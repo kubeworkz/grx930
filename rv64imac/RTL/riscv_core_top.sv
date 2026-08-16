@@ -1468,7 +1468,12 @@ u_riscv_core_dcache_top
     // Interface with CORE//
     .i_clk(i_riscv_core_clk)
     ,.i_rst_n(i_riscv_core_rst_n)
-    ,.i_data_from_core(ex_mem_pipe_wd)
+    // Gate the store-data bus with memwrite: for non-store instructions the
+    // write-data operand (rs2) can be an uninitialized X register, and that X
+    // propagates through the dcache's combinational amo_alu/FSM feedback path
+    // (FSM->o_rd_en->memory read->amo_alu->FSM), which Icarus never settles.
+    // A defined 0 when no store is in flight is also correct for real silicon.
+    ,.i_data_from_core(ex_mem_pipe_memwrite ? ex_mem_pipe_wd : 64'h0)
     ,.i_addr_from_core(ex_mem_pipe_alu_result)
     ,.i_read(mem_cahce_read)
     ,.i_write(ex_mem_pipe_memwrite)

@@ -109,7 +109,13 @@ begin : stall_proc
     // dependent instruction is held in ID, so freezing EX/MEM would deadlock.)
     o_hazard_unit_stall_ex  = mstall_detection || icache_stall_detection || dcache_stall_detection;
     o_hazard_unit_stall_mem = mstall_detection || icache_stall_detection || dcache_stall_detection;
-    o_hazard_unit_stall_wb  = mstall_detection;
+    // Freeze the MEM/WB pipe while either cache (or an MMIO access via the
+    // dcache) is stalled: if a producer (e.g. li/lui feeding a store's data)
+    // leaves WB while its consumer is held in EX, the WB->EX forward drops and
+    // the consumer captures the stale pre-write register value into the
+    // store-data pipe. Holding WB keeps the forward source live until the stall
+    // releases, so the consumer latches the forwarded value.
+    o_hazard_unit_stall_wb  = mstall_detection || icache_stall_detection || dcache_stall_detection;
 end
 
 //---------------------------------Flush---------------------------------\\
