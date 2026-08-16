@@ -35,6 +35,7 @@ module tb_c930_soc;
   localparam int DONE_ADDR   = 32'h9410;
   localparam int STRESS_ADDR = 32'h9420;   // MMIO stress result (0x0BADBEEF = pass)
   localparam int AMO_RES_ADDR = 32'h9470;  // AMO/LR/SC stress result (0x00C0FFEE = pass)
+  localparam int CONS_RES_ADDR = 32'h94B0; // multi-line consistency result (0x5EEDCAFE = pass)
   localparam int DIAG_ADDR    = 32'h9480;  // first failing stress step (C driver)
   localparam int PHASE_ADDR   = 32'h9490;  // program phase marker (C driver)
   localparam int AMO_BASE     = 32'h9600;  // AMO/LR/SC scratch words (C driver)
@@ -145,6 +146,10 @@ module tb_c930_soc;
     dut.u_ddr.mem[AMO_RES_ADDR + 1] = 8'h00;
     dut.u_ddr.mem[AMO_RES_ADDR + 2] = 8'h00;
     dut.u_ddr.mem[AMO_RES_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[CONS_RES_ADDR + 0] = 8'h00;
+    dut.u_ddr.mem[CONS_RES_ADDR + 1] = 8'h00;
+    dut.u_ddr.mem[CONS_RES_ADDR + 2] = 8'h00;
+    dut.u_ddr.mem[CONS_RES_ADDR + 3] = 8'h00;
   endtask
 
   // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
@@ -161,6 +166,14 @@ module tb_c930_soc;
           dut.u_ddr.mem[AMO_RES_ADDR + 2] == 8'hC0 &&
           dut.u_ddr.mem[AMO_RES_ADDR + 1] == 8'hFF &&
           dut.u_ddr.mem[AMO_RES_ADDR + 0] == 8'hEE);
+  endtask
+
+  // Read the multi-line consistency stress magic (0x5EEDCAFE = pass).
+  task automatic cons_ok(output int ok);
+    ok = (dut.u_ddr.mem[CONS_RES_ADDR + 3] == 8'h5E &&
+          dut.u_ddr.mem[CONS_RES_ADDR + 2] == 8'hED &&
+          dut.u_ddr.mem[CONS_RES_ADDR + 1] == 8'hCA &&
+          dut.u_ddr.mem[CONS_RES_ADDR + 0] == 8'hFE);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -244,6 +257,12 @@ module tb_c930_soc;
     amo_ok(sok);
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: AMO/LR/SC stress failed (dcache AMO path)", m, n, k);
+
+    // Multi-line memory-consistency stress must have passed (write-through /
+    // eviction / refill integrity across several cache lines).
+    cons_ok(sok);
+    if (!sok)
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: multi-line consistency stress failed", m, n, k);
 
     if (o_npu_error)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);

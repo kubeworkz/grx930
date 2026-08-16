@@ -287,6 +287,104 @@ static void dcache_stress(void)
             ;   // hang so the testbench reports the failure
 }
 
+// -----------------------------------------------------------------------------
+// Multi-line memory-consistency stress. Interleaves AMOs and regular
+// loads/stores across FOUR dcache lines, plus same-index/different-tag ALIAS
+// lines, so the refill path (write-through integrity) is exercised:
+//
+//  (1) per line: init store, AMO, cache read-back, alias eviction, then a
+//      re-read that MUST refill from DDR and see the AMO-updated value
+//      (catches a write-through that only hit the cache, or a fill that
+//      returns a stale block),
+//  (2) same-line word independence: a store and an AMO to different words of
+//      one line must not disturb each other,
+//  (3) cross-line interleave: AMO/load/store traffic on two resident lines
+//      with per-step checks (catches tag/index contamination),
+//  (4) LR/SC with a line eviction between LR and SC: the reservation must
+//      survive the refill and the SC must still succeed,
+//  (5) double eviction: AMO a line and its alias, touch unrelated traffic,
+//      then re-read both - each must refill from DDR with its own value.
+//
+// The dcache is direct-mapped (32B lines, index addr[11:5]); within 64KB,
+// CONS_BASE and CONS_ALIAS share an index but differ in bits[15:12], so every
+// cross-access evicts the other line and forces a refill. All scratch words
+// are explicitly initialized before use so the stress is idempotent across
+// sweep boots (the TB reboots the core per case and DDR state carries over).
+// -----------------------------------------------------------------------------
+#define CONS_BASE     0x9800   // 4 x 32B lines (indices 0x40..0x43)
+#define CONS_ALIAS    0x1800   // aliases: same index, different tag
+#define CONS_RES_ADDR 0x94B0   // result magic (0x5EEDCAFE = pass)
+#define CONS_PASS     0x5EEDCAFEu
+#define CONS_FAIL     0xDEADF00Du
+
+static void mem_consistency_stress(void)
+{
+    volatile unsigned long long *L[4], *A[4];
+    volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
+    volatile u32 *first_fail = (volatile u32 *)FAIL_ADDR;
+    u32 ok = 1;
+
+    for (int i = 0; i < 4; i++) {
+        L[i] = (volatile unsigned long long *)(CONS_BASE  + 0x20*i);
+        A[i] = (volatile unsigned long long *)(CONS_ALIAS + 0x20*i);
+    }
+
+    // (1) init store, AMO, cache read-back, alias eviction, DDR re-read.
+    for (int i = 0; i < 4; i++) {
+        *diag = 0x801 + i;
+        L[i][0] = 0x1000ull + i;                        // cold line: fill + write-through
+        if (amo_add(&L[i][0], 0x11) != (0x1000ull + i)) { ok = 0; *first_fail = 0x801 + i; }
+        if (L[i][0] != (0x1011ull + i)) { ok = 0; *first_fail = 0x802 + i; }  // cache hit
+        A[i][0] = 0x2000ull + i;                        // alias store evicts L[i]
+        if (L[i][0] != (0x1011ull + i)) { ok = 0; *first_fail = 0x803 + i; }  // refill from DDR
+    }
+
+    // (2) same-line word independence: store to word0, AMO to word1.
+    *diag = 0x810;
+    L[0][1] = 0x9999;
+    L[0][0] = 0x1111;
+    if (L[0][0] != 0x1111) { ok = 0; *first_fail = 0x810; }
+    if (amo_swap(&L[0][1], 0x2222) != 0x9999) { ok = 0; *first_fail = 0x811; }
+    if (L[0][0] != 0x1111) { ok = 0; *first_fail = 0x812; }   // AMO must not touch word0
+    if (L[0][1] != 0x2222) { ok = 0; *first_fail = 0x813; }
+
+    // (3) cross-line interleave on two resident lines.
+    *diag = 0x820;
+    L[1][0] = 0x3000;
+    L[2][0] = 0x4000;
+    if (amo_add(&L[1][0], 0x1) != 0x3000) { ok = 0; *first_fail = 0x820; }
+    if (L[2][0] != 0x4000) { ok = 0; *first_fail = 0x821; }   // L2 intact after AMO to L1
+    if (amo_xor(&L[2][0], 0x0F) != 0x4000) { ok = 0; *first_fail = 0x822; }
+    if (L[1][0] != 0x3001) { ok = 0; *first_fail = 0x823; }   // L1 intact after AMO to L2
+    L[2][0] = L[2][0] + 1;                                    // regular store/load path
+    if (L[1][0] != 0x3001) { ok = 0; *first_fail = 0x824; }
+    if (L[2][0] != 0x4010) { ok = 0; *first_fail = 0x825; }   // 0x400F + 1
+
+    // (4) LR/SC across a line eviction: reservation must survive the refill.
+    *diag = 0x830;
+    L[3][0] = 0x5000;
+    if (lr_d(&L[3][0]) != 0x5000) { ok = 0; *first_fail = 0x830; }
+    A[3][0] = 0x6000;                       // evicts L[3] (same index, different tag)
+    if (sc_d(&L[3][0], 0x5555) != 0) { ok = 0; *first_fail = 0x831; }  // SC must succeed
+    if (L[3][0] != 0x5555) { ok = 0; *first_fail = 0x832; }
+
+    // (5) double eviction: AMO a line and its alias, unrelated traffic, re-read both.
+    *diag = 0x840;
+    L[2][1] = 0x7000;
+    A[2][0] = 0x8000;
+    if (amo_add(&L[2][1], 0x1) != 0x7000) { ok = 0; *first_fail = 0x840; }  // evicts A[2]
+    if (amo_add(&A[2][0], 0x1) != 0x8000) { ok = 0; *first_fail = 0x841; }  // evicts L[2]
+    L[1][1] = 0x9000;                       // unrelated traffic
+    if (L[2][1] != 0x7001) { ok = 0; *first_fail = 0x842; }  // refill from DDR
+    if (A[2][0] != 0x8001) { ok = 0; *first_fail = 0x843; }  // refill from DDR
+
+    *diag = 0x850;
+    *(volatile u32 *)CONS_RES_ADDR = ok ? CONS_PASS : CONS_FAIL;
+    if (!ok)
+        for (;;)
+            ;   // hang so the testbench reports the failure
+}
+
 __attribute__((noreturn))
 void main(void)
 {
@@ -297,6 +395,10 @@ void main(void)
     *phase = 0x02;
     dcache_stress();
     *phase = 0x03;
+
+    // 0b. Multi-line memory-consistency stress (write-through/eviction/refill).
+    mem_consistency_stress();
+    *phase = 0x04;
 
     // 1. Stress the MMIO write/read-back path (regression coverage).
     mmio_stress();
