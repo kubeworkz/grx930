@@ -151,7 +151,11 @@ module c930_mmio_bridge
     endcase
   end
 
-  // Latch the transaction fields when they are accepted in IDLE.
+  // Latch the transaction fields when IDLE first sees the request. The dcache
+  // freezes its EX/MEM pipe (o_stall=1) during MMIO transactions AND during the
+  // MMIO_DRAIN gap, so by the time IDLE re-asserts the request the fields are
+  // stable and there is no race with the pipe update. The registered completion
+  // pulses above still break the combinational done->request loop.
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       awaddr_r <= 32'd0;

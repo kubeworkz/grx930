@@ -28,11 +28,12 @@ module tb_c930_soc;
   localparam int MAX_N    = 12;  // > NUM_COLS so the sweep exercises N-tiling
 
   // DDR workload layout (byte addresses, shared with sw/npu_test.c)
-  localparam int A_ADDR    = 32'h9000;
-  localparam int B_ADDR    = 32'h9100;
-  localparam int C_ADDR    = 32'h9200;
-  localparam int DIMS_ADDR = 32'h9400;
-  localparam int DONE_ADDR = 32'h9410;
+  localparam int A_ADDR      = 32'h9000;
+  localparam int B_ADDR      = 32'h9100;
+  localparam int C_ADDR      = 32'h9200;
+  localparam int DIMS_ADDR   = 32'h9400;
+  localparam int DONE_ADDR   = 32'h9410;
+  localparam int STRESS_ADDR = 32'h9420;   // MMIO stress result (0x0BADBEEF = pass)
 
   localparam int MEM_BYTES = 65536;
   localparam int IMG_WORDS = 4096;   // program image is small; operands are TB-loaded
@@ -132,6 +133,18 @@ module tb_c930_soc;
     dut.u_ddr.mem[DONE_ADDR + 1] = 8'h00;
     dut.u_ddr.mem[DONE_ADDR + 2] = 8'h00;
     dut.u_ddr.mem[DONE_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[STRESS_ADDR + 0] = 8'h00;
+    dut.u_ddr.mem[STRESS_ADDR + 1] = 8'h00;
+    dut.u_ddr.mem[STRESS_ADDR + 2] = 8'h00;
+    dut.u_ddr.mem[STRESS_ADDR + 3] = 8'h00;
+  endtask
+
+  // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
+  task automatic stress_ok(output int ok);
+    ok = (dut.u_ddr.mem[STRESS_ADDR + 3] == 8'h0B &&
+          dut.u_ddr.mem[STRESS_ADDR + 2] == 8'hAD &&
+          dut.u_ddr.mem[STRESS_ADDR + 1] == 8'hBE &&
+          dut.u_ddr.mem[STRESS_ADDR + 0] == 8'hEF);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -189,6 +202,7 @@ module tb_c930_soc;
   // ---------------------------------------------------------------------------
   task automatic run_case(input int m, n, k, input int seed);
     int found;
+    int sok;
     $display("[TEST] M=%0d N=%0d K=%0d (seed %0d)", m, n, k, seed);
     $fflush();
     fill_ab(m, n, k, seed);
@@ -203,6 +217,13 @@ module tb_c930_soc;
     wait_done(found);
     if (!found)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: CPU never signaled completion", m, n, k);
+
+    // MMIO write/read-back stress must have passed (catches the store-data
+    // forward and back-to-back-store corruption bugs early).
+    stress_ok(sok);
+    if (!sok)
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: MMIO stress failed (corrupted store data)", m, n, k);
+
     if (o_npu_error)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);
     repeat (4) @(posedge clk);   // let the final stores settle

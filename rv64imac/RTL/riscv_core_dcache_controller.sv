@@ -98,7 +98,8 @@ enum logic [2:0] {
     MEM_WRITE      = 3'b011,
     AMO_OP         = 3'b100,
     MMIO_READ      = 3'b101,
-    MMIO_WRITE     = 3'b110} STATE , NEXT ;
+    MMIO_WRITE     = 3'b110,
+    MMIO_DRAIN     = 3'b111} STATE , NEXT ;   // 1-cycle no-request gap between MMIO xacts
 
 logic                      update_en;
 logic                      tag_hit;
@@ -460,8 +461,9 @@ case (STATE)
         o_mmio_read_sel = 1;
 
         if (i_mmio_read_done) begin
+            o_mmio_read_req = 0;
             o_stall = 0;
-            NEXT = IDLE;
+            NEXT = MMIO_DRAIN;
         end
 
                end 
@@ -486,9 +488,50 @@ case (STATE)
         if (i_mmio_write_done) begin
             o_mmio_write_valid = 0;
             o_stall = 0;
-            NEXT = IDLE;
+            NEXT = MMIO_DRAIN;
         end
 
+               end 
+
+      // One-cycle gap after an MMIO transaction. The dcache's request/valid
+      // lines are LEVELs that the IDLE case re-asserts immediately when the
+      // next access is already in MEM (back-to-back loads/stores), and the
+      // MMIO bridge returns to IDLE only after observing the request deasserted
+      // for a full cycle - so without this drain cycle consecutive MMIO
+      // accesses deadlock the bridge in its response state.
+      //
+      // CRITICAL: the pipe must stay FROZEN (o_stall=1) during the drain. The
+      // serviced access advances MEM->WB on the posedge where done is seen
+      // (o_stall drops to 0 in MMIO_READ/MMIO_WRITE's done branch); if the
+      // drain also released the stall, the NEXT back-to-back access would
+      // advance into MEM during the drain and then OUT of MEM while the FSM
+      // was still in DRAIN - slipping through IDLE unserviced and corrupting
+      // the MMIO stream (observed as a lost DIM_N write). Freezing here keeps
+      // the pending access in MEM until IDLE sees it.
+      MMIO_DRAIN : begin
+
+        o_rd_en = 0;
+        o_wr_en = 0;
+        o_block_replace = 0;
+        o_stall = 1;
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_req = 0;
+        update_en = 0;
+        o_amo_wr = 0;
+
+        o_mem_write_data = i_data_from_core;
+        o_mem_write_address = i_addr_from_core;
+        o_mem_write_valid = 0;
+
+        o_mmio_read_req      = 0;
+        o_mmio_read_sel      = 1;
+        o_mmio_read_address  = i_addr_from_core;
+        o_mmio_write_valid   = 0;
+        o_mmio_write_address = i_addr_from_core;
+        o_mmio_write_data    = i_data_from_core;
+        o_mmio_write_strobe  = o_mem_write_strobe;
+
+        NEXT = IDLE;
                end 
 
     default: begin
