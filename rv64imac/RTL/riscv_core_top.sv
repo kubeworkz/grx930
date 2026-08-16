@@ -1002,6 +1002,17 @@ u_riscv_core_mux2x1_csr_src
   ,.o_mux2x1_out(csr_src_ex)
 );
 
+// MEM-stage forward source. For a LOAD in MEM, ex_mem_pipe_alu_result holds the
+// effective ADDRESS, not the loaded value - forwarding it to the dependent EX
+// instruction computes with the address. When the MEM instruction is a load,
+// forward the extended load data read from the dcache instead. The same applies
+// to A-extension ops (AMO/LR/SC): the dcache mux already presents the loaded
+// value (LR), the AMO ALU result (AMO), or the reservation result (SC, via
+// sc_out) on read_data_mem_extnd, so forwarding the ALU result would hand the
+// dependent instruction the address.
+logic [63:0] mem_forward_data;
+assign mem_forward_data = (mem_cahce_read || mem_main_decoder_amo || mem_main_decoder_lr || mem_main_decoder_sc) ? read_data_mem_extnd : ex_mem_pipe_alu_result;
+
 riscv_core_mux3x1
 #(
   .XLEN (64)
@@ -1010,7 +1021,7 @@ u_riscv_core_mux3x1_srca
 (
   .i_mux3x1_in0 (id_ex_pipe_rd1)
   ,.i_mux3x1_in1(result_wb)
-  ,.i_mux3x1_in2(ex_mem_pipe_alu_result)
+  ,.i_mux3x1_in2(mem_forward_data)
   ,.i_mux3x1_sel(hu_forward_a)
   ,.o_mux3x1_out(src_a_ex)
 );
@@ -1023,7 +1034,7 @@ u_riscv_core_mux3x1_srcb
 (
   .i_mux3x1_in0 (id_ex_pipe_rd2)
   ,.i_mux3x1_in1(result_wb)
-  ,.i_mux3x1_in2(ex_mem_pipe_alu_result)
+  ,.i_mux3x1_in2(mem_forward_data)
   ,.i_mux3x1_sel(hu_forward_b)
   ,.o_mux3x1_out(src_b_out)
 );
@@ -1473,7 +1484,9 @@ u_riscv_core_dcache_top
     // propagates through the dcache's combinational amo_alu/FSM feedback path
     // (FSM->o_rd_en->memory read->amo_alu->FSM), which Icarus never settles.
     // A defined 0 when no store is in flight is also correct for real silicon.
-    ,.i_data_from_core(ex_mem_pipe_memwrite ? ex_mem_pipe_wd : 64'h0)
+    // AMOs and SCs carry their rs2 operand on this same bus, so they must also
+    // gate it through (the decoder leaves memwrite=0 for A-extension ops).
+    ,.i_data_from_core((ex_mem_pipe_memwrite || mem_main_decoder_amo || mem_main_decoder_sc) ? ex_mem_pipe_wd : 64'h0)
     ,.i_addr_from_core(ex_mem_pipe_alu_result)
     ,.i_read(mem_cahce_read)
     ,.i_write(ex_mem_pipe_memwrite)

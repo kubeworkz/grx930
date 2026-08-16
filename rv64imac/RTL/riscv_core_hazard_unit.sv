@@ -52,7 +52,6 @@ module riscv_core_hazard_unit
 );
 
 // Internals
-logic lwstall_detection;
 logic mstall_detection;
 logic icache_stall_detection;
 logic dcache_stall_detection;
@@ -96,17 +95,20 @@ end
 
 always_comb 
 begin : stall_proc
-    lwstall_detection       = ((i_hazard_unit_resultsrc_ex == 2'b01) && ((i_hazard_unit_rs1_id == i_hazard_unit_rd_ex) || (i_hazard_unit_rs2_id == i_hazard_unit_rd_ex)));
     mstall_detection        = (i_hazard_unit_mbusy && !i_hazard_unit_mdone);
     icache_stall_detection  = i_hazard_unit_icache_stall;
     dcache_stall_detection  = i_hazard_unit_dcache_stall;
-    o_hazard_unit_stall_if  = lwstall_detection || mstall_detection || icache_stall_detection || dcache_stall_detection;
-    o_hazard_unit_stall_id  = lwstall_detection || mstall_detection || icache_stall_detection || dcache_stall_detection;
+    // Load-use is resolved by the MEM->EX forward (the dcache read is
+    // combinational, so the loaded value is valid while the load sits in MEM).
+    // Stalling on it would hold the dependent in ID while stall_ex lets it also
+    // advance to EX, so it is captured twice and re-executes. A load that
+    // misses is already handled by dcache_stall, which freezes every stage
+    // until the line is filled.
+    o_hazard_unit_stall_if  = mstall_detection || icache_stall_detection || dcache_stall_detection;
+    o_hazard_unit_stall_id  = mstall_detection || icache_stall_detection || dcache_stall_detection;
     // The ID/EX and EX/MEM pipes must also hold while the instruction cache is
     // filling: if only IF/ID is stalled, the instruction stuck in ID is
     // re-captured into EX every cycle and re-executed on each line fill.
-    // (lwstall is deliberately excluded: the load advances EX->MEM while the
-    // dependent instruction is held in ID, so freezing EX/MEM would deadlock.)
     o_hazard_unit_stall_ex  = mstall_detection || icache_stall_detection || dcache_stall_detection;
     o_hazard_unit_stall_mem = mstall_detection || icache_stall_detection || dcache_stall_detection;
     // Freeze the MEM/WB pipe while either cache (or an MMIO access via the
@@ -122,7 +124,11 @@ end
 
 always_comb 
 begin : flush_proc
-    o_hazard_unit_flush_ex  = (lwstall_detection || i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_ex );
+    // A load-use is resolved by the MEM->EX forward, never by a flush:
+    // flushing the EX stage here destroys the in-flight load (it vanishes from
+    // the pipeline and its result never reaches the register file), so the
+    // dependent instruction reads the stale pre-load value.
+    o_hazard_unit_flush_ex  = (i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_ex );
     o_hazard_unit_flush_id  = i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_id;
     o_hazard_unit_flush_mem = i_hazard_unit_csr_flush_mem;
     o_hazard_unit_flush_wb  = i_hazard_unit_csr_flush_wb;

@@ -34,6 +34,10 @@ module tb_c930_soc;
   localparam int DIMS_ADDR   = 32'h9400;
   localparam int DONE_ADDR   = 32'h9410;
   localparam int STRESS_ADDR = 32'h9420;   // MMIO stress result (0x0BADBEEF = pass)
+  localparam int AMO_RES_ADDR = 32'h9470;  // AMO/LR/SC stress result (0x00C0FFEE = pass)
+  localparam int DIAG_ADDR    = 32'h9480;  // first failing stress step (C driver)
+  localparam int PHASE_ADDR   = 32'h9490;  // program phase marker (C driver)
+  localparam int AMO_BASE     = 32'h9600;  // AMO/LR/SC scratch words (C driver)
 
   localparam int MEM_BYTES = 65536;
   localparam int IMG_WORDS = 4096;   // program image is small; operands are TB-loaded
@@ -137,6 +141,10 @@ module tb_c930_soc;
     dut.u_ddr.mem[STRESS_ADDR + 1] = 8'h00;
     dut.u_ddr.mem[STRESS_ADDR + 2] = 8'h00;
     dut.u_ddr.mem[STRESS_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[AMO_RES_ADDR + 0] = 8'h00;
+    dut.u_ddr.mem[AMO_RES_ADDR + 1] = 8'h00;
+    dut.u_ddr.mem[AMO_RES_ADDR + 2] = 8'h00;
+    dut.u_ddr.mem[AMO_RES_ADDR + 3] = 8'h00;
   endtask
 
   // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
@@ -145,6 +153,14 @@ module tb_c930_soc;
           dut.u_ddr.mem[STRESS_ADDR + 2] == 8'hAD &&
           dut.u_ddr.mem[STRESS_ADDR + 1] == 8'hBE &&
           dut.u_ddr.mem[STRESS_ADDR + 0] == 8'hEF);
+  endtask
+
+  // Read the AMO/LR/SC stress magic (0x00C0FFEE = pass).
+  task automatic amo_ok(output int ok);
+    ok = (dut.u_ddr.mem[AMO_RES_ADDR + 3] == 8'h00 &&
+          dut.u_ddr.mem[AMO_RES_ADDR + 2] == 8'hC0 &&
+          dut.u_ddr.mem[AMO_RES_ADDR + 1] == 8'hFF &&
+          dut.u_ddr.mem[AMO_RES_ADDR + 0] == 8'hEE);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -224,6 +240,11 @@ module tb_c930_soc;
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: MMIO stress failed (corrupted store data)", m, n, k);
 
+    // AMO/LR/SC stress must have passed (dcache AMO path regression).
+    amo_ok(sok);
+    if (!sok)
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: AMO/LR/SC stress failed (dcache AMO path)", m, n, k);
+
     if (o_npu_error)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);
     repeat (4) @(posedge clk);   // let the final stores settle
@@ -285,8 +306,10 @@ module tb_c930_soc;
     $fatal(1, "timeout");
   end
 
-  // Cheap liveness marker: every 1000 cycles print the CPU PC and NPU done so
-  // a hang is visible immediately.
+  // Per-posedge liveness counter (historical [LV] probe). Generates real events
+  // every clock edge; kept minimal (no $display per edge). $fflush forces the
+  // buffered stdout out so progress is visible and the Icarus event ordering
+  // (which a marginal zero-delay loop is sensitive to) is perturbed.
   integer lv_edges = 0;
   always @(posedge clk) begin
     lv_edges = lv_edges + 1;
@@ -299,6 +322,136 @@ module tb_c930_soc;
         dut.u_npu.o_done);
       $fflush();
     end
+  end
+
+  // LR/SC reservation debug: dump the dcache reservation state whenever a
+  // store/SC to AMO_BASE+0x18 (w[3]) is in the dcache MEM stage.
+  always @(posedge clk) begin
+    if (dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_sc &&
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_addr_from_core[15:0] == 16'h9618) begin
+      $display("[SC] c=%0d pc=%h addr=%h valid=%b res=%h size=%0d hit=%b st=%0d",
+        lv_edges, dut.u_cpu.if_pipe_pcf_new,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_addr_from_core,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.VALID_RES,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.RES_SET,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.RES_SET_SIZE,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.res_set_hit,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
+      $fflush();
+    end
+  end
+
+  // DDR write debug: dump every write-through request targeting the AMO line.
+  always @(posedge clk) begin
+    if (dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_valid &&
+        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address[15:0] >= 16'h9600 &&
+        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address[15:0] < 16'h9620) begin
+      $display("[W] c=%0d addr=%h data=%h strobe=%02x wr=%b amo=%b sc=%b st=%0d",
+        lv_edges,
+        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address,
+        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_data,
+        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_strobe,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_write,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_amo,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_sc,
+        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
+      $fflush();
+    end
+  end
+
+  // LR/SC pipeline debug: dump every cycle the LR/SC instruction is in the
+  // EX/MEM stage (i_sc/i_lr asserted), plus the captured read data and the
+  // reservation state, to catch double-capture or lost reservations.
+  always @(posedge clk) begin
+    if (dut.u_cpu.mem_main_decoder_lr || dut.u_cpu.mem_main_decoder_sc) begin
+      $display("[LS] c=%0d lr=%b sc=%b addr=%h scres=%h rd=%h stall=%b fwd_a=%0d rdata=%h",
+        lv_edges,
+        dut.u_cpu.mem_main_decoder_lr,
+        dut.u_cpu.mem_main_decoder_sc,
+        dut.u_cpu.ex_mem_pipe_alu_result,
+        dut.u_cpu.u_riscv_core_dcache_top.sc_out,
+        dut.u_cpu.ex_mem_pipe_rd,
+        dut.u_cpu.hu_stall_ex,
+        dut.u_cpu.hu_forward_a,
+        dut.u_cpu.read_data_mem_extnd);
+      $fflush();
+    end
+  end
+
+  // WB-stage result debug: dump the value written back for a4 (rd=14) during
+  // the LR/SC section (cycles 350-450).
+  always @(posedge clk) begin
+    if (lv_edges >= 350 && lv_edges <= 450 && dut.u_cpu.mem_wb_pipe_rd == 5'd14) begin
+      $display("[WB] c=%0d rd=14 rdata=%h alu=%h rsrc=%0d regwr=%b",
+        lv_edges,
+        dut.u_cpu.mem_wb_pipe_read_data,
+        dut.u_cpu.mem_wb_pipe_alu_result,
+        dut.u_cpu.mem_wb_pipe_resultsrc,
+        dut.u_cpu.mem_wb_pipe_regwrite);
+      $fflush();
+    end
+  end
+
+  // Branch debug: dump branch operands for the AMO w[0] section (cycles 60-130)
+  // and the LR/SC section (cycles 405-425).
+  always @(posedge clk) begin
+    if (((lv_edges >= 60 && lv_edges <= 130) || (lv_edges >= 405 && lv_edges <= 425)) &&
+        dut.u_cpu.id_ex_pipe_branch) begin
+      $display("[BR] c=%0d pc=%h fwd_a=%0d srca=%h srcb=%h taken=%b pcsrc=%b rdm=%0d rs1e=%0d regwr_mem=%b",
+        lv_edges,
+        dut.u_cpu.id_ex_pipe_pc,
+        dut.u_cpu.hu_forward_a,
+        dut.u_cpu.src_a_ex,
+        dut.u_cpu.src_b_ex,
+        dut.u_cpu.u_riscv_core_branch_unit.istaken,
+        dut.u_cpu.pcsrc_ex,
+        dut.u_cpu.ex_mem_pipe_rd,
+        dut.u_cpu.id_ex_pipe_rs1,
+        dut.u_cpu.ex_mem_pipe_regwrite);
+      $fflush();
+    end
+  end
+
+  // One-shot time-advance markers (passive; pinpoint where the sim stalls).
+  initial begin
+    #10;     $display("[T10] reached");
+    #100;    $display("[T100] reached");
+    #890;    $display("[T1K] reached");
+    #999000; $display("[T1M] reached");
+    $display("[DUMP] done=%02x%02x%02x%02x stress=%02x%02x%02x%02x amo=%02x%02x%02x%02x phase=%02x%02x%02x%02x diag=%02x%02x%02x%02x w0=%02x%02x%02x%02x w1=%02x%02x%02x%02x w2=%02x%02x%02x%02x w3=%02x%02x%02x%02x fail=%02x%02x%02x%02x pc=%h dcm=%0d",
+      dut.u_ddr.mem[DONE_ADDR+3], dut.u_ddr.mem[DONE_ADDR+2],
+      dut.u_ddr.mem[DONE_ADDR+1], dut.u_ddr.mem[DONE_ADDR+0],
+      dut.u_ddr.mem[STRESS_ADDR+3], dut.u_ddr.mem[STRESS_ADDR+2],
+      dut.u_ddr.mem[STRESS_ADDR+1], dut.u_ddr.mem[STRESS_ADDR+0],
+      dut.u_ddr.mem[AMO_RES_ADDR+3], dut.u_ddr.mem[AMO_RES_ADDR+2],
+      dut.u_ddr.mem[AMO_RES_ADDR+1], dut.u_ddr.mem[AMO_RES_ADDR+0],
+      dut.u_ddr.mem[PHASE_ADDR+3], dut.u_ddr.mem[PHASE_ADDR+2],
+      dut.u_ddr.mem[PHASE_ADDR+1], dut.u_ddr.mem[PHASE_ADDR+0],
+      dut.u_ddr.mem[DIAG_ADDR+3], dut.u_ddr.mem[DIAG_ADDR+2],
+      dut.u_ddr.mem[DIAG_ADDR+1], dut.u_ddr.mem[DIAG_ADDR+0],
+      dut.u_ddr.mem[AMO_BASE+3], dut.u_ddr.mem[AMO_BASE+2],
+      dut.u_ddr.mem[AMO_BASE+1], dut.u_ddr.mem[AMO_BASE+0],
+      dut.u_ddr.mem[AMO_BASE+11], dut.u_ddr.mem[AMO_BASE+10],
+      dut.u_ddr.mem[AMO_BASE+9],  dut.u_ddr.mem[AMO_BASE+8],
+      dut.u_ddr.mem[AMO_BASE+19], dut.u_ddr.mem[AMO_BASE+18],
+      dut.u_ddr.mem[AMO_BASE+17], dut.u_ddr.mem[AMO_BASE+16],
+      dut.u_ddr.mem[AMO_BASE+27], dut.u_ddr.mem[AMO_BASE+26],
+      dut.u_ddr.mem[AMO_BASE+25], dut.u_ddr.mem[AMO_BASE+24],
+      dut.u_ddr.mem[32'h94A0+3], dut.u_ddr.mem[32'h94A0+2],
+      dut.u_ddr.mem[32'h94A0+1], dut.u_ddr.mem[32'h94A0+0],
+      dut.u_cpu.if_pipe_pcf_new,
+      dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
+    #4000000; $display("[T5M] reached");
+    $display("[DUMP2] done=%02x%02x%02x%02x stress=%02x%02x%02x%02x amo=%02x%02x%02x%02x phase=%02x diag=%02x pc=%h",
+      dut.u_ddr.mem[DONE_ADDR+3], dut.u_ddr.mem[DONE_ADDR+2],
+      dut.u_ddr.mem[DONE_ADDR+1], dut.u_ddr.mem[DONE_ADDR+0],
+      dut.u_ddr.mem[STRESS_ADDR+3], dut.u_ddr.mem[STRESS_ADDR+2],
+      dut.u_ddr.mem[STRESS_ADDR+1], dut.u_ddr.mem[STRESS_ADDR+0],
+      dut.u_ddr.mem[AMO_RES_ADDR+3], dut.u_ddr.mem[AMO_RES_ADDR+2],
+      dut.u_ddr.mem[AMO_RES_ADDR+1], dut.u_ddr.mem[AMO_RES_ADDR+0],
+      dut.u_ddr.mem[PHASE_ADDR],
+      dut.u_ddr.mem[DIAG_ADDR],
+      dut.u_cpu.if_pipe_pcf_new);
   end
 
 endmodule

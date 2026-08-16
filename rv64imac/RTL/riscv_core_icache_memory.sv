@@ -22,7 +22,10 @@ input logic [AXI_DATA_WIDTH-1     : 0  ]   i_block_from_axi,
 input logic                                i_rd_en,
 input logic                                i_wr_en,
 input logic                                i_block_replace,
-input logic                                i_offset //indicate which block index to write in
+input logic                                i_offset, //indicate which block index to write in
+// Latched fill address: the write index must be the address of the line
+// being filled, not the (possibly redirected) live fetch PC.
+input logic [ ADDR_WIDTH-1        :  0  ]  i_fill_addr
 );
 //             LOCAL PARAMETERS              //
 localparam CACHE_DEPTH = 2**INDEX_WIDTH ;
@@ -31,6 +34,12 @@ logic [ADDR_WIDTH-1      : 0] i_addr_from_core_1 , i_addr_from_core_2 , i_addr_f
 //      INTERNAL REGISTERS AND MEMORIES      //
 // One 256-bit cache line per index (flattened from [BLOCK][BYTE] for Icarus).
 logic [AXI_DATA_WIDTH-1 : 0] INSTR_MEM [0:CACHE_DEPTH-1];
+// Initializers keep the combinational read defined before the first reset edge.
+initial begin
+    for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
+        INSTR_MEM[i] = 'b0;
+    end
+end
 //          assign internal addresses   //
 assign i_addr_from_core_1 = i_addr_from_core + 1'b1;
 assign i_addr_from_core_2 = i_addr_from_core + 2'b10;
@@ -46,10 +55,7 @@ always @( posedge i_clk , negedge i_rst_n ) begin : FLUSH_WRITE_REPLACEMENT_BLOC
     else begin
         // BLOCK REPLACEMENT // 
         if (i_wr_en && i_block_replace) begin
-            if(!i_offset)
-                INSTR_MEM [  i_addr_from_core  [11 -: INDEX_WIDTH] ] <= i_block_from_axi;
-            else
-                INSTR_MEM [  i_addr_from_core_2[11 -: INDEX_WIDTH] ] <= i_block_from_axi;
+            INSTR_MEM [ i_fill_addr[11 -: INDEX_WIDTH] ] <= i_block_from_axi;
         end
     end    
 end

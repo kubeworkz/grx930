@@ -21,6 +21,9 @@ module riscv_core_rf (
 	output logic [63:0] o_rf_rd1, o_rf_rd2
 	);
 	logic [63:0] rf[31:0]; 	
+	initial begin
+	    for ( int i = 0 ; i < 32 ; i=i+1 ) rf[i] = 64'b0;
+	end
 	always_ff @(negedge i_rf_clk) begin  //write
 		if ((i_rf_we3)&&(!(i_rf_a3==0))) rf[i_rf_a3] <= i_rf_wd3; 
 	end

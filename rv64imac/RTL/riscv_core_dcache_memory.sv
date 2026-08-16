@@ -55,6 +55,12 @@ localparam BLOCK_SIZE  = 2**BLOCK_OFFSET ;
 
 // One 256-bit cache line per index (flattened from [BLOCK][BYTE] for Icarus).
 logic [AXI_DATA_WIDTH-1 : 0] DATA_MEM [0: CACHE_DEPTH-1];
+// Initializers keep the combinational read defined before the first reset edge.
+initial begin
+    for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
+        DATA_MEM[i] = 'b0;
+    end
+end
 
 
 ///////////////////////////////////////////////

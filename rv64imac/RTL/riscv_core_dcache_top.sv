@@ -75,6 +75,22 @@ logic                         control_to_mem_amo_wr;
 
 logic  [CORE_DATA_WIDTH -1 : 0] amo_alu_result;
 
+// Registered copy of the AMO result. The dcache has a combinational feedback
+// path FSM->o_rd_en->memory read->amo_alu->FSM (the controller samples the live
+// memory output through the AMO ALU every cycle); with a defined store-data
+// operand flowing into it (real AMO/SC rs2) Icarus never settles that loop.
+// The result is computed in AMO_OP (when the old value is read) and consumed in
+// MEM_WRITE (the next cycle), so a registered copy is functionally identical
+// and breaks the zero-delay loop at the register.
+logic  [CORE_DATA_WIDTH -1 : 0] amo_alu_result_reg;
+
+always_ff @(posedge i_clk, negedge i_rst_n) begin : AMO_RESULT_REG
+    if (!i_rst_n)
+        amo_alu_result_reg <= 'b0;
+    else
+        amo_alu_result_reg <= amo_alu_result;
+end
+
 logic  [CORE_DATA_WIDTH -1 : 0] cache_mem_out , sc_out;
 logic                            mmio_read_sel;
 
@@ -91,7 +107,7 @@ riscv_core_dcache_controller #(.TAG_WIDTH(TAG_WIDTH), .MMIO_BASE(MMIO_BASE)) dca
     .i_read(i_read),
     .i_write(i_write),
     .i_amo(i_amo),
-    .i_amo_alu_result(amo_alu_result),
+    .i_amo_alu_result(amo_alu_result_reg),
     .o_stall(o_stall),
     .o_rd_en(control_to_mem_rd_en),
     .o_wr_en(control_to_mem_wr_en),

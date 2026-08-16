@@ -99,7 +99,18 @@ enum logic [2:0] {
     AMO_OP         = 3'b100,
     MMIO_READ      = 3'b101,
     MMIO_WRITE     = 3'b110,
-    MMIO_DRAIN     = 3'b111} STATE , NEXT ;   // 1-cycle no-request gap between MMIO xacts
+    MMIO_DRAIN     = 3'b111} STATE = IDLE , NEXT = IDLE ;   // 1-cycle no-request gap between MMIO xacts
+// Initializers keep the combinational FSM/tag/reservation logic defined before
+// the first reset edge (Icarus would otherwise cascade X through the cache).
+initial begin
+    for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
+        TAG_MEM[i] = 'b0;
+        VALID_MEM[i] = 1'b0;
+    end
+    VALID_RES = 1'b0;
+    RES_SET = 'b0;
+    RES_SET_SIZE = 2'b0;
+end
 
 logic                      update_en;
 logic                      tag_hit;
@@ -420,6 +431,13 @@ case (STATE)
             if (i_amo) begin
                 o_wr_en = 1; 
                 o_amo_wr = 1; 
+            end
+            else begin
+                // Write the store/SC data into the cache line as well: a store
+                // MISS fills the line with the stale block, so without this the
+                // cache holds the pre-store value and a later read/AMO on the
+                // same line sees stale data (write-through only hits DDR).
+                o_wr_en = 1;
             end
         end
                end 

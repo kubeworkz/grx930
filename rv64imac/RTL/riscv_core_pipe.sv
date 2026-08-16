@@ -18,7 +18,7 @@ module riscv_core_pipe
     input logic [W_PIPE_BUS-1:0] i_pipe_in,
 
     // Output
-    output logic [W_PIPE_BUS-1:0] o_pipe_out
+    output logic [W_PIPE_BUS-1:0] o_pipe_out = 'b0
 );
 
 // Pipe behaviour
