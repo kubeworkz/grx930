@@ -1,0 +1,15 @@
+# Freebuff app state
+.freebuff/
+
+# Icarus build artifacts and waveform dumps
+c930/build/
+*.vcd
+
+# Vendored xpack RISC-V toolchain (re-downloadable; see c930/toolchain/README.md)
+c930/toolchain/*
+!c930/toolchain/README.md
+
+# rv64imac upstream clone: only the RTL (with C930 fixes) and README are vendored
+rv64imac/*
+!rv64imac/RTL/
+!rv64imac/README.md
