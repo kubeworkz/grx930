@@ -30,6 +30,7 @@ module riscv_core_dcache_controller #(
     input logic                         i_sc,
     input logic [CORE_DATA_WIDTH-1 : 0] i_amo_alu_result ,
     output logic                        o_stall,
+    output logic                        o_amo_result_pending,
     output logic                        o_store_fault,
     output logic                        o_load_fault,
     output logic                        o_amo_fault,
@@ -116,6 +117,21 @@ logic                      update_en;
 logic                      tag_hit;
 logic                      fault;
 
+// Remembers that the AMO/SC currently sitting in the core's MEM stage has
+// already been fully serviced (its write-through landed and the cache line was
+// updated). An independent stall (e.g. an instruction-cache fill after a taken
+// branch) freezes the pipeline, so the instruction cannot advance MEM->WB and
+// the LEVEL-based i_amo/i_sc stay asserted. IDLE would otherwise re-dispatch
+// and re-execute the same AMO (applying the op twice) or SC. Skip re-dispatch
+// until the request deasserts, i.e. until the core actually advanced.
+logic                      amo_sc_serviced;
+
+// The AMO result the core must capture is the OLD memory value, which the
+// memory array no longer holds once the AMO write-through lands. If the WB
+// capture is delayed past the transaction (frozen pipeline), present the
+// latched old value on the read port until the request deasserts.
+assign o_amo_result_pending = amo_sc_serviced && i_amo;
+
 /////////////////////////////////////////////////
 //    ASSIGNING NEXT STATE AND UPDATE BLOCK    //
 /////////////////////////////////////////////////
@@ -131,6 +147,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         VALID_RES <= 0;
         RES_SET <= 0;
         RES_SET_SIZE <= 0;
+        amo_sc_serviced <= 0;
         STATE <= IDLE;
     end
 
@@ -140,6 +157,13 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         VALID_RES <= NEXT_VALID_RES;
         RES_SET <= NEXT_RES_SET;
         RES_SET_SIZE <= NEXT_RES_SET_SIZE;
+
+        // Set once the AMO/SC write-through completes; clear when the request
+        // deasserts (the core advanced the instruction out of MEM).
+        if ((STATE == MEM_WRITE) && i_mem_write_done && (i_amo || i_sc))
+            amo_sc_serviced <= 1'b1;
+        else if (!(i_amo || i_sc))
+            amo_sc_serviced <= 1'b0;
 
         // UPDATE TAG and VALID MEM in case of BLOCK REPLACEMENT //
 
@@ -303,7 +327,7 @@ case (STATE)
 
             // SC INSTRUCTIONS //
 
-            else if(!mmio_sel && i_sc) begin
+            else if(!mmio_sel && i_sc && !amo_sc_serviced) begin
                 if (tag_hit) begin // WRITE HIT
                 NEXT_VALID_RES = 0;
                        if (!fault && res_set_hit) begin // SC HIT
@@ -330,7 +354,7 @@ case (STATE)
             // AMO INSTRUCTIONS //
 
 
-            else if(!mmio_sel && i_amo) begin
+            else if(!mmio_sel && i_amo && !amo_sc_serviced) begin
                 if (tag_hit) begin // AMO_READ HIT
                     if (!fault)
                     begin

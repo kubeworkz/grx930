@@ -36,6 +36,7 @@ module tb_c930_soc;
   localparam int STRESS_ADDR = 32'h9420;   // MMIO stress result (0x0BADBEEF = pass)
   localparam int AMO_RES_ADDR = 32'h9470;  // AMO/LR/SC stress result (0x00C0FFEE = pass)
   localparam int CONS_RES_ADDR = 32'h94B0; // multi-line consistency result (0x5EEDCAFE = pass)
+  localparam int STORE_RES_ADDR = 32'h94C0; // store-ordering result (0x00FACADE = pass)
   localparam int DIAG_ADDR    = 32'h9480;  // first failing stress step (C driver)
   localparam int PHASE_ADDR   = 32'h9490;  // program phase marker (C driver)
   localparam int AMO_BASE     = 32'h9600;  // AMO/LR/SC scratch words (C driver)
@@ -150,6 +151,10 @@ module tb_c930_soc;
     dut.u_ddr.mem[CONS_RES_ADDR + 1] = 8'h00;
     dut.u_ddr.mem[CONS_RES_ADDR + 2] = 8'h00;
     dut.u_ddr.mem[CONS_RES_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[STORE_RES_ADDR + 0] = 8'h00;
+    dut.u_ddr.mem[STORE_RES_ADDR + 1] = 8'h00;
+    dut.u_ddr.mem[STORE_RES_ADDR + 2] = 8'h00;
+    dut.u_ddr.mem[STORE_RES_ADDR + 3] = 8'h00;
   endtask
 
   // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
@@ -174,6 +179,14 @@ module tb_c930_soc;
           dut.u_ddr.mem[CONS_RES_ADDR + 2] == 8'hED &&
           dut.u_ddr.mem[CONS_RES_ADDR + 1] == 8'hCA &&
           dut.u_ddr.mem[CONS_RES_ADDR + 0] == 8'hFE);
+  endtask
+
+  // Read the store-ordering stress magic (0x00FACADE = pass).
+  task automatic store_ok(output int ok);
+    ok = (dut.u_ddr.mem[STORE_RES_ADDR + 3] == 8'h00 &&
+          dut.u_ddr.mem[STORE_RES_ADDR + 2] == 8'hFA &&
+          dut.u_ddr.mem[STORE_RES_ADDR + 1] == 8'hCA &&
+          dut.u_ddr.mem[STORE_RES_ADDR + 0] == 8'hDE);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -264,6 +277,12 @@ module tb_c930_soc;
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: multi-line consistency stress failed", m, n, k);
 
+    // Store-ordering stress must have passed (program order between AMOs and
+    // regular stores to the same address, write-through integrity).
+    store_ok(sok);
+    if (!sok)
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: store-ordering stress failed", m, n, k);
+
     if (o_npu_error)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);
     repeat (4) @(posedge clk);   // let the final stores settle
@@ -339,94 +358,6 @@ module tb_c930_soc;
         dut.u_cpu.hu_stall_if,
         dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE,
         dut.u_npu.o_done);
-      $fflush();
-    end
-  end
-
-  // LR/SC reservation debug: dump the dcache reservation state whenever a
-  // store/SC to AMO_BASE+0x18 (w[3]) is in the dcache MEM stage.
-  always @(posedge clk) begin
-    if (dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_sc &&
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_addr_from_core[15:0] == 16'h9618) begin
-      $display("[SC] c=%0d pc=%h addr=%h valid=%b res=%h size=%0d hit=%b st=%0d",
-        lv_edges, dut.u_cpu.if_pipe_pcf_new,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_addr_from_core,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.VALID_RES,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.RES_SET,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.RES_SET_SIZE,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.res_set_hit,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
-      $fflush();
-    end
-  end
-
-  // DDR write debug: dump every write-through request targeting the AMO line.
-  always @(posedge clk) begin
-    if (dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_valid &&
-        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address[15:0] >= 16'h9600 &&
-        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address[15:0] < 16'h9620) begin
-      $display("[W] c=%0d addr=%h data=%h strobe=%02x wr=%b amo=%b sc=%b st=%0d",
-        lv_edges,
-        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_address,
-        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_data,
-        dut.u_cpu.u_riscv_core_dcache_top.o_mem_write_strobe,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_write,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_amo,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.i_sc,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
-      $fflush();
-    end
-  end
-
-  // LR/SC pipeline debug: dump every cycle the LR/SC instruction is in the
-  // EX/MEM stage (i_sc/i_lr asserted), plus the captured read data and the
-  // reservation state, to catch double-capture or lost reservations.
-  always @(posedge clk) begin
-    if (dut.u_cpu.mem_main_decoder_lr || dut.u_cpu.mem_main_decoder_sc) begin
-      $display("[LS] c=%0d lr=%b sc=%b addr=%h scres=%h rd=%h stall=%b fwd_a=%0d rdata=%h",
-        lv_edges,
-        dut.u_cpu.mem_main_decoder_lr,
-        dut.u_cpu.mem_main_decoder_sc,
-        dut.u_cpu.ex_mem_pipe_alu_result,
-        dut.u_cpu.u_riscv_core_dcache_top.sc_out,
-        dut.u_cpu.ex_mem_pipe_rd,
-        dut.u_cpu.hu_stall_ex,
-        dut.u_cpu.hu_forward_a,
-        dut.u_cpu.read_data_mem_extnd);
-      $fflush();
-    end
-  end
-
-  // WB-stage result debug: dump the value written back for a4 (rd=14) during
-  // the LR/SC section (cycles 350-450).
-  always @(posedge clk) begin
-    if (lv_edges >= 350 && lv_edges <= 450 && dut.u_cpu.mem_wb_pipe_rd == 5'd14) begin
-      $display("[WB] c=%0d rd=14 rdata=%h alu=%h rsrc=%0d regwr=%b",
-        lv_edges,
-        dut.u_cpu.mem_wb_pipe_read_data,
-        dut.u_cpu.mem_wb_pipe_alu_result,
-        dut.u_cpu.mem_wb_pipe_resultsrc,
-        dut.u_cpu.mem_wb_pipe_regwrite);
-      $fflush();
-    end
-  end
-
-  // Branch debug: dump branch operands for the AMO w[0] section (cycles 60-130)
-  // and the LR/SC section (cycles 405-425).
-  always @(posedge clk) begin
-    if (((lv_edges >= 60 && lv_edges <= 130) || (lv_edges >= 405 && lv_edges <= 425)) &&
-        dut.u_cpu.id_ex_pipe_branch) begin
-      $display("[BR] c=%0d pc=%h fwd_a=%0d srca=%h srcb=%h taken=%b pcsrc=%b rdm=%0d rs1e=%0d regwr_mem=%b",
-        lv_edges,
-        dut.u_cpu.id_ex_pipe_pc,
-        dut.u_cpu.hu_forward_a,
-        dut.u_cpu.src_a_ex,
-        dut.u_cpu.src_b_ex,
-        dut.u_cpu.u_riscv_core_branch_unit.istaken,
-        dut.u_cpu.pcsrc_ex,
-        dut.u_cpu.ex_mem_pipe_rd,
-        dut.u_cpu.id_ex_pipe_rs1,
-        dut.u_cpu.ex_mem_pipe_regwrite);
       $fflush();
     end
   end

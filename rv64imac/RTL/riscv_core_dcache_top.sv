@@ -94,6 +94,15 @@ end
 logic  [CORE_DATA_WIDTH -1 : 0] cache_mem_out , sc_out;
 logic                            mmio_read_sel;
 
+// Latched copy of the AMO result (the OLD memory value, read in AMO_OP and
+// held through MEM_WRITE). If an independent stall (icache fill) freezes the
+// core past the transaction, the MEM->WB capture of the result is delayed; by
+// then the memory array already holds the NEW value, so the old value must be
+// presented explicitly (o_amo_result_pending) until the request deasserts.
+logic                            o_amo_result_pending;
+logic [CORE_DATA_WIDTH-1:0]      amo_old_value;
+logic [CORE_DATA_WIDTH-1:0]      mux_to_core;
+
 
 ////////////////////////////////
 //      BLOCK INSTANTIATION   //
@@ -109,6 +118,7 @@ riscv_core_dcache_controller #(.TAG_WIDTH(TAG_WIDTH), .MMIO_BASE(MMIO_BASE)) dca
     .i_amo(i_amo),
     .i_amo_alu_result(amo_alu_result_reg),
     .o_stall(o_stall),
+    .o_amo_result_pending(o_amo_result_pending),
     .o_rd_en(control_to_mem_rd_en),
     .o_wr_en(control_to_mem_wr_en),
     .o_block_replace(control_to_mem_block_replace),
@@ -150,8 +160,22 @@ dcache_mux
   ,.i_mux3x1_in1(sc_out)
   ,.i_mux3x1_in2(i_mmio_read_data)
   ,.i_mux3x1_sel({mmio_read_sel, i_sc})
-  ,.o_mux3x1_out(o_data_to_core)
+  ,.o_mux3x1_out(mux_to_core)
 );
+
+// Present the latched AMO result while a serviced AMO is still pending
+// deassertion (its MEM->WB capture was delayed by an independent stall).
+assign o_data_to_core = o_amo_result_pending ? amo_old_value : mux_to_core;
+
+// Capture the AMO's old value while the transaction reads the line (AMO_OP and
+// MEM_WRITE both keep o_rd_en high; the memory write only lands at the done
+// edge, so cache_mem_out is still the OLD value on every capture edge).
+always_ff @(posedge i_clk, negedge i_rst_n) begin : AMO_OLD_VALUE_LATCH
+    if (!i_rst_n)
+        amo_old_value <= 'b0;
+    else if (i_amo && control_to_mem_rd_en)
+        amo_old_value <= cache_mem_out;
+end
 
 
 riscv_core_amo_alu amo_alu (

@@ -385,6 +385,100 @@ static void mem_consistency_stress(void)
             ;   // hang so the testbench reports the failure
 }
 
+// -----------------------------------------------------------------------------
+// Store-ordering stress. Issues bursts of back-to-back stores and interleaves
+// AMOs with regular stores to the SAME address, verifying program order:
+//
+//  (1) 16 back-to-back stores to one word must land in order, and after an
+//      alias eviction the refill from DDR must show the last value (every
+//      write-through landed),
+//  (2) store -> AMO -> store -> AMO ... on the same word: each AMO must return
+//      the value written by the preceding store (and the cache must have been
+//      updated, not just DDR),
+//  (3) AMO then store to the same word: the store must overwrite the AMO
+//      result, and the evicted refill must show the store's value,
+//  (4) a chain of 8 back-to-back AMOs to one word: each must see the previous
+//      AMO's result (accumulating 1+2+...+8),
+//  (5) back-to-back stores to all four words of the line, then verify all four
+//      before and after an eviction (per-lane write-through integrity).
+//
+// STORE_BASE (index 0x44) and STORE_ALIAS (same index, different tag) force
+// refills like the consistency stress. All words are explicitly initialized
+// before use so the stress is idempotent across sweep boots.
+// -----------------------------------------------------------------------------
+#define STORE_BASE    0x9880   // 4 x 64-bit words in one 32B line (index 0x44)
+#define STORE_ALIAS   0x1880   // alias: same index, different tag
+#define STORE_RES_ADDR 0x94C0  // result magic (0x00FACADE = pass)
+#define STORE_PASS    0x00FACADEu
+#define STORE_FAIL    0xDEADFA11u
+
+static void store_order_stress(void)
+{
+    volatile unsigned long long *s = (volatile unsigned long long *)STORE_BASE;
+    volatile unsigned long long *al = (volatile unsigned long long *)STORE_ALIAS;
+    volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
+    volatile u32 *first_fail = (volatile u32 *)FAIL_ADDR;
+    u32 ok = 1;
+
+    // (1) 16 back-to-back stores to one word, then verify cache + DDR.
+    *diag = 0x901;
+    s[0] = 0;
+    for (int i = 1; i <= 16; i++)
+        s[0] = i;
+    if (s[0] != 16) { ok = 0; *first_fail = 0x901; }        // cache holds last store
+    al[0] = 0xDEAD;                                         // evict s's line
+    if (s[0] != 16) { ok = 0; *first_fail = 0x902; }        // refill from DDR: all 16 landed
+
+    // (2) store -> AMO -> store -> AMO ... to the same word.
+    *diag = 0x903;
+    s[1] = 0x1000;
+    if (amo_add(&s[1], 0x1) != 0x1000) { ok = 0; *first_fail = 0x903; }  // -> 0x1001
+    s[1] = 0x2000;
+    if (amo_add(&s[1], 0x1) != 0x2000) { ok = 0; *first_fail = 0x904; }  // -> 0x2001
+    s[1] = 0x3000;
+    if (amo_xor(&s[1], 0xF) != 0x3000) { ok = 0; *first_fail = 0x905; }  // -> 0x300F
+    s[1] = 0x4000;
+    if (amo_swap(&s[1], 0x5000) != 0x4000) { ok = 0; *first_fail = 0x906; }  // -> 0x5000
+    if (s[1] != 0x5000) { ok = 0; *first_fail = 0x907; }
+
+    // (3) AMO then store to the same word: the store must overwrite the result.
+    *diag = 0x908;
+    s[2] = 0x7777;
+    if (amo_add(&s[2], 0x1) != 0x7777) { ok = 0; *first_fail = 0x908; }  // -> 0x7778
+    s[2] = 0x8888;                                          // overwrite the AMO result
+    if (s[2] != 0x8888) { ok = 0; *first_fail = 0x909; }
+    al[1] = 0xEEEE;                                         // evict s's line
+    if (s[2] != 0x8888) { ok = 0; *first_fail = 0x90A; }    // DDR has the store, not the AMO
+    if (s[1] != 0x5000) { ok = 0; *first_fail = 0x90B; }    // neighbor word intact
+
+    // (4) chain of 8 back-to-back AMOs to one word.
+    *diag = 0x90C;
+    unsigned long long expect = 0;
+    s[3] = 0;
+    for (int i = 1; i <= 8; i++) {
+        if (amo_add(&s[3], i) != expect) { ok = 0; if (*first_fail == 0) *first_fail = 0x90C + i; }
+        expect += i;
+    }
+    if (s[3] != 36) { ok = 0; if (*first_fail == 0) *first_fail = 0x915; }  // 1+2+...+8
+    al[2] = 0xFFFF;                                         // evict s's line
+    if (s[3] != 36) { ok = 0; if (*first_fail == 0) *first_fail = 0x916; }  // DDR has the sum
+
+    // (5) back-to-back stores to all four words, then verify before/after eviction.
+    *diag = 0x917;
+    s[0] = 0xAAAA; s[1] = 0xBBBB; s[2] = 0xCCCC; s[3] = 0xDDDD;
+    if (s[0] != 0xAAAA || s[1] != 0xBBBB || s[2] != 0xCCCC || s[3] != 0xDDDD)
+        { ok = 0; *first_fail = 0x917; }
+    al[3] = 0x1234;                                         // evict s's line
+    if (s[0] != 0xAAAA || s[1] != 0xBBBB || s[2] != 0xCCCC || s[3] != 0xDDDD)
+        { ok = 0; *first_fail = 0x918; }                    // all four landed in DDR
+
+    *diag = 0x920;
+    *(volatile u32 *)STORE_RES_ADDR = ok ? STORE_PASS : STORE_FAIL;
+    if (!ok)
+        for (;;)
+            ;   // hang so the testbench reports the failure
+}
+
 __attribute__((noreturn))
 void main(void)
 {
@@ -398,6 +492,9 @@ void main(void)
 
     // 0b. Multi-line memory-consistency stress (write-through/eviction/refill).
     mem_consistency_stress();
+
+    // 0c. Store-ordering stress (back-to-back stores + AMO/store interleave).
+    store_order_stress();
     *phase = 0x04;
 
     // 1. Stress the MMIO write/read-back path (regression coverage).
