@@ -418,10 +418,14 @@ static void mem_consistency_stress(void)
 // setup lands during a line fill (regression coverage for the fetch-PC trap
 // capture under stalls: a CSR redirect landing mid-fill must not be dropped).
 #define TRAP_CNT_ADDR   0x94D0   // handler invocation counter
-#define TRAP_CAUSE_ADDR 0x94D4   // mcause the handler observed
+#define TRAP_CAUSE_ADDR 0x94D4   // mcause the handler observed, slot[cnt] (0x94D4 + 8*cnt)
 #define TRAP_RES_ADDR   0x94D8   // result magic (0x00D0C1DE = pass)
 #define TRAP_PASS       0x00D0C1DEu
 #define TRAP_FAIL       0x0A11BADu
+
+// Second-trap trigger (ecall) placed at 0x2020 by link.ld; see definition
+// below trap_test. Forward-declared so trap_test can call it.
+static void ecall_trigger(void);
 
 // Forces the SC result to be read from the ARCHITECTED register (post-WB)
 // instead of the combinational MEM->EX forward. The stranded-SC scenario needs
@@ -600,10 +604,17 @@ __attribute__((noinline)) static void trap_handler(void)
         "sd    ra, 24(sp)\n\t"
         "sd    a3, 16(sp)\n\t"
         "sd    a5,  8(sp)\n\t"
-        // *caus = mcause
-        ".word 0x342022F3\n\t"
+        // *slot = mcause, where slot = 0x94D4 + 8*cnt (cnt BEFORE increment),
+        // so each invocation records its own cause and the first (illegal =
+        // 2) isn't overwritten by the second (ecall = 11). Only t0/t1/a5 are
+        // clobbered (the same set the original handler used).
         "lui   a5, 0x9\n\t"
-        "sw    t0, 0x4d4(a5)\n\t"
+        "lw    t1, 0x4d0(a5)\n\t"          // t1 = cnt (pre-increment)
+        "slli  t1, t1, 3\n\t"              // t1 = cnt*8
+        "addi  a5, a5, 0x4d4\n\t"          // a5 = 0x94D4
+        "add   a5, a5, t1\n\t"             // a5 = slot
+        ".word 0x342022F3\n\t"            // csrrs t0, mcause, x0
+        "sw    t0, 0(a5)\n\t"              // *slot = mcause
         // mepc += 4 (skip the faulting instruction)
         ".word 0x341022F3\n\t"
         "addi  t0, t0, 4\n\t"
@@ -653,6 +664,22 @@ static void trap_test(void)
     if (*cnt != 1) { ok = 0; if (*first_fail == 0) *first_fail = 0x943; }
     if (*caus != 2) { ok = 0; if (*first_fail == 0) *first_fail = 0x944; }
 
+    // Second trap: an ecall (mcause = 11) fired from code whose icache line
+    // aliases the handler's (0x2020 has index 1, tag 2; the handler at 0x24
+    // has index 1, tag 0), so calling it EVICTS the cached handler line and
+    // the redirect to 0x24 must miss again -> the handler re-enters from a
+    // cold line, exercising the same stall/redirect path as the first trap.
+    *diag = 0x945;
+    ecall_trigger();
+
+    // Now the handler must have run exactly twice, with the first invocation
+    // still recorded as mcause==2 and the second as mcause==11 (the slot
+    // indexing in the handler must not have overwritten the first cause).
+    *diag = 0x946;
+    if (*cnt != 2) { ok = 0; if (*first_fail == 0) *first_fail = 0x946; }
+    if (*caus != 2) { ok = 0; if (*first_fail == 0) *first_fail = 0x947; }
+    if (*(volatile u32 *)(TRAP_CAUSE_ADDR + 8) != 11) { ok = 0; if (*first_fail == 0) *first_fail = 0x948; }
+
     // Defensive: restore mtvec = 0 (nothing traps after this point).
     t0 = 0;
     asm volatile(".word 0x30529073" :: "r"(t0));
@@ -662,6 +689,24 @@ static void trap_test(void)
     if (!ok)
         for (;;)
             ;   // hang so the testbench reports the failure
+}
+
+// -----------------------------------------------------------------------------
+// Second-trap trigger: an ecall (mcause = 11) fired from a fixed address that
+// aliases the handler's icache line. link.ld places this section at 0x2020:
+// icache index = addr[11:5] = 1 (same line as the handler at 0x24) but tag =
+// addr[63:12] = 2 (the handler's tag is 0), so merely CALLING this function
+// refills line 1 with a different tag and evicts the cached handler bytes.
+// The ecall then traps and the redirect to 0x24 misses again -> the handler
+// is re-entered from a cold line under a cache-fill stall.
+// -----------------------------------------------------------------------------
+__attribute__((section(".ecall_trig"), noinline, used))
+static void ecall_trigger(void)
+{
+    asm volatile(
+        ".word 0x00000073\n\t"   // ecall -> mcause = 11
+        "ret\n\t"                // mret returns here (mepc+4), then back to caller
+    );
 }
 
 __attribute__((noreturn))

@@ -48,6 +48,17 @@ module riscv_core_hazard_unit
     output logic o_hazard_unit_flush_mem,
     output logic o_hazard_unit_flush_wb,
 
+    // CSR-dependency stall operand hold: while the one-cycle stall holds the
+    // dependent instruction in EX, an operand whose producer sits in WB loses
+    // its WB->EX forward on the release cycle (only EX/MEM are frozen). The
+    // top captures that operand's value at the stall edge (hold_a/b_en) and
+    // reselects it during the release window (csr_stall_prev). The operand
+    // produced by the CSR read itself is NOT held - it is stale at the stall
+    // edge and arrives via the WB->EX forward once the producer reaches WB.
+    output logic o_hazard_unit_csr_hold_a_en,
+    output logic o_hazard_unit_csr_hold_b_en,
+    output logic o_hazard_unit_csr_stall_prev,
+
     //CSR inputs
     input  logic i_hazard_unit_csr_flush_id,
     input  logic i_hazard_unit_csr_flush_ex,
@@ -64,6 +75,8 @@ logic mstall_detection;
 logic icache_stall_detection;
 logic dcache_stall_detection;
 logic csr_stall_detection;
+logic csr_dep_rs1;
+logic csr_dep_rs2;
 logic csr_stall_prev;
 logic csr_stall_active;
 
@@ -133,12 +146,15 @@ begin : stall_proc
     // A CSR read in MEM whose rd matches an EX-stage source: the value only
     // exists at WB, so the consumer must be held in EX (its operands in the
     // id_ex pipe) until the producer advances MEM->WB. stall_wb stays clear so
-    // the producer is not frozen; on the release cycle the WB->EX forward
-    // supplies the CSR read data. The IF/ID stages freeze harmlessly for the
-    // single cycle (csr_stall_active is a one-cycle pulse).
-    csr_stall_detection = (i_hazard_unit_resultsrc_mem == 2'b11) && i_hazard_unit_regwrite_mem &&
-                          (((i_hazard_unit_rs1_ex == i_hazard_unit_rd_mem) && (i_hazard_unit_rs1_ex != 5'b0)) ||
-                           ((i_hazard_unit_rs2_ex == i_hazard_unit_rd_mem) && (i_hazard_unit_rs2_ex != 5'b0)));
+    // the producer is not frozen (it advances MEM->WB, where the WB->EX
+    // forward supplies the CSR read data on the release cycle). The IF/ID
+    // stages freeze harmlessly for the single cycle (csr_stall_active is a
+    // one-cycle pulse).
+    csr_dep_rs1 = (i_hazard_unit_resultsrc_mem == 2'b11) && i_hazard_unit_regwrite_mem &&
+                  (i_hazard_unit_rs1_ex == i_hazard_unit_rd_mem) && (i_hazard_unit_rs1_ex != 5'b0);
+    csr_dep_rs2 = (i_hazard_unit_resultsrc_mem == 2'b11) && i_hazard_unit_regwrite_mem &&
+                  (i_hazard_unit_rs2_ex == i_hazard_unit_rd_mem) && (i_hazard_unit_rs2_ex != 5'b0);
+    csr_stall_detection = csr_dep_rs1 || csr_dep_rs2;
     // Load-use is resolved by the MEM->EX forward (the dcache read is
     // combinational, so the loaded value is valid while the load sits in MEM).
     // Stalling on it would hold the dependent in ID while stall_ex lets it also
@@ -161,6 +177,16 @@ begin : stall_proc
     // stall deliberately excludes stall_wb: the CSR producer must advance
     // MEM->WB for its value to become available.
     o_hazard_unit_stall_wb  = mstall_detection || icache_stall_detection || dcache_stall_detection;
+
+    // Capture the operand NOT produced by the CSR read. At the stall edge its
+    // value is correct (its producer is in WB and the WB->EX forward is live,
+    // or it is an already-committed register value); on the release cycle that
+    // producer has left WB, so the captured value must be reselected. When
+    // both sources depend on the CSR read neither is held - both forward from
+    // WB on the release cycle.
+    o_hazard_unit_csr_hold_a_en = csr_stall_active && csr_dep_rs2 && !csr_dep_rs1;
+    o_hazard_unit_csr_hold_b_en = csr_stall_active && csr_dep_rs1 && !csr_dep_rs2;
+    o_hazard_unit_csr_stall_prev = csr_stall_prev;
 end
 
 //---------------------------------Flush---------------------------------\\

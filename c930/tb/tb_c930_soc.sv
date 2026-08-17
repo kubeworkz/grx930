@@ -168,6 +168,10 @@ module tb_c930_soc;
     dut.u_ddr.mem[32'h94D4 + 1] = 8'h00;
     dut.u_ddr.mem[32'h94D4 + 2] = 8'h00;
     dut.u_ddr.mem[32'h94D4 + 3] = 8'h00;
+    dut.u_ddr.mem[32'h94DC + 0] = 8'h00;
+    dut.u_ddr.mem[32'h94DC + 1] = 8'h00;
+    dut.u_ddr.mem[32'h94DC + 2] = 8'h00;
+    dut.u_ddr.mem[32'h94DC + 3] = 8'h00;
   endtask
 
   // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
@@ -202,12 +206,22 @@ module tb_c930_soc;
           dut.u_ddr.mem[STORE_RES_ADDR + 0] == 8'hDE);
   endtask
 
-  // Read the trap-test magic (0x00D0C1DE = pass).
+  // Read the trap-test magic (0x00D0C1DE = pass) plus the per-invocation
+  // cause slots: slot[0] (0x94D4) must be 2 (illegal instruction) and slot[1]
+  // (0x94DC) must be 11 (ecall).
   task automatic trap_ok(output int ok);
     ok = (dut.u_ddr.mem[TRAP_RES_ADDR + 3] == 8'h00 &&
           dut.u_ddr.mem[TRAP_RES_ADDR + 2] == 8'hD0 &&
           dut.u_ddr.mem[TRAP_RES_ADDR + 1] == 8'hC1 &&
-          dut.u_ddr.mem[TRAP_RES_ADDR + 0] == 8'hDE);
+          dut.u_ddr.mem[TRAP_RES_ADDR + 0] == 8'hDE &&
+          dut.u_ddr.mem[32'h94D4 + 0] == 8'h02 &&
+          dut.u_ddr.mem[32'h94D4 + 1] == 8'h00 &&
+          dut.u_ddr.mem[32'h94D4 + 2] == 8'h00 &&
+          dut.u_ddr.mem[32'h94D4 + 3] == 8'h00 &&
+          dut.u_ddr.mem[32'h94DC + 0] == 8'h0B &&
+          dut.u_ddr.mem[32'h94DC + 1] == 8'h00 &&
+          dut.u_ddr.mem[32'h94DC + 2] == 8'h00 &&
+          dut.u_ddr.mem[32'h94DC + 3] == 8'h00);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -304,8 +318,9 @@ module tb_c930_soc;
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: store-ordering stress failed", m, n, k);
 
-    // Trap test must have passed (illegal instr -> mtvec handler -> mret,
-    // exactly once, with the trap redirect surviving the cache-fill stall).
+    // Trap test must have passed (illegal instr + ecall -> mtvec handler ->
+    // mret twice, both re-entering from cold icache lines with the redirect
+    // surviving the cache-fill stall).
     trap_ok(sok);
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: trap test failed", m, n, k);

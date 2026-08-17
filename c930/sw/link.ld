@@ -41,4 +41,11 @@ SECTIONS
     *(.bss .bss.*)
     *(COMMON)
   } > RAM
+
+  /* Second-trap trigger: placed at 0x2020 so it aliases icache line 1 (index
+     addr[11:5] = 1) with tag 2, evicting the handler at 0x24 (tag 0) when
+     called. See ecall_trigger() in npu_test.c. */
+  .ecall_trig 0x2020 : {
+    KEEP(*(.ecall_trig))
+  } > RAM
 }

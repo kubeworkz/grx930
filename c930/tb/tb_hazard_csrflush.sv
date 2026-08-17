@@ -14,6 +14,7 @@ module tb;
   logic [1:0] forwarda_ex, forwardb_ex;
   logic stall_if, stall_id, stall_ex, stall_mem, stall_wb;
   logic flush_id, flush_ex, flush_mem, flush_wb;
+  logic csr_hold_a_en, csr_hold_b_en, csr_stall_prev;
 
   riscv_core_hazard_unit u (
     .i_hazard_unit_clk(clk), .i_hazard_unit_rst_n(rst_n),
@@ -34,7 +35,9 @@ module tb;
     .o_hazard_unit_stall_ex(stall_ex), .o_hazard_unit_stall_mem(stall_mem),
     .o_hazard_unit_stall_wb(stall_wb),
     .o_hazard_unit_flush_id(flush_id), .o_hazard_unit_flush_ex(flush_ex),
-    .o_hazard_unit_flush_mem(flush_mem), .o_hazard_unit_flush_wb(flush_wb)
+    .o_hazard_unit_flush_mem(flush_mem), .o_hazard_unit_flush_wb(flush_wb),
+    .o_hazard_unit_csr_hold_a_en(csr_hold_a_en), .o_hazard_unit_csr_hold_b_en(csr_hold_b_en),
+    .o_hazard_unit_csr_stall_prev(csr_stall_prev)
   );
 
   int errors = 0;
