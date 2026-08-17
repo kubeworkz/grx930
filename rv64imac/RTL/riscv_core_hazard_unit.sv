@@ -128,7 +128,17 @@ begin : flush_proc
     // flushing the EX stage here destroys the in-flight load (it vanishes from
     // the pipeline and its result never reaches the register file), so the
     // dependent instruction reads the stale pre-load value.
-    o_hazard_unit_flush_ex  = (i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_ex );
+    //
+    // flush_id fires immediately on a redirect so the wrong-path instruction in
+    // ID is killed before the stall releases. flush_ex must be DEFERRED while
+    // the pipeline is stalled (cache fill / mul busy): it clears the id_ex
+    // pipe, which holds the resolving branch/jump itself. If it fires while the
+    // stall is freezing the EX->MEM capture, the branch's writeback (e.g. a
+    // jal's return address) is destroyed before it can reach WB. Deferring the
+    // EX flush to the stall-release edge lets the branch advance EX->MEM (the
+    // stall holds its id_ex copy until then) and clears the stale id_ex
+    // contents on the same edge.
+    o_hazard_unit_flush_ex  = ((i_hazard_unit_pcsrc_ex && !mstall_detection && !icache_stall_detection && !dcache_stall_detection) || i_hazard_unit_csr_flush_ex);
     o_hazard_unit_flush_id  = i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_id;
     o_hazard_unit_flush_mem = i_hazard_unit_csr_flush_mem;
     o_hazard_unit_flush_wb  = i_hazard_unit_csr_flush_wb;

@@ -422,6 +422,15 @@ static int sc_rc_ok(unsigned long long rc)
     return (rc == 0) ? 1 : 0;
 }
 
+// Same idea for the LR: the stranded-LR scenario must verify the loaded value
+// reached the architected register (post-WB), not just the forward used by the
+// result-check branch.
+__attribute__((noinline))
+static int lr_val_ok(unsigned long long v)
+{
+    return (v == 0xABCDull) ? 1 : 0;
+}
+
 static void store_order_stress(void)
 {
     volatile unsigned long long *s = (volatile unsigned long long *)STORE_BASE;
@@ -512,6 +521,35 @@ sc_freeze_done:
     if (fx[0] != 0x5151ull) { ok = 0; if (*first_fail == 0) *first_fail = 0x923; }
     al[4] = 0xEEEE;                                         // evict fx's line
     if (fx[0] != 0x5151ull) { ok = 0; if (*first_fail == 0) *first_fail = 0x924; }  // DDR
+
+    // (7) stranded LR: the LR's result-check branch redirects to an icache
+    //     line the fetch only ever enters via this branch, so the line fill
+    //     freezes the pipeline while the LR sits in MEM. The loaded value must
+    //     still reach the architected register (post-WB) and the reservation
+    //     must survive the freeze so a subsequent SC still succeeds.
+    *diag = 0x931;
+    volatile unsigned long long *gx = (volatile unsigned long long *)(STORE_BASE + 0x20);
+    unsigned long long glr;
+    gx[0] = 0xABCDull;
+    glr = lr_d(gx);
+    if (glr == 0xABCDull)
+        goto lr_freeze_done;
+    // Fail path - never taken in the pass case; padded so lr_freeze_done lands
+    // in a line the fetch has not yet reached when the result branch resolves.
+    {
+        volatile u32 pad = 0;
+        for (int p = 0; p < 8; p++)
+            pad += p;
+        if (pad)
+            *first_fail = 0x931;
+        ok = 0;
+    }
+lr_freeze_done:
+    if (!lr_val_ok(glr)) { ok = 0; if (*first_fail == 0) *first_fail = 0x932; }
+    if (sc_d(gx, 0xBEEF) != 0) { ok = 0; if (*first_fail == 0) *first_fail = 0x933; }  // reservation survived
+    if (gx[0] != 0xBEEF) { ok = 0; if (*first_fail == 0) *first_fail = 0x934; }
+    al[4] = 0xEEEE;                                         // evict gx's line
+    if (gx[0] != 0xBEEF) { ok = 0; if (*first_fail == 0) *first_fail = 0x935; }  // DDR
 
     *diag = 0x920;
     *(volatile u32 *)STORE_RES_ADDR = ok ? STORE_PASS : STORE_FAIL;
