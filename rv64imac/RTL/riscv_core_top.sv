@@ -287,7 +287,13 @@ u_riscv_core_pipe_pcf_if
   // A taken branch/jump must update the fetch PC even while the pipeline is
   // stalled (e.g. a dcache line fill right behind the branch), otherwise the
   // redirect is lost and execution continues at the fall-through address.
-  ,.i_pipe_en_n  (hu_stall_if && !pcsrc_ex)
+  // A CSR redirect (trap handler / mret) must do the same: pc_cntrl_wb selects
+  // TRAP_PC into PCF_NEW, but if the fetch-PC register is frozen by a cache
+  // fill when the trap fires, the handler/mret target is dropped and execution
+  // continues past the faulting instruction. mret holds pc_cntrl_wb through the
+  // stall (it stays in WB), and the exception's setting_up window is one cycle,
+  // so the capture must happen while the stall is active.
+  ,.i_pipe_en_n  (hu_stall_if && !pcsrc_ex && !pc_cntrl_wb)
   ,.i_pipe_in    (PCF_NEW)
   ,.o_pipe_out   (if_pipe_pcf_new)
 );
