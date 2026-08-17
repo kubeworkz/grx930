@@ -412,6 +412,17 @@ static void mem_consistency_stress(void)
 #define STORE_PASS    0x00FACADEu
 #define STORE_FAIL    0xDEADFA11u
 
+// Trap test: an illegal instruction traps to a real mtvec handler that records
+// mcause, advances mepc past the fault, and mret's back. The handler lives in
+// an icache line the fetch only ever enters via the trap redirect, so the trap
+// setup lands during a line fill (regression coverage for the fetch-PC trap
+// capture under stalls: a CSR redirect landing mid-fill must not be dropped).
+#define TRAP_CNT_ADDR   0x94D0   // handler invocation counter
+#define TRAP_CAUSE_ADDR 0x94D4   // mcause the handler observed
+#define TRAP_RES_ADDR   0x94D8   // result magic (0x00D0C1DE = pass)
+#define TRAP_PASS       0x00D0C1DEu
+#define TRAP_FAIL       0x0A11BADu
+
 // Forces the SC result to be read from the ARCHITECTED register (post-WB)
 // instead of the combinational MEM->EX forward. The stranded-SC scenario needs
 // to detect a dcache re-dispatch, which only corrupts the register file (rc
@@ -558,6 +569,101 @@ lr_freeze_done:
             ;   // hang so the testbench reports the failure
 }
 
+// -----------------------------------------------------------------------------
+// Trap test: illegal instruction -> real mtvec handler -> mret, exactly once.
+//
+// The handler is compiled as a separate noinline function placed after this
+// test in the .text output, so its icache line is only ever entered via the
+// trap redirect: the redirect misses, the line fill freezes the pipeline while
+// the CSR unit's trap setup (pc_cntrl_wb / setting_up) is active, and the
+// fetch-PC register must capture the handler address DURING the stall. If the
+// trap redirect is dropped (the pre-fix behavior), execution falls through to
+// the checks below with the handler never having run (cnt stays 0).
+// -----------------------------------------------------------------------------
+// The whole handler is one deterministic asm blob. Why: a C handler's
+// restore epilogue (ld ra; ret) lands AFTER the mret and is dead code, so ra
+// would stay clobbered by the handler's own jals and the interrupted code's
+// ret would jump into the handler body (re-running the mret without a trap
+// setup, which corrupts the CSR state machine). The blob below explicitly
+// preserves the registers trap_test lives on across the trap (a5 = &DIAG,
+// a3 = &CNT, ra = 0x12d0, sp) and restores them BEFORE the mret.
+//
+// CSR encodings (no Zicsr in the march string):
+//   0x342022F3  csrrs t0, mcause, x0
+//   0x341022F3  csrrs t0, mepc,   x0
+//   0x34129073  csrrw x0, mepc,   t0   (mepc += 4 to skip the faulting instr)
+//   0x30200073  mret
+__attribute__((noinline)) static void trap_handler(void)
+{
+    asm volatile(
+        "addi  sp, sp, -32\n\t"
+        "sd    ra, 24(sp)\n\t"
+        "sd    a3, 16(sp)\n\t"
+        "sd    a5,  8(sp)\n\t"
+        // *caus = mcause
+        ".word 0x342022F3\n\t"
+        "lui   a5, 0x9\n\t"
+        "sw    t0, 0x4d4(a5)\n\t"
+        // mepc += 4 (skip the faulting instruction)
+        ".word 0x341022F3\n\t"
+        "addi  t0, t0, 4\n\t"
+        ".word 0x34129073\n\t"
+        // cnt += 1
+        "lui   a5, 0x9\n\t"
+        "lw    t1, 0x4d0(a5)\n\t"
+        "addiw t1, t1, 1\n\t"
+        "sw    t1, 0x4d0(a5)\n\t"
+        // restore the interrupted context, THEN mret
+        "ld    a5,  8(sp)\n\t"
+        "ld    a3, 16(sp)\n\t"
+        "ld    ra, 24(sp)\n\t"
+        "addi  sp, sp, 32\n\t"
+        ".word 0x30200073\n\t"
+    );
+}
+
+__attribute__((noinline))
+static void trap_test(void)
+{
+    volatile u32 *cnt  = (volatile u32 *)TRAP_CNT_ADDR;
+    volatile u32 *caus = (volatile u32 *)TRAP_CAUSE_ADDR;
+    volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
+    volatile u32 *first_fail = (volatile u32 *)FAIL_ADDR;
+    u32 ok = 1;
+    register unsigned long long t0 asm("t0");
+
+    *diag = 0x941;
+    *cnt = 0;
+    *caus = 0;
+
+    // Install the handler: csrrw x0, mtvec, t0.
+    t0 = (unsigned long long)(unsigned long)trap_handler;
+    asm volatile(".word 0x30529073" :: "r"(t0));
+
+    // Trigger the illegal instruction (opcode 0x0B - custom-0, not decoded).
+    // On success the handler mret's back to the instruction after this one;
+    // on a dropped redirect (the bug under test) the fetch falls through to
+    // the checks below instead and the count stays 0.
+    *diag = 0x942;
+    asm volatile(".word 0x0000000B");
+
+    // Handler must have run exactly once, seen the illegal-instruction cause
+    // (mcause == 2), and mret'd back to here.
+    *diag = 0x943;
+    if (*cnt != 1) { ok = 0; if (*first_fail == 0) *first_fail = 0x943; }
+    if (*caus != 2) { ok = 0; if (*first_fail == 0) *first_fail = 0x944; }
+
+    // Defensive: restore mtvec = 0 (nothing traps after this point).
+    t0 = 0;
+    asm volatile(".word 0x30529073" :: "r"(t0));
+
+    *diag = 0x940;
+    *(volatile u32 *)TRAP_RES_ADDR = ok ? TRAP_PASS : TRAP_FAIL;
+    if (!ok)
+        for (;;)
+            ;   // hang so the testbench reports the failure
+}
+
 __attribute__((noreturn))
 void main(void)
 {
@@ -579,6 +685,11 @@ void main(void)
     // 1. Stress the MMIO write/read-back path (regression coverage).
     mmio_stress();
     *phase = 0x05;
+
+    // 1b. Trap test: real mtvec handler + mret under a cache-fill stall.
+    *phase = 0x0A;
+    trap_test();
+    *phase = 0x0B;
 
     // 1. Read the workload descriptor the testbench staged in DDR.
     u32 m = *(volatile u32 *)(DIMS_ADDR + 0x00);

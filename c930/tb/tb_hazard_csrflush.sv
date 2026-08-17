@@ -10,11 +10,13 @@ module tb;
   logic pcsrc_ex;
   logic illegal_instr, mdone, mbusy, dcache_stall, icache_stall;
   logic csr_flush_id, csr_flush_ex, csr_flush_mem, csr_flush_wb;
+  logic [1:0] resultsrc_mem;
   logic [1:0] forwarda_ex, forwardb_ex;
   logic stall_if, stall_id, stall_ex, stall_mem, stall_wb;
   logic flush_id, flush_ex, flush_mem, flush_wb;
 
   riscv_core_hazard_unit u (
+    .i_hazard_unit_clk(clk), .i_hazard_unit_rst_n(rst_n),
     .i_hazard_unit_rs1_id(rs1_id), .i_hazard_unit_rs2_id(rs2_id),
     .i_hazard_unit_rs1_ex(rs1_ex), .i_hazard_unit_rs2_ex(rs2_ex),
     .i_hazard_unit_rd_ex(rd_ex), .i_hazard_unit_rd_mem(rd_mem),
@@ -26,6 +28,7 @@ module tb;
     .i_hazard_unit_dcache_stall(dcache_stall), .i_hazard_unit_icache_stall(icache_stall),
     .i_hazard_unit_csr_flush_id(csr_flush_id), .i_hazard_unit_csr_flush_ex(csr_flush_ex),
     .i_hazard_unit_csr_flush_mem(csr_flush_mem), .i_hazard_unit_csr_flush_wb(csr_flush_wb),
+    .i_hazard_unit_resultsrc_mem(resultsrc_mem),
     .o_hazard_unit_forwarda_ex(forwarda_ex), .o_hazard_unit_forwardb_ex(forwardb_ex),
     .o_hazard_unit_stall_if(stall_if), .o_hazard_unit_stall_id(stall_id),
     .o_hazard_unit_stall_ex(stall_ex), .o_hazard_unit_stall_mem(stall_mem),
@@ -47,6 +50,7 @@ module tb;
     regwrite_mem = 0; regwrite_wb = 0; resultsrc_ex = 0; pcsrc_ex = 0;
     illegal_instr = 0; mdone = 1; mbusy = 0; dcache_stall = 0; icache_stall = 0;
     csr_flush_id = 0; csr_flush_ex = 0; csr_flush_mem = 0; csr_flush_wb = 0;
+    resultsrc_mem = 0;
 
     @(negedge clk); rst_n = 1;
 

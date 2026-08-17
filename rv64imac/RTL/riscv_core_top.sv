@@ -1789,9 +1789,14 @@ riscv_core_mux2x1
 )
 u_riscv_core_mux2x1_stg1_pc_trap
 (
+  // The trap PC must be captured from the stage where the exception fires.
+  // An ID-stage exception (illegal instruction, ecall, ebreak) sets
+  // csr_id_flush, not csr_ex_flush, so selecting on csr_ex_flush left the
+  // fetch-ahead PC (if_pipe_pcf_new) in mepc and the handler mret'd to the
+  // wrong address.
   .i_mux2x1_in0 (if_pipe_pcf_new)
   ,.i_mux2x1_in1(if_id_pipe_pc)
-  ,.i_mux2x1_sel(csr_ex_flush)
+  ,.i_mux2x1_sel(csr_id_flush)
   ,.o_mux2x1_out(csr_pc_trap_stg1)
 );
 
@@ -1843,8 +1848,11 @@ u_riscv_core_mux2x1_stg2_instr_csr
 riscv_core_hazard_unit
 u_riscv_core_hazard_unit
 (
+    // Clock / reset (one-cycle CSR-dependency stall latch)
+    .i_hazard_unit_clk            (i_riscv_core_clk)
+    ,.i_hazard_unit_rst_n         (i_riscv_core_rst_n)
     // RV64I Detection inputs
-    .i_hazard_unit_rs1_id         (if_id_pipe_instr[19:15]) // rs1D
+    ,.i_hazard_unit_rs1_id        (if_id_pipe_instr[19:15]) // rs1D
     ,.i_hazard_unit_rs2_id        (if_id_pipe_instr[24:20]) // rs2D
     ,.i_hazard_unit_rs1_ex        (id_ex_pipe_rs1)
     ,.i_hazard_unit_rs2_ex        (id_ex_pipe_rs2)
@@ -1867,6 +1875,7 @@ u_riscv_core_hazard_unit
     // CSR inputs
     ,.i_hazard_unit_csr_flush_id  (csr_if_flush)
     ,.i_hazard_unit_csr_flush_ex  (csr_id_flush)
+    ,.i_hazard_unit_resultsrc_mem (ex_mem_pipe_resultsrc)
     ,.i_hazard_unit_csr_flush_mem (csr_ex_flush)
     ,.i_hazard_unit_csr_flush_wb  (csr_mem_flush)
     // UART 

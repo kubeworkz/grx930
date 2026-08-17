@@ -897,6 +897,15 @@ if (!i_csr_unit_rst_n)
                     mtimecmp <= op_result;
                  end
 
+              // mepc must be writable so a trap handler can advance past the
+              // faulting instruction (mepc += 4) before mret; without this
+              // case the write is silently dropped and mret re-executes the
+              // same fault forever.
+              `csr_mepc:
+                 begin
+                    mepc <= op_result;
+                 end
+
               `csr_sie:
                  begin
                   sie_seie <= op_result[9];

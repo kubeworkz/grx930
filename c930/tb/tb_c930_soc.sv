@@ -37,6 +37,7 @@ module tb_c930_soc;
   localparam int AMO_RES_ADDR = 32'h9470;  // AMO/LR/SC stress result (0x00C0FFEE = pass)
   localparam int CONS_RES_ADDR = 32'h94B0; // multi-line consistency result (0x5EEDCAFE = pass)
   localparam int STORE_RES_ADDR = 32'h94C0; // store-ordering result (0x00FACADE = pass)
+  localparam int TRAP_RES_ADDR  = 32'h94D8; // trap-test result (0x00D0C1DE = pass)
   localparam int DIAG_ADDR    = 32'h9480;  // first failing stress step (C driver)
   localparam int PHASE_ADDR   = 32'h9490;  // program phase marker (C driver)
   localparam int AMO_BASE     = 32'h9600;  // AMO/LR/SC scratch words (C driver)
@@ -155,6 +156,18 @@ module tb_c930_soc;
     dut.u_ddr.mem[STORE_RES_ADDR + 1] = 8'h00;
     dut.u_ddr.mem[STORE_RES_ADDR + 2] = 8'h00;
     dut.u_ddr.mem[STORE_RES_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[TRAP_RES_ADDR + 0] = 8'h00;
+    dut.u_ddr.mem[TRAP_RES_ADDR + 1] = 8'h00;
+    dut.u_ddr.mem[TRAP_RES_ADDR + 2] = 8'h00;
+    dut.u_ddr.mem[TRAP_RES_ADDR + 3] = 8'h00;
+    dut.u_ddr.mem[32'h94D0 + 0] = 8'h00;
+    dut.u_ddr.mem[32'h94D0 + 1] = 8'h00;
+    dut.u_ddr.mem[32'h94D0 + 2] = 8'h00;
+    dut.u_ddr.mem[32'h94D0 + 3] = 8'h00;
+    dut.u_ddr.mem[32'h94D4 + 0] = 8'h00;
+    dut.u_ddr.mem[32'h94D4 + 1] = 8'h00;
+    dut.u_ddr.mem[32'h94D4 + 2] = 8'h00;
+    dut.u_ddr.mem[32'h94D4 + 3] = 8'h00;
   endtask
 
   // Read the MMIO stress magic written by the C driver (0x0BADBEEF = pass).
@@ -187,6 +200,14 @@ module tb_c930_soc;
           dut.u_ddr.mem[STORE_RES_ADDR + 2] == 8'hFA &&
           dut.u_ddr.mem[STORE_RES_ADDR + 1] == 8'hCA &&
           dut.u_ddr.mem[STORE_RES_ADDR + 0] == 8'hDE);
+  endtask
+
+  // Read the trap-test magic (0x00D0C1DE = pass).
+  task automatic trap_ok(output int ok);
+    ok = (dut.u_ddr.mem[TRAP_RES_ADDR + 3] == 8'h00 &&
+          dut.u_ddr.mem[TRAP_RES_ADDR + 2] == 8'hD0 &&
+          dut.u_ddr.mem[TRAP_RES_ADDR + 1] == 8'hC1 &&
+          dut.u_ddr.mem[TRAP_RES_ADDR + 0] == 8'hDE);
   endtask
 
   // Poll the DDR for the completion magic written by the C program.
@@ -282,6 +303,12 @@ module tb_c930_soc;
     store_ok(sok);
     if (!sok)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: store-ordering stress failed", m, n, k);
+
+    // Trap test must have passed (illegal instr -> mtvec handler -> mret,
+    // exactly once, with the trap redirect surviving the cache-fill stall).
+    trap_ok(sok);
+    if (!sok)
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: trap test failed", m, n, k);
 
     if (o_npu_error)
       $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);
