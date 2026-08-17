@@ -412,6 +412,16 @@ static void mem_consistency_stress(void)
 #define STORE_PASS    0x00FACADEu
 #define STORE_FAIL    0xDEADFA11u
 
+// Forces the SC result to be read from the ARCHITECTED register (post-WB)
+// instead of the combinational MEM->EX forward. The stranded-SC scenario needs
+// to detect a dcache re-dispatch, which only corrupts the register file (rc
+// flips 0 -> 1 on the cleared reservation); the forward stays correct.
+__attribute__((noinline))
+static int sc_rc_ok(unsigned long long rc)
+{
+    return (rc == 0) ? 1 : 0;
+}
+
 static void store_order_stress(void)
 {
     volatile unsigned long long *s = (volatile unsigned long long *)STORE_BASE;
@@ -471,6 +481,37 @@ static void store_order_stress(void)
     al[3] = 0x1234;                                         // evict s's line
     if (s[0] != 0xAAAA || s[1] != 0xBBBB || s[2] != 0xCCCC || s[3] != 0xDDDD)
         { ok = 0; *first_fail = 0x918; }                    // all four landed in DDR
+
+    // (6) LR/SC stranded across an icache-miss freeze. The SC's success branch
+    //     redirects to an icache line the fetch only ever enters via this
+    //     branch; the line fill freezes the pipeline while the SC sits in MEM.
+    //     The dcache must not re-dispatch the completed SC - a re-dispatch
+    //     sees the cleared reservation, reports rc=1, and corrupts the SC's
+    //     architected register result (the memory write-through stays correct).
+    *diag = 0x921;
+    volatile unsigned long long *fx = (volatile unsigned long long *)(STORE_BASE + 0x20);
+    unsigned long long frc;
+    fx[0] = 0;
+    lr_d(fx);
+    frc = sc_d(fx, 0x5151ull);
+    if (frc == 0)
+        goto sc_freeze_done;
+    // Fail path - never taken in the pass case. Padded with a small volatile
+    // loop so sc_freeze_done lands in a line the fetch has not yet reached
+    // when the success branch above resolves (the strand needs the miss).
+    {
+        volatile u32 pad = 0;
+        for (int p = 0; p < 8; p++)
+            pad += p;
+        if (pad)
+            *first_fail = 0x921;
+        ok = 0;
+    }
+sc_freeze_done:
+    if (!sc_rc_ok(frc)) { ok = 0; if (*first_fail == 0) *first_fail = 0x922; }
+    if (fx[0] != 0x5151ull) { ok = 0; if (*first_fail == 0) *first_fail = 0x923; }
+    al[4] = 0xEEEE;                                         // evict fx's line
+    if (fx[0] != 0x5151ull) { ok = 0; if (*first_fail == 0) *first_fail = 0x924; }  // DDR
 
     *diag = 0x920;
     *(volatile u32 *)STORE_RES_ADDR = ok ? STORE_PASS : STORE_FAIL;
