@@ -138,7 +138,14 @@ begin : flush_proc
     // EX flush to the stall-release edge lets the branch advance EX->MEM (the
     // stall holds its id_ex copy until then) and clears the stale id_ex
     // contents on the same edge.
-    o_hazard_unit_flush_ex  = ((i_hazard_unit_pcsrc_ex && !mstall_detection && !icache_stall_detection && !dcache_stall_detection) || i_hazard_unit_csr_flush_ex);
+    //
+    // The same deferral applies to the CSR flush source (faults, mret/sret,
+    // interrupt setup): it clears the same id_ex pipe, and its conditions are
+    // level-based on the stalled pipeline stage, so the flush stays asserted
+    // through the stall and can be taken on the release edge. This protects a
+    // writeback-producing instruction (e.g. a jal) sitting in EX when a CSR
+    // flush fires during a cache fill.
+    o_hazard_unit_flush_ex  = (((i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_ex) && !mstall_detection && !icache_stall_detection && !dcache_stall_detection));
     o_hazard_unit_flush_id  = i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_id;
     o_hazard_unit_flush_mem = i_hazard_unit_csr_flush_mem;
     o_hazard_unit_flush_wb  = i_hazard_unit_csr_flush_wb;

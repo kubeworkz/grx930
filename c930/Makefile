@@ -5,6 +5,7 @@
 #   make sw         compile sw/npu_test.c -> sw/npu_prog.hex
 #   make soc        build + run the end-to-end SoC testbench (tb_c930_soc)
 #   make npu        build + run the standalone NPU testbench (tb_c930_npu)
+#   make hazard     build + run the hazard-unit flush/stall unit test
 #   make wave       simulate the SoC and print the waveform location
 #   make clean      remove build artifacts and the VCD dump
 
@@ -47,7 +48,7 @@ SOC_RTL := $(NPU_RTL) \
 OUT_NPU := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC := $(BUILD_DIR)/tb_c930_soc.vvp
 
-.PHONY: all sw soc npu wave clean
+.PHONY: all sw soc npu hazard wave clean
 
 all: sw soc
 
@@ -76,6 +77,18 @@ $(OUT_NPU): $(NPU_RTL) tb/tb_c930_npu.sv
 
 npu: $(OUT_NPU)
 	$(VVP) $(OUT_NPU)
+
+# ---------------------------------------------------------------------------
+# Hazard-unit unit test (flush deferral under stalls)
+# ---------------------------------------------------------------------------
+OUT_HAZARD := $(BUILD_DIR)/tb_hazard_csrflush.vvp
+
+$(OUT_HAZARD): $(CORE_RTL) tb/tb_hazard_csrflush.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) tb/tb_hazard_csrflush.sv
+
+hazard: $(OUT_HAZARD)
+	$(VVP) $(OUT_HAZARD)
 
 # ---------------------------------------------------------------------------
 # Full SoC testbench (core + NPU + DDR + MMIO)
