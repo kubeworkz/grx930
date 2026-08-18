@@ -92,15 +92,21 @@ logic [            1 : 0  ] RES_SET_SIZE , NEXT_RES_SET_SIZE ;
 logic                       res_set_hit;
 
 
-enum logic [2:0] {
-    IDLE           = 3'b000,
-    MEM_REQ        = 3'b001,
-    UPDATE_CACHE   = 3'b010,
-    MEM_WRITE      = 3'b011,
-    AMO_OP         = 3'b100,
-    MMIO_READ      = 3'b101,
-    MMIO_WRITE     = 3'b110,
-    MMIO_DRAIN     = 3'b111
+enum logic [3:0] {
+    IDLE           = 4'b0000,
+    MEM_REQ        = 4'b0001,
+    UPDATE_CACHE   = 4'b0010,
+    MEM_WRITE      = 4'b0011,
+    AMO_OP         = 4'b0100,
+    MMIO_READ      = 4'b0101,
+    MMIO_WRITE     = 4'b0110,
+    MMIO_DRAIN     = 4'b0111,
+    // One-cycle pass-through after a cache-read hit (load/LR). The memory
+    // read is REGISTERED (EBR-mappable), so the data is valid one cycle after
+    // o_rd_en; the core samples it here with o_stall released. The request
+    // lines stay asserted (the load is still in MEM until the posedge), so
+    // this state must NOT re-dispatch -- it just drains to IDLE.
+    LOAD_DONE      = 4'b1000
 } STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
 // Initializers keep the combinational FSM/tag/reservation logic defined before
 // the first reset edge (Icarus would otherwise cascade X through the cache).
@@ -263,9 +269,13 @@ case (STATE)
         // READ INSTRUCTIONS //
 
             if (!mmio_sel && i_read) begin
-                if (tag_hit) begin // READ HIT
+                if (tag_hit) begin // READ HIT (registered read: stall 1 cycle so the core samples the data in LOAD_DONE)
                     if (!fault)
+                    begin
                     o_rd_en = 1;
+                    o_stall = 1;
+                    NEXT = LOAD_DONE;
+                    end
                     else
                     o_rd_en = 0;
                 end
@@ -286,6 +296,8 @@ case (STATE)
 
                     begin
                        o_rd_en = 1;
+                       o_stall = 1;
+                       NEXT = LOAD_DONE;
                        NEXT_RES_SET = i_addr_from_core;
                        NEXT_VALID_RES =1;  
                        NEXT_RES_SET_SIZE = i_size;
@@ -380,6 +392,30 @@ case (STATE)
 
 
 
+
+
+     LOAD_DONE : begin
+
+        // The registered read from the previous cycle is valid now; release
+        // the stall so the load advances MEM->WB and samples o_data_to_core.
+        // All other outputs keep their defaults (no new request is taken --
+        // the load is still in MEM until the posedge, so re-dispatching here
+        // would double-service it).
+        o_rd_en = 0;
+        o_wr_en = 0;
+        o_block_replace = 0;
+        o_stall = 0;
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_req = 0;
+        update_en = 0;
+        o_amo_wr = 0;
+
+        o_mem_write_data = i_data_from_core;
+        o_mem_write_address = i_addr_from_core;
+        o_mem_write_valid = 0;
+
+        NEXT = IDLE;
+               end
 
 
      MEM_REQ : begin

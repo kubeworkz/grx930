@@ -7,12 +7,12 @@
 # builds and Git Bash's own runtime conflicts with them (direct exec -> 127).
 #
 # Usage:
-#   bash synth/run_synth.sh          real design: yosys only (resource/latch
-#                                    report). nextpnr CANNOT place this netlist
-#                                    (dcache write muxes -> ~424K LUTs).
+#   bash synth/run_synth.sh          real design: yosys + nextpnr P&R.
+#                                    The dcache is EBR-mapped (8 DP16KD) so the
+#                                    full design fits ECP5-85F (~66K LUTs).
 #   bash synth/run_synth.sh fit      cache-shrunk variant (chparam INDEX_WIDTH
-#                                    7->4) + nextpnr P&R -> Fmax of the logic
-#                                    fabric. NOT the real design's Fmax.
+#                                    7->3) + nextpnr P&R (kept as a comparison;
+#                                    no longer needed to fit).
 #
 # Outputs (under c930/build/synth/):
 #   synth.log / fit.log  yosys log: latch warnings + LUT/FF/BRAM/DSP stats
@@ -45,13 +45,13 @@ if [ "$MODE" = "fit" ]; then
     JSON=fit.json
     LOG=fit.log
     DDRSTUB=synth/c930_ddr_stub.sv
-    NOTE="fit-test (caches shrunk to 16 lines via chparam; DDR placeholder)"
+    NOTE="fit-test (caches shrunk to 8 lines via chparam; DDR placeholder)"
 else
     FLOW=synth/synth.ys
     JSON=ecp5.json
     LOG=synth.log
-    DDRSTUB=synth/c930_ddr_blackbox.sv
-    NOTE="real design (DDR blackboxed)"
+    DDRSTUB=synth/c930_ddr_stub.sv
+    NOTE="real design (DDR placeholder stub)"
 fi
 
 # yosys does not expand wildcards itself and its scripts are line-oriented
@@ -72,10 +72,8 @@ fi
 echo "== yosys synth_ecp5 (c930_soc_top) [$NOTE] =="
 cmd //c "yosys -ql build/synth/$LOG build/synth/run_$MODE.ys"
 
-if [ "$MODE" = "fit" ]; then
-    echo "== nextpnr-ecp5 P&R (ECP5-85F placeholder) =="
-    cmd //c "nextpnr-ecp5 -l build/synth/pnr.log --json build/synth/$JSON --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 --textcfg build/synth/ecp5.config"
-fi
+echo "== nextpnr-ecp5 P&R (ECP5-85F placeholder) =="
+cmd //c "nextpnr-ecp5 -l build/synth/pnr.log --json build/synth/$JSON --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 --textcfg build/synth/ecp5.config"
 
 echo
 echo "===================== REPORT ($MODE) ====================="
@@ -88,11 +86,9 @@ fi
 echo
 echo "== RESOURCES (post-map stats) =="
 grep -E "Number of cells|LUT|FF |BRAM|DSP" "build/synth/$LOG" | grep -vE "\\\\\$abc|GND|VCC" | head -20
-if [ "$MODE" = "fit" ]; then
-    echo
-    echo "== FMAX (nextpnr-ecp5 timing report) =="
-    grep -iE "max frequency|fmax" build/synth/pnr.log | tail -6
-fi
+echo
+echo "== FMAX (nextpnr-ecp5 timing report) =="
+grep -iE "max frequency|fmax" build/synth/pnr.log | tail -6
 echo
 echo "Logs: build/synth/$LOG  ${MODE/fit/pnr}.log"
 echo "==========================================================="

@@ -7,67 +7,83 @@ extract it there).
 ## Usage
 
 ```bash
-make synth        # real design: yosys resource/latch report (~15 min)
-make synth-fit    # cache-shrunk fit test: yosys + nextpnr P&R -> Fmax (~30 min)
+make synth        # real design: yosys resource/latch report + nextpnr P&R -> Fmax
+make synth-fit    # cache-shrunk fit test (kept as a historical comparison)
 ```
 
 Both wrap `synth/run_synth.sh` (`fit` selects the fit variant). Logs and
 netlists land in `c930/build/synth/`.
 
-## What the real-design run reports (as of Aug 2026)
+## Real-design results (Aug 2026, after the dcache EBR re-architecture)
 
-| Resource            | Count   | ECP5-85F |
-|---------------------|---------|----------|
-| LUT4                | 423,747 | 83,640 (511%) |
-| TRELLIS_FF          | 86,971  | 83,640 (103%) |
-| CCU2C (carry)       | 1,564   | —        |
-| DPR16X4 (EBR slice) | 104     | —        |
-| MULT18X18D (DSP)    | 21      | 156      |
+| Resource            | Before  | After  | ECP5-85F |
+|---------------------|---------|--------|----------|
+| LUT4                | 423,747 | **73,161** | 83,640 (87%) |
+| TRELLIS_FF          | 86,971  | **56,505** | 83,640 (68%) |
+| CCU2C (carry)       | 1,564   | 2,069  | —        |
+| DP16KD (EBR)        | 0       | **8**  | 156      |
+| DPR16X4 (EBR slice) | 104     | 104    | —        |
+| MULT18X18D (DSP)    | 21      | 21     | 156      |
 
-Latch audit: **clean** — no inferred latches (all `done_latch`/memory signals
-resolve to proper registers; `check -noinit` reports 0 problems).
+Latch audit: **clean** — no inferred latches (`check -noinit` reports 0
+problems). **The full design now fits ECP5-85F.**
 
-**The full design does not fit ECP5-85F**, and the reason is precise:
+### What changed
 
-- `riscv_core_dcache_top` alone: **365,988 LUTs / 35,655 FFs**
-- `riscv_core_icache_top` alone:   **28,165 LUTs / 35,517 FFs**
+The 423K-LUT blow-up was the **dcache write path**: the old memory demoted to
+registers with per-bit byte-strobe/AMO write muxes (365,988 LUTs standalone).
+The re-architecture (`riscv_core_dcache_memory.sv`) uses EBR-mappable
+semantics — a single write port with 32 decoded byte-lane enables, a
+registered read port, and a `LOAD_DONE` controller state — so the storage maps
+to **8 DP16KD**:
 
-Both caches store the same 128 x 256-bit lines, so the FF counts are nearly
-equal — the LUT blow-up is the dcache's **per-bit byte-strobe / AMO write
-muxes** (a 256-bit line written at any of 32 byte lanes, with 4 sizes + AMO +
-line-fill cases). That pattern defeats EBR inference (async-read, per-bit
-write enables), so every RAM bit becomes a flop plus a giant mux tree.
+- dcache standalone: 365,988 -> **9,008 LUTs / 3,471 FFs / 8 DP16KD**
+- icache standalone: 28,165 LUTs (still register-based; same treatment would
+  shrink it further, but it is not the bottleneck)
 
-### Fix direction (before any board purchase)
+Behavior was verified unchanged: the full 22-case SoC sweep (core + MMIO +
+DMA + DDR, incl. GEMM shapes, AMO/LR-SC stress, store-ordering, traps) and the
+hazard-unit unit test both pass with the refactored cache.
 
-Re-architect the dcache memory toward EBR-mappable semantics: registered
-(or at least shared) read/write ports, a decoded per-word byte-enable vector
-computed once instead of per bit, and a single-port line-fill/write interface.
-The DP16KD primitive has native byte-enables; the write-mux cost then moves
-into BRAM and the LUT count drops by ~350K.
+## The DDR placeholder (c930_ddr_stub.sv)
+
+The behavioral `c930_ddr.sv` (64 KB byte array) must not be synthesized (it
+demotes to ~hundreds of K FFs), and nextpnr cannot place a blackbox. The stub
+keeps the module name/ports and implements a **genuine 16-line x 256-bit
+memory**: dcache writes and AXI writes land in it, and every read port returns
+stored state. That is deliberate:
+
+- A stub whose read data is a function of the request address lets yosys prove
+  `INSTR_MEM[i] == f(i)` and collapses the cache arrays; one that discards the
+  AXI write data lets yosys prove the systolic array's C-write path is
+  unobservable and folds the NPU (21 -> 2 DSPs, u_npu -> ~600 FFs). Both bugs
+  were reproduced and ruled out. The memory stub keeps every datapath live
+  (21 DSPs, full icache) while adding only ~7K LUTs / 1.7K FFs of placeholder.
 
 ## Fit test (`make synth-fit`)
 
-nextpnr cannot place a 511%-over design, so the fit test shrinks the caches
-via `chparam` (INDEX_WIDTH 7->3, i.e. 128 -> 8 lines) through the new
-`ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH` parameters on `riscv_core_top`
-(added so cache geometry is settable per board). The behavioral DDR model is
-replaced by a tiny synthesizable placeholder (`c930_ddr_stub.sv`; nextpnr
-cannot place blackboxes).
+Kept for comparison. Shrinks the caches via `chparam` (INDEX_WIDTH 7->3)
+through the `ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH` parameters on
+`riscv_core_top` (added so cache geometry is settable per board). Result
+(P&R complete): **52,897 LUTs (63%), 7,104 FFs, 2 DSPs**, Fmax ~20 MHz with
+the CSR unit's `mtinst` datapath on the critical path. This was a
+logic-fabric estimate for the pre-refactor design; with the dcache now in EBR
+the real design fits directly (see below).## Fmax (real design P&R)
 
-Result (P&R complete):
+The real design (73K LUTs = 87% density) places cleanly (`make synth` runs
+nextpnr after yosys). At that density the ROUTER does not fully converge in
+reasonable time (it oscillates at ~200-300 unrouted wires out of ~340K, the
+same endgame that stalled the old 90% fit test), so there is no final routed
+Fmax yet. The placement-stage estimate in `pnr.log` is **~10.6 MHz**
+(pre-routing, dominated by the still register-based icache fabric); the
+routable fit-test (63% density) measured ~20 MHz. Both numbers are
+placeholder-constraint artifacts (the LPF clocks at 400 MHz to expose the
+true critical path), direction-setting only.
 
-- **52,897 LUTs (63%), 7,104 FFs, 2 DSPs** — fits ECP5-85F.
-- **Fmax ~20 MHz** (16.2 MHz best-effort / 20.3 MHz after rip-up). The
-  critical path is in the CSR unit's `mtinst` datapath: only ~7.6 ns of logic
-  but ~29 ns of routing — placement is scattered by the residual cache-mux
-  fabric, so routing dominates. Expect this to improve sharply once the dcache
-  is re-architected (and a real clock is used instead of the placeholder IO).
-
-This is a **logic-fabric Fmax estimate, not the real design's Fmax** — the
-caches in the fit test are 8 lines, and the systolic PE multipliers map to
-LUTs rather than DSPs under chparam re-elaboration (real design infers 21
-DSPs). Treat both numbers as direction-setting until the dcache lands in BRAM.
+The clean path to a routed real-design Fmax is to give the icache the same
+EBR treatment as the dcache (~28K LUTs / 35.5K FFs of register storage to
+move into DP16KD) -- that drops density below ~60% and the router finishes
+in minutes (as the fit test proved).
 
 ## Files
 
@@ -78,8 +94,8 @@ DSPs). Treat both numbers as direction-setting until the dcache lands in BRAM.
 | `run_synth.sh`      | drives yosys/nextpnr via `cmd` (oss-cad-suite is MSYS2-built; Git Bash direct exec -> 127) |
 | `light.abc`         | minimal abc mapping script (default resyn OOMs on the ~100K-FF netlist) |
 | `ecp5_85f.lpf`      | placeholder pin/clock constraints (400 MHz target reveals true Fmax) |
-| `c930_ddr_blackbox.sv` | synth-only blackbox for the behavioral DDR (real report) |
-| `c930_ddr_stub.sv`     | tiny synthesizable DDR placeholder (fit/P&R) |
+| `c930_ddr_blackbox.sv` | synth-only blackbox for the behavioral DDR (opaque reference) |
+| `c930_ddr_stub.sv`     | tiny synthesizable DDR placeholder (genuine 16-line memory; keeps datapaths live) |
 | `cache_probe.ys` / `dcache_probe.ys` | per-hierarchy LUT attribution probes |
 
 ## Bugs the synthesis run caught (all fixed, RTL now clean for yosys)
@@ -96,3 +112,5 @@ DSPs). Treat both numbers as direction-setting until the dcache lands in BRAM.
 - Cache tops did not pass `INDEX_WIDTH` down to their controller/memory
   modules (latent size-mismatch wart) — now parameterized through
   `riscv_core_top` (`ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH`, defaults 7).
+- dcache `wr_nbytes` was 3 bits, truncating dword writes (`3'd8` -> 0 byte
+  enables) after the EBR re-architecture — widened; caught by the SoC sweep.
