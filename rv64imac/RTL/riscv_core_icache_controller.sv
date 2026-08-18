@@ -37,7 +37,8 @@ logic                      VALID_MEM [0:CACHE_DEPTH-1];
 enum logic [1:0] {
     IDLE           = 2'b00,
     MEM_REQ        = 2'b01,
-    UPDATE_CACHE   = 2'b10
+    UPDATE_CACHE   = 2'b10,
+    LOAD_DONE      = 2'b11
 } STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
 logic                      update_en;
 logic                      tag_hit_1 , tag_hit_2 , over_f , s1 , s2 , miss ;
@@ -49,6 +50,14 @@ logic [ADDR_WIDTH-1      : 0] i_addr_from_core_next_block;
 // and tag get written to the wrong index and the cache is corrupted.
 logic [ADDR_WIDTH-1      : 0] fill_addr = 'b0;
 logic                      fill_s2 = 1'b0;   // s2 condition captured at MEM_REQ entry
+// Fetch address served by the current registered read. The word is captured
+// into read_data_reg one cycle after the IDLE hit and presented from LOAD_DONE;
+// LOAD_DONE HOLDS (stall released, word still valid) until the fetch PC
+// advances -- i.e. until the pipeline actually captured the instruction. This
+// guarantees a both-stalls-released window with the dcache (whose registered
+// read also needs the pipeline to advance), preventing the two period-2
+// hit-stall loops from phase-locking in anti-phase and deadlocking.
+logic [ADDR_WIDTH-1      : 0] served_pc = 'b0;
 // Initializers keep the combinational FSM/tag logic defined before the first
 // reset edge (Icarus would otherwise cascade X through the cache at t=0).
 initial begin
@@ -69,6 +78,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         STATE <= IDLE;
         fill_addr <= 'b0;
         fill_s2 <= 1'b0;
+        served_pc <= 'b0;
     end
     else 
     begin
@@ -79,6 +89,13 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         if (STATE == IDLE && NEXT == MEM_REQ) begin
             fill_addr <= s2 ? i_addr_from_core_next_block : i_addr_from_core;
             fill_s2   <= s2;
+        end
+        // Latch the fetch PC served by a hit (IDLE->LOAD_DONE transition).
+        // LOAD_DONE compares the live PC against this to decide hold vs
+        // transition; the PC is frozen while the hit stalls, so this is the
+        // address the registered read serves.
+        if (STATE == IDLE && NEXT == LOAD_DONE) begin
+            served_pc <= i_addr_from_core;
         end
         // UPDATE TAG and VALID MEM in case of BLOCK REPLACEMENT //
         if (update_en) begin
@@ -132,8 +149,11 @@ case (STATE)
         o_mem_req = 0;
         update_en = 0;
         // READING SCINARIOs //
-            if (!miss) begin // READ HIT
+            if (!miss) begin // READ HIT (registered read: stall 1 cycle so the
+                             // core samples the word from read_data_reg in LOAD_DONE)
                 o_rd_en = 1;
+                o_stall = 1;
+                NEXT = LOAD_DONE;
             end
             else begin // READ MISS
                 o_stall = 1;
@@ -173,7 +193,27 @@ case (STATE)
         o_mem_req = 0;
         update_en = 1;
         NEXT = IDLE;
-    end           
+    end
+
+    LOAD_DONE : begin
+
+        // The registered read from the previous cycle is valid now. Release
+        // the stall and HOLD while the fetch PC is unchanged -- the word stays
+        // valid and the pipeline captures it at the first posedge where every
+        // other stall (e.g. the dcache's registered-read stall) is also
+        // released. If the fetch PC has advanced (the pipeline captured the
+        // word, or a redirect fired), stall one cycle so the now-stale word is
+        // not captured into IF/ID, then start the next fetch in IDLE.
+        if (i_addr_from_core == served_pc) begin
+            o_stall = 0;
+            NEXT = LOAD_DONE;
+        end
+        else begin
+            o_stall = 1;
+            NEXT = IDLE;
+        end
+    end
+
     default: begin
         o_rd_en = 0;
         o_wr_en = 0;

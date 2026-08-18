@@ -91,7 +91,14 @@ always_ff @(posedge i_hazard_unit_clk or negedge i_hazard_unit_rst_n)
 begin
     if (!i_hazard_unit_rst_n)
         csr_stall_prev <= 1'b0;
-    else
+    // Only advance the one-cycle-pulse tracker when the pipeline can actually
+    // move. If a cache fill (or the M extension) holds the pipeline during the
+    // CSR-dependency window, the CSR producer cannot advance MEM->WB, so the
+    // pulse must re-fire when the other stall releases -- otherwise the pulse
+    // is consumed invisibly during the freeze and the dependent instruction
+    // advances with a stale operand (the WB->EX forward never activates). The
+    // icache's registered-read hit stall makes this overlap common.
+    else if (!mstall_detection && !icache_stall_detection && !dcache_stall_detection)
         csr_stall_prev <= csr_stall_detection;
 end
 

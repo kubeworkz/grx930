@@ -14,36 +14,52 @@ make synth-fit    # cache-shrunk fit test (kept as a historical comparison)
 Both wrap `synth/run_synth.sh` (`fit` selects the fit variant). Logs and
 netlists land in `c930/build/synth/`.
 
-## Real-design results (Aug 2026, after the dcache EBR re-architecture)
+## Real-design results (Aug 2026, after the dcache + icache EBR re-architecture)
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4                | 423,747 | **73,161** | 83,640 (87%) |
-| TRELLIS_FF          | 86,971  | **56,505** | 83,640 (68%) |
+| LUT4                | 423,747 | **51,140** | 83,640 (61%) |
+| TRELLIS_FF          | 86,971  | **23,801** | 83,640 (28%) |
 | CCU2C (carry)       | 1,564   | 2,069  | —        |
-| DP16KD (EBR)        | 0       | **8**  | 156      |
+| DP16KD (EBR)        | 0       | **16** | 156      |
 | DPR16X4 (EBR slice) | 104     | 104    | —        |
 | MULT18X18D (DSP)    | 21      | 21     | 156      |
 
 Latch audit: **clean** — no inferred latches (`check -noinit` reports 0
-problems). **The full design now fits ECP5-85F.**
+problems). **The full design now fits ECP5-85F at 61% LUT density.**
 
 ### What changed
 
-The 423K-LUT blow-up was the **dcache write path**: the old memory demoted to
-registers with per-bit byte-strobe/AMO write muxes (365,988 LUTs standalone).
-The re-architecture (`riscv_core_dcache_memory.sv`) uses EBR-mappable
-semantics — a single write port with 32 decoded byte-lane enables, a
-registered read port, and a `LOAD_DONE` controller state — so the storage maps
-to **8 DP16KD**:
+The 423K-LUT blow-up was the **cache write paths**: the old memories demoted
+to registers with per-bit byte-strobe/AMO write muxes (dcache 365,988 LUTs
+standalone). Both caches now use EBR-mappable semantics — a registered read
+port, a decoded byte-lane/whole-line write port, and a controller state that
+stalls the core one cycle per read so the registered data is sampled:
 
 - dcache standalone: 365,988 -> **9,008 LUTs / 3,471 FFs / 8 DP16KD**
-- icache standalone: 28,165 LUTs (still register-based; same treatment would
-  shrink it further, but it is not the bottleneck)
+  (`LOAD_DONE` state; 32 decoded byte-lane enables; array has no reset —
+  `VALID_MEM` gates every read, which is what lets EBR storage be used).
+- icache standalone: 28,165 LUTs / 35,517 FFs -> **7,808 LUTs / 2,813 FFs /
+  8 DP16KD** (same registered-read pattern; fill writes a whole line).
+
+The icache's `LOAD_DONE` state also **holds** (stall released, word still
+presented) until the fetch PC advances — i.e. until the pipeline actually
+captured the instruction. Without the hold, the icache's period-2 hit-stall
+loop and the dcache's period-2 registered-read loop phase-lock in anti-phase
+and deadlock the pipeline (no cycle ever has both stalls released).
+
+Moving the icache storage into EBR also exposed a latent hazard-unit bug: the
+one-cycle CSR-dependency stall pulse was consumed invisibly when it coincided
+with a cache stall, so a CSR producer never advanced MEM->WB and a dependent
+instruction (e.g. the trap handler's `addi` on `csrr mepc`) computed with a
+stale operand — corrupting `mepc` and sending `mret` to a garbage address.
+The pulse tracker now only advances when the pipeline can actually move, so
+the pulse re-fires after any cache/M-extension stall (`riscv_core_hazard_unit`).
 
 Behavior was verified unchanged: the full 22-case SoC sweep (core + MMIO +
-DMA + DDR, incl. GEMM shapes, AMO/LR-SC stress, store-ordering, traps) and the
-hazard-unit unit test both pass with the refactored cache.
+DMA + DDR, incl. GEMM shapes, AMO/LR-SC stress, store-ordering, the two-trap
+illegal+ecall test) and the hazard-unit unit test both pass with the refactored
+caches.
 
 ## The DDR placeholder (c930_ddr_stub.sv)
 
@@ -67,23 +83,28 @@ through the `ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH` parameters on
 `riscv_core_top` (added so cache geometry is settable per board). Result
 (P&R complete): **52,897 LUTs (63%), 7,104 FFs, 2 DSPs**, Fmax ~20 MHz with
 the CSR unit's `mtinst` datapath on the critical path. This was a
-logic-fabric estimate for the pre-refactor design; with the dcache now in EBR
-the real design fits directly (see below).## Fmax (real design P&R)
+logic-fabric estimate for the pre-refactor design; with both caches now in EBR
+the real design fits at 61% and P&Rs directly (see below).
 
-The real design (73K LUTs = 87% density) places cleanly (`make synth` runs
-nextpnr after yosys). At that density the ROUTER does not fully converge in
-reasonable time (it oscillates at ~200-300 unrouted wires out of ~340K, the
-same endgame that stalled the old 90% fit test), so there is no final routed
-Fmax yet. The placement-stage estimate in `pnr.log` is **~10.6 MHz**
-(pre-routing, dominated by the still register-based icache fabric); the
-routable fit-test (63% density) measured ~20 MHz. Both numbers are
-placeholder-constraint artifacts (the LPF clocks at 400 MHz to expose the
+## Fmax (real design P&R)
+
+The real design (51K LUTs = 61% LUT density, 28% FF, 10% BRAM) places
+cleanly and the placement-stage estimate in `pnr.log` is **~15.9 MHz** (up
+from 10.6 MHz pre-icache — the register-based icache was on the critical
+path; the fit-test style CSR `mtinst` datapath dominates now). Both numbers
+are placeholder-constraint artifacts (the LPF clocks at 400 MHz to expose the
 true critical path), direction-setting only.
 
-The clean path to a routed real-design Fmax is to give the icache the same
-EBR treatment as the dcache (~28K LUTs / 35.5K FFs of register storage to
-move into DP16KD) -- that drops density below ~60% and the router finishes
-in minutes (as the fit test proved).
+Routed-Fmax caveat: nextpnr's rip-up routers (router1 with two seeds and
+router2) do not fully converge on this net count — they oscillate at a few
+hundred unrouted wires / ~5K track-overuse out of ~200K-1.15M wires after
+1.5+ hours, the same endgame that stalled the old 87% run. This is a
+nextpnr heuristic limitation on the design's net count, not a resource
+shortage: the design fits comfortably (61%/28%/10%) and the much smaller
+fit-test design P&Rs to completion at similar density. A commercial router
+(Vivado/Quartus/Radiant) or a further fabric reduction (e.g. moving the
+tag/valid arrays or the NPU's A/B/C buffers into BRAM) would close the last
+nets; the yosys resource/latch report is the authoritative feasibility result.
 
 ## Files
 
@@ -96,7 +117,7 @@ in minutes (as the fit test proved).
 | `ecp5_85f.lpf`      | placeholder pin/clock constraints (400 MHz target reveals true Fmax) |
 | `c930_ddr_blackbox.sv` | synth-only blackbox for the behavioral DDR (opaque reference) |
 | `c930_ddr_stub.sv`     | tiny synthesizable DDR placeholder (genuine 16-line memory; keeps datapaths live) |
-| `cache_probe.ys` / `dcache_probe.ys` | per-hierarchy LUT attribution probes |
+| `cache_probe.ys` / `icache_full.ys` / `dcache_full.ys` | per-hierarchy LUT/EBR attribution probes |
 
 ## Bugs the synthesis run caught (all fixed, RTL now clean for yosys)
 
@@ -114,3 +135,6 @@ in minutes (as the fit test proved).
   `riscv_core_top` (`ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH`, defaults 7).
 - dcache `wr_nbytes` was 3 bits, truncating dword writes (`3'd8` -> 0 byte
   enables) after the EBR re-architecture — widened; caught by the SoC sweep.
+- CSR-dependency stall pulse consumed by overlapping cache stalls (mepc
+  corruption in the trap handler) — the pulse tracker now re-arms after any
+  cache/M-extension stall; caught by the SoC sweep with the icache hit-stall.
