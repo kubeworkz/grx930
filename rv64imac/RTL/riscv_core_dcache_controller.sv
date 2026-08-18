@@ -174,12 +174,24 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         else if (!(i_amo || i_sc))
             amo_sc_serviced <= 1'b0;
 
-        // UPDATE TAG and VALID MEM in case of BLOCK REPLACEMENT //
-
+        // UPDATE VALID MEM in case of BLOCK REPLACEMENT //
+        // (TAG_MEM is written in its own no-reset block below -- an async-
+        // reset-sensitive block demotes every memory written from it to
+        // registers in synthesis, killing DPR16X4 inference.)
         if (update_en) begin
-           TAG_MEM       [  i_addr_from_core[`INDEX]   ] <= i_addr_from_core[`TAG];
            VALID_MEM     [  i_addr_from_core[`INDEX]   ] <= 1'b1; 
         end
+    end
+end
+
+// TAG storage: written only on a line fill, read combinationally by the tag
+// compare. Kept in a separate always_ff with NO reset -- distributed-RAM
+// storage has no reset, and a line is only trusted when VALID_MEM says so,
+// so stale tags are never observable. This is what lets yosys map TAG_MEM
+// to DPR16X4 instead of ~6.6K FFs.
+always_ff @( posedge i_clk ) begin : TAG_UPDATE_BLOCK
+    if (update_en) begin
+        TAG_MEM [ i_addr_from_core[`INDEX] ] <= i_addr_from_core[`TAG];
     end
 end
 

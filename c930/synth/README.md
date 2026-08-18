@@ -14,19 +14,20 @@ make synth-fit    # cache-shrunk fit test (kept as a historical comparison)
 Both wrap `synth/run_synth.sh` (`fit` selects the fit variant). Logs and
 netlists land in `c930/build/synth/`.
 
-## Real-design results (Aug 2026, after the dcache + icache EBR re-architecture)
+## Real-design results (Aug 2026, after both caches EBR-mapped AND P&R-complete)
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4                | 423,747 | **51,140** | 83,640 (61%) |
-| TRELLIS_FF          | 86,971  | **23,801** | 83,640 (28%) |
+| LUT4                | 423,747 | **35,009** | 83,640 (42%) |
+| TRELLIS_FF          | 86,971  | **10,489** | 83,640 (13%) |
 | CCU2C (carry)       | 1,564   | 2,069  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
-| DPR16X4 (EBR slice) | 104     | 104    | —        |
+| DPR16X4 (EBR slice) | 104     | **416** | ~20K    |
 | MULT18X18D (DSP)    | 21      | 21     | 156      |
 
 Latch audit: **clean** — no inferred latches (`check -noinit` reports 0
-problems). **The full design now fits ECP5-85F at 61% LUT density.**
+problems). **The full design P&Rs to completion at 42% LUT density with a
+routed Fmax of ~25.8 MHz (default nextpnr router).**
 
 ### What changed
 
@@ -55,6 +56,24 @@ instruction (e.g. the trap handler's `addi` on `csrr mepc`) computed with a
 stale operand — corrupting `mepc` and sending `mret` to a garbage address.
 The pulse tracker now only advances when the pipeline can actually move, so
 the pulse re-fires after any cache/M-extension stall (`riscv_core_hazard_unit`).
+
+### Tag arrays into distributed RAM (DPR16X4)
+
+The controllers' `TAG_MEM` (128 x 52 per cache) was being demoted to ~6.6K
+FFs per cache even though it has no reset, because it was written in the same
+`always_ff` as the async-reset `VALID_MEM` clear — yosys demotes every memory
+written from an async-reset-sensitive block. Splitting the TAG write into its
+own no-reset block maps it to distributed RAM (a line is only trusted when
+`VALID_MEM` says so, so stale tags are never observable):
+
+- icache standalone: 28,165 -> 7,808 -> **2,735 LUTs / 253 FFs**
+  (8 DP16KD + 80 DPR16X4)
+- dcache standalone: 365,988 -> 9,008 -> **8,615 LUTs / 911 FFs**
+  (8 DP16KD + 40 DPR16X4)
+
+This is what finally let the real-design router finish: the net count dropped
+enough that nextpnr's rip-up router converges (it had oscillated for hours at
+61% density).
 
 Behavior was verified unchanged: the full 22-case SoC sweep (core + MMIO +
 DMA + DDR, incl. GEMM shapes, AMO/LR-SC stress, store-ordering, the two-trap
@@ -88,23 +107,14 @@ the real design fits at 61% and P&Rs directly (see below).
 
 ## Fmax (real design P&R)
 
-The real design (51K LUTs = 61% LUT density, 28% FF, 10% BRAM) places
-cleanly and the placement-stage estimate in `pnr.log` is **~15.9 MHz** (up
-from 10.6 MHz pre-icache — the register-based icache was on the critical
-path; the fit-test style CSR `mtinst` datapath dominates now). Both numbers
-are placeholder-constraint artifacts (the LPF clocks at 400 MHz to expose the
-true critical path), direction-setting only.
+**The real design now P&Rs to completion** (`make synth`; default nextpnr
+router1): after the tag arrays moved to DPR16X4 the net count dropped enough
+that the router converges (it had oscillated for 1.5+ hours at the 61%-density
+build). The routed result in `pnr.log` / `ecp5.config` (full bitstream config):
 
-Routed-Fmax caveat: nextpnr's rip-up routers (router1 with two seeds and
-router2) do not fully converge on this net count — they oscillate at a few
-hundred unrouted wires / ~5K track-overuse out of ~200K-1.15M wires after
-1.5+ hours, the same endgame that stalled the old 87% run. This is a
-nextpnr heuristic limitation on the design's net count, not a resource
-shortage: the design fits comfortably (61%/28%/10%) and the much smaller
-fit-test design P&Rs to completion at similar density. A commercial router
-(Vivado/Quartus/Radiant) or a further fabric reduction (e.g. moving the
-tag/valid arrays or the NPU's A/B/C buffers into BRAM) would close the last
-nets; the yosys resource/latch report is the authoritative feasibility result.
+- **Routed Fmax: ~25.8 MHz** (constrained at 400 MHz to expose the true
+  critical path — the CSR unit's `mtinst` datapath dominates, per the fit
+  test). Direction-setting, not a board-validated number.
 
 ## Files
 
@@ -120,6 +130,10 @@ nets; the yosys resource/latch report is the authoritative feasibility result.
 | `cache_probe.ys` / `icache_full.ys` / `dcache_full.ys` | per-hierarchy LUT/EBR attribution probes |
 
 ## Bugs the synthesis run caught (all fixed, RTL now clean for yosys)
+
+- TAG_MEM demoted to registers because it was written in the same
+  async-reset `always_ff` as the VALID_MEM clear — split into a no-reset
+  block in both cache controllers (maps to DPR16X4).
 
 - `mepc` multiply-driven by two `always_ff` blocks (blocking `=` + non-blocking
   `<=`) — Icarus tolerated it; nextpnr flagged it; consolidated.
