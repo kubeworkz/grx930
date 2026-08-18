@@ -30,10 +30,12 @@ module c930_systolic_array
   input  logic [$clog2(NUM_COLS)-1:0]              i_wcol,
   input  logic signed [DIN_W-1:0]                  i_wdata,
 
-  // Left-edge activations (one per row)
-  input  logic signed [DIN_W-1:0]                  i_act    [0:NUM_ROWS-1],
-  // Top-edge partial sums (one per column)
-  input  logic signed [ACC_W-1:0]                  i_ps_in  [0:NUM_COLS-1],
+  // Left-edge activations (one per row): flattened like o_ps_out -- row r
+  // lives in bits [r*DIN_W +: DIN_W] (unpacked-array ports misconnect in
+  // Icarus 11 and are rejected by yosys's SV parser).
+  input  logic signed [NUM_ROWS*DIN_W-1:0]         i_act,
+  // Top-edge partial sums (one per column): col c lives in bits [c*ACC_W +: ACC_W]
+  input  logic signed [NUM_COLS*ACC_W-1:0]         i_ps_in,
 
   // Bottom-edge partial sums (one per column): completed outputs.
   // Flattened into one packed vector: Icarus 11 misconnects unpacked-array
@@ -52,7 +54,7 @@ module c930_systolic_array
   generate
     genvar r, c;
     for (r = 0; r < NUM_ROWS; r = r + 1) begin : g_row
-      assign a_h[r][0] = i_act[r];
+      assign a_h[r][0] = i_act[r*DIN_W +: DIN_W];
       for (c = 0; c < NUM_COLS; c = c + 1) begin : g_col
         c930_tensor_pe #(
           .DIN_W (DIN_W),
@@ -72,7 +74,7 @@ module c930_systolic_array
       end
     end
     for (c = 0; c < NUM_COLS; c = c + 1) begin : g_edge
-      assign ps_v[0][c]                     = i_ps_in[c];
+      assign ps_v[0][c]                     = i_ps_in[c*ACC_W +: ACC_W];
       assign o_ps_out[c*ACC_W +: ACC_W]     = ps_v[NUM_ROWS][c];
     end
   endgenerate

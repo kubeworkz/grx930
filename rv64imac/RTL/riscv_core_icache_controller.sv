@@ -37,7 +37,8 @@ logic                      VALID_MEM [0:CACHE_DEPTH-1];
 enum logic [1:0] {
     IDLE           = 2'b00,
     MEM_REQ        = 2'b01,
-    UPDATE_CACHE   = 2'b10} STATE = IDLE , NEXT = IDLE ;
+    UPDATE_CACHE   = 2'b10
+} STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
 logic                      update_en;
 logic                      tag_hit_1 , tag_hit_2 , over_f , s1 , s2 , miss ;
 logic [ADDR_WIDTH-1      : 0] i_addr_from_core_next_block;
@@ -55,6 +56,8 @@ initial begin
         TAG_MEM[i] = 'b0;
         VALID_MEM[i] = 1'b0;
     end
+    STATE = IDLE;
+    NEXT = IDLE;
 end
 //    ASSIGNING NEXT STATE AND UPDATE BLOCK    //
 always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_UPDATE_BLOCK
@@ -103,8 +106,11 @@ always_comb begin : FSM_TRANSITION_BLOCK
         // One-shot t=0 probe: Icarus never settles a marginal zero-delay
         // combinational loop in the dcache at time 0 (an event-scheduling
         // pathology, not RTL logic); a $display in any comb block at t=0
-        // perturbs the scheduling and lets the sim advance.
+        // perturbs the scheduling and lets the sim advance. Sim-only: yosys
+        // defines SYNTHESIS and skips this (it cannot parse $time here).
+`ifndef SYNTHESIS
         if ($time == 0) $display("[T0P] icache FSM probe");
+`endif
 // DEFAULT VALUES //
 o_rd_en = 0;
 o_wr_en = 0;

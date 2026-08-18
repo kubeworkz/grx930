@@ -1,4 +1,9 @@
 module riscv_core_top
+#(
+  // Cache geometry (FPGA sizing: defaults match the reference core).
+  parameter int ICACHE_INDEX_WIDTH = 7,
+  parameter int DCACHE_INDEX_WIDTH = 7
+)
 (
   // Global inputs
   input  logic i_riscv_core_clk,
@@ -340,7 +345,7 @@ u_riscv_core_64bit_adder_pc_if
 riscv_core_icache_top
 #(
     .BLOCK_OFFSET_WIDTH (3)
-    ,.INDEX_WIDTH (7)
+    ,.INDEX_WIDTH (ICACHE_INDEX_WIDTH)
     ,.TAG_WIDTH  (52)
     ,.CORE_DATA_WIDTH (32)
     ,.ADDR_WIDTH       (64)
@@ -1539,7 +1544,7 @@ u_riscv_core_pipe_csr_wen_ex_mem
 
 riscv_core_dcache_top#(
     .BLOCK_OFFSET(2)
-    ,.INDEX_WIDTH(7)
+    ,.INDEX_WIDTH(DCACHE_INDEX_WIDTH)
     ,.TAG_WIDTH(52)
     ,.CORE_DATA_WIDTH(64)
     ,.ADDR_WIDTH(64)

@@ -1,0 +1,28 @@
+# -----------------------------------------------------------------------------
+# C930 SoC ECP5-85F physical constraints for nextpnr-ecp5.
+#
+# This is a PLACEHOLDER pin map for an Fmax/resource estimation run, not a
+# board bring-up file. The clock is constrained to 400 MHz so the reported
+# "max frequency" is the TRUE achievable Fmax (nextpnr caps its report at the
+# constrained frequency, so a high constraint reveals the real critical path).
+# Retarget to the real board (pin locations, package, speed grade, real
+# oscillator frequency) when a target is chosen.
+# -----------------------------------------------------------------------------
+
+BLOCK ASYNCPATH;
+
+# Placeholder clock pin (ECP5-85F CABGA381). Pin choice does not affect the
+# timing estimate; replace with the real board's oscillator pin.
+LOCATE COMP "i_clk" SITE "P17";
+
+# High target so the post-P&R report shows the achievable Fmax, not the cap.
+FREQUENCY PORT "i_clk" 400 MHz;
+
+# Placeholder I/O sites for the remaining top-level ports (required so
+# nextpnr accepts the design; the sites are arbitrary and do not affect the
+# timing estimate -- a real board maps these to its actual pins).
+LOCATE COMP "i_rst_n"     SITE "P1";
+LOCATE COMP "o_npu_busy"  SITE "P2";
+LOCATE COMP "o_npu_done"  SITE "P3";
+LOCATE COMP "o_npu_error" SITE "P4";
+LOCATE COMP "o_npu_irq"   SITE "P5";

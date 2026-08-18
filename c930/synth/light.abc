@@ -1,0 +1,7 @@
+# Minimal abc mapping script: structural strash + LUT4 (if -K 4) mapping.
+# Used instead of the default resyn script, which is pathologically slow /
+# OOM on this netlist's ~100k register-demoted memory FFs.
+strash
+&get -n
+&if -K 4
+&put

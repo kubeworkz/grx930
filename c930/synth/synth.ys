@@ -1,0 +1,52 @@
+# -----------------------------------------------------------------------------
+# C930 SoC synthesis for ECP5 (oss-cad-suite Yosys).
+#
+# This file is the FLOW BODY only. run_synth.sh prepends the RTL file list
+# (yosys does not expand wildcards itself) and writes the combined script to
+# build/synth/run.ys. Manual use:
+#   cd c930 && yosys -ql build/synth/synth.log -p \
+#     "read_verilog -sv <files...>; $(grep -v '^#' synth/synth.ys)"
+#
+# Outputs:
+#   build/synth/ecp5.json  -> netlist for nextpnr-ecp5 (P&R / Fmax)
+#   build/synth/synth.log  -> full log incl. latch warnings + resource stats
+#
+# NOTE: c930_ddr.sv is a behavioral memory model (byte array + cache/AXI
+# ports) and is excluded here; c930_ddr_stub.sv blackboxes it so the report
+# reflects the actual fabric (core + caches + NPU + bridge).
+# -----------------------------------------------------------------------------
+
+# Run the full ECP5 flow up to (but excluding) map_luts. The -run to-label is
+# EXCLUSIVE, so begin:map_luts includes begin..map_ffs -- which is what runs
+# dfflegalize (async-reset DFFEs from the memory arrays' `<= 'b0` resets must
+# be converted to ECP5-synthesizable sync-reset/set cells). -noabc9 selects
+# the classic abc path; -latches warn makes the proc pass REPORT inferred
+# latches instead of aborting, so the report includes a latch audit.
+synth_ecp5 -top c930_soc_top -noabc9 -latches warn -run begin:map_luts
+
+# abc with a MINIMAL mapping script (strash + structural if-K4 map) instead of
+# the default resyn. The cache/NPU storage arrays demote to registers (~100k
+# FFs) because their byte-enabled / combinational-read patterns defeat EBR
+# inference; the resyn script blows past the ~8 GB machine. The light script
+# still produces a valid LUT netlist; density is a few % lower, which is fine
+# for a resource/Fmax estimate.
+abc -lut 4 -script synth/light.abc
+
+# Finish the standard synth_lattice tail passes (latch techmap, cell mapping).
+techmap -map +/lattice/latches_map.v
+techmap -map +/lattice/cells_map_trellis.v
+opt_lut_ins -tech lattice
+clean
+
+# check: autoname, hierarchy -check, stat (resource summary), check -noinit,
+# then blackbox every non-top module (the standard flow's tail step) so the
+# JSON backend can serialize the design -- BRAM/IO primitives keep their
+# processes until this runs.
+autoname
+hierarchy -check
+stat
+check -noinit
+blackbox =A:whitebox
+
+# write the netlist for nextpnr-ecp5.
+write_json build/synth/ecp5.json

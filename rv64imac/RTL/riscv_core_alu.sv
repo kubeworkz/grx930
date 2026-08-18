@@ -27,6 +27,7 @@ module riscv_core_alu
 logic [31:0] o_alu_resultword;
 always_comb
   begin: result_proc
+    o_alu_resultword = '0;   // default assign: 64-bit path never writes it, so without this the synthesis tools infer a latch
     if(!i_alu_isword)
       begin
         case (i_alu_control)

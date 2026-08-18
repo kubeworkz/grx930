@@ -109,23 +109,23 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   // Systolic-array feed (combinational): skew generation
   // ---------------------------------------------------------------------------
-  logic signed [DIN_W-1:0] act   [0:NUM_ROWS-1];
-  logic signed [ACC_W-1:0] ps_in [0:NUM_COLS-1];
+  logic signed [NUM_ROWS*DIN_W-1:0] act;    // row r in bits [r*DIN_W +: DIN_W]
+  logic signed [NUM_COLS*ACC_W-1:0] ps_in;  // col n in bits [n*ACC_W +: ACC_W]
 
   always_comb begin
-    for (int r = 0; r < NUM_ROWS; r++) act[r] = '0;
-    for (int n = 0; n < NUM_COLS; n++) ps_in[n] = '0;
+    act   = '0;
+    ps_in = '0;
 
     if (state == S_RUN) begin
       // Row r's activation A[m][k_base + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == r) && (r < kr))
-          act[r] = a_mem[m_reg*i_dim_k + k_base + r];
+          act[r*DIN_W +: DIN_W] = a_mem[m_reg*i_dim_k + k_base + r];
       end
       // Column n's running accumulator pulses at cycle n (skew by n).
       for (int n = 0; n < NUM_COLS; n++) begin
         if (t == n)
-          ps_in[n] = acc[n];
+          ps_in[n*ACC_W +: ACC_W] = acc[n];
       end
     end
   end

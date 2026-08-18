@@ -394,7 +394,7 @@ begin:trap_setup_proc
         mtval  <= 64'b0;
         mtinst <= 64'b0;
         scause <= 64'b0;
-        mepc   = 64'b0;
+        mepc   <= 64'b0;
         sepc   = 64'b0;
         stval  <= 64'b0;
     end
@@ -439,13 +439,23 @@ begin:trap_setup_proc
 
                     else if (i_csr_unit_csr_addr == `csr_stval)
                       stval <= op_result;
+
+                    // mepc must be writable so a trap handler can advance past
+                    // the faulting instruction (mepc += 4) before mret. The
+                    // write lives HERE (not in the other csr-write block) so
+                    // mepc has exactly one sequential driver -- the trap-setup
+                    // FSM also captures PC into mepc, and two always_ff blocks
+                    // writing the same variable is a multiply-driven net that
+                    // Icarus tolerates but synthesis rejects.
+                    else if (i_csr_unit_csr_addr == `csr_mepc)
+                      mepc <= op_result;
                   end
 
                 
                 //external interrupts
                 if (mstatus_mie & mie_meie & mip_meip)
                   begin
-                    mepc = i_csr_unit_pc;
+                    mepc <= i_csr_unit_pc;
                     current_state <= setting_up;
                     mtval  <= 64'b0;
                     mtinst <= 64'b0;
@@ -459,7 +469,7 @@ begin:trap_setup_proc
                 //timer interrupts
                 else if (mstatus_mie & mie_mtie & mip_mtip)
                   begin
-                    mepc = i_csr_unit_pc;
+                    mepc <= i_csr_unit_pc;
                     current_state <= setting_up;
                     mtval  <= 64'b0;
                     mtinst <= 64'b0;
@@ -475,7 +485,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -499,7 +509,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -519,7 +529,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -541,7 +551,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -561,7 +571,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -583,7 +593,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -603,7 +613,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -625,7 +635,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -643,7 +653,7 @@ begin:trap_setup_proc
                 else if (i_csr_unit_ecall)
                   begin
                     current_state <= setting_up;
-                    mepc = i_csr_unit_pc;
+                    mepc <= i_csr_unit_pc;
                     mtval  <= 64'b0;
                     mtinst <= i_csr_unit_instr;
                     mcause[63] <= 1'b0;
@@ -660,7 +670,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -682,7 +692,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -701,7 +711,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -723,7 +733,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -742,7 +752,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -764,7 +774,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc = i_csr_unit_pc;
+                              mepc <= i_csr_unit_pc;
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -897,14 +907,10 @@ if (!i_csr_unit_rst_n)
                     mtimecmp <= op_result;
                  end
 
-              // mepc must be writable so a trap handler can advance past the
-              // faulting instruction (mepc += 4) before mret; without this
-              // case the write is silently dropped and mret re-executes the
-              // same fault forever.
-              `csr_mepc:
-                 begin
-                    mepc <= op_result;
-                 end
+              // NOTE: `csr_mepc writes are handled in the trap-setup FSM's
+              // idle-state csr-write chain (where mepc's other sequential
+              // driver, the trap PC capture, lives). Writing mepc from two
+              // always_ff blocks would make it a multiply-driven net.
 
               `csr_sie:
                  begin

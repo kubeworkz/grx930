@@ -100,7 +100,8 @@ enum logic [2:0] {
     AMO_OP         = 3'b100,
     MMIO_READ      = 3'b101,
     MMIO_WRITE     = 3'b110,
-    MMIO_DRAIN     = 3'b111} STATE = IDLE , NEXT = IDLE ;   // 1-cycle no-request gap between MMIO xacts
+    MMIO_DRAIN     = 3'b111
+} STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
 // Initializers keep the combinational FSM/tag/reservation logic defined before
 // the first reset edge (Icarus would otherwise cascade X through the cache).
 initial begin
@@ -111,6 +112,8 @@ initial begin
     VALID_RES = 1'b0;
     RES_SET = 'b0;
     RES_SET_SIZE = 2'b0;
+    STATE = IDLE;
+    NEXT = IDLE;
 end
 
 logic                      update_en;

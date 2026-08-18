@@ -108,7 +108,7 @@ logic [CORE_DATA_WIDTH-1:0]      mux_to_core;
 //      BLOCK INSTANTIATION   //
 ////////////////////////////////
 
-riscv_core_dcache_controller #(.TAG_WIDTH(TAG_WIDTH), .MMIO_BASE(MMIO_BASE)) dcache_controller (
+riscv_core_dcache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH), .MMIO_BASE(MMIO_BASE)) dcache_controller (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_data_from_core (i_data_from_core),
@@ -185,7 +185,7 @@ riscv_core_amo_alu amo_alu (
 .o_amo_alu_result(amo_alu_result)); 
     
     
-riscv_core_dcache_memory #(.TAG_WIDTH(TAG_WIDTH)) dcache_memory (
+riscv_core_dcache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) dcache_memory (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_data_from_core (i_data_from_core),

@@ -7,6 +7,8 @@
 #   make npu        build + run the standalone NPU testbench (tb_c930_npu)
 #   make hazard     build + run the hazard-unit flush/stall unit test
 #   make wave       simulate the SoC and print the waveform location
+#   make synth      ECP5 synthesis resource/latch report (oss-cad-suite; real design)
+#   make synth-fit   ECP5 synthesis + P&R Fmax (cache-shrunk fit test)
 #   make clean      remove build artifacts and the VCD dump
 
 IVERILOG ?= iverilog
@@ -48,7 +50,7 @@ SOC_RTL := $(NPU_RTL) \
 OUT_NPU := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC := $(BUILD_DIR)/tb_c930_soc.vvp
 
-.PHONY: all sw soc npu hazard wave clean
+.PHONY: all sw soc npu hazard synth synth-fit wave clean
 
 all: sw soc
 
@@ -102,6 +104,20 @@ soc: $(OUT_SOC)
 
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
+
+# ---------------------------------------------------------------------------
+# ECP5 synthesis resource/latch report for the REAL design (vendored
+# oss-cad-suite). The full netlist is ~424K LUTs (dcache byte-strobe write
+# muxes demote to fabric), far over the ECP5-85F fabric, so this target is
+# yosys-only -- see synth-fit for a P&R/Fmax estimate.
+# ---------------------------------------------------------------------------
+synth:
+	@bash synth/run_synth.sh
+
+# Cache-shrunk fit test (chparam INDEX_WIDTH 7->4) + nextpnr P&R for an Fmax
+# estimate of the logic fabric (core + NPU + bridge + DMA).
+synth-fit:
+	@bash synth/run_synth.sh fit
 
 clean:
 	rm -rf $(BUILD_DIR)

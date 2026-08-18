@@ -31,7 +31,7 @@ logic                         control_to_mem_block_replace;
 logic                         control_to_mem_offset;
 logic [ADDR_WIDTH-1      : 0] control_to_mem_fill_addr;
 //      BLOCK INSTANTIATION   //
-riscv_core_icache_controller #(.TAG_WIDTH(TAG_WIDTH)) icache_controller (
+riscv_core_icache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_controller (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_addr_from_core (i_addr_from_core),
@@ -44,7 +44,7 @@ riscv_core_icache_controller #(.TAG_WIDTH(TAG_WIDTH)) icache_controller (
     .i_mem_done(i_mem_done),
     .o_offset(control_to_mem_offset),
     .o_fill_addr(control_to_mem_fill_addr));
-riscv_core_icache_memory #(.TAG_WIDTH(TAG_WIDTH)) icache_memory (
+riscv_core_icache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_memory (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_addr_from_core (i_addr_from_core),

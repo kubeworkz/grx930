@@ -1,0 +1,42 @@
+# -----------------------------------------------------------------------------
+# C930 SoC FIT-TEST flow for ECP5 (oss-cad-suite Yosys).
+#
+# Same flow as synth.ys, but with the two caches shrunk via chparam
+# (INDEX_WIDTH 7 -> 3, i.e. 128 -> 8 lines) so the netlist fits the
+# ECP5-85F fabric and nextpnr can place-and-route it for an Fmax number.
+# (INDEX_WIDTH 4 was tried first: 76K LUTs = 90% of the fabric, and the
+# router could not finish at that density.)
+#
+# WHY: the full design as-synthesized is ~424K LUTs (511% of ECP5-85F) because
+# the dcache's per-bit byte-strobe/AMO write muxes demote to ~366K LUTs (see
+# synth.log). The fit test measures the LOGIC FABRIC (core + NPU + bridge +
+# DMA) Fmax; it is NOT the real design's Fmax -- the caches must be re-architected
+# to EBR (registered reads / native byte-enables) before the real design fits.
+#
+# The DDR placeholder (c930_ddr_stub.sv) is used instead of the blackbox
+# because nextpnr cannot place blackboxes.
+#
+# chparam re-evaluates the parameterized MODULE (defaults are overridden at the
+# top instantiation), which is why the cache geometry is parameterized through
+# riscv_core_top (ICACHE_INDEX_WIDTH / DCACHE_INDEX_WIDTH).
+# -----------------------------------------------------------------------------
+
+chparam -set ICACHE_INDEX_WIDTH 3 riscv_core_top
+chparam -set DCACHE_INDEX_WIDTH 3 riscv_core_top
+
+synth_ecp5 -top c930_soc_top -noabc9 -latches warn -run begin:map_luts
+
+abc -lut 4 -script synth/light.abc
+
+techmap -map +/lattice/latches_map.v
+techmap -map +/lattice/cells_map_trellis.v
+opt_lut_ins -tech lattice
+clean
+
+autoname
+hierarchy -check
+stat
+check -noinit
+blackbox =A:whitebox
+
+write_json build/synth/fit.json

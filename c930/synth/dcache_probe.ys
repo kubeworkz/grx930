@@ -1,0 +1,18 @@
+# Probe: synthesize ONLY the dcache hierarchy to measure its LUT/FF contribution.
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux3x1.sv
+
+synth_ecp5 -top riscv_core_dcache_top -noabc9 -latches warn -run begin:map_luts
+abc -lut 4 -script synth/light.abc
+techmap -map +/lattice/latches_map.v
+techmap -map +/lattice/cells_map_trellis.v
+opt_lut_ins -tech lattice
+clean
+stat
+hierarchy -check
+check -noinit
+blackbox =A:whitebox
+write_json build/synth/dcache_probe.json
