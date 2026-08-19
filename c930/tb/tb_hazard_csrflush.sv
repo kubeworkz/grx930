@@ -194,6 +194,29 @@ module tb;
     @(negedge clk);
     rs1_id = 0; rd_mem = 0; resultsrc_mem = 2'b00; regwrite_mem = 0;
 
+    // Case 10 (regression guard): LOAD producer in EX (resultsrc_ex==01) with a
+    // dependent in ID, WHILE dcache_stall is still asserted (the preceding
+    // store/AMO still being serviced as the next producer enters EX -- the
+    // exact back-to-back-memory-op pattern from the store-ordering stress).
+    //
+    // The load-use bubble (flush_ex) is DEFERRED by the dcache_stall guard, so
+    // stall_ex must be HIGH to FREEZE the id_ex pipe this cycle. If the stall
+    // detection were ever registered (one-cycle lag) the pipe would be neither
+    // frozen nor bubbled and the dependent would be captured into EX -- the
+    // store re-dispatch / lost-AMO corruption seen when that retime was tried.
+    // The stall detection MUST stay combinational for this invariant.
+    @(negedge clk);
+    rs1_id = 5; rd_ex = 5; resultsrc_ex = 2'b01; regwrite_ex = 1;
+    dcache_stall = 1;
+    #1;
+    check("load producer in EX + dcache_stall: stall_id", stall_id, 1'b1);
+    check("load producer in EX + dcache_stall: stall_ex FREEZES id_ex", stall_ex, 1'b1);
+    check("load producer in EX + dcache_stall: flush_ex deferred", flush_ex, 1'b0);
+    check("load producer in EX + dcache_stall: stall_mem", stall_mem, 1'b1);
+    @(negedge clk);
+    dcache_stall = 0;
+    rd_ex = 0; resultsrc_ex = 2'b00; regwrite_ex = 0; rs1_id = 0;
+
     if (errors == 0)
       $display("[PASS] hazard CSR-flush deferral + CSR-read stall checks passed");
     else

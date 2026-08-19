@@ -201,23 +201,33 @@ collapsed), +64 FFs for `trap_pc_reg`, and the routed Fmax reads **~29.4 MHz**
 
 `synth/seed_sweep.sh` re-runs nextpnr P&R on the fixed synthesized netlist
 with several `--seed` values to measure the placement/routing variance
-(the routing term dominates the critical path):
+(the routing term dominates the critical path — ~76% of the path is routing).
+
+**First sweep (old netlist, pre-CSR-stall retiming):**
 
 | seed | routed Fmax |
 |------|-------------|
-| default (run_synth.sh) | **29.41 MHz** |
+| default | **29.41 MHz** |
 | 0  | 28.89 MHz |
 | 2  | 28.57 MHz |
 | 3  | 29.33 MHz |
 | 5  | 29.15 MHz |
 | 11 | 29.31 MHz |
 
-The routed Fmax is stable in a tight **28.6–29.4 MHz band** (~3% spread);
-the default flow already lands on the best seed, so no flow change is
-needed. The design is no longer seed-sensitive — the remaining path is
-routing-bound and RTL retiming (the CSR `op_result` decode into the
-stall-release handshake) is what would move the band, not placement
-luck. All seeds P&R to completion and write a full `ecp5_seed_<n>.config`.
+**Second sweep (post-CSR-stall netlist, best seeds):**
+
+| seed | routed Fmax |
+|------|-------------|
+| 7  | **35.87 MHz** |
+| 13 | 33.87 MHz |
+| 17 | 35.46 MHz |
+| 19 | 35.06 MHz |
+
+Seed 7 is the best: **35.87 MHz** routed (the critical path shifted to the
+NPU systolic array's 64-bit MAC accumulator carry chain, no longer the
+hazard-stall→CE path). `run_synth.sh` now pins `--seed 7` so the canonical
+flow reproduces the best result. All seeds P&R to completion and write a
+full `ecp5_seed_<n>.config`.
 
 ### CSR read-decode pre-retiming (Aug 2026)
 
@@ -307,9 +317,41 @@ critical path** -- the new worst path (28.9 ns = **34.6 MHz** routed, up from
 ALU -> CCU2C carry -> hazard-unit stall detection (`csr_mem_hold`/stall_ex) ->
 `csr_addr_id_ex` CE. LUT count moved 34,012 -> 33,767 (-245; the csr_hold
 machinery collapsed), FFs 10,707 -> 10,577 (-130), 0 latches, 16 DP16KD /
-416 DPR16X4 / 21 DSPs unchanged. The remaining path is again
-routing-dominated (6.9 ns logic + 22.1 ns routing), and the Fmax band across
+416 DPR16X4 / 21 DSPs unchanged. The remaining path is againrouting-dominated (6.9 ns logic + 22.1 ns routing), and the Fmax band across
 the retiming series is now 24.3 -> 27.7 -> 29.4 -> 31.7 -> 31.9 -> **34.6 MHz**.
+
+### Registered stall-detection retime: attempted and REVERTED (Aug 2026)
+
+The post-CSR-stall worst path ended at the id_ex pipe clock-enables
+(`instruction_ex_mem` -> hazard-unit stall detection -> `csr_addr_id_ex` CE).
+Registering the CSR/load-use stall detection (`dep_stall_reg`) was tried so the
+comparison chain would end at the flop D instead of the ~fifteen 64-bit id_ex
+CEs. The A/B against the combinational baseline is unambiguous: **the
+registered version breaks the SoC sweep** (amo_stress fails at 0x204: the
++0x2 store and amo_xor never reach the dcache; w[1] stays 0x1112 in DDR),
+while the identical binary with the combinational stall passes all 22 cases.
+
+The mechanism (traced cycle-by-cycle in the sim): the icache's period-2
+hit-stall loop freezes the pipeline every other cycle, and a plain store whose
+MEM phase spans that freeze stays in MEM past the dcache's service completion
+-- the level-based request re-dispatches (a double write-through; benign for an
+idempotent store). The one-cycle registered lag on stall_ex shifts the whole
+instruction stream's phase against the period-2 loop, landing the downstream
+AMO/store sequence in a corrupting configuration (the store re-dispatch delays
+the pipeline and later ops are lost). The stall protocol -- combinational
+detection, deferred flush, cycle-accurate release against the dcache's
+LOAD_DONE -- is a correctness invariant of this design; the id_ex CE cone is
+best attacked by placement (routing is 76% of the path), not by shifting the
+stall timing.
+
+Net: hazard unit reverted to the combinational baseline (34.6 MHz stands),
+and the invariant is locked in as **Case 10 of tb_hazard_csrflush.sv**: a LOAD
+producer in EX with a dependent in ID while `dcache_stall` is still asserted
+must keep `stall_ex` high (id_ex frozen -- `flush_ex` is deferred by the
+dcache_stall guard, so a clear stall_ex would capture the dependent into EX).
+
+
+
 
 ## Files
 

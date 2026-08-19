@@ -73,7 +73,10 @@ echo "== yosys synth_ecp5 (c930_soc_top) [$NOTE] =="
 cmd //c "yosys -ql build/synth/$LOG build/synth/run_$MODE.ys"
 
 echo "== nextpnr-ecp5 P&R (ECP5-85F placeholder) =="
-cmd //c "nextpnr-ecp5 -l build/synth/pnr.log --json build/synth/$JSON --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 --textcfg build/synth/ecp5.config"
+# Seed 7 was the best of the placement-seed sweep (35.87 MHz routed vs 34.57
+# for nextpnr's default seed) on the post-CSR-stall netlist; pin it so the
+# canonical flow reproduces the best result.
+cmd //c "nextpnr-ecp5 -l build/synth/pnr.log --json build/synth/$JSON --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 --seed 7 --textcfg build/synth/ecp5.config"
 
 echo
 echo "===================== REPORT ($MODE) ====================="
