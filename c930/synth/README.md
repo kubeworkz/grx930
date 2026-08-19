@@ -239,8 +239,7 @@ before the NPU retime). Seed 19 is the best: **35.56 MHz** routed.
 
 The Fmax band across the retiming series is now
 24.3 -> 27.7 -> 29.4 -> 31.7 -> 31.9 -> 34.6 -> 35.9 (seed 7) ->
-**35.6 MHz** (NPU-pipelined, seed 19). The CPU fetch-PC carry chain is
-the next retiming target.
+35.6 (NPU-pipelined, seed 19) -> **35.3 MHz** (IF-stage PC+4 register).
 
 All seeds P&R to completion and write a full `ecp5_seed_<n>.config`.
 
@@ -364,6 +363,22 @@ and the invariant is locked in as **Case 10 of tb_hazard_csrflush.sv**: a LOAD
 producer in EX with a dependent in ID while `dcache_stall` is still asserted
 must keep `stall_ex` high (id_ex frozen -- `flush_ex` is deferred by the
 dcache_stall guard, so a clear stall_ex would capture the dependent into EX).
+
+### IF-stage PC+4 register (Aug 2026)
+
+The IF-stage PC+4 adder output (`pc_plus_offset_if`) feeds the `pcsrc_ex` mux,
+which selects between the fall-through (PC+4) and the EX-stage branch target.
+The mux output (`PCF_NEW`) feeds the `pcf_if` pipe -- a 64-bit carry chain that
+was the critical path after the NPU retime. Registering `pc_plus_offset_if`
+(`pc_plus_offset_if_reg`) breaks this chain: the mux now starts from a
+registered value. The `if_id_pipe_pc_plus_offset` pipe still uses the
+combinational value, preserving ID-stage JALR timing.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. The remaining path
+is the branch unit's 64-bit subtraction carry chain (the branch comparison).
+Routed Fmax moved from 35.87 (seed 7) to 35.31 (seed 19) -- the register
+reduced LUT count by ~50 but the branch-unit carry chain became the sole
+bottleneck at ~28.8 ns.
 
 ### NPU K-tile pipeline registers (Aug 2026)
 

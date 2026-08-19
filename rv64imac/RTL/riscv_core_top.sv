@@ -48,6 +48,7 @@ logic [63:0] if_id_pipe_pc_plus_offset;
 logic [31:0] if_id_pipe_instr;
 logic [63:0] pcf;
 logic [63:0] pc_plus_offset_if;
+logic [63:0] pc_plus_offset_if_reg;  // registered for pcsrc mux carry-chain break
 logic [63:0] mux_to_stg2;
 logic [31:0] instr;
 logic [31:0] c_ext_instr_out;
@@ -259,7 +260,7 @@ riscv_core_mux2x1
 )
 u_riscv_core_mux2x1_stg2
 (
-  .i_mux2x1_in0 (pc_plus_offset_if)
+  .i_mux2x1_in0 (pc_plus_offset_if_reg)
   ,.i_mux2x1_in1(mux_to_stg2)
   ,.i_mux2x1_sel(pcsrc_ex)
   ,.o_mux2x1_out(pcf)
@@ -337,9 +338,20 @@ u_riscv_core_64bit_adder_pc_if
 (
   .i_64bit_adder_srcA   (if_pipe_pcf_new)
   ,.i_64bit_adder_srcB  (compressed_offset)
-  ,.o_64bit_adder_result(pc_plus_offset_if)
+  ,  .o_64bit_adder_result(pc_plus_offset_if)
 );
 
+// Register the IF-stage PC+4 adder output for the pcsrc mux.  This breaks the
+// 64-bit carry chain (pcsrc_ex -> mux -> pcf_if pipe) off the WB->EX forward
+// critical path: the mux now starts from a registered value instead of a
+// combinational chain from mem_wb_pipe_resultsrc through the branch unit.
+// The if_id_pipe_pc_plus_offset pipe still uses the combinational value.
+always_ff @(posedge i_riscv_core_clk or negedge i_riscv_core_rst_n) begin
+  if (!i_riscv_core_rst_n)
+    pc_plus_offset_if_reg <= '0;
+  else
+    pc_plus_offset_if_reg <= pc_plus_offset_if;
+end
 
 
 riscv_core_icache_top
