@@ -268,6 +268,49 @@ handshake). LUT count moved 34,102 -> 34,012 (-90; the combinational IDLE
 presentation collapsed), and the path is again routing-dominated (8.1 ns logic
 + 23.2 ns routing).
 
+### ID-based CSR-read stall (Aug 2026)
+
+The post-bridge worst path still threaded the **WB-stage CSR read-data mux**:
+`csr_sel_mem_wb` (the registered one-hot select) -> CSR `mstatus_mie`/
+`op_result` merge -> WB->EX forward -> ALU carry chain -> icache stall-release
+-> `rf_rd2_id_ex` CE. The retiming removes the combinational CSR read data
+from the data path entirely and delivers CSR reads through the register file:
+
+- **`riscv_core_hazard_unit.sv`** -- the EX-based CSR stall + operand-hold
+  machinery (`csr_hold_a/b`, `pcsrc_gate`) is replaced by an **ID-based
+  CSR-read stall** mirroring the load-use stall: a dependent in ID whose
+  source matches a CSR-read producer (`resultsrc == 2'b11`) in EX, MEM, or WB
+  is held in ID until the producer's regfile write commits at the WB negedge.
+  The producer is bubbled out of EX (`flush_ex` CSR term) so it can never
+  re-execute, and a one-shot **`csr_mem_hold` drain flop** freezes the EX->MEM
+  pipe for exactly the producer's first MEM cycle (the load-use stall gets that
+  freeze from `dcache_stall`; a CSR read has no dcache service). The WB->EX
+  forward now excludes `resultsrc == 2'b11` entirely.
+- **`riscv_core_top.sv`** -- `wb_fwd_data` (the WB->EX forward source) carries
+  only the REGISTERED mem_wb pipes (`read_data` / `pc_plus_offset` /
+  `alu_result`); the combinational `csr_rdata_wb` is intentionally absent, so
+  the `csr_sel_mem_wb -> read mux -> result_wb -> src mux -> ALU` chain is off
+  the FF-to-FF path. The csr_hold registers and mux overrides are deleted.
+
+This exposed a latent bug in the previous rewrite: the hazard-unit
+instantiation had silently dropped the `i_hazard_unit_resultsrc_mem`
+connection (an edit accident), leaving `load_in_mem` dead and the MEM->EX
+forward firing for load/AMO producers -- the dcache_stress AMO got the previous
+AMO's *address* forwarded as its base and faulted (mcause=7 trap loop).
+Restored the connection and verified the trap tests (which exercise the CSR
+read stall through the handler's `csrrs mcause`/`csrrs mepc` chains) pass.
+
+Verified: full 22-case SoC sweep + hazard-unit test (now cycle-accurate with
+the drain pulse) pass. Result: the CSR read-decode chain is **gone from the
+critical path** -- the new worst path (28.9 ns = **34.6 MHz** routed, up from
+31.9) starts at `instruction_ex_mem` -> regwrite pipe -> branch-unit srcB ->
+ALU -> CCU2C carry -> hazard-unit stall detection (`csr_mem_hold`/stall_ex) ->
+`csr_addr_id_ex` CE. LUT count moved 34,012 -> 33,767 (-245; the csr_hold
+machinery collapsed), FFs 10,707 -> 10,577 (-130), 0 latches, 16 DP16KD /
+416 DPR16X4 / 21 DSPs unchanged. The remaining path is again
+routing-dominated (6.9 ns logic + 22.1 ns routing), and the Fmax band across
+the retiming series is now 24.3 -> 27.7 -> 29.4 -> 31.7 -> 31.9 -> **34.6 MHz**.
+
 ## Files
 
 | File | Purpose |

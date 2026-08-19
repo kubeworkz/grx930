@@ -119,21 +119,8 @@ logic        ex_mem_pipe_regwrite;
 logic [63:0] src_a_ex;
 logic [63:0] src_b_ex;
 logic [63:0] src_b_out;
-// CSR-dependency stall operand hold: while the one-cycle stall holds the
-// dependent instruction in EX, an operand whose producer sits in WB loses its
-// WB->EX forward on the release cycle. The mux outputs are captured at the
-// stall edge (src_a_mux/src_b_mux, forwarded values) and reselected during the
-// release window. See the always_ff block in the EX stage.
 logic [63:0] src_a_mux;
 logic [63:0] src_b_mux;
-logic [63:0] csr_hold_a;
-logic [63:0] csr_hold_b;
-logic        csr_hold_a_vld;
-logic        csr_hold_b_vld;
-logic        csr_hold_a_en;
-logic        csr_hold_b_en;
-logic        pcsrc_gate;
-logic        csr_stall_prev;
 logic [63:0] alu_result_ex;
 logic [63:0] m_ext_res;
 logic [63:0] arith_result_ex;
@@ -320,12 +307,12 @@ u_riscv_core_pipe_pcf_if
   // continues past the faulting instruction. mret holds pc_cntrl_wb through the
   // stall (it stays in WB), and the exception's setting_up window is one cycle,
   // so the capture must happen while the stall is active.
-  // Exception: during the CSR-dependency stall pulse a branch/jump in EX
-  // cannot resolve - its stalled operand is stale - so its pcsrc_ex must NOT
-  // un-freeze the fetch PC (pcsrc_gate suppresses it); the branch re-evaluates
-  // with the forwarded value on the release cycle. (The load-use stall never
-  // holds a stale branch in EX - it bubbles EX - so its pcsrc_ex is honored.)
-  ,.i_pipe_en_n  (hu_stall_if && !(pcsrc_ex && !pcsrc_gate) && !pc_cntrl_wb)
+  // Exception: during the load-use stall the dependent is held in ID and EX is
+  // bubbled, so no branch/jump sits in EX with a stale operand -- its pcsrc_ex
+  // is always legitimate and honored. (The old CSR-dependency pulse could hold
+  // a stale branch in EX; the CSR-read stall now holds the dependent in ID,
+  // so that case no longer exists.)
+  ,.i_pipe_en_n  (hu_stall_if && !pcsrc_ex && !pc_cntrl_wb)
   ,.i_pipe_in    (PCF_NEW)
   ,.o_pipe_out   (if_pipe_pcf_new)
 );
@@ -1053,6 +1040,21 @@ u_riscv_core_mux2x1_csr_src
 logic [63:0] mem_forward_data;
 assign mem_forward_data = ex_mem_pipe_alu_result;
 
+// WB->EX forward source: REGISTERED mem_wb pipe values only. The CSR read
+// data (csr_rdata_wb, the WB-stage read mux output) is intentionally absent:
+// it is COMBINATIONAL in WB (registered one-hot select x registered CSR
+// values), and a dependent on a CSR read is held in ID by the CSR-read stall
+// until the producer's regfile write commits at the WB negedge -- it captures
+// the committed value at the release edge and never needs a WB->EX forward.
+// Keeping the CSR read data out of this bus removes the
+// csr_sel_mem_wb -> read mux -> result_wb -> src mux -> ALU chain from the
+// FF-to-FF critical path (the load-use stall removed the load data for the
+// same reason: mem_wb_pipe_read_data is a registered pipe).
+logic [63:0] wb_fwd_data;
+assign wb_fwd_data = (mem_wb_pipe_resultsrc == 2'b01) ? mem_wb_pipe_read_data :
+                     (mem_wb_pipe_resultsrc == 2'b10) ? mem_wb_pipe_pc_plus_offset :
+                                                        mem_wb_pipe_alu_result;
+
 riscv_core_mux3x1
 #(
   .XLEN (64)
@@ -1060,18 +1062,13 @@ riscv_core_mux3x1
 u_riscv_core_mux3x1_srca
 (
   .i_mux3x1_in0 (id_ex_pipe_rd1)
-  ,.i_mux3x1_in1(result_wb)
+  ,.i_mux3x1_in1(wb_fwd_data)
   ,.i_mux3x1_in2(mem_forward_data)
   ,.i_mux3x1_sel(hu_forward_a)
   ,.o_mux3x1_out(src_a_mux)
 );
 
-// CSR-dependency stall operand hold override: on the release cycle the held
-// value (captured at the stall edge, when the producer was still in WB)
-// replaces the dead forward for the operand NOT produced by the CSR read.
-// (The load-use stall needs no hold: its dependent is held in ID, so both
-// operands are captured fresh at the release edge.)
-assign src_a_ex = csr_hold_a_vld ? csr_hold_a : src_a_mux;
+assign src_a_ex = src_a_mux;
 
 riscv_core_mux3x1
 #(
@@ -1080,57 +1077,13 @@ riscv_core_mux3x1
 u_riscv_core_mux3x1_srcb
 (
   .i_mux3x1_in0 (id_ex_pipe_rd2)
-  ,.i_mux3x1_in1(result_wb)
+  ,.i_mux3x1_in1(wb_fwd_data)
   ,.i_mux3x1_in2(mem_forward_data)
   ,.i_mux3x1_sel(hu_forward_b)
   ,.o_mux3x1_out(src_b_mux)
 );
 
-// Same hold override for the SrcB register value (before the immediate mux,
-// so immediate-based instructions are unaffected).
-assign src_b_out = csr_hold_b_vld ? csr_hold_b : src_b_mux;
-
-// CSR-dependency stall operand hold. When the one-cycle stall fires
-// (csr_stall_active), the operand NOT produced by the CSR read is correct at
-// the stall edge: its producer is in WB (the WB->EX forward is live) or its
-// value is already committed in the register file. Capture it then; the CSR
-// read's own operand is stale at the stall edge (the MEM forward is
-// suppressed for CSR producers) and instead arrives via the WB->EX forward on
-// the release cycle. The vld flops reselect the held values while
-// csr_stall_prev is high (the release window, which stays high through any
-// cache stalls that extend the freeze) and clear once the consumer advances.
-always_ff @(posedge i_riscv_core_clk or negedge i_riscv_core_rst_n)
-begin
-    if (!i_riscv_core_rst_n)
-    begin
-        csr_hold_a     <= 64'b0;
-        csr_hold_b     <= 64'b0;
-        csr_hold_a_vld <= 1'b0;
-        csr_hold_b_vld <= 1'b0;
-    end
-    else
-    begin
-        if (csr_hold_a_en)
-        begin
-            csr_hold_a     <= src_a_mux;
-            csr_hold_a_vld <= 1'b1;
-        end
-        else if (!csr_stall_prev)
-        begin
-            csr_hold_a_vld <= 1'b0;
-        end
-
-        if (csr_hold_b_en)
-        begin
-            csr_hold_b     <= src_b_mux;
-            csr_hold_b_vld <= 1'b1;
-        end
-        else if (!csr_stall_prev)
-        begin
-            csr_hold_b_vld <= 1'b0;
-        end
-    end
-end
+assign src_b_out = src_b_mux;
 
 riscv_core_mux2x1
 #(
@@ -1175,7 +1128,7 @@ u_riscv_core_mul_div
   // M/D with a wrong result from the stale values; deferring one cycle lets
   // the operands settle via the WB->EX forward on the release cycle. (During
   // the load-use stall the id_ex pipe is a bubble, so no M/D issues there.)
-  ,.i_mul_div_en         (id_ex_pipe_im_sel && !pcsrc_gate) // is_MulE
+  ,.i_mul_div_en         (id_ex_pipe_im_sel) // is_MulE
   ,.o_mul_div_result     (m_ext_res)
   ,.o_mul_div_busy       (m_ext_busy)
   ,.o_mul_div_done       (m_ext_done)
@@ -2002,7 +1955,7 @@ u_riscv_core_mux2x1_stg2_instr_csr
 riscv_core_hazard_unit
 u_riscv_core_hazard_unit
 (
-    // Clock / reset (one-cycle CSR-dependency stall latch)
+    // Clock / reset (CSR-read stall ex_mem drain pulse)
     .i_hazard_unit_clk            (i_riscv_core_clk)
     ,.i_hazard_unit_rst_n         (i_riscv_core_rst_n)
     // RV64I Detection inputs
@@ -2032,6 +1985,7 @@ u_riscv_core_hazard_unit
     ,.i_hazard_unit_resultsrc_mem (ex_mem_pipe_resultsrc)
     ,.i_hazard_unit_csr_flush_mem (csr_ex_flush)
     ,.i_hazard_unit_csr_flush_wb  (csr_mem_flush)
+    ,.i_hazard_unit_resultsrc_wb  (mem_wb_pipe_resultsrc)
     // UART 
     //,.i_hazard_unit_uart_stall    (1'b0)
     // Forwarding outputs
@@ -2048,13 +2002,7 @@ u_riscv_core_hazard_unit
     ,.o_hazard_unit_flush_ex      (hu_flush_ex)
     ,.o_hazard_unit_flush_mem     (hu_flush_mem)
     ,.o_hazard_unit_flush_wb      (hu_flush_wb)
-    // CSR-dependency stall operand hold
-    ,.o_hazard_unit_csr_hold_a_en (csr_hold_a_en)
-    ,.o_hazard_unit_csr_hold_b_en (csr_hold_b_en)
-    ,.o_hazard_unit_csr_stall_prev(csr_stall_prev)
     ,.i_hazard_unit_regwrite_ex(id_ex_pipe_regwrite)
-    // CSR-dependency stall pulse gate
-    ,.o_hazard_unit_pcsrc_gate(pcsrc_gate)
 );
 //----------------------------------//
 
