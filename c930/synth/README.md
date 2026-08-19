@@ -18,7 +18,7 @@ netlists land in `c930/build/synth/`.
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4 (logic)        | 423,747 | **35,074** | 83,640 (42%) |
+| LUT4 (logic)        | 423,747 | **35,226** | 83,640 (42%) |
 | TRELLIS_FF          | 86,971  | **10,619** | 83,640 (13%) |
 | CCU2C (carry)       | 1,564   | 2,069  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
@@ -27,8 +27,8 @@ netlists land in `c930/build/synth/`.
 
 Latch audit: **clean** — no inferred latches in the final netlist (0 `$dlatch`,
 0 DLATCH cells; `check -noinit` reports 0 problems). **The full design P&Rs
-to completion at 42% LUT density with a routed Fmax of ~26.4 MHz (default
-nextpnr router).**
+to completion at 42% LUT density with a routed Fmax of ~24.3 MHz (default
+nextpnr router, constrained at 400 MHz to expose the true critical path).**
 
 ### What changed
 
@@ -113,8 +113,9 @@ router1): after the tag arrays moved to DPR16X4 the net count dropped enough
 that the router converges (it had oscillated for 1.5+ hours at the 61%-density
 build). The routed result in `pnr.log` / `ecp5.config` (full bitstream config):
 
-- **Routed Fmax: ~26.4 MHz** (constrained at 400 MHz to expose the true
-  critical path). Direction-setting, not a board-validated number.
+- **Routed Fmax: ~24.3 MHz** (worst FF path 36.2 ns = 8.6 ns logic + 27.6 ns
+  routing; constrained at 400 MHz to expose the true critical path).
+  Direction-setting, not a board-validated number.
 
 ### M/D operand retiming (Aug 2026)
 
@@ -136,9 +137,42 @@ MUL/DIV's 64-bit CCU2C subtractor -> fetch-PC mux -> CSR `mepc`. The fix in
 Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the
 MUL/DIV units no longer appear in the critical path report (the tail is now
 `src_b_mux -> ALU adder -> fetch-PC -> CSR mepc`, still ~26 ns routing), and
-the routed Fmax moved **25.8 -> 26.4 MHz**. The next bottleneck is the ALU
-adder fed by the load-use forward; a one-cycle load-use stall (registered WB
-forward) or pipelining the MMIO bridge read would attack it directly.
+the routed Fmax moved **25.8 -> 26.4 MHz**. The next bottleneck was the ALU
+adder fed by the combinational MEM->EX load-use forward.
+
+### ID-based load-use stall (Aug 2026)
+
+The old MEM->EX load forward put the dcache's address->data chain (tag/valid
+decode, word select, MMIO decode) on the EX critical path. It is replaced by
+an **ID-based one-cycle load-use stall** in `riscv_core_hazard_unit.sv`:
+
+- A dependent in ID whose source matches a read-data producer (load/AMO/LR/SC,
+  `resultsrc == 01`) in EX — or in MEM while the dcache is still servicing it
+  (`dcache_stall`) — is held in ID (level-based) until the producer reaches WB.
+  The value arrives through the **registered WB->EX forward**
+  (`mem_wb_pipe_read_data -> result_wb`), so the dcache chain is off the EX
+  data path entirely.
+- The producer is never held: `stall_mem/wb` stay clear, so it flows
+  EX->MEM->WB exactly as in the unstalled flow and the dcache's registered-read
+  data window is never disturbed (an earlier EX-based pulse that held the load
+  in MEM made the dcache re-enter its read path and corrupt the data).
+- The `id_ex` pipe is flushed to a bubble while the producer sits in EX (the
+  stall releases on the dcache's `LOAD_DONE` cycle, so the dependent enters EX
+  exactly when the producer is in WB). The flush is deferred during cache/M
+  stalls exactly like the branch flush. No operand-hold registers are needed:
+  the dependent's operands are captured into the pipe only at the release
+  edge, so they are always fresh.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the dcache
+address->data chain **no longer appears in the critical path report** — the
+worst FF path is now `instr_wb -> CSR instruction decode (ip_stip) ->
+op_result datapath -> mie/meie -> result_wb -> srcB mux -> ALU ->
+i_csr_unit_pc -> mepc` (36.2 ns, mostly 27.6 ns of routing). LUT count moved
+35,074 -> 35,226 (+152 for the ID detection) and the routed Fmax reads
+~24.3 MHz on this run (within the flow's run-to-run routing variance band;
+the removed path was previously co-critical at ~38.7 ns). The next attack
+point is the CSR `op_result`/`mepc` capture datapath or a placement-seed
+sweep.
 
 ## Files
 

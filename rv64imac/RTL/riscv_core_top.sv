@@ -132,6 +132,7 @@ logic        csr_hold_a_vld;
 logic        csr_hold_b_vld;
 logic        csr_hold_a_en;
 logic        csr_hold_b_en;
+logic        pcsrc_gate;
 logic        csr_stall_prev;
 logic [63:0] alu_result_ex;
 logic [63:0] m_ext_res;
@@ -312,7 +313,12 @@ u_riscv_core_pipe_pcf_if
   // continues past the faulting instruction. mret holds pc_cntrl_wb through the
   // stall (it stays in WB), and the exception's setting_up window is one cycle,
   // so the capture must happen while the stall is active.
-  ,.i_pipe_en_n  (hu_stall_if && !pcsrc_ex && !pc_cntrl_wb)
+  // Exception: during the CSR-dependency stall pulse a branch/jump in EX
+  // cannot resolve - its stalled operand is stale - so its pcsrc_ex must NOT
+  // un-freeze the fetch PC (pcsrc_gate suppresses it); the branch re-evaluates
+  // with the forwarded value on the release cycle. (The load-use stall never
+  // holds a stale branch in EX - it bubbles EX - so its pcsrc_ex is honored.)
+  ,.i_pipe_en_n  (hu_stall_if && !(pcsrc_ex && !pcsrc_gate) && !pc_cntrl_wb)
   ,.i_pipe_in    (PCF_NEW)
   ,.o_pipe_out   (if_pipe_pcf_new)
 );
@@ -1027,16 +1033,18 @@ u_riscv_core_mux2x1_csr_src
   ,.o_mux2x1_out(csr_src_ex)
 );
 
-// MEM-stage forward source. For a LOAD in MEM, ex_mem_pipe_alu_result holds the
-// effective ADDRESS, not the loaded value - forwarding it to the dependent EX
-// instruction computes with the address. When the MEM instruction is a load,
-// forward the extended load data read from the dcache instead. The same applies
-// to A-extension ops (AMO/LR/SC): the dcache mux already presents the loaded
-// value (LR), the AMO ALU result (AMO), or the reservation result (SC, via
-// sc_out) on read_data_mem_extnd, so forwarding the ALU result would hand the
-// dependent instruction the address.
+// MEM-stage forward source: the ALU result of a non-read-data instruction
+// (resultsrc == 2'b00) in MEM. A read-data producer (load/AMO/LR/SC,
+// resultsrc == 2'b01) is NEVER forwarded to EX: its MEM-stage ALU result is
+// the effective ADDRESS, and the loaded value only exists at WB. Dependents
+// on it are held in EX by the load-use stall (one cycle) until the producer
+// reaches WB, where the registered read-data pipe (mem_wb_pipe_read_data ->
+// result_wb) supplies the value via the WB->EX forward. This removes the
+// dcache address->data chain (tag/valid decode, word select, MMIO decode)
+// from the EX critical path: the src mux in2 now reads a registered pipe
+// output instead of combinational load data.
 logic [63:0] mem_forward_data;
-assign mem_forward_data = (mem_cahce_read || mem_main_decoder_amo || mem_main_decoder_lr || mem_main_decoder_sc) ? read_data_mem_extnd : ex_mem_pipe_alu_result;
+assign mem_forward_data = ex_mem_pipe_alu_result;
 
 riscv_core_mux3x1
 #(
@@ -1054,6 +1062,8 @@ u_riscv_core_mux3x1_srca
 // CSR-dependency stall operand hold override: on the release cycle the held
 // value (captured at the stall edge, when the producer was still in WB)
 // replaces the dead forward for the operand NOT produced by the CSR read.
+// (The load-use stall needs no hold: its dependent is held in ID, so both
+// operands are captured fresh at the release edge.)
 assign src_a_ex = csr_hold_a_vld ? csr_hold_a : src_a_mux;
 
 riscv_core_mux3x1
@@ -1152,7 +1162,13 @@ u_riscv_core_mul_div
   ,.i_mul_div_srcB       (src_b_out)
   ,.i_mul_div_control    (id_ex_pipe_alu_control[2:0])
   ,.i_mul_div_isword     (id_ex_pipe_isword)
-  ,.i_mul_div_en         (id_ex_pipe_im_sel) // is_MulE
+  // Gate the M/D issue during the CSR-dependency stall pulse: the unit's
+  // fast-path detection is combinational on the raw operands, which are stale
+  // while the dependent is held in EX. Issuing then could complete a fast-path
+  // M/D with a wrong result from the stale values; deferring one cycle lets
+  // the operands settle via the WB->EX forward on the release cycle. (During
+  // the load-use stall the id_ex pipe is a bubble, so no M/D issues there.)
+  ,.i_mul_div_en         (id_ex_pipe_im_sel && !pcsrc_gate) // is_MulE
   ,.o_mul_div_result     (m_ext_res)
   ,.o_mul_div_busy       (m_ext_busy)
   ,.o_mul_div_done       (m_ext_done)
@@ -1968,6 +1984,9 @@ u_riscv_core_hazard_unit
     ,.o_hazard_unit_csr_hold_a_en (csr_hold_a_en)
     ,.o_hazard_unit_csr_hold_b_en (csr_hold_b_en)
     ,.o_hazard_unit_csr_stall_prev(csr_stall_prev)
+    ,.i_hazard_unit_regwrite_ex(id_ex_pipe_regwrite)
+    // CSR-dependency stall pulse gate
+    ,.o_hazard_unit_pcsrc_gate(pcsrc_gate)
 );
 //----------------------------------//
 
