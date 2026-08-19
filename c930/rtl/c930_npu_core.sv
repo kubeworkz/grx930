@@ -86,16 +86,12 @@ module c930_npu_core
   logic signed [ACC_W-1:0] acc [0:NUM_COLS-1];   // running accumulator per column
 
   // Combinational helpers
-  int  k_base;          // kt_reg * NUM_ROWS
-  int  kr;              // rows actually used in the current K tile
   int  n_base;          // nt_reg * NUM_COLS
   int  nc;              // columns actually used in the current N tile
   int  num_k_tiles;     // ceil(K / NUM_ROWS)
   int  num_n_tiles;     // ceil(N / NUM_COLS)
   logic dims_ok;
 
-  assign k_base      = kt_reg * NUM_ROWS;
-  assign kr          = (i_dim_k - k_base >= NUM_ROWS) ? NUM_ROWS : (i_dim_k - k_base);
   assign n_base      = nt_reg * NUM_COLS;
   assign nc          = (i_dim_n - n_base >= NUM_COLS) ? NUM_COLS : (i_dim_n - n_base);
   assign num_k_tiles = (i_dim_k + NUM_ROWS - 1) / NUM_ROWS;
@@ -105,6 +101,13 @@ module c930_npu_core
                        (i_dim_k >= 1) && (i_dim_k <= MAX_K);
 
   assign o_busy = (state != S_IDLE);
+
+  // Registered K-tile helpers: k_base and kr are computed at the START of each
+  // K tile (end of the previous tile) and held stable for the whole S_WLOAD +
+  // S_RUN sequence.  This breaks the 32-bit subtraction carry chain
+  // (i_dim_k - k_base) off the critical path to the PE datapath.
+  int  k_base_reg;      // kt_reg * NUM_ROWS, registered
+  int  kr_reg;          // min(NUM_ROWS, i_dim_k - k_base), registered
 
   // ---------------------------------------------------------------------------
   // Systolic-array feed (combinational): skew generation
@@ -117,10 +120,12 @@ module c930_npu_core
     ps_in = '0;
 
     if (state == S_RUN) begin
-      // Row r's activation A[m][k_base + r] pulses at cycle r (skew by r).
+      // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
+      // Uses registered k_base_reg and kr_reg to keep the subtraction carry
+      // chain off the PE critical path.
       for (int r = 0; r < NUM_ROWS; r++) begin
-        if ((t == r) && (r < kr))
-          act[r*DIN_W +: DIN_W] = a_mem[m_reg*i_dim_k + k_base + r];
+        if ((t == r) && (r < kr_reg))
+          act[r*DIN_W +: DIN_W] = a_mem[m_reg*i_dim_k + k_base_reg + r];
       end
       // Column n's running accumulator pulses at cycle n (skew by n).
       for (int n = 0; n < NUM_COLS; n++) begin
@@ -146,7 +151,7 @@ module c930_npu_core
     .i_wen    (state == S_WLOAD),
     .i_wrow   (w_r[$clog2(NUM_ROWS)-1:0]),
     .i_wcol   (w_n[$clog2(NUM_COLS)-1:0]),
-    .i_wdata  (b_mem[(k_base + w_r)*i_dim_n + n_base + w_n]),
+    .i_wdata  (b_mem[(k_base_reg + w_r)*i_dim_n + n_base + w_n]),
     .i_act    (act),
     .i_ps_in  (ps_in),
     .o_ps_out (ps_out)
@@ -157,16 +162,18 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      state   <= S_IDLE;
-      o_done  <= 1'b0;
-      o_error <= 1'b0;
-      m_reg   <= 0;
-      nt_reg  <= 0;
-      kt_reg  <= 0;
-      t       <= 0;
-      w_r     <= 0;
-      w_n     <= 0;
-      n_cnt   <= 0;
+      state      <= S_IDLE;
+      o_done     <= 1'b0;
+      o_error    <= 1'b0;
+      m_reg      <= 0;
+      nt_reg     <= 0;
+      kt_reg     <= 0;
+      t          <= 0;
+      w_r        <= 0;
+      w_n        <= 0;
+      n_cnt      <= 0;
+      k_base_reg <= 0;
+      kr_reg     <= 0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
       o_done <= 1'b0;
@@ -178,16 +185,19 @@ module c930_npu_core
             if (!dims_ok) begin
               o_error <= 1'b1;          // stay IDLE
             end else begin
-              o_error <= 1'b0;
-              m_reg   <= 0;
-              nt_reg  <= 0;
-              kt_reg  <= 0;
-              t       <= 0;
-              w_r     <= 0;
-              w_n     <= 0;
-              n_cnt   <= 0;
+              o_error    <= 1'b0;
+              m_reg      <= 0;
+              nt_reg     <= 0;
+              kt_reg     <= 0;
+              t          <= 0;
+              w_r        <= 0;
+              w_n        <= 0;
+              n_cnt      <= 0;
+              // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)
+              k_base_reg <= 0;
+              kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
               for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-              state   <= S_WLOAD;
+              state      <= S_WLOAD;
             end
           end
         end
@@ -195,7 +205,7 @@ module c930_npu_core
         // Load B[k_base + w_r][n_base + w_n] into PE(w_r, w_n), one per cycle.
         // Only the nc active columns of this N tile are loaded.
         S_WLOAD: begin
-          if ((w_n == nc - 1) && (w_r == kr - 1)) begin
+          if ((w_n == nc - 1) && (w_r == kr_reg - 1)) begin
             // last weight of this tile
             w_r   <= 0;
             w_n   <= 0;
@@ -226,6 +236,10 @@ module c930_npu_core
             end else begin
               // next K tile (accumulator is kept across tiles)
               kt_reg <= kt_reg + 1;
+              // Pre-register k_base and kr for the next S_WLOAD + S_RUN
+              k_base_reg <= (kt_reg + 1) * NUM_ROWS;
+              kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
+                             NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
               w_r    <= 0;
               w_n    <= 0;
               state  <= S_WLOAD;
@@ -246,22 +260,26 @@ module c930_npu_core
                 o_done <= 1'b1;
                 state  <= S_IDLE;
               end else begin
-                m_reg  <= m_reg + 1;
-                nt_reg <= 0;
-                kt_reg <= 0;
-                w_r    <= 0;
-                w_n    <= 0;
+                m_reg      <= m_reg + 1;
+                nt_reg     <= 0;
+                kt_reg     <= 0;
+                k_base_reg <= 0;
+                kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
+                w_r        <= 0;
+                w_n        <= 0;
                 for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-                state  <= S_WLOAD;
+                state      <= S_WLOAD;
               end
             end else begin
               // next N tile (same row): fresh accumulator
-              nt_reg <= nt_reg + 1;
-              kt_reg <= 0;
-              w_r    <= 0;
-              w_n    <= 0;
+              nt_reg     <= nt_reg + 1;
+              kt_reg     <= 0;
+              k_base_reg <= 0;
+              kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
+              w_r        <= 0;
+              w_n        <= 0;
               for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-              state  <= S_WLOAD;
+              state      <= S_WLOAD;
             end
           end else begin
             n_cnt <= n_cnt + 1;

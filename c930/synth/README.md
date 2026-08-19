@@ -223,11 +223,26 @@ with several `--seed` values to measure the placement/routing variance
 | 17 | 35.46 MHz |
 | 19 | 35.06 MHz |
 
-Seed 7 is the best: **35.87 MHz** routed (the critical path shifted to the
-NPU systolic array's 64-bit MAC accumulator carry chain, no longer the
-hazard-stall→CE path). `run_synth.sh` now pins `--seed 7` so the canonical
-flow reproduces the best result. All seeds P&R to completion and write a
-full `ecp5_seed_<n>.config`.
+**Third sweep (NPU-pipelined netlist, after k_base_reg / kr_reg):**
+
+| seed | routed Fmax |
+|------|-------------|
+| 7  | 34.32 MHz |
+| 13 | 33.65 MHz |
+| 17 | 35.26 MHz |
+| 19 | **35.56 MHz** |
+
+The NPU carry chain is now broken; the critical path reverted to the CPU
+fetch-PC carry chain (the same hazard-stall → CE path that was co-critical
+before the NPU retime). Seed 19 is the best: **35.56 MHz** routed.
+`run_synth.sh` now pins `--seed 19`.
+
+The Fmax band across the retiming series is now
+24.3 -> 27.7 -> 29.4 -> 31.7 -> 31.9 -> 34.6 -> 35.9 (seed 7) ->
+**35.6 MHz** (NPU-pipelined, seed 19). The CPU fetch-PC carry chain is
+the next retiming target.
+
+All seeds P&R to completion and write a full `ecp5_seed_<n>.config`.
 
 ### CSR read-decode pre-retiming (Aug 2026)
 
@@ -350,6 +365,20 @@ producer in EX with a dependent in ID while `dcache_stall` is still asserted
 must keep `stall_ex` high (id_ex frozen -- `flush_ex` is deferred by the
 dcache_stall guard, so a clear stall_ex would capture the dependent into EX).
 
+### NPU K-tile pipeline registers (Aug 2026)
+
+With the hazard-stall path off the critical path, the next bottleneck was the
+NPU systolic array's K-tile computation: `kt_reg.Q` (K-tile counter) -> `k_base`
+(kt_reg x NUM_ROWS shift) -> 32-bit subtraction `i_dim_k - k_base` -> `kr`
+(active rows) -> PE activation skew -> partial-sum carry chain. The
+`k_base_reg` / `kr_reg` registers in `c930_npu_core.sv` are computed at the
+start of each K tile (end of the previous tile) and held stable for the whole
+S_WLOAD + S_RUN sequence, so the subtraction carry chain is in the previous
+cycle's timing budget and the PE datapath starts from a registered `kr_reg.Q`.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. The NPU carry chain
+is gone from the critical path; the worst path reverted to the CPU fetch-PC
+carry chain (the same hazard-stall -> CE path that was co-critical before).
 
 
 
