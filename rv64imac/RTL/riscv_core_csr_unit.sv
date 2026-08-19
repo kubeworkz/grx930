@@ -86,7 +86,14 @@ module riscv_core_csr_unit(
     input  logic                    i_csr_unit_csr_wen,               //csr write enable signal
     input  logic  [1:0]             i_csr_unit_op,                    //CSR operation
     input  logic  [`XLEN-1:0]       i_csr_unit_src,
-    input  logic  [`csr_addr-1:0]   i_csr_unit_csr_addr,              //csr address
+    input  logic  [`csr_addr-1:0]   i_csr_unit_csr_addr,              //csr address (write decode)
+    // One-hot read select, pre-decoded in the MEM stage and registered into
+    // WB (bit i selects the i-th entry of the read-data case below). Using it
+    // for the READ mux removes the 12-bit address decode from the WB critical
+    // path -- the mux becomes a flat OR-of-ANDs over registered selects x
+    // registered CSR values. i_csr_unit_csr_addr above is still used for the
+    // WRITE decode in the trap-setup FSM.
+    input  logic  [28:0]            i_csr_unit_csr_sel,
     output logic  [`XLEN-1:0]       o_csr_unit_csr_rdata,             //data read from the csr
 
     //exception handling signals
@@ -298,77 +305,46 @@ begin: output_assignment_proc
 
  if(!i_csr_unit_rst_n)
   o_csr_unit_csr_rdata = 64'b0;
-  
-   else 
+
+   else
     begin
 
-     case(i_csr_unit_csr_addr)
-      
-
-       `csr_mvendorid:    o_csr_unit_csr_rdata = 32'b0;
-
-       `csr_marchid:      o_csr_unit_csr_rdata = 64'b0;
-
-       `csr_mhartid:      o_csr_unit_csr_rdata = 64'b0;
-
-       `csr_mimpid:       o_csr_unit_csr_rdata = 64'b0;
-
-       `csr_misa:         o_csr_unit_csr_rdata = misa;
-
-       `csr_medeleg:      o_csr_unit_csr_rdata = medeleg;
-
-       `csr_mideleg:      o_csr_unit_csr_rdata = mideleg;
-
-       `csr_mstatus:      o_csr_unit_csr_rdata = mstatus;
-
-       `csr_mie:          o_csr_unit_csr_rdata = mie;
-
-       `csr_mip:          o_csr_unit_csr_rdata = mip;
-
-       `csr_mcause:       o_csr_unit_csr_rdata = mcause;
-
-       `csr_mtvec:        o_csr_unit_csr_rdata = mtvec;
-
-       `csr_mepc:         o_csr_unit_csr_rdata = mepc;
-
-       `csr_mtval:        o_csr_unit_csr_rdata = mtval;
-
-       `csr_mtinst:       o_csr_unit_csr_rdata = mtinst;
-
-       `csr_mscratch:     o_csr_unit_csr_rdata = mscratch;
-
-       `csr_time:         o_csr_unit_csr_rdata = counter;
-
-       `csr_cycle:        o_csr_unit_csr_rdata = counter;
-
-       `csr_mtimecmp:     o_csr_unit_csr_rdata = mtimecmp;
-
-       `csr_sstatus:      o_csr_unit_csr_rdata = sstatus;
-
-       `csr_sie:          o_csr_unit_csr_rdata = sie;
-
-       `csr_sip:          o_csr_unit_csr_rdata = sip;
-
-       `csr_scause:       o_csr_unit_csr_rdata = scause;
-
-       `csr_stvec:        o_csr_unit_csr_rdata = stvec;
-
-       `csr_sepc:         o_csr_unit_csr_rdata = sepc;
-
-       `csr_stval:        o_csr_unit_csr_rdata = stval;
-
-       `csr_sscratch:     o_csr_unit_csr_rdata = sscratch;
-
-       `csr_satp:         o_csr_unit_csr_rdata = satp;
-
-       `csr_stimecmp:     o_csr_unit_csr_rdata = stimecmp;
-
-       default:           o_csr_unit_csr_rdata = 64'b0;
-      
-
-     endcase
-
-      
+     // Flat one-hot read mux. i_csr_unit_csr_sel is pre-decoded in the MEM
+     // stage and registered into WB (see riscv_core_top.sv csr_sel_decode and
+     // u_riscv_core_pipe_csr_sel_mem_wb), so this is an OR-of-ANDs over
+     // REGISTERED select bits x REGISTERED CSR values -- the 12-bit address
+     // decode no longer sits on the WB critical path. Bit i matches the i-th
+     // case entry below; keep in lockstep with csr_sel_decode.
+     o_csr_unit_csr_rdata =
+        ({64{i_csr_unit_csr_sel[ 0]}} & 64'b0)        |   // mvendorid
+        ({64{i_csr_unit_csr_sel[ 1]}} & 64'b0)        |   // marchid
+        ({64{i_csr_unit_csr_sel[ 2]}} & 64'b0)        |   // mhartid
+        ({64{i_csr_unit_csr_sel[ 3]}} & 64'b0)        |   // mimpid
+        ({64{i_csr_unit_csr_sel[ 4]}} & misa)         |
+        ({64{i_csr_unit_csr_sel[ 5]}} & medeleg)      |
+        ({64{i_csr_unit_csr_sel[ 6]}} & mideleg)      |
+        ({64{i_csr_unit_csr_sel[ 7]}} & mstatus)      |
+        ({64{i_csr_unit_csr_sel[ 8]}} & mie)          |
+        ({64{i_csr_unit_csr_sel[ 9]}} & mip)          |
+        ({64{i_csr_unit_csr_sel[10]}} & mcause)       |
+        ({64{i_csr_unit_csr_sel[11]}} & mtvec)        |
+        ({64{i_csr_unit_csr_sel[12]}} & mepc)         |
+        ({64{i_csr_unit_csr_sel[13]}} & mtval)        |
+        ({64{i_csr_unit_csr_sel[14]}} & mtinst)       |
+        ({64{i_csr_unit_csr_sel[15]}} & mscratch)     |
+        ({64{i_csr_unit_csr_sel[16]}} & counter)      |   // time
+        ({64{i_csr_unit_csr_sel[17]}} & counter)      |   // cycle
+        ({64{i_csr_unit_csr_sel[18]}} & mtimecmp)     |
+        ({64{i_csr_unit_csr_sel[19]}} & sstatus)      |
+        ({64{i_csr_unit_csr_sel[20]}} & sie)          |
+        ({64{i_csr_unit_csr_sel[21]}} & sip)          |
+        ({64{i_csr_unit_csr_sel[22]}} & scause)       |
+        ({64{i_csr_unit_csr_sel[23]}} & stvec)        |
+        ({64{i_csr_unit_csr_sel[24]}} & sepc)         |
+        ({64{i_csr_unit_csr_sel[25]}} & stval)        |
+        ({64{i_csr_unit_csr_sel[26]}} & sscratch)     |
+        ({64{i_csr_unit_csr_sel[27]}} & satp)         |
+        ({64{i_csr_unit_csr_sel[28]}} & stimecmp);
 
     end
 

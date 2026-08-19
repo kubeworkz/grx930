@@ -18,8 +18,8 @@ netlists land in `c930/build/synth/`.
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4 (logic)        | 423,747 | **33,558** | 83,640 (40%) |
-| TRELLIS_FF          | 86,971  | **10,683** | 83,640 (13%) |
+| LUT4 (logic)        | 423,747 | **34,102** | 83,640 (41%) |
+| TRELLIS_FF          | 86,971  | **10,707** | 83,640 (13%) |
 | CCU2C (carry)       | 1,564   | 2,101  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
 | DPR16X4 (EBR slice) | 104     | **416** | ~20K    |
@@ -27,7 +27,7 @@ netlists land in `c930/build/synth/`.
 
 Latch audit: **clean** — no inferred latches in the final netlist (0 `$dlatch`,
 0 DLATCH cells; `check -noinit` reports 0 problems). **The full design P&Rs
-to completion at 40% LUT density with a routed Fmax of ~29.4 MHz (default
+to completion at 41% LUT density with a routed Fmax of ~31.7 MHz (default
 nextpnr router, constrained at 400 MHz to expose the true critical path).**
 
 ### What changed
@@ -218,6 +218,31 @@ needed. The design is no longer seed-sensitive — the remaining path is
 routing-bound and RTL retiming (the CSR `op_result` decode into the
 stall-release handshake) is what would move the band, not placement
 luck. All seeds P&R to completion and write a full `ecp5_seed_<n>.config`.
+
+### CSR read-decode pre-retiming (Aug 2026)
+
+The remaining critical path head was the **WB-stage CSR read-data mux**:
+`instr_wb[31:20]` (12 address bits) drove a ~29-entry case decode tree through
+the mip/mie/sie/sip data bits into `op_result -> result_wb` (~12 ns of the
+34 ns path). The safe half to move is the *select* — the CSR address is known
+in MEM, while the *data* must stay in WB (CSR writes land in WB; pre-reading
+the data in MEM would create a WAR hazard). In `riscv_core_top.sv`:
+
+- A MEM-stage decoder turns `instr_mem[31:20]` into a **29-bit one-hot select**
+  (`csr_sel_mem`), registered through the mem_wb pipe (same en/clr as the
+  instruction pipe) into `csr_sel_wb`.
+- `riscv_core_csr_unit.sv` now takes `i_csr_unit_csr_sel` and the read mux is
+  a **flat OR-of-ANDs** over the registered one-hot select × registered CSR
+  values instead of a 12-bit address decode tree in the WB stage.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the CSR
+decode chain is **off the critical path** — the new worst path (31.6 ns =
+**31.66 MHz** routed, up from 29.41) starts at `alu_result_ex_mem` -> dcache
+`dcache_rd_addr` -> VALID_MEM address decode -> DDR -> `csr_wstrb` -> NPU
+`a_base` CE. LUT count moved 33,558 -> 34,102 (+544 for the decode/mux),
++24 FFs for the pipe stage. The remaining path is again routing-dominated
+(~4-5 ns logic + ~26 ns routing), so the next moves are either more retiming
+of the dcache address->VALID_MEM decode or a wider, lower-density placement.
 
 ## Files
 

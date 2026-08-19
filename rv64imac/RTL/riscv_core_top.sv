@@ -232,6 +232,13 @@ logic [63:0] csr_src_wb;
 logic        trap_cntrl_wb;
 logic        pc_cntrl_wb;
 logic [63:0] csr_rdata_wb;
+// MEM-stage pre-decode of the CSR address to a one-hot read select,
+// registered into WB so the WB read-data mux is a flat OR-of-ANDs over
+// registered selects x registered CSR values instead of a 12-bit address
+// decode in the WB stage (which sat on the critical path). Bit i corresponds
+// to the i-th entry of the CSR unit's read case (see riscv_core_csr_unit.sv).
+logic [28:0] csr_sel_mem;
+logic [28:0] csr_sel_wb;
 logic        csr_mem_flush;
 logic        csr_ex_flush;
 logic        csr_id_flush;
@@ -1297,6 +1304,51 @@ u_riscv_core_pipe_csr_src_ex_mem
 
 
 
+// -------------------------------------------------------------------------
+// CSR read-select pre-decode (MEM stage). Decodes instr_mem[31:20] to a
+// one-hot select whose bit i matches the i-th entry of the CSR unit's read
+// data case (riscv_core_csr_unit.sv output_assignment_proc). The select is
+// registered into WB by u_riscv_core_pipe_csr_sel_mem_wb, so the WB read
+// mux reduces to a flat OR-of-ANDs over registered selects x registered CSR
+// values -- the 12-bit address decode is off the WB critical path.
+// NOTE: keep in lockstep with the CSR unit's read case (same order, same
+// addresses).
+always_comb begin : csr_sel_decode
+    csr_sel_mem = 29'b0;
+    case (instr_mem[31:20])
+        12'hf11: csr_sel_mem = 29'b1 <<  0;   // mvendorid
+        12'hf12: csr_sel_mem = 29'b1 <<  1;   // marchid
+        12'hf14: csr_sel_mem = 29'b1 <<  2;   // mhartid
+        12'hf13: csr_sel_mem = 29'b1 <<  3;   // mimpid
+        12'h301: csr_sel_mem = 29'b1 <<  4;   // misa
+        12'h302: csr_sel_mem = 29'b1 <<  5;   // medeleg
+        12'h303: csr_sel_mem = 29'b1 <<  6;   // mideleg
+        12'h300: csr_sel_mem = 29'b1 <<  7;   // mstatus
+        12'h304: csr_sel_mem = 29'b1 <<  8;   // mie
+        12'h344: csr_sel_mem = 29'b1 <<  9;   // mip
+        12'h342: csr_sel_mem = 29'b1 << 10;   // mcause
+        12'h305: csr_sel_mem = 29'b1 << 11;   // mtvec
+        12'h341: csr_sel_mem = 29'b1 << 12;   // mepc
+        12'h343: csr_sel_mem = 29'b1 << 13;   // mtval
+        12'h34a: csr_sel_mem = 29'b1 << 14;   // mtinst
+        12'h340: csr_sel_mem = 29'b1 << 15;   // mscratch
+        12'hc01: csr_sel_mem = 29'b1 << 16;   // time
+        12'hc00: csr_sel_mem = 29'b1 << 17;   // cycle
+        12'hbbf: csr_sel_mem = 29'b1 << 18;   // mtimecmp
+        12'h100: csr_sel_mem = 29'b1 << 19;   // sstatus
+        12'h104: csr_sel_mem = 29'b1 << 20;   // sie
+        12'h144: csr_sel_mem = 29'b1 << 21;   // sip
+        12'h142: csr_sel_mem = 29'b1 << 22;   // scause
+        12'h105: csr_sel_mem = 29'b1 << 23;   // stvec
+        12'h141: csr_sel_mem = 29'b1 << 24;   // sepc
+        12'h143: csr_sel_mem = 29'b1 << 25;   // stval
+        12'h140: csr_sel_mem = 29'b1 << 26;   // sscratch
+        12'h180: csr_sel_mem = 29'b1 << 27;   // satp
+        12'h14d: csr_sel_mem = 29'b1 << 28;   // stimecmp
+        default: csr_sel_mem = 29'b0;         // non-CSR / unmapped
+    endcase
+end
+
 riscv_core_pipe 
 #(
   .W_PIPE_BUS (5)
@@ -1722,6 +1774,21 @@ u_riscv_core_pipe_csr_src_mem_wb
   ,.i_pipe_in    (csr_src_mem)
   ,.o_pipe_out   (csr_src_wb)
 );
+
+// Registered one-hot CSR read select (pre-decoded in MEM, see csr_sel_mem).
+riscv_core_pipe 
+#(
+  .W_PIPE_BUS (29)
+)
+u_riscv_core_pipe_csr_sel_mem_wb
+(
+  .i_pipe_clk    (i_riscv_core_clk)
+  ,.i_pipe_rst_n (i_riscv_core_rst_n)
+  ,.i_pipe_clr   (hu_flush_wb)
+  ,.i_pipe_en_n  (hu_stall_wb)
+  ,.i_pipe_in    (csr_sel_mem)
+  ,.o_pipe_out   (csr_sel_wb)
+);
 //---------Control Signals----------//
 riscv_core_pipe 
 #(
@@ -1845,6 +1912,7 @@ u_riscv_core_csr_unit
   ,.i_csr_unit_op(csr_op_wb)
   ,.i_csr_unit_src(csr_src_wb)
   ,.i_csr_unit_csr_addr(instr_wb[31:20])
+  ,.i_csr_unit_csr_sel(csr_sel_wb)
   ,.o_csr_unit_csr_rdata(csr_rdata_wb)
     //exception handling signals
   ,.o_csr_unit_irq_handler(trap_addr_if)
