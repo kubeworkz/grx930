@@ -18,16 +18,17 @@ netlists land in `c930/build/synth/`.
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4                | 423,747 | **35,009** | 83,640 (42%) |
-| TRELLIS_FF          | 86,971  | **10,489** | 83,640 (13%) |
+| LUT4 (logic)        | 423,747 | **35,074** | 83,640 (42%) |
+| TRELLIS_FF          | 86,971  | **10,619** | 83,640 (13%) |
 | CCU2C (carry)       | 1,564   | 2,069  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
 | DPR16X4 (EBR slice) | 104     | **416** | ~20K    |
 | MULT18X18D (DSP)    | 21      | 21     | 156      |
 
-Latch audit: **clean** — no inferred latches (`check -noinit` reports 0
-problems). **The full design P&Rs to completion at 42% LUT density with a
-routed Fmax of ~25.8 MHz (default nextpnr router).**
+Latch audit: **clean** — no inferred latches in the final netlist (0 `$dlatch`,
+0 DLATCH cells; `check -noinit` reports 0 problems). **The full design P&Rs
+to completion at 42% LUT density with a routed Fmax of ~26.4 MHz (default
+nextpnr router).**
 
 ### What changed
 
@@ -112,9 +113,32 @@ router1): after the tag arrays moved to DPR16X4 the net count dropped enough
 that the router converges (it had oscillated for 1.5+ hours at the 61%-density
 build). The routed result in `pnr.log` / `ecp5.config` (full bitstream config):
 
-- **Routed Fmax: ~25.8 MHz** (constrained at 400 MHz to expose the true
-  critical path — the CSR unit's `mtinst` datapath dominates, per the fit
-  test). Direction-setting, not a board-validated number.
+- **Routed Fmax: ~26.4 MHz** (constrained at 400 MHz to expose the true
+  critical path). Direction-setting, not a board-validated number.
+
+### M/D operand retiming (Aug 2026)
+
+The routed critical path (38.7 ns) threaded the MUL/DIV unit's combinational
+carry chains: ex_mem ALU result -> dcache valid/tag -> srcB mux -> ALU ->
+MUL/DIV's 64-bit CCU2C subtractor -> fetch-PC mux -> CSR `mepc`. The fix in
+`riscv_core_mul_div.sv`:
+
+- `srcA`/`srcB` are captured into registers at issue (they are stable for the
+  whole op because EX is frozen by the m-busy stall).
+- The booth/non-restoring start pulses are delayed one cycle so the datapath
+  samples the registered operands; the control FSM stays on the raw operands
+  (its fast-path comparisons are short and resolve in the issue cycle).
+- The `mul_in`/`div_in` sign-prep, the booth accumulator, and the
+  non-restoring subtractor now start from the operand registers instead of a
+  chain from the core's srcB mux. Cost: one extra stall cycle per M/D op
+  (65 vs 64) and +130 FFs.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the
+MUL/DIV units no longer appear in the critical path report (the tail is now
+`src_b_mux -> ALU adder -> fetch-PC -> CSR mepc`, still ~26 ns routing), and
+the routed Fmax moved **25.8 -> 26.4 MHz**. The next bottleneck is the ALU
+adder fed by the load-use forward; a one-cycle load-use stall (registered WB
+forward) or pipelining the MMIO bridge read would attack it directly.
 
 ## Files
 

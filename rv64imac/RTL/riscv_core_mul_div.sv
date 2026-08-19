@@ -40,6 +40,34 @@ logic [XLEN-1:0] divisor;
 logic [XLEN-1:0] quotient;      
 logic [XLEN-1:0] remainder;
 
+// Registered operand boundary: srcA/srcB are captured at issue and the
+// start pulses are delayed one cycle, so the datapath (sign-prep, booth
+// accumulator, non-restoring subtractor) reads stable registered operands
+// instead of a combinational chain from the core's srcB mux. The control
+// FSM stays on the raw operands -- its fast-path comparisons are short and
+// must resolve in the issue cycle. EX is frozen by the m-busy stall for the
+// whole op, so the raw operands are stable while the registers re-capture.
+logic [XLEN-1:0] srcA_reg;
+logic [XLEN-1:0] srcB_reg;
+logic            mul_start_d;
+logic            div_start_d;
+
+always_ff @(posedge i_mul_div_clk, negedge i_mul_div_rstn)
+  if (!i_mul_div_rstn)
+    begin
+      srcA_reg    <= '0;
+      srcB_reg    <= '0;
+      mul_start_d <= 1'b0;
+      div_start_d <= 1'b0;
+    end
+  else
+    begin
+      srcA_reg    <= i_mul_div_srcA;
+      srcB_reg    <= i_mul_div_srcB;
+      mul_start_d <= mul_start;
+      div_start_d <= div_start;
+    end
+
 riscv_core_mul_div_ctrl
 #(
   .XLEN(XLEN)
@@ -72,8 +100,8 @@ riscv_core_mul_in
 )
 u_riscv_core_mul_in
 (
-  .i_mul_in_srcA(i_mul_div_srcA),
-  .i_mul_in_srcB(i_mul_div_srcB),
+  .i_mul_in_srcA(srcA_reg),
+  .i_mul_in_srcB(srcB_reg),
   .i_mul_in_control(i_mul_div_control[1:0]),
   .i_mul_in_isword(i_mul_div_isword),
   .o_mul_in_multiplicand(multiplicand),
@@ -89,7 +117,7 @@ u_riscv_core_booth
 (
   .i_booth_multiplicand(multiplicand),
   .i_booth_multilpier(multiplier),
-  .i_booth_en(mul_start),
+  .i_booth_en(mul_start_d),
   .i_booth_clk(i_mul_div_clk),
   .i_booth_rstn(i_mul_div_rstn),
   .o_booth_done(mul_done),
@@ -103,10 +131,10 @@ riscv_core_mul_out
 )
 u_riscv_core_mul_out
 (
-  .i_mul_out_srcA_Dsign(i_mul_div_srcA[XLEN-1]),
-  .i_mul_out_srcB_Dsign(i_mul_div_srcB[XLEN-1]),
-  .i_mul_out_srcA_Wsign(i_mul_div_srcA[XLEN/2-1]),
-  .i_mul_out_srcB_Wsign(i_mul_div_srcB[XLEN/2-1]),
+  .i_mul_out_srcA_Dsign(srcA_reg[XLEN-1]),
+  .i_mul_out_srcB_Dsign(srcB_reg[XLEN-1]),
+  .i_mul_out_srcA_Wsign(srcA_reg[XLEN/2-1]),
+  .i_mul_out_srcB_Wsign(srcB_reg[XLEN/2-1]),
   .i_mul_out_control(i_mul_div_control[1:0]),
   .i_mul_out_isword(i_mul_div_isword),
   .i_mul_out_product(product),
@@ -119,8 +147,8 @@ riscv_core_div_in
 )
 u_riscv_core_div_in
 (
-  .i_div_in_srcA(i_mul_div_srcA),
-  .i_div_in_srcB(i_mul_div_srcB),
+  .i_div_in_srcA(srcA_reg),
+  .i_div_in_srcB(srcB_reg),
   .i_div_in_control(i_mul_div_control[1:0]),
   .i_div_in_isword(i_mul_div_isword),
   .o_div_in_dividend(dividend),
@@ -136,7 +164,7 @@ u_riscv_core_non_restoring
 (
   .i_non_restoring_dividend(dividend),
   .i_non_restoring_divisor(divisor),
-  .i_non_restoring_en(div_start),
+  .i_non_restoring_en(div_start_d),
   .i_non_restoring_clk(i_mul_div_clk),
   .i_non_restoring_rstn(i_mul_div_rstn),
   .o_non_restoring_done(div_done),
@@ -151,10 +179,10 @@ riscv_core_div_out
 )
 u_riscv_core_div_out
 (
-  .i_div_out_srcA_Dsign(i_mul_div_srcA[XLEN-1]),
-  .i_div_out_srcB_Dsign(i_mul_div_srcB[XLEN-1]),
-  .i_div_out_srcA_Wsign(i_mul_div_srcA[XLEN/2-1]),
-  .i_div_out_srcB_Wsign(i_mul_div_srcB[XLEN/2-1]),
+  .i_div_out_srcA_Dsign(srcA_reg[XLEN-1]),
+  .i_div_out_srcB_Dsign(srcB_reg[XLEN-1]),
+  .i_div_out_srcA_Wsign(srcA_reg[XLEN/2-1]),
+  .i_div_out_srcB_Wsign(srcB_reg[XLEN/2-1]),
   .i_div_out_control(i_mul_div_control[1:0]),
   .i_div_out_isword(i_mul_div_isword),
   .i_div_out_quotient(quotient),
