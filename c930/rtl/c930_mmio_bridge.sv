@@ -103,17 +103,19 @@ module c930_mmio_bridge
 
     case (state)
       IDLE: begin
+        // Capture the request fields and advance to the AXI-issue state. The
+        // request is deliberately NOT presented combinationally here: the old
+        // code strobed awvalid/wvalid/wstrb straight off i_mmio_write_valid,
+        // putting the dcache's combinational address -> write-valid decode
+        // (VALID_MEM/tag lookup, byte-strobe decoder, FSM) on the NPU CSR's
+        // clock-enable critical path. W_AW_W / R_AR issue the channels from
+        // the REGISTERED awaddr_r/wdata_r/wstrb_r one cycle later, so the
+        // a_base CE cone starts at a flop. The dcache holds its request as a
+        // level until done, so the extra cycle is invisible to software.
         if (i_mmio_write_valid) begin
-          m_axi_awaddr  = i_mmio_write_addr[31:0];
-          m_axi_wdata   = i_mmio_write_data[31:0];
-          m_axi_wstrb   = i_mmio_write_strobe[7:4] != 4'b0 ? 4'hF : i_mmio_write_strobe[3:0];
-          m_axi_awvalid = 1'b1;
-          m_axi_wvalid  = 1'b1;
-          next_state    = W_AW_W;
+          next_state = W_AW_W;
         end else if (i_mmio_read_req) begin
-          m_axi_araddr  = i_mmio_read_addr[31:0];
-          m_axi_arvalid = 1'b1;
-          next_state    = R_AR;
+          next_state = R_AR;
         end
       end
 

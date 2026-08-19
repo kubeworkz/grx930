@@ -18,7 +18,7 @@ netlists land in `c930/build/synth/`.
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4 (logic)        | 423,747 | **34,102** | 83,640 (41%) |
+| LUT4 (logic)        | 423,747 | **34,012** | 83,640 (41%) |
 | TRELLIS_FF          | 86,971  | **10,707** | 83,640 (13%) |
 | CCU2C (carry)       | 1,564   | 2,101  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
@@ -27,7 +27,7 @@ netlists land in `c930/build/synth/`.
 
 Latch audit: **clean** — no inferred latches in the final netlist (0 `$dlatch`,
 0 DLATCH cells; `check -noinit` reports 0 problems). **The full design P&Rs
-to completion at 41% LUT density with a routed Fmax of ~31.7 MHz (default
+to completion at 41% LUT density with a routed Fmax of ~31.9 MHz (default
 nextpnr router, constrained at 400 MHz to expose the true critical path).**
 
 ### What changed
@@ -243,6 +243,30 @@ decode chain is **off the critical path** — the new worst path (31.6 ns =
 +24 FFs for the pipe stage. The remaining path is again routing-dominated
 (~4-5 ns logic + ~26 ns routing), so the next moves are either more retiming
 of the dcache address->VALID_MEM decode or a wider, lower-density placement.
+
+### Registered MMIO-bridge AXI issue (Aug 2026)
+
+The post-CSR-decode critical path ended at the NPU CSR `a_base` clock-enable:
+`alu_result_ex_mem` (store address) -> dcache FSM (VALID_MEM/tag decode,
+byte-strobe decoder, `o_mmio_write_valid`) -> **bridge IDLE presenting the AXI
+write combinationally from the raw MMIO inputs** -> NPU CSR accept -> `a_base`
+CE, all in one cycle across three physically distant modules (~26 ns of
+routing). The fix in `c930_mmio_bridge.sv`: IDLE no longer presents the AXI
+request at all -- it captures the fields (`awaddr_r`/`wdata_r`/`wstrb_r`, which
+it already latched) and advances to `W_AW_W`/`R_AR`, which issue the channels
+from the REGISTERED state and captured fields one cycle later. The dcache
+holds its request as a level until done and the CSR slave pairs AW/W, so the
+handshake is preserved (single accept, no deadlock); MMIO transactions cost
+one extra cycle, invisible to software (the C driver polls STATUS).
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the `a_base`
+CE chain is **gone from the critical path** -- the new worst path (31.4 ns =
+**31.9 MHz** routed, up from 31.66) starts at `csr_sel_mem_wb` (the registered
+one-hot CSR select) -> CSR `mstatus_mie`/`op_result` merge -> ALU carry chain
+-> DDR `o_icache_rd_done` -> `rf_rd2_id_ex` CE (the icache-miss stall-release
+handshake). LUT count moved 34,102 -> 34,012 (-90; the combinational IDLE
+presentation collapsed), and the path is again routing-dominated (8.1 ns logic
++ 23.2 ns routing).
 
 ## Files
 
