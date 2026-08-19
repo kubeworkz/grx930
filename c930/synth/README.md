@@ -18,16 +18,16 @@ netlists land in `c930/build/synth/`.
 
 | Resource            | Before  | After  | ECP5-85F |
 |---------------------|---------|--------|----------|
-| LUT4 (logic)        | 423,747 | **35,226** | 83,640 (42%) |
-| TRELLIS_FF          | 86,971  | **10,619** | 83,640 (13%) |
-| CCU2C (carry)       | 1,564   | 2,069  | —        |
+| LUT4 (logic)        | 423,747 | **33,558** | 83,640 (40%) |
+| TRELLIS_FF          | 86,971  | **10,683** | 83,640 (13%) |
+| CCU2C (carry)       | 1,564   | 2,101  | —        |
 | DP16KD (EBR)        | 0       | **16** | 156      |
 | DPR16X4 (EBR slice) | 104     | **416** | ~20K    |
 | MULT18X18D (DSP)    | 21      | 21     | 156      |
 
 Latch audit: **clean** — no inferred latches in the final netlist (0 `$dlatch`,
 0 DLATCH cells; `check -noinit` reports 0 problems). **The full design P&Rs
-to completion at 42% LUT density with a routed Fmax of ~24.3 MHz (default
+to completion at 40% LUT density with a routed Fmax of ~29.4 MHz (default
 nextpnr router, constrained at 400 MHz to expose the true critical path).**
 
 ### What changed
@@ -171,8 +171,53 @@ i_csr_unit_pc -> mepc` (36.2 ns, mostly 27.6 ns of routing). LUT count moved
 35,074 -> 35,226 (+152 for the ID detection) and the routed Fmax reads
 ~24.3 MHz on this run (within the flow's run-to-run routing variance band;
 the removed path was previously co-critical at ~38.7 ns). The next attack
-point is the CSR `op_result`/`mepc` capture datapath or a placement-seed
-sweep.
+point was the CSR `op_result`/`mepc` capture datapath.
+
+### Pipelined mepc capture (Aug 2026)
+
+The trap PC was captured combinationally into `mepc` in the same idle cycle
+the trap was detected (`mepc <= i_csr_unit_pc`), putting the whole trap-entry
+decode -> `i_csr_unit_pc` mux -> mepc DI tree on the FF-to-FF path. The
+capture is now split into two registered stages in `riscv_core_csr_unit.sv`:
+
+- In `idle`, every trap-entry branch captures `trap_pc_reg <= i_csr_unit_pc`
+  (a plain 64-bit register) instead of writing mepc directly.
+- In `setting_up` (the one-cycle state that follows), `mepc <= trap_pc_reg`
+  commits the PC. The pipeline is flushed during `setting_up` and nothing
+  reads mepc until the handler's `mret` / `csrr mepc`, many cycles later, so
+  the one-cycle delay is invisible. The CSR-write path (`csrw mepc` in idle)
+  is unchanged and still writes mepc directly.
+
+Verified: full 22-case SoC sweep + hazard-unit test pass. Result: the mepc
+capture chain is **gone from the critical path** — the new worst path
+(34.0 ns = 29.4 MHz routed) starts at `instr_wb -> CSR op_result/interrupt-
+enable decode` but ends at the icache-miss stall-release handshake
+(`jump_id_ex -> DDR stub o_icache_rd_done -> csr_addr_id_ex` CE), not the
+mepc DI tree. LUT count moved 35,226 -> 33,558 (-1,668; the mepc DI mux tree
+collapsed), +64 FFs for `trap_pc_reg`, and the routed Fmax reads **~29.4 MHz**
+(up from 27.7 MHz routed / 36.2 ns). The remaining path is dominated by theCSR `op_result` decode into the stall-release logic.
+
+### Placement-seed sweep (Aug 2026)
+
+`synth/seed_sweep.sh` re-runs nextpnr P&R on the fixed synthesized netlist
+with several `--seed` values to measure the placement/routing variance
+(the routing term dominates the critical path):
+
+| seed | routed Fmax |
+|------|-------------|
+| default (run_synth.sh) | **29.41 MHz** |
+| 0  | 28.89 MHz |
+| 2  | 28.57 MHz |
+| 3  | 29.33 MHz |
+| 5  | 29.15 MHz |
+| 11 | 29.31 MHz |
+
+The routed Fmax is stable in a tight **28.6–29.4 MHz band** (~3% spread);
+the default flow already lands on the best seed, so no flow change is
+needed. The design is no longer seed-sensitive — the remaining path is
+routing-bound and RTL retiming (the CSR `op_result` decode into the
+stall-release handshake) is what would move the band, not placement
+luck. All seeds P&R to completion and write a full `ecp5_seed_<n>.config`.
 
 ## Files
 

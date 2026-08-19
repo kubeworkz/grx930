@@ -124,6 +124,7 @@ logic [`XLEN-1:0] mie;
 logic [`XLEN-1:0] mip;
 logic [`XLEN-1:0] mcause;
 logic [`XLEN-1:0] mepc;
+logic [`XLEN-1:0] trap_pc_reg;  // pipelined trap-PC capture (committed to mepc in setting_up)
 logic [`XLEN-1:0] mtval;
 logic [`XLEN-1:0] mtinst;
 logic [`XLEN-1:0] mtvec;
@@ -395,6 +396,7 @@ begin:trap_setup_proc
         mtinst <= 64'b0;
         scause <= 64'b0;
         mepc   <= 64'b0;
+        trap_pc_reg <= 64'b0;
         sepc   = 64'b0;
         stval  <= 64'b0;
     end
@@ -455,7 +457,8 @@ begin:trap_setup_proc
                 //external interrupts
                 if (mstatus_mie & mie_meie & mip_meip)
                   begin
-                    mepc <= i_csr_unit_pc;
+                    trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                     current_state <= setting_up;
                     mtval  <= 64'b0;
                     mtinst <= 64'b0;
@@ -469,7 +472,8 @@ begin:trap_setup_proc
                 //timer interrupts
                 else if (mstatus_mie & mie_mtie & mip_mtip)
                   begin
-                    mepc <= i_csr_unit_pc;
+                    trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                     current_state <= setting_up;
                     mtval  <= 64'b0;
                     mtinst <= 64'b0;
@@ -485,7 +489,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -509,7 +514,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -529,7 +535,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -551,7 +558,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
                               mcause[63] <= 1'b1;
@@ -571,7 +579,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -593,7 +602,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -613,7 +623,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -635,7 +646,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -653,7 +665,8 @@ begin:trap_setup_proc
                 else if (i_csr_unit_ecall)
                   begin
                     current_state <= setting_up;
-                    mepc <= i_csr_unit_pc;
+                    trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                     mtval  <= 64'b0;
                     mtinst <= i_csr_unit_instr;
                     mcause[63] <= 1'b0;
@@ -670,7 +683,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -692,7 +706,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= 64'b0;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -711,7 +726,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -733,7 +749,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -752,7 +769,8 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -774,7 +792,8 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              mepc <= i_csr_unit_pc;
+                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+
                               mtval  <= i_csr_unit_fault_addr;
                               mtinst <= i_csr_unit_instr;
                               mcause[63] <= 1'b0;
@@ -794,6 +813,15 @@ begin:trap_setup_proc
 
            setting_up:
               begin
+                // Commit the pipelined trap PC here. The pipeline is flushed
+                // during setting_up (nothing reads mepc until the handler's
+                // mret / csrr mepc, many cycles later), so the trap-PC capture
+                // no longer has to resolve combinationally into mepc in the
+                // same cycle the trap is detected -- removing the trap-decode
+                // -> i_csr_unit_pc mux -> mepc DI chain from the critical
+                // path. The CSR-write path (csrw mepc in idle) is unchanged
+                // and writes mepc directly.
+                mepc <= trap_pc_reg;
                 current_state <= idle;
                 o_csr_unit_ack <= 1'b0;
               end
