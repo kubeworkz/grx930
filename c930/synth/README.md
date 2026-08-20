@@ -419,6 +419,45 @@ speculative redirect, which requires a complete pipeline restructure).
 Net: Fmax stays at 35.3 MHz (seed 19) with the branch-unit carry chain as
 the sole remaining critical path (~28.8 ns, 87% routing).
 
+### IF-stage BTB (64-entry direct-mapped): attempted and REVERTED (Aug 2026)
+
+A 64-entry direct-mapped Branch Target Buffer (`riscv_core_btb.sv`) was
+implemented in the IF stage to predict taken branches and redirect fetch from
+a registered target, with the goal of breaking the branch-unit carry chain
+and pushing Fmax to ~40 MHz.
+
+Two implementation bugs had to be fixed during bring-up:
+1. **Misprediction detection used the live IF-stage lookup.** Comparing
+   `btb_pred_valid && btb_pred_taken` (the BTB output for whatever PC the
+   fetch stage currently points at) against the EX-stage resolution is
+   meaningless: by the time a branch reaches EX the IF stage has moved on,
+   so the "misprediction" fired spuriously and redirected fetch into a loop
+   (icache permanently stalled at PC=0x25c). The fix carries a "predicted
+   taken" bit with the branch through dedicated IF/ID and ID/EX pipes and
+   compares THAT against `pcsrc_ex`.
+2. **The update write port was on the critical path.** The combinational
+   `mux_to_stg2` (branch/JALR target) fed the BTB's 64-bit write decode
+   directly, so the EX carry chain simply reattached at the BTB. The fix
+   registers the update inputs in four EX->MEM pipes, so the write starts
+   from flops (a predictor may lag a cycle without affecting correctness).
+
+With both fixes the BTB was functionally correct (full 22-case SoC sweep +
+hazard test pass), but the Fmax result was negative:
+
+| Configuration | Routed Fmax (seed 19) |
+|---|---|
+| Baseline (no BTB) | 35.31 MHz |
+| BTB, combinational update | 32.15 MHz |
+| BTB, registered EX->MEM update | 32.70 MHz |
+
+**Result: REVERTED.** The BTB did not break the branch carry chain -- the
+worst path still ends in the ALU's 64-bit target-computation carry chain
+(`alu_result_ex_mem`), and the added BTB fabric (~55% LUT density) worsened
+routing. Net regression of ~2.6 MHz versus baseline. The prediction only
+removes the taken-branch *penalty*, not the worst-case combinational path;
+on a fabric with dedicated carry chains (Artix-7, see synth_xilinx/) it may
+still be worth re-evaluating as a pure IPC feature.
+
 ### Fmax progression summary
 
 | Retime step | Routed Fmax | Notes |
@@ -434,6 +473,7 @@ the sole remaining critical path (~28.8 ns, 87% routing).
 | NPU K-tile pipeline | 35.6 | PE subtraction carry chain broken |
 | IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
+| IF-stage BTB (64-entry) | **REVERTED** | 32.7 vs 35.3 baseline; predictor only removes taken-branch penalty, carry chain remains |
 
 The design's Fmax ceiling is **~35 MHz** on ECP5-85F with the 5-stage
 in-order pipeline. The branch-unit carry chain is inherent to the architecture
