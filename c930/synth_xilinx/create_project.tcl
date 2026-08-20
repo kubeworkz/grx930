@@ -1,0 +1,56 @@
+## ---------------------------------------------------------------------------
+## create_project.tcl  --  Create a Vivado project for the C930 SoC
+##
+## Usage:  vivado -mode batch -source synth_xilinx/create_project.tcl
+## ---------------------------------------------------------------------------
+
+set proj_name "c930_artix7"
+set proj_dir  "[file dirname [info script]]/../build/vivado"
+set part      "xc7a35tcsg324-1"
+
+# ---- Create project ----
+create_project $proj_name $proj_dir -part $part -force
+
+# ---- Add RTL sources ----
+# Core RTL (top-level .sv only; subdirectories excluded as in the ECP5 flow)
+set core_rtl_dir "[file dirname [info script]]/../../rv64imac/RTL"
+foreach f [glob -nocomplain "$core_rtl_dir/*.sv"] {
+    add_files -norecurse $f
+}
+
+# NPU RTL
+set npu_rtl_dir "[file dirname [info script]]/../rtl"
+foreach f [glob -nocomplain "$npu_rtl_dir/c930_tensor_pe.sv \
+                              $npu_rtl_dir/c930_systolic_array.sv \
+                              $npu_rtl_dir/c930_npu_core.sv \
+                              $npu_rtl_dir/c930_npu_csr.sv \
+                              $npu_rtl_dir/c930_npu_dma.sv \
+                              $npu_rtl_dir/c930_npu_top.sv"] {
+    add_files -norecurse $f
+}
+
+# SoC wrapper
+add_files -norecurse "$npu_rtl_dir/c930_soc_top.sv"
+
+# Synth-only DDR stub (tiny BRAM; replaces behavioral 64 KB model)
+add_files -norecurse "[file dirname [info script]]/../synth/c930_ddr_stub.sv"
+
+# MMIO bridge
+add_files -norecurse "$npu_rtl_dir/c930_mmio_bridge.sv"
+
+# ---- Constraints ----
+add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/arty_a7_35t.xdc"
+
+# ---- Top module ----
+set_property top c930_soc_top [current_fileset]
+
+# ---- SystemVerilog ----
+set_property file_type SystemVerilog [get_files *.sv]
+
+# ---- Synthesis settings ----
+# Enable Verilog 2005 + SystemVerilog
+set_property verilog_define {SYNTHESIS=1} [current_fileset]
+
+puts "INFO: Project created at $proj_dir"
+puts "INFO: Part = $part"
+puts "INFO: Top  = c930_soc_top"
