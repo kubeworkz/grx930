@@ -5,6 +5,19 @@
 c930/build/
 *.vcd
 
+# Xilinx/Vivado installers and synthesis artifacts (re-downloadable)
+FPGAs_AdaptiveSoCs_Unified_SDI_*.exe
+Xilinx_Unified_*.exe
+*.bit
+*.ltx
+c930/synth_xilinx/vivado/
+c930/synth_xilinx/*.jou
+c930/synth_xilinx/*.log
+c930/synth_xilinx/*.runs/
+c930/synth_xilinx/*.cache/
+c930/synth_xilinx/*.hw/
+c930/synth_xilinx/*.srcs/
+
 # Vendored xpack RISC-V toolchain (re-downloadable; see c930/toolchain/README.md)
 c930/toolchain/*
 !c930/toolchain/README.md
