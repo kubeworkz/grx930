@@ -395,7 +395,45 @@ Verified: full 22-case SoC sweep + hazard-unit test pass. The NPU carry chain
 is gone from the critical path; the worst path reverted to the CPU fetch-PC
 carry chain (the same hazard-stall -> CE path that was co-critical before).
 
+### Branch-unit srcA/srcB registration: attempted and REVERTED (Aug 2026)
 
+The last remaining critical path is the branch unit's 64-bit comparison carry
+chain: `src_a_ex` (or `src_b_out`) -> branch-unit comparator -> `istaken_ex`
+-> `pcsrc_ex`. Registering the branch-unit inputs (`branch_src_a`,
+`branch_src_b`) so the carry chain starts from a flop Q was attempted.
+
+**Result: REVERTED.** The registered branch comparison uses 1-cycle-old
+forwarded operands, causing incorrect branch decisions on dependent code.
+The sim hangs in a tight branch loop (PC cycling between 0x3f0/0x74c/0x7a4)
+and the watchdog fires after 2M cycles. This is fundamental to the pipeline
+architecture: branches resolve in EX using forwarded values, and inserting a
+register there breaks the forwarding protocol. The branch-unit carry chain
+is inherent to the 5-stage in-order design and can only be broken by a
+deep architectural change (e.g., moving the comparison to ID stage with
+speculative redirect, which requires a complete pipeline restructure).
+
+Net: Fmax stays at 35.3 MHz (seed 19) with the branch-unit carry chain as
+the sole remaining critical path (~28.8 ns, 87% routing).
+
+### Fmax progression summary
+
+| Retime step | Routed Fmax | Notes |
+|---|---|---|
+| Baseline | 24.3 MHz | Worst path: MUL/DIV carry chain |
+| M/D operand retiming | 26.4 | srcA/srcB registered at issue |
+| ID-based load-use stall | 27.7 | dcache address chain off EX |
+| Pipelined mepc capture | 29.4 | CSR op_result decode off path |
+| CSR one-hot pre-decode | 31.7 | MEM-stage CSR addr decode |
+| Registered MMIO-bridge AXI | 31.9 | Bridge issue path registered |
+| ID-based CSR-read stall | 34.6 | CSR read-data mux off WB path |
+| Seed-7 placement | 35.9 | Best seed from 4-seed sweep |
+| NPU K-tile pipeline | 35.6 | PE subtraction carry chain broken |
+| IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
+| Branch-unit register | **REVERTED** | Breaks forwarding protocol |
+
+The design's Fmax ceiling is **~35 MHz** on ECP5-85F with the 5-stage
+in-order pipeline. The branch-unit carry chain is inherent to the architecture
+(deep changes needed to break it further).
 
 ## Files
 

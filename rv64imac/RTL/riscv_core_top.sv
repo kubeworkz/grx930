@@ -123,6 +123,7 @@ logic [63:0] src_b_out;
 logic [63:0] src_a_mux;
 logic [63:0] src_b_mux;
 logic [63:0] alu_result_ex;
+
 logic [63:0] m_ext_res;
 logic [63:0] arith_result_ex;
 logic [63:0] pc_plus_imm;
