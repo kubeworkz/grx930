@@ -10,7 +10,30 @@ Artix-7 has **dedicated CARRY4/CARRY8 carry-chain primitives** -- the same
 64-bit arithmetic paths that consumed ~7 ns of logic + 22 ns of routing on
 ECP5 become ~3 ns logic + ~4 ns routing on Artix-7. Expected Fmax: **60-80 MHz**.
 
-## Prerequisites
+## Resource estimate (Yosys synth_xilinx, no Vivado needed)
+
+Run `bash synth_xilinx/run_yosys_xilinx.sh` to get Xilinx-mapped resource counts
+using the vendored oss-cad-suite (no Vivado install required).
+
+| Resource | Artix-7 (Yosys) | ECP5-85F (nextpnr) |
+|----------|-----------------|---------------------|
+| **LUTs** | ~21K (7,939 LUT6 + 16K smaller) | 33,767 (LUT4) |
+| **FFs** | 10,082 (FDRE+FDCE+FDPE) | 10,577 |
+| **DSPs** | 19 (DSP48E1) | 21 |
+| **BRAM** | 4 (RAMB36E1) | 16 DP16KD + 416 DPR16X4 |
+| **Carry chains** | 636 (CARRY4, dedicated) | 0 (routed through LUT fabric) |
+| **Latches** | 0 | 0 |
+
+**LUT count dropped ~40%** because Artix-7's LUT6 packs 6 inputs vs ECP5's LUT4.
+The **636 CARRY4** slices mean all 64-bit adders/subtractors use dedicated carry
+hardware instead of routing through general interconnect -- this is the key to
+higher Fmax.
+
+## Vivado P&R (for definitive Fmax)
+
+For the actual routed Fmax, Vivado is needed (Yosys only estimates resources).
+
+### Prerequisites
 
 - **Xilinx Vivado** (2023.2 or later; WebPACK edition is free for XC7A35T)
 - `vivado` must be on PATH

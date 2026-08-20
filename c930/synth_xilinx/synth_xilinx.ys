@@ -1,0 +1,55 @@
+## ---------------------------------------------------------------------------
+## synth_xilinx.ys  --  Yosys synth_xilinx for C930 SoC (resource estimate)
+##
+## This runs Yosys's Xilinx-targeted synthesis to get LUT/FF/DSP/BRAM counts
+## mapped to Xilinx architecture primitives (LUT6, FDRE, DSP48E1, RAMB36E1).
+## It does NOT do place-and-route (that needs Vivado), but the resource
+## estimates and latch report are valid.
+## ---------------------------------------------------------------------------
+
+# Read all RTL sources (core + NPU + SoC)
+read_verilog -sv ../rv64imac/RTL/riscv_core_64bit_adder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_div_in.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_div_out.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_icache_controller.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_icache_memory.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_icache_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_ldextend.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv rtl/c930_tensor_pe.sv
+read_verilog -sv rtl/c930_systolic_array.sv
+read_verilog -sv rtl/c930_npu_core.sv
+read_verilog -sv rtl/c930_npu_csr.sv
+read_verilog -sv rtl/c930_npu_dma.sv
+read_verilog -sv rtl/c930_npu_top.sv
+read_verilog -sv rtl/c930_mmio_bridge.sv
+read_verilog -sv rtl/c930_soc_top.sv
+read_verilog -sv synth/c930_ddr_stub.sv
+
+# Xilinx synthesis
+synth_xilinx -flatten -top c930_soc_top
+
+# Reports
+stat
+tee -o build/synth_xilinx/xilinx_latches.rpt log -p "latch_detect"

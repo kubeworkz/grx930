@@ -24,7 +24,7 @@ PROJ_NAME := c930_artix7
 
 .PHONY: all project synth impl bitstream reports clean
 
-all: impl
+all: yosys
 
 # ---- Create project ----
 project: $(PROJ_DIR)/$(PROJ_NAME).xpr
@@ -48,6 +48,10 @@ impl: $(PROJ_DIR)/$(PROJ_NAME).xpr
 	@cat $(PROJ_DIR)/post_impl_timing.rpt | grep -A 2 "Design Timing Summary"
 	@echo "---"
 	@cat $(PROJ_DIR)/post_impl_utilization.rpt | grep -A 20 "Utilization by Hierarchy"
+
+# ---- Yosys Xilinx resource estimate (no Vivado needed) ----
+yosys:
+	bash run_yosys_xilinx.sh
 
 # ---- Generate bitstream ----
 bitstream: impl
