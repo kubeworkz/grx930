@@ -36,23 +36,50 @@ WSL (native-filesystem work copy, `-jobs 2`).
 
 | Metric | Value |
 |--------|-------|
-| **Post-implementation Fmax** | **68.45 MHz** (WNS -4.609 ns @ 100 MHz) |
-| Slice LUTs | 16,138 / 20,800 (77.6%) |
-| Slice Registers (FFs) | 9,911 / 41,600 (23.8%) |
-| Slices | 5,648 / 8,150 (69.3%) |
+| **Post-implementation Fmax** | **68.75 MHz** (WNS -4.546 ns @ 100 MHz) |
+| Slice LUTs | 17,173 / 20,800 (82.6%) |
+| Slice Registers (FFs) | 13,064 / 41,600 (31.4%) |
 | DSP48E1 | 3 / 90 (3.3%) -- most multiplies mapped to LUTs |
-| RAMB36E1 | 2 / 50 (4.0%) -- icache + dcache data arrays |
+| RAMB36E1 | 4 / 50 (8.0%) -- icache + dcache data arrays + stub banks |
 | Hold / Pulse-width | 0 failing endpoints |
-| DRC | No errors (only REQP-1839 report limit note) |
+| DRC (bitgen) | **0 errors** |
 | **Critical path** | `u_npu/u_core/m_reg_reg[1]_replica/C` -> `u_pe/o_ps_out_reg[29]/D` (NPU systolic MAC carry chain) |
 
-**~1.94x over ECP5** (68.45 vs 35.31 MHz) -- the dedicated CARRY4 slices remove
+**~1.95x over ECP5** (68.75 vs 35.31 MHz) -- the dedicated CARRY4 slices remove
 ~22 ns of routing from the 64-bit arithmetic paths. The remaining bottleneck is
-the NPU PE accumulator carry chain, same as on ECP5. The design fits the
-XC7A35T (77.6% LUTs); the A7-100T would give comfortable headroom.
+the NPU PE accumulator carry chain, same as on ECP5.
 
 The Yosys estimate (~21K LUTs) was pessimistic -- actual routed LUT count is
-16.1K, which fits the -35T.
+17.2K, which fits the -35T (82.6%).
+
+## Boot firmware: LEDs light on power-up
+
+`c930_ddr_stub.sv` is a **real 512-byte boot memory** (8 BRAM banks x 16 lines
+x 32 bits, shared read arbiter), initialized with the tiny NPU GEMM kick-off
+firmware (`c930/sw/npu_boot.c`). On board power-up the core boots straight
+into it: the firmware programs a fixed 2x4x2 INT8 GEMM over MMIO, the NPU DMA
+fetches A/B from the stub, and the result C = {1,2; 5,6} lands at 0x120.
+
+Expected LED behavior on the Arty:
+
+| LED | Signal | Behavior |
+|-----|--------|----------|
+| LD4 | `o_npu_busy` | lights for the GEMM duration |
+| LD5 | `o_npu_done` | pulses on completion |
+| LD6 | `o_npu_error` | stays dark (0 errors) |
+| LD7 | `o_npu_irq` | pulses with done |
+
+Verified end-to-end in simulation by `c930/tb/tb_kickoff.sv` (boots the exact
+stub + firmware that goes into the bitstream; `[KICK PASS] busy=1 done=1
+error=0`, C={1,2,5,6}). Program the board with:
+
+```bash
+openFPGALoader -b arty_a7_35t c930/build/vivado/c930_soc_top.bit
+```
+
+Note: the board clock is 100 MHz but the routed Fmax is 68.75 MHz, so a
+real board demo should divide the clock (or relax the demo workload) -- the
+bitstream is timing-verified at 68.75 MHz and DRC-clean.
 
 ## WSL environment prerequisites (Windows 11 + WSL2 Ubuntu)
 
@@ -144,7 +171,10 @@ make reports
 ## What stays the same
 
 - **RTL is identical** -- no modifications needed for Xilinx
-- **DDR stub** -- the same `c930_ddr_stub.sv` (tiny BRAM, 16 lines) works
+- **DDR stub** -- `c930_ddr_stub.sv` is the 512-byte boot memory: 8 BRAM
+  banks (16 lines x 32 bits) with a shared read arbiter (icache > dcache >
+  AXI), plus the embedded GEMM kick-off firmware; an FF line-array version
+  cost ~5K LUTs and blew the -35T budget, the banked BRAM version is ~1.1K
 - **Cache geometry** -- parameterized through `riscv_core_top`, unchanged
 - **Testbench** -- the full `tb_c930_soc.sv` Icarus testbench can also be
   compiled with Vivado xsim (add `tb_xsim.sv` for a quick smoke test)
