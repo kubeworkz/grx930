@@ -29,6 +29,53 @@ The **636 CARRY4** slices mean all 64-bit adders/subtractors use dedicated carry
 hardware instead of routing through general interconnect -- this is the key to
 higher Fmax.
 
+## Measured results (Vivado 2026.1 P&R, XC7A35TCSG324-1)
+
+Routed with Vivado 2026.1 WebPACK (Basic license) on an 8 GB machine through
+WSL (native-filesystem work copy, `-jobs 2`).
+
+| Metric | Value |
+|--------|-------|
+| **Post-implementation Fmax** | **68.45 MHz** (WNS -4.609 ns @ 100 MHz) |
+| Slice LUTs | 16,138 / 20,800 (77.6%) |
+| Slice Registers (FFs) | 9,911 / 41,600 (23.8%) |
+| Slices | 5,648 / 8,150 (69.3%) |
+| DSP48E1 | 3 / 90 (3.3%) -- most multiplies mapped to LUTs |
+| RAMB36E1 | 2 / 50 (4.0%) -- icache + dcache data arrays |
+| Hold / Pulse-width | 0 failing endpoints |
+| DRC | No errors (only REQP-1839 report limit note) |
+| **Critical path** | `u_npu/u_core/m_reg_reg[1]_replica/C` -> `u_pe/o_ps_out_reg[29]/D` (NPU systolic MAC carry chain) |
+
+**~1.94x over ECP5** (68.45 vs 35.31 MHz) -- the dedicated CARRY4 slices remove
+~22 ns of routing from the 64-bit arithmetic paths. The remaining bottleneck is
+the NPU PE accumulator carry chain, same as on ECP5. The design fits the
+XC7A35T (77.6% LUTs); the A7-100T would give comfortable headroom.
+
+The Yosys estimate (~21K LUTs) was pessimistic -- actual routed LUT count is
+16.1K, which fits the -35T.
+
+## WSL environment prerequisites (Windows 11 + WSL2 Ubuntu)
+
+Vivado runs as a Linux process inside WSL in this setup (Linux installer at
+`/mnt/c/Users/kubew/Vivaldo/2026.1`). The following one-time fixes were needed
+and are now baked into the machine:
+
+1. **Locale** -- Vivado's `rdiArgs.sh` exports `LC_ALL=en_US.UTF-8` and aborts
+   if it is missing. Generate it: `sudo locale-gen en_US.UTF-8`.
+2. **License hostid** -- the free WebPACK license must be nodelocked to the
+   **WSL `eth0` MAC**, not the Windows physical MAC (flexlm runs inside WSL).
+3. **MAC pinning** -- WSL2 regenerates virtual NIC MACs on every boot, which
+   silently invalidates the nodelocked license. `/etc/wsl.conf` runs
+   `/usr/local/bin/fix-wsl-mac.sh` at boot to re-pin `eth0` to the licensed MAC
+   (`00:15:5d:c5:ac:f9`).
+4. **Memory** -- this machine has 7.7 GB RAM; `~/.wslconfig` had
+   `memory=8GB` which exhausted the machine and wedged the VM mid-synthesis.
+   Now `memory=5GB` + `swap=10GB`.
+5. **Native-FS work copy** -- running Vivado against `/mnt/c` (drvfs) is slow
+   and can wedge under I/O + memory pressure. The flow is copied to
+   `~/vivado_work` (WSL ext4) and driven by `run_impl_native.sh`;
+   `run_impl_wsl.sh` is the /mnt/c variant. `-jobs 2` keeps peak memory low.
+
 ## Vivado P&R (for definitive Fmax)
 
 For the actual routed Fmax, Vivado is needed (Yosys only estimates resources).

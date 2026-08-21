@@ -18,25 +18,17 @@ foreach f [glob -nocomplain "$core_rtl_dir/*.sv"] {
     add_files -norecurse $f
 }
 
-# NPU RTL
+# NPU + SoC RTL (all top-level c930/rtl/*.sv except the behavioral DDR model)
 set npu_rtl_dir "[file dirname [info script]]/../rtl"
-foreach f [glob -nocomplain "$npu_rtl_dir/c930_tensor_pe.sv \
-                              $npu_rtl_dir/c930_systolic_array.sv \
-                              $npu_rtl_dir/c930_npu_core.sv \
-                              $npu_rtl_dir/c930_npu_csr.sv \
-                              $npu_rtl_dir/c930_npu_dma.sv \
-                              $npu_rtl_dir/c930_npu_top.sv"] {
+foreach f [glob -nocomplain "$npu_rtl_dir/*.sv"] {
+    if {[string match "*c930_ddr.sv" $f]} {
+        continue    ;# behavioral 64 KB DDR model -> replaced by the synth stub below
+    }
     add_files -norecurse $f
 }
 
-# SoC wrapper
-add_files -norecurse "$npu_rtl_dir/c930_soc_top.sv"
-
-# Synth-only DDR stub (tiny BRAM; replaces behavioral 64 KB model)
+# Synth-only DDR stub (tiny BRAM; same module name c930_ddr, replaces behavioral model)
 add_files -norecurse "[file dirname [info script]]/../synth/c930_ddr_stub.sv"
-
-# MMIO bridge
-add_files -norecurse "$npu_rtl_dir/c930_mmio_bridge.sv"
 
 # ---- Constraints ----
 add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/arty_a7_35t.xdc"

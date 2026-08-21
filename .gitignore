@@ -7,6 +7,7 @@ c930/build/
 
 # Xilinx/Vivado installers and synthesis artifacts (re-downloadable)
 FPGAs_AdaptiveSoCs_Unified_SDI_*.exe
+FPGAs_AdaptiveSoCs_Unified_SDI_*.bin
 Xilinx_Unified_*.exe
 *.bit
 *.ltx
@@ -26,3 +27,7 @@ c930/toolchain/*
 rv64imac/*
 !rv64imac/RTL/
 !rv64imac/README.md
+
+# Personal FlexLM license files (never commit these)
+*.lic
+*.lic.txt
