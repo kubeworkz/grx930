@@ -37,17 +37,17 @@ $(PROJ_DIR)/$(PROJ_NAME).xpr: create_project.tcl arty_a7_35t.xdc
 synth: $(PROJ_DIR)/$(PROJ_NAME).xpr
 	$(VIVADO) -mode batch -source run_synth.tcl -tclargs synth_only -log $(PROJ_DIR)/synth.log -journal $(PROJ_DIR)/synth.jou
 	@echo "=== Post-synthesis reports ==="
-	@cat $(PROJ_DIR)/post_synth_timing.rpt | grep -A 2 "Design Timing Summary"
+	@cat $(PROJ_DIR)/post_synth_timing.rpt | grep -A 2 "Design Timing Summary" || true
 	@echo "---"
-	@cat $(PROJ_DIR)/post_synth_utilization.rpt | grep -A 20 "Utilization by Hierarchy"
+	@cat $(PROJ_DIR)/post_synth_utilization.rpt | grep -A 20 "Slice Logic" || true
 
 # ---- Full implementation (synth + place + route, ~15-30 min) ----
 impl: $(PROJ_DIR)/$(PROJ_NAME).xpr
 	$(VIVADO) -mode batch -source run_synth.tcl -log $(PROJ_DIR)/impl.log -journal $(PROJ_DIR)/impl.jou
 	@echo "=== Post-implementation timing ==="
-	@cat $(PROJ_DIR)/post_impl_timing.rpt | grep -A 2 "Design Timing Summary"
+	@cat $(PROJ_DIR)/post_impl_timing.rpt | grep -A 2 "Design Timing Summary" || true
 	@echo "---"
-	@cat $(PROJ_DIR)/post_impl_utilization.rpt | grep -A 20 "Utilization by Hierarchy"
+	@cat $(PROJ_DIR)/post_impl_utilization.rpt | grep -A 20 "Slice Logic" || true
 
 # ---- Yosys Xilinx resource estimate (no Vivado needed) ----
 yosys:
