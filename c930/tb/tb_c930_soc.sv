@@ -28,9 +28,9 @@ module tb_c930_soc;
   localparam int MAX_N    = 12;  // > NUM_COLS so the sweep exercises N-tiling
 
   // DDR workload layout (byte addresses, shared with sw/npu_test.c)
-  localparam int A_ADDR      = 32'h9000;
-  localparam int B_ADDR      = 32'h9100;
-  localparam int C_ADDR      = 32'h9200;
+  localparam int A_ADDR      = 32'h8000;  // 512-byte slot, above stack (grows down from 0x8000)
+  localparam int B_ADDR      = 32'h8400;  // 512-byte slot, avoids INT16 overlap with C
+  localparam int C_ADDR      = 32'h8800;  // 512-byte slot, avoids overlap with DIMS
   localparam int DIMS_ADDR   = 32'h9400;
   localparam int DONE_ADDR   = 32'h9410;
   localparam int STRESS_ADDR = 32'h9420;   // MMIO stress result (0x0BADBEEF = pass)
@@ -105,22 +105,32 @@ module tb_c930_soc;
   endtask
 
   // ---------------------------------------------------------------------------
-  // Workload injection: random INT8 A/B, dims descriptor, clear completion magic
+  // Workload injection: random INT8/INT16 A/B, dims descriptor, clear completion magic
   // ---------------------------------------------------------------------------
-  task automatic fill_ab(input int m, n, k, input int seed);
+  task automatic fill_ab(input int m, n, k, input int seed, input int prec);
     logic [31:0] s;
     s = seed;
     for (int i = 0; i < m * k; i++) begin
       s = lcg(s);
-      dut.u_ddr.mem[A_ADDR + i] = s[7:0];   // INT8 lane, little-endian packing
+      if (prec == 0) begin
+        dut.u_ddr.mem[A_ADDR + i] = s[7:0];   // INT8: 1 byte per element
+      end else begin
+        dut.u_ddr.mem[A_ADDR + 2*i + 0] = s[7:0];   // INT16: 2 bytes LE per element
+        dut.u_ddr.mem[A_ADDR + 2*i + 1] = s[15:8];
+      end
     end
     for (int i = 0; i < k * n; i++) begin
       s = lcg(s);
-      dut.u_ddr.mem[B_ADDR + i] = s[7:0];
+      if (prec == 0) begin
+        dut.u_ddr.mem[B_ADDR + i] = s[7:0];
+      end else begin
+        dut.u_ddr.mem[B_ADDR + 2*i + 0] = s[7:0];
+        dut.u_ddr.mem[B_ADDR + 2*i + 1] = s[15:8];
+      end
     end
   endtask
 
-  task automatic write_dims(input int m, n, k);
+  task automatic write_dims(input int m, n, k, input int prec);
     dut.u_ddr.mem[DIMS_ADDR +  0] = m[7:0];
     dut.u_ddr.mem[DIMS_ADDR +  1] = m[15:8];
     dut.u_ddr.mem[DIMS_ADDR +  2] = 8'h00;
@@ -133,6 +143,10 @@ module tb_c930_soc;
     dut.u_ddr.mem[DIMS_ADDR +  9] = k[15:8];
     dut.u_ddr.mem[DIMS_ADDR + 10] = 8'h00;
     dut.u_ddr.mem[DIMS_ADDR + 11] = 8'h00;
+    dut.u_ddr.mem[DIMS_ADDR + 12] = prec[7:0];   // precision: 0=INT8, 1=INT16
+    dut.u_ddr.mem[DIMS_ADDR + 13] = 8'h00;
+    dut.u_ddr.mem[DIMS_ADDR + 14] = 8'h00;
+    dut.u_ddr.mem[DIMS_ADDR + 15] = 8'h00;
   endtask
 
   task automatic clear_done();
@@ -242,48 +256,59 @@ module tb_c930_soc;
   // ---------------------------------------------------------------------------
   // Reference check (reads A/B/C back from the DDR model)
   // ---------------------------------------------------------------------------
-  task automatic check_gemm(input int m, n, k);
+  task automatic check_gemm(input int m, n, k, input int prec);
     int errors = 0;
-    int sum;
+    longint sum;
     int got;
 
     for (int mi = 0; mi < m; mi++) begin
       for (int ni = 0; ni < n; ni++) begin
         sum = 0;
         for (int ki = 0; ki < k; ki++) begin
-          int av = $signed(dut.u_ddr.mem[A_ADDR + mi*k + ki]);
-          int bv = $signed(dut.u_ddr.mem[B_ADDR + ki*n + ni]);
+          longint av, bv;
+          if (prec == 0) begin
+            av = $signed(dut.u_ddr.mem[A_ADDR + mi*k + ki]);
+            bv = $signed(dut.u_ddr.mem[B_ADDR + ki*n + ni]);
+          end else begin
+            av = $signed({dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 1],
+                          dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 0]});
+            bv = $signed({dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 1],
+                          dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 0]});
+          end
           sum = sum + av * bv;
         end
 
-        // C is stored as little-endian INT32 words.
+        // C is stored as little-endian INT32 words (NPU accumulator is 40-bit
+        // but only the low 32 bits are written back to DDR).
         got = $signed({dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 3],
                        dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 2],
                        dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 1],
                        dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 0]});
 
-        if (got != sum) begin
-          $display("[FAIL] C[%0d][%0d] = %0d, expected %0d", mi, ni, got, sum);
+        // Truncate reference to 32 bits to match the NPU's writeback.
+        if (got != int'(sum[31:0])) begin
+          $display("[FAIL] C[%0d][%0d] = %0d, expected %0d (full=%0d)",
+            mi, ni, got, int'(sum[31:0]), sum);
           errors = errors + 1;
         end
       end
     end
 
     if (errors != 0)
-      $fatal(1, "[FAIL] GEMM M=%0d N=%0d K=%0d: %0d mismatches", m, n, k, errors);
-    $display("[PASS] GEMM M=%0d N=%0d K=%0d verified (C read back from DDR)", m, n, k);
+      $fatal(1, "[FAIL] GEMM M=%0d N=%0d K=%0d prec=%0d: %0d mismatches", m, n, k, prec, errors);
+    $display("[PASS] GEMM M=%0d N=%0d K=%0d prec=%0d verified (C read back from DDR)", m, n, k, prec);
   endtask
 
   // ---------------------------------------------------------------------------
   // One full end-to-end case: inject workload, reboot the core, verify.
   // ---------------------------------------------------------------------------
-  task automatic run_case(input int m, n, k, input int seed);
+  task automatic run_case(input int m, n, k, input int seed, input int prec);
     int found;
     int sok;
-    $display("[TEST] M=%0d N=%0d K=%0d (seed %0d)", m, n, k, seed);
+    $display("[TEST] M=%0d N=%0d K=%0d prec=%0d (seed %0d)", m, n, k, prec, seed);
     $fflush();
-    fill_ab(m, n, k, seed);
-    write_dims(m, n, k);
+    fill_ab(m, n, k, seed, prec);
+    write_dims(m, n, k, prec);
     clear_done();
 
     // Reboot the core so it re-runs the C driver against the new workload.
@@ -293,53 +318,49 @@ module tb_c930_soc;
 
     wait_done(found);
     if (!found)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: CPU never signaled completion", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: CPU never signaled completion", m, n, k, prec);
 
     // MMIO write/read-back stress must have passed (catches the store-data
     // forward and back-to-back-store corruption bugs early).
     stress_ok(sok);
     if (!sok)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: MMIO stress failed (corrupted store data)", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: MMIO stress failed", m, n, k, prec);
 
     // AMO/LR/SC stress must have passed (dcache AMO path regression).
     amo_ok(sok);
     if (!sok)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: AMO/LR/SC stress failed (dcache AMO path)", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: AMO/LR/SC stress failed", m, n, k, prec);
 
-    // Multi-line memory-consistency stress must have passed (write-through /
-    // eviction / refill integrity across several cache lines).
+    // Multi-line memory-consistency stress must have passed.
     cons_ok(sok);
     if (!sok)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: multi-line consistency stress failed", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: multi-line consistency stress failed", m, n, k, prec);
 
-    // Store-ordering stress must have passed (program order between AMOs and
-    // regular stores to the same address, write-through integrity).
+    // Store-ordering stress must have passed.
     store_ok(sok);
     if (!sok)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: store-ordering stress failed", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: store-ordering stress failed", m, n, k, prec);
 
-    // Trap test must have passed (illegal instr + ecall -> mtvec handler ->
-    // mret twice, both re-entering from cold icache lines with the redirect
-    // surviving the cache-fill stall).
+    // Trap test must have passed.
     trap_ok(sok);
     if (!sok)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: trap test failed", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: trap test failed", m, n, k, prec);
 
     if (o_npu_error)
-      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d: NPU reported an error", m, n, k);
+      $fatal(1, "[FAIL] M=%0d N=%0d K=%0d prec=%0d: NPU reported an error", m, n, k, prec);
     repeat (4) @(posedge clk);   // let the final stores settle
-    check_gemm(m, n, k);
+    check_gemm(m, n, k, prec);
   endtask
 
   // Randomized (but deterministic) M/N/K sweep across the supported space.
-  task automatic run_sweep(input int num_cases);
-    logic [31:0] s = 32'hDEADBEEF;
+  task automatic run_sweep(input int num_cases, input int prec);
+    logic [31:0] s = (prec == 0) ? 32'hDEADBEEF : 32'hCAFEBABE;
     int m, n, k;
     for (int c = 0; c < num_cases; c++) begin
       s = lcg(s); m = (s % MAX_M) + 1;
       s = lcg(s); n = (s % MAX_N) + 1;
       s = lcg(s); k = (s % MAX_K) + 1;
-      run_case(m, n, k, 5000 + c);
+      run_case(m, n, k, 5000 + c, prec);
     end
   endtask
 
@@ -358,22 +379,39 @@ module tb_c930_soc;
     // never boots against a partially-initialized workload.
     rst_n = 1'b0;
 
-    // ---- Explicit edge cases (through the full core+MMIO+DMA+DDR path) ----
-    run_case(1, 1, 1, 1001);    // minimal: M=1, K=1
-    run_case(2, 3, 1, 1002);    // K=1 -> single partial tile (kr=1)
-    run_case(8, 12, 1, 1003);   // max M/N with K=1
-    run_case(1, 4, 4, 1004);    // M=1, K == NUM_ROWS (one full tile)
-    run_case(8, 4, 4, 1005);    // K == NUM_ROWS exactly
-    run_case(3, 4, 8, 1006);    // K == 2 * NUM_ROWS
-    run_case(2, 3, 16, 1007);   // K == MAX_K == 4 * NUM_ROWS
-    run_case(1, 2, 5, 1008);    // M=1 with a partial K tile (kr=1)
-    run_case(5, 11, 7, 1009);   // N > NUM_COLS (N-tiling) + partial K tile
-    run_case(8, 12, 16, 1010);  // max dims: 3 N-tiles x 4 K-tiles
-    run_case(1, 12, 1, 1011);   // M=1, K=1, 3 N-tiles
-    run_case(2, 6, 9, 1012);    // odd K-tiling (kr=1) + N-tiling
+    // ---- INT8 edge cases (through the full core+MMIO+DMA+DDR path) ----
+    run_case(1, 1, 1, 1001, 0);    // minimal: M=1, K=1
+    run_case(2, 3, 1, 1002, 0);    // K=1 -> single partial tile (kr=1)
+    run_case(8, 12, 1, 1003, 0);   // max M/N with K=1
+    run_case(1, 4, 4, 1004, 0);    // M=1, K == NUM_ROWS (one full tile)
+    run_case(8, 4, 4, 1005, 0);    // K == NUM_ROWS exactly
+    run_case(3, 4, 8, 1006, 0);    // K == 2 * NUM_ROWS
+    run_case(2, 3, 16, 1007, 0);   // K == MAX_K == 4 * NUM_ROWS
+    run_case(1, 2, 5, 1008, 0);    // M=1 with a partial K tile (kr=1)
+    run_case(5, 11, 7, 1009, 0);   // N > NUM_COLS (N-tiling) + partial K tile
+    run_case(8, 12, 16, 1010, 0);  // max dims: 3 N-tiles x 4 K-tiles
+    run_case(1, 12, 1, 1011, 0);   // M=1, K=1, 3 N-tiles
+    run_case(2, 6, 9, 1012, 0);    // odd K-tiling (kr=1) + N-tiling
 
-    // ---- Randomized M/N/K sweep ----
-    run_sweep(10);
+    // ---- Randomized INT8 M/N/K sweep ----
+    run_sweep(10, 0);
+
+    // ---- INT16 edge cases ----
+    run_case(1, 1, 1, 2001, 1);    // minimal: M=1, K=1
+    run_case(2, 3, 1, 2002, 1);    // K=1 -> single partial tile
+    run_case(8, 12, 1, 2003, 1);   // max M/N with K=1
+    run_case(1, 4, 4, 2004, 1);    // M=1, K == NUM_ROWS
+    run_case(8, 4, 4, 2005, 1);    // K == NUM_ROWS exactly
+    run_case(3, 4, 8, 2006, 1);    // K == 2 * NUM_ROWS
+    run_case(2, 3, 16, 2007, 1);   // K == MAX_K
+    run_case(1, 2, 5, 2008, 1);    // M=1 partial K tile
+    run_case(5, 11, 7, 2009, 1);   // N > NUM_COLS (N-tiling) + partial K
+    run_case(8, 12, 16, 2010, 1);  // max dims
+    run_case(1, 12, 1, 2011, 1);   // M=1, K=1, 3 N-tiles
+    run_case(2, 6, 9, 2012, 1);    // odd K-tiling + N-tiling
+
+    // ---- Randomized INT16 M/N/K sweep ----
+    run_sweep(10, 1);
 
     $display("[PASS] all SoC NPU tests passed");
     $finish;

@@ -232,8 +232,8 @@ module c930_soc_top
   c930_npu_top #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
-    .DIN_W    (8),
-    .ACC_W    (32),
+    .DIN_W    (16),
+    .ACC_W    (40),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
     .MAX_N    (MAX_N)

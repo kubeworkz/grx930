@@ -17,9 +17,9 @@ typedef unsigned int u32;
 // -----------------------------------------------------------------------------
 // DDR workload layout (byte addresses, written by the testbench before boot)
 // -----------------------------------------------------------------------------
-#define A_ADDR     0x9000
-#define B_ADDR     0x9100
-#define C_ADDR     0x9200
+#define A_ADDR     0x8000   // 512-byte slot, above stack (grows down)
+#define B_ADDR     0x8400   // 512-byte slot, avoids INT16 overlap with C
+#define C_ADDR     0x8800   // 512-byte slot, avoids overlap with DIMS
 #define DIMS_ADDR  0x9400
 #define DONE_ADDR  0x9410
 #define DONE_MAGIC 0xDEADBEEFu
@@ -63,9 +63,14 @@ typedef unsigned int u32;
 #define CSR_A_BASE  (*(volatile u32 *)(MMIO_BASE + 0x14))
 #define CSR_B_BASE  (*(volatile u32 *)(MMIO_BASE + 0x18))
 #define CSR_C_BASE  (*(volatile u32 *)(MMIO_BASE + 0x1C))
+#define CSR_PREC    (*(volatile u32 *)(MMIO_BASE + 0x20))
 
 #define CSR_START   0x1u
 #define STATUS_DONE 0x2u
+
+// Precision modes (matching the CSR bit-field)
+#define PREC_INT8   0u
+#define PREC_INT16  1u
 
 // -----------------------------------------------------------------------------
 // MMIO stress. Regression coverage for two reference-core bugs that corrupted
@@ -740,9 +745,10 @@ void main(void)
     u32 m = *(volatile u32 *)(DIMS_ADDR + 0x00);
     u32 n = *(volatile u32 *)(DIMS_ADDR + 0x04);
     u32 k = *(volatile u32 *)(DIMS_ADDR + 0x08);
+    u32 prec = *(volatile u32 *)(DIMS_ADDR + 0x0C);  // precision: 0=INT8, 1=INT16
 
-    // 2. Program the NPU (dims + buffer bases). A/B already sit in DDR at the
-    //    bases; the DMA fetches them autonomously.
+    // 2. Program the NPU (dims + buffer bases + precision). A/B already sit in
+    //    DDR at the bases; the DMA fetches them autonomously.
     *phase = 0x06;
     CSR_DIM_M  = m;
     CSR_DIM_N  = n;
@@ -750,6 +756,10 @@ void main(void)
     CSR_A_BASE = A_ADDR;
     CSR_B_BASE = B_ADDR;
     CSR_C_BASE = C_ADDR;
+    CSR_PREC   = prec;
+    // Read-back barrier: ensures the PREC MMIO write completes (through the
+    // bridge's AXI handshake) before the START pulse is issued.
+    {volatile u32 _b; _b = CSR_PREC; (void)_b;}
 
     // 3. Launch and poll for completion.
     *phase = 0x07;

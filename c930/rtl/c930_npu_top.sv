@@ -15,8 +15,8 @@ module c930_npu_top
 #(
   parameter int NUM_ROWS = 8,
   parameter int NUM_COLS = 8,
-  parameter int DIN_W    = 8,
-  parameter int ACC_W    = 32,
+  parameter int DIN_W    = 16,
+  parameter int ACC_W    = 40,
   parameter int MAX_M    = 64,
   parameter int MAX_K    = 256,
   parameter int MAX_N    = 8
@@ -82,6 +82,7 @@ module c930_npu_top
   logic        busy, done, error;
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
+  logic [1:0]  precision;
 
   logic                    dma_wen, dma_wsel, core_start;
   logic [15:0]             dma_waddr;
@@ -117,6 +118,7 @@ module c930_npu_top
     .o_a_base      (a_base),
     .o_b_base      (b_base),
     .o_c_base      (c_base),
+    .o_precision   (precision),
     .i_busy        (busy),
     .i_done        (done),
     .i_error       (error)
@@ -136,6 +138,7 @@ module c930_npu_top
     .i_a_base      (a_base),
     .i_b_base      (b_base),
     .i_c_base      (c_base),
+    .i_precision   (precision),
     .o_busy        (busy),
     .o_done        (done),
     .o_error       (error),

@@ -192,6 +192,7 @@ Base address: `0x4000_0000` (byte-addressed; register offsets are word-aligned).
 | `0x14` | **A_BASE** | R/W | `0x0000_0000` | A matrix base address (byte) |
 | `0x18` | **B_BASE** | R/W | `0x0000_0000` | B matrix base address (byte) |
 | `0x1C` | **C_BASE** | R/W | `0x0000_0000` | C result base address (byte) |
+| `0x20` | **PREC** | R/W | `0x0000_0000` | Precision mode (0=INT8, 1=INT16, 2=FP16, 3=BF16) |
 
 ### CTRL (0x00) — Write-only
 
@@ -247,6 +248,22 @@ Base address: `0x4000_0000` (byte-addressed; register offsets are word-aligned).
 | Bits | Description |
 |------|-------------|
 | [31:0] | Byte address of the C result buffer in DDR. The NPU DMA writes M×N INT32 elements to this address (row-major, one word per element). Must be word-aligned. |
+
+### PREC (0x20) — Read/Write
+
+| Bits | Name | Description |
+|------|------|-------------|
+| [1:0] | **MODE** | Precision mode: 0=INT8 (default), 1=INT16, 2=FP16, 3=BF16 |
+| [31:2] | — | Reserved (read as 0) |
+
+The precision mode controls the element width of the systolic array PEs:
+- **INT8 (0):** 8-bit signed multiply-accumulate, 4 elements per AXI beat
+- **INT16 (1):** 16-bit signed multiply-accumulate, 2 elements per AXI beat
+- **FP16 (2):** half-precision IEEE 754 (planned, not yet implemented)
+- **BF16 (3):** bfloat16 (planned, not yet implemented)
+
+The precision mode must be set before writing CTRL.START. Changing precision
+while the engine is busy is undefined.
 
 ---
 

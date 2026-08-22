@@ -17,6 +17,7 @@
 //   0x14 A_BASE  (R/W) A matrix base address (DMA read source)
 //   0x18 B_BASE  (R/W) B matrix base address (DMA read source)
 //   0x1C C_BASE  (R/W) C matrix base address (DMA write sink)
+//   0x20 PREC    (R/W) bit[1:0] precision: 0=INT8, 1=INT16, 2=FP16, 3=BF16
 // -----------------------------------------------------------------------------
 module c930_npu_csr
 (
@@ -51,31 +52,35 @@ module c930_npu_csr
   output logic [31:0] o_a_base,
   output logic [31:0] o_b_base,
   output logic [31:0] o_c_base,
+  output logic [1:0]  o_precision,
   input  logic        i_busy,
   input  logic        i_done,
   input  logic        i_error
 );
 
-  localparam logic [3:0] ADDR_CTRL   = 4'h0;
-  localparam logic [3:0] ADDR_STAT   = 4'h1;
-  localparam logic [3:0] ADDR_DIM_M  = 4'h2;
-  localparam logic [3:0] ADDR_DIM_N  = 4'h3;
-  localparam logic [3:0] ADDR_DIM_K  = 4'h4;
-  localparam logic [3:0] ADDR_A_BASE = 4'h5;
-  localparam logic [3:0] ADDR_B_BASE = 4'h6;
-  localparam logic [3:0] ADDR_C_BASE = 4'h7;
+  localparam logic [3:0] ADDR_CTRL     = 4'h0;
+  localparam logic [3:0] ADDR_STAT     = 4'h1;
+  localparam logic [3:0] ADDR_DIM_M    = 4'h2;
+  localparam logic [3:0] ADDR_DIM_N    = 4'h3;
+  localparam logic [3:0] ADDR_DIM_K    = 4'h4;
+  localparam logic [3:0] ADDR_A_BASE   = 4'h5;
+  localparam logic [3:0] ADDR_B_BASE   = 4'h6;
+  localparam logic [3:0] ADDR_C_BASE   = 4'h7;
+  localparam logic [3:0] ADDR_PREC     = 4'h8;
 
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
+  logic [1:0]  precision;
   logic        start_pulse;
   logic        done_latch;
 
-  assign o_dim_m  = dim_m;
-  assign o_dim_n  = dim_n;
-  assign o_dim_k  = dim_k;
-  assign o_a_base = a_base;
-  assign o_b_base = b_base;
-  assign o_c_base = c_base;
+  assign o_dim_m     = dim_m;
+  assign o_dim_n     = dim_n;
+  assign o_dim_k     = dim_k;
+  assign o_a_base    = a_base;
+  assign o_b_base    = b_base;
+  assign o_c_base    = c_base;
+  assign o_precision = precision;
 
   // Start only when the engine is idle.
   assign o_start = start_pulse & ~i_busy;
@@ -95,6 +100,7 @@ module c930_npu_csr
       a_base        <= 32'd0;
       b_base        <= 32'd0;
       c_base        <= 32'd0;
+      precision     <= 2'd0;
       start_pulse   <= 1'b0;
       done_latch    <= 1'b0;
     end else begin
@@ -126,6 +132,7 @@ module c930_npu_csr
           ADDR_A_BASE: if (s_axi_wstrb[0]) a_base <= s_axi_wdata;
           ADDR_B_BASE: if (s_axi_wstrb[0]) b_base <= s_axi_wdata;
           ADDR_C_BASE: if (s_axi_wstrb[0]) c_base <= s_axi_wdata;
+          ADDR_PREC:   if (s_axi_wstrb[0]) precision <= s_axi_wdata[1:0];
           default: ;
         endcase
 
@@ -161,6 +168,7 @@ module c930_npu_csr
           ADDR_A_BASE: s_axi_rdata <= a_base;
           ADDR_B_BASE: s_axi_rdata <= b_base;
           ADDR_C_BASE: s_axi_rdata <= c_base;
+          ADDR_PREC:   s_axi_rdata <= {30'd0, precision};
           default:     s_axi_rdata <= 32'd0;
         endcase
 

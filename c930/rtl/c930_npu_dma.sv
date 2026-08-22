@@ -23,8 +23,8 @@ module c930_npu_dma
 #(
   parameter int AXI_ADDR_W = 32,
   parameter int AXI_DATA_W = 32,
-  parameter int DIN_W      = 8,
-  parameter int ACC_W      = 32,
+  parameter int DIN_W      = 16,
+  parameter int ACC_W      = 40,
   parameter int MAX_M      = 64,
   parameter int MAX_K      = 256,
   parameter int MAX_N      = 8
@@ -41,6 +41,7 @@ module c930_npu_dma
   input  logic [31:0] i_a_base,
   input  logic [31:0] i_b_base,
   input  logic [31:0] i_c_base,
+  input  logic [1:0]  i_precision,   // 0=INT8, 1=INT16
 
   // ---- Status (to the CSR / top) ----
   output logic        o_busy,
@@ -96,6 +97,10 @@ module c930_npu_dma
 
   localparam int BYTES_PER_BEAT = AXI_DATA_W / 8;   // 4
   localparam [2:0] BEAT_SIZE    = $clog2(BYTES_PER_BEAT);  // 2 -> 4 bytes/beat
+
+  // Precision-dependent element size: INT8=1 byte, INT16=2 bytes
+  logic [1:0] elem_size;   // 1 for INT8, 2 for INT16
+  int  elems_per_beat;     // 4 for INT8, 2 for INT16
 
   // ---- Phases ----
   localparam [2:0] P_IDLE    = 3'd0;
@@ -189,8 +194,10 @@ module c930_npu_dma
               a_base_r <= i_a_base;
               b_base_r <= i_b_base;
               c_base_r <= i_c_base;
-              elem_cnt   <= i_dim_m * i_dim_k;              // A bytes
-              rd_beats   <= (i_dim_m * i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+              elem_size    <= (i_precision == 2'd0) ? 2'd1 : 2'd2;
+              elems_per_beat <= (i_precision == 2'd0) ? 4 : 2;
+              elem_cnt   <= i_dim_m * i_dim_k * ((i_precision == 2'd0) ? 1 : 2);  // A bytes
+              rd_beats   <= (i_dim_m * i_dim_k * ((i_precision == 2'd0) ? 1 : 2) + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
               rd_beat    <= 0;
               flat_idx   <= 0;
               unpack_idx <= 0;
@@ -234,10 +241,14 @@ module c930_npu_dma
               o_wen   <= 1'b1;
               o_wsel  <= wsel_reg;
               o_waddr <= flat_idx[15:0];
-              o_wdata <= rword[unpack_idx*8 +: 8];
+              // INT8: sign-extend 8→16 bits; INT16: direct 16-bit
+              if (elem_size == 2'd1)
+                o_wdata <= {{8{rword[unpack_idx*8+7]}}, rword[unpack_idx*8 +: 8]};
+              else
+                o_wdata <= rword[unpack_idx*16 +: 16];
               flat_idx   <= flat_idx + 1;
               unpack_idx <= unpack_idx + 1;
-              if (unpack_idx == BYTES_PER_BEAT - 1) begin
+              if (unpack_idx == elems_per_beat - 1) begin
                 // last byte of this beat
                 if (rd_beat == rd_beats) begin
                   if (wsel_reg) begin
@@ -246,8 +257,8 @@ module c930_npu_dma
                     rd_sub <= RS_AR;
                   end else begin
                     // A loaded -> move on to B
-                    elem_cnt   <= dn * dk;
-                    rd_beats   <= (dn * dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                    elem_cnt   <= dn * dk * elem_size;
+                    rd_beats   <= (dn * dk * elem_size + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                     rd_beat    <= 0;
                     flat_idx   <= 0;
                     unpack_idx <= 0;
