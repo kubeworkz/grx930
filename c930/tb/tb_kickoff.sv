@@ -10,6 +10,9 @@
 // same image, same RTL -- so a board programmed with the generated .bit must
 // light LD4 (busy) then LD5/LD7 (done/irq) and leave LD6 (error) dark.
 //
+// The DUT runs with CLK_DIV=2 (the exact bitstream configuration): the tb
+// clock is the 100 MHz board oscillator and the core sees a 50 MHz clock.
+//
 // Compile with the stub REPLACING the behavioral c930_ddr.sv:
 //   iverilog -g2012 -o build/tb_kickoff.vvp \
 //     ../rv64imac/RTL/*.sv \
@@ -38,7 +41,8 @@ module tb_kickoff;
     .MAX_M     (MAX_M),
     .MAX_K     (MAX_K),
     .MAX_N     (MAX_N),
-    .MEM_BYTES (MEM_BYTES)
+    .MEM_BYTES (MEM_BYTES),
+    .CLK_DIV   (2)   // bitstream config: 100 MHz board clock -> 50 MHz core
   ) dut (
     .i_clk        (clk),
     .i_rst_n      (rst_n),

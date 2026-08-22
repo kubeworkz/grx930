@@ -24,7 +24,13 @@ module c930_soc_top
   parameter int MAX_M    = 8,
   parameter int MAX_K    = 16,
   parameter int MAX_N    = 12,
-  parameter int MEM_BYTES = 65536
+  parameter int MEM_BYTES = 65536,
+  // Core clock divider. 1 = run the whole SoC on the input clock (default;
+  // used by the Icarus testbenches and the ECP5 flow). >1 divides the input
+  // clock so the 100 MHz Arty oscillator produces a core clock comfortably
+  // below the routed Fmax (100 MHz / 2 = 50 MHz vs ~68.75 MHz routed). The
+  // Xilinx flow overrides this to 2 via the synth run's `generic` property.
+  parameter int CLK_DIV  = 1
 )
 (
   input  logic i_clk,
@@ -38,6 +44,65 @@ module c930_soc_top
 );
 
   localparam logic [63:0] MMIO_BASE = 64'h4000_0000;
+
+  // ---------------------------------------------------------------------------
+  // Core clock generation. CLK_DIV = 1 passes the input clock through
+  // unchanged. CLK_DIV > 1 runs a counter-based divide-by-N toggle (50% duty
+  // cycle) plus an async-assert/sync-release reset synchronizer on the divided
+  // clock, so the core and all peripherals see a clean, resettable clock.
+  // The divider output is a plain FF (no combinational logic), so the divided
+  // clock edges are glitch-free; the XDC declares it as a generated clock.
+  // ---------------------------------------------------------------------------
+  logic core_clk;
+  logic core_rst_n;
+
+  generate
+    if (CLK_DIV > 1) begin : g_clkgen
+      (* DONT_TOUCH = "TRUE" *) logic [$clog2(CLK_DIV)-1:0] clk_cnt;
+      (* DONT_TOUCH = "TRUE" *) logic clk_div;
+      logic rst_s1, rst_s2;
+
+      // Icarus t=0 fix (same pattern as the core's caches): define the
+      // divider/synchronizer registers before the first clock edge, else the
+      // async-reset arms never fire (no reset transition at t=0) and the
+      // divided reset propagates X into the core.
+      initial begin
+        clk_cnt = '0;
+        clk_div = 1'b0;
+        rst_s1  = 1'b0;
+        rst_s2  = 1'b0;
+      end
+
+      always_ff @(posedge i_clk or negedge i_rst_n) begin
+        if (!i_rst_n) begin
+          clk_cnt <= '0;
+          clk_div <= 1'b0;
+        end else begin
+          if (clk_cnt == (CLK_DIV / 2) - 1) begin
+            clk_cnt <= '0;
+            clk_div <= ~clk_div;
+          end else
+            clk_cnt <= clk_cnt + 1'b1;
+        end
+      end
+      assign core_clk = clk_div;
+
+      // Reset synchronizer: async assert on i_rst_n, sync release on core_clk.
+      always_ff @(posedge core_clk or negedge i_rst_n) begin
+        if (!i_rst_n) begin
+          rst_s1 <= 1'b0;
+          rst_s2 <= 1'b0;
+        end else begin
+          rst_s1 <= 1'b1;
+          rst_s2 <= rst_s1;
+        end
+      end
+      assign core_rst_n = rst_s2;
+    end else begin : g_clkpass
+      assign core_clk   = i_clk;
+      assign core_rst_n = i_rst_n;
+    end
+  endgenerate
 
   // ---------------------------------------------------------------------------
   // CPU <-> DDR (cache-line read ports + write port)
@@ -126,8 +191,8 @@ module c930_soc_top
   // CPU
   // ---------------------------------------------------------------------------
   riscv_core_top u_cpu (
-    .i_riscv_core_clk                  (i_clk),
-    .i_riscv_core_rst_n                (i_rst_n),
+    .i_riscv_core_clk                  (core_clk),
+    .i_riscv_core_rst_n                (core_rst_n),
     .i_riscv_core_external_interrupt_m (1'b0),
     .i_riscv_core_external_interrupt_s (1'b0),
     .o_riscv_core_ack                  (),
@@ -173,8 +238,8 @@ module c930_soc_top
     .MAX_K    (MAX_K),
     .MAX_N    (MAX_N)
   ) u_npu (
-    .i_clk         (i_clk),
-    .i_rst_n       (i_rst_n),
+    .i_clk         (core_clk),
+    .i_rst_n       (core_rst_n),
 
     .s_axi_awaddr  (csr_awaddr),
     .s_axi_awvalid (csr_awvalid),
@@ -230,8 +295,8 @@ module c930_soc_top
   // CPU MMIO <-> NPU AXI4-Lite CSR
   // ---------------------------------------------------------------------------
   c930_mmio_bridge u_mmio_bridge (
-    .i_clk              (i_clk),
-    .i_rst_n            (i_rst_n),
+    .i_clk              (core_clk),
+    .i_rst_n            (core_rst_n),
 
     .i_mmio_read_addr   (mmio_rd_addr),
     .i_mmio_read_req    (mmio_rd_req),
@@ -271,8 +336,8 @@ module c930_soc_top
     .ADDR_WIDTH        (64),
     .CACHE_LINE_WIDTH  (256)
   ) u_ddr (
-    .i_clk             (i_clk),
-    .i_rst_n           (i_rst_n),
+    .i_clk             (core_clk),
+    .i_rst_n           (core_rst_n),
 
     .i_icache_rd_addr  (icache_rd_addr),
     .i_icache_rd_req   (icache_rd_req),

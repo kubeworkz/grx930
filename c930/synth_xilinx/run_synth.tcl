@@ -24,13 +24,20 @@ if {[info exists tcl.argv] && [lsearch -exact $tcl.argv "synth_only"] >= 0} {
 # ---- Open project ----
 open_project "$proj_dir/$proj_name.xpr"
 
+# ---- Core clock divider: 100 MHz board clock -> 50 MHz core clock ----
+# The routed Fmax is ~68.75 MHz, so a 100 MHz core clock would violate timing
+# on the Arty. CLK_DIV=2 (top-module parameter) keeps the core well under the
+# Fmax and is the exact configuration the bitstream is built with.
+set_property generic {CLK_DIV=2} [current_fileset]
+
 # ---- Synthesis (resumable) ----
 set synth_status [get_property STATUS [get_runs synth_1]]
 if {![string match -nocase "*complete*" $synth_status]} {
     puts "INFO: Running synthesis..."
-    # -jobs 2: this dev machine has only 8 GB RAM; 4 jobs exhausted WSL's memory
+    # -jobs 1: this dev machine has only 8 GB RAM; 2 jobs exhausted WSL's
+    # memory and swap-stormed mid-synthesis (VM wedged, no checkpoint saved)
     if {[llength [get_runs synth_1]] > 0} { reset_run synth_1 }
-    launch_runs synth_1 -jobs 2
+    launch_runs synth_1 -jobs 1
     wait_on_run synth_1
     set synth_status [get_property STATUS [get_runs synth_1]]
 } else {
@@ -71,7 +78,7 @@ set impl_status [get_property STATUS [get_runs impl_1]]
 if {![string match -nocase "*complete*" $impl_status]} {
     puts "INFO: Running implementation..."
     if {[llength [get_runs impl_1]] > 0} { reset_run impl_1 }
-    launch_runs impl_1 -jobs 2
+    launch_runs impl_1 -jobs 1
     wait_on_run impl_1
     set impl_status [get_property STATUS [get_runs impl_1]]
 } else {
