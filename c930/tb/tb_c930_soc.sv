@@ -84,6 +84,63 @@ module tb_c930_soc;
   endfunction
 
   // ---------------------------------------------------------------------------
+  // FP16 helpers (IEEE 754 half-precision)
+  // ---------------------------------------------------------------------------
+  function automatic real fp16_to_real(input logic [15:0] h);
+    automatic int    s;
+    automatic int    e;
+    automatic real   m;
+    automatic real   val;
+    s = h[15];
+    e = h[14:10] - 15;       // unbiased exponent
+    m = (h[14:10] == 0) ? 0.0 : 1.0;  // hidden leading 1 (0 for zero/denorm)
+    m = m + h[9:0] / 1024.0;          // add mantissa
+    val = m * (2.0 ** e);
+    if (s) val = -val;
+    return val;
+  endfunction
+
+  function automatic logic [15:0] real_to_fp16(input real r);
+    automatic real   ar;
+    automatic int    s;
+    automatic int    e;
+    automatic real   m;
+    automatic int    mant_i;
+    automatic logic [4:0] enc_exp;
+    ar = r;
+    if (ar < 0.0) begin
+      s = 1;
+      ar = -ar;
+    end else begin
+      s = 0;
+    end
+    if (ar == 0.0)
+      return 16'h0000;
+    // Compute exponent
+    e = 0;
+    m = ar;
+    while (m >= 2.0) begin m = m / 2.0; e = e + 1; end
+    while (m < 1.0)  begin m = m * 2.0; e = e - 1; end
+    // Encode
+    if (e > 15)
+      return s ? 16'hFC00 : 16'h7C00;  // infinity
+    if (e < -14) begin
+      // denormal: shift mantissa right
+      m = m * (2.0 ** (-14 - e));
+      mant_i = int'(m * 1024.0);
+      return {s[0], 5'd0, mant_i[9:0]};
+    end else begin
+      mant_i = int'((m - 1.0) * 1024.0);
+      enc_exp = (e + 15);
+      return {s[0], enc_exp, mant_i[9:0]};
+    end
+  endfunction
+
+  function automatic real fp16_mul(input real a, input real b);
+    return a * b;
+  endfunction
+
+  // ---------------------------------------------------------------------------
   // Image loading
   // ---------------------------------------------------------------------------
   logic [31:0] img [0:IMG_WORDS-1];
@@ -109,23 +166,33 @@ module tb_c930_soc;
   // ---------------------------------------------------------------------------
   task automatic fill_ab(input int m, n, k, input int seed, input int prec);
     logic [31:0] s;
+    logic [15:0] h;
     s = seed;
     for (int i = 0; i < m * k; i++) begin
       s = lcg(s);
       if (prec == 0) begin
         dut.u_ddr.mem[A_ADDR + i] = s[7:0];   // INT8: 1 byte per element
-      end else begin
+      end else if (prec == 1) begin
         dut.u_ddr.mem[A_ADDR + 2*i + 0] = s[7:0];   // INT16: 2 bytes LE per element
         dut.u_ddr.mem[A_ADDR + 2*i + 1] = s[15:8];
+      end else begin
+        // FP16: generate small values in [-8, 8] to avoid overflow in GEMM
+        h = real_to_fp16(($signed(s % 17) - 8) * 0.5);  // values in [-4, 4]
+        dut.u_ddr.mem[A_ADDR + 2*i + 0] = h[7:0];
+        dut.u_ddr.mem[A_ADDR + 2*i + 1] = h[15:8];
       end
     end
     for (int i = 0; i < k * n; i++) begin
       s = lcg(s);
       if (prec == 0) begin
         dut.u_ddr.mem[B_ADDR + i] = s[7:0];
-      end else begin
+      end else if (prec == 1) begin
         dut.u_ddr.mem[B_ADDR + 2*i + 0] = s[7:0];
         dut.u_ddr.mem[B_ADDR + 2*i + 1] = s[15:8];
+      end else begin
+        h = real_to_fp16(($signed(s % 17) - 8) * 0.5);  // values in [-4, 4]
+        dut.u_ddr.mem[B_ADDR + 2*i + 0] = h[7:0];
+        dut.u_ddr.mem[B_ADDR + 2*i + 1] = h[15:8];
       end
     end
   endtask
@@ -264,32 +331,82 @@ module tb_c930_soc;
     for (int mi = 0; mi < m; mi++) begin
       for (int ni = 0; ni < n; ni++) begin
         sum = 0;
-        for (int ki = 0; ki < k; ki++) begin
-          longint av, bv;
-          if (prec == 0) begin
-            av = $signed(dut.u_ddr.mem[A_ADDR + mi*k + ki]);
-            bv = $signed(dut.u_ddr.mem[B_ADDR + ki*n + ni]);
-          end else begin
-            av = $signed({dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 1],
-                          dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 0]});
-            bv = $signed({dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 1],
-                          dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 0]});
+        if (prec == 2) begin
+          // FP16 GEMM: accumulate in real arithmetic
+          real fp32_sum;
+          logic [31:0] npu_c;
+          fp32_sum = 0.0;
+          for (int ki = 0; ki < k; ki++) begin
+            logic [15:0] av_h, bv_h;
+            av_h = {dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 1],
+                    dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 0]};
+            bv_h = {dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 1],
+                    dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 0]};
+            fp32_sum = fp32_sum + fp16_to_real(av_h) * fp16_to_real(bv_h);
           end
-          sum = sum + av * bv;
-        end
-
-        // C is stored as little-endian INT32 words (NPU accumulator is 40-bit
-        // but only the low 32 bits are written back to DDR).
-        got = $signed({dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 3],
-                       dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 2],
-                       dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 1],
-                       dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 0]});
-
-        // Truncate reference to 32 bits to match the NPU's writeback.
-        if (got != int'(sum[31:0])) begin
-          $display("[FAIL] C[%0d][%0d] = %0d, expected %0d (full=%0d)",
-            mi, ni, got, int'(sum[31:0]), sum);
-          errors = errors + 1;
+          // Read NPU result as raw FP32 bits
+          npu_c = {dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 3],
+                   dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 2],
+                   dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 1],
+                   dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 0]};
+          // Compare: encode fp32_sum as FP32 and compare with NPU result
+          // (allows +-1 ULP for rounding differences)
+          begin
+            real ar2;
+            int  rs2, re2;
+            real rm2;
+            logic [31:0] ref32;
+            logic [7:0] rexp;
+            logic [22:0] rmant;
+            logic [31:0] adiff;
+            ar2 = fp32_sum;
+            if (ar2 < 0.0) begin rs2 = 1; ar2 = -ar2; end else rs2 = 0;
+            if (ar2 == 0.0) begin
+              ref32 = {rs2[0], 8'd0, 23'd0};
+            end else begin
+              re2 = 0; rm2 = ar2;
+              while (rm2 >= 2.0) begin rm2 = rm2 / 2.0; re2 = re2 + 1; end
+              while (rm2 < 1.0)  begin rm2 = rm2 * 2.0; re2 = re2 - 1; end
+              rexp  = re2 + 127;
+              rmant = int'((rm2 - 1.0) * 8388608.0);
+              ref32 = {rs2[0], rexp, rmant};
+            end
+            if (npu_c[30:0] != ref32[30:0]) begin
+              adiff = (npu_c[30:0] > ref32[30:0]) ? (npu_c[30:0] - ref32[30:0]) :
+                                                      (ref32[30:0] - npu_c[30:0]);
+              // Allow up to K+1 ULP: FP32 accumulation vs double-precision reference
+              if (adiff > (k + 1)) begin
+                $display("[FAIL] FP16 C[%0d][%0d] = %h, expected %h",
+                  mi, ni, npu_c, ref32);
+                errors = errors + 1;
+              end
+            end
+          end
+        end else begin
+          // INT8/INT16: integer GEMM reference
+          for (int ki = 0; ki < k; ki++) begin
+            longint av, bv;
+            if (prec == 0) begin
+              av = $signed(dut.u_ddr.mem[A_ADDR + mi*k + ki]);
+              bv = $signed(dut.u_ddr.mem[B_ADDR + ki*n + ni]);
+            end else begin
+              av = $signed({dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 1],
+                            dut.u_ddr.mem[A_ADDR + 2*(mi*k + ki) + 0]});
+              bv = $signed({dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 1],
+                            dut.u_ddr.mem[B_ADDR + 2*(ki*n + ni) + 0]});
+            end
+            sum = sum + av * bv;
+          end
+          // C is stored as little-endian INT32 words.
+          got = $signed({dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 3],
+                         dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 2],
+                         dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 1],
+                         dut.u_ddr.mem[C_ADDR + (mi*n+ni)*4 + 0]});
+          if (got != int'(sum[31:0])) begin
+            $display("[FAIL] C[%0d][%0d] = %0d, expected %0d (full=%0d)",
+              mi, ni, got, int'(sum[31:0]), sum);
+            errors = errors + 1;
+          end
         end
       end
     end
@@ -413,13 +530,24 @@ module tb_c930_soc;
     // ---- Randomized INT16 M/N/K sweep ----
     run_sweep(10, 1);
 
+    // ---- FP16 edge cases ----
+    run_case(1, 1, 1, 3001, 2);    // minimal: M=1, K=1
+    run_case(2, 3, 1, 3002, 2);    // K=1
+    run_case(1, 4, 4, 3003, 2);    // M=1, K == NUM_ROWS
+    run_case(2, 3, 4, 3004, 2);    // K == NUM_ROWS, small dims
+    run_case(1, 2, 8, 3005, 2);    // K == 2 * NUM_ROWS
+    run_case(2, 4, 8, 3006, 2);    // K == 2 * NUM_ROWS, N=4
+
+    // ---- Randomized FP16 M/N/K sweep ----
+    run_sweep(6, 2);
+
     $display("[PASS] all SoC NPU tests passed");
     $finish;
   end
 
   // Failsafe watchdog
   initial begin
-    #20000000;
+    #40000000;
     $display("[FAIL] watchdog timeout");
     $fatal(1, "timeout");
   end

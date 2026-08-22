@@ -197,6 +197,7 @@ module c930_npu_top
     .i_dim_m    (dim_m),
     .i_dim_n    (dim_n),
     .i_dim_k    (dim_k),
+    .i_precision(precision),
     .o_busy     (),             // internal to the core; DMA drives the top's o_busy
     .o_done     (core_done),
     .o_error    (core_error),

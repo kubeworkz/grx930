@@ -71,6 +71,7 @@ typedef unsigned int u32;
 // Precision modes (matching the CSR bit-field)
 #define PREC_INT8   0u
 #define PREC_INT16  1u
+#define PREC_FP16   2u
 
 // -----------------------------------------------------------------------------
 // MMIO stress. Regression coverage for two reference-core bugs that corrupted

@@ -40,6 +40,7 @@ module c930_npu_core
   input  logic [15:0]                 i_dim_m,
   input  logic [15:0]                 i_dim_n,
   input  logic [15:0]                 i_dim_k,
+  input  logic [1:0]                  i_precision,  // 0=INT8, 1=INT16, 2=FP16
   output logic                        o_busy,
   output logic                        o_done,   // 1-cycle pulse
   output logic                        o_error,  // sticky, cleared on valid start
@@ -154,7 +155,8 @@ module c930_npu_core
     .i_wdata  (b_mem[(k_base_reg + w_r)*i_dim_n + n_base + w_n]),
     .i_act    (act),
     .i_ps_in  (ps_in),
-    .o_ps_out (ps_out)
+    .o_ps_out (ps_out),
+    .i_precision(i_precision)
   );
 
   // ---------------------------------------------------------------------------

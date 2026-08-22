@@ -161,7 +161,7 @@ With default parameters (NUM_ROWS=4, NUM_COLS=4, MAX_M=8, MAX_K=16, MAX_N=12):
 
 - **Input:** INT8 (signed, 2's complement), 4 elements packed per 32-bit AXI beat
 - **Accumulation:** INT32 (signed), one word per output element
-- **Future:** INT16, FP16, FP8, BF16 parameterized extensions (roadmap item 3)
+- **INT16/FP16:** Precision-aware datapath (PREC CSR at 0x20: 0=INT8, 1=INT16, 2=FP16)
 
 ### 4.4 Modules
 
@@ -259,7 +259,7 @@ Base address: `0x4000_0000` (byte-addressed; register offsets are word-aligned).
 The precision mode controls the element width of the systolic array PEs:
 - **INT8 (0):** 8-bit signed multiply-accumulate, 4 elements per AXI beat
 - **INT16 (1):** 16-bit signed multiply-accumulate, 2 elements per AXI beat
-- **FP16 (2):** half-precision IEEE 754 (planned, not yet implemented)
+- **FP16 (2):** half-precision IEEE 754 × FP32 multiply-accumulate, 2 elements per AXI beat
 - **BF16 (3):** bfloat16 (planned, not yet implemented)
 
 The precision mode must be set before writing CTRL.START. Changing precision
@@ -518,7 +518,7 @@ The SoC testbench sweeps GEMM shapes including:
 |------|-------------|--------|
 | 1 | INT8 systolic GEMM + CSR + testbench | ✅ Done |
 | 2 | AXI4 DMA master for data plane | ✅ Done |
-| 3 | INT16 / FP16 / BF16 / FP8 datapaths + precision CSR | Planned |
+| 3 | INT16 / FP16 datapaths + precision CSR | ✅ Done |
 | 4 | RVV 1.0 vector unit + fused vector→matrix dispatch | Planned |
 | 5 | CHI coherent NPU port (SVM with CPU) | Planned |
 | 6 | Wide out-of-order core, DDR5/HBM, PCIe/CXL, IOMMU/AIA | Planned |
