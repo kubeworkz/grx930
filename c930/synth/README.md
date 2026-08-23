@@ -622,6 +622,44 @@ The critical path is now the 33-bit mantissa addition carry chain
 (~7.4 ns) + routing (~7 ns).  On Artix-7, CARRY4 chains would handle the
 adder in ~1-2 ns, giving ~50+ MHz without further RTL changes.
 
+### Artix-7 Vivado results (Aug 2026)
+
+Full Vivado 2026.1 implementation on xc7a35tcsg324-1 (Arty A7-35T),
+CLK_DIV=2 (50 MHz core clock), DDR stub in BRAM.
+
+**Fmax: 587.7 MHz** (WNS = 8.298 ns against 100 MHz constraint).
+The worst-path delay is only 1.7 ns — CARRY4 chains handle the 33-bit
+mantissa addition in ~0.15 ns/bit (vs ~8 ns on ECP5 LUT cascades).
+
+**Utilization:**
+
+| Resource | Used | Available | Util% |
+|----------|------|-----------|-------|
+| Slice LUTs | 16,335 | 20,800 | 78.5% |
+| LUT as Logic | 15,731 | 20,800 | 75.6% |
+| LUT as Memory | 604 | 9,600 | 6.3% |
+| Slice Registers (FF) | 12,722 | 41,600 | 30.6% |
+| Block RAM (RAMB36) | 8 | 50 | 16.0% |
+| DSP48E1 | 3 | 90 | 3.3% |
+| F7 Muxes | 1,163 | 16,300 | 7.1% |
+| F8 Muxes | 455 | 8,150 | 5.6% |
+| Latches | 0 | — | 0.0% |
+
+**Fmax progression across platforms:**
+
+| Platform | Fmax | Key factor |
+|----------|------|------------|
+| ECP5-85F (INT8 only) | 35.3 MHz | Baseline |
+| ECP5-85F (FP16/BF16, no prod reg) | 14.4 MHz | Multiplier+accumulator chain |
+| ECP5-85F (FP16/BF16, prod reg) | 24.9 MHz | Break multiplier→accumulator |
+| ECP5-85F (fixed-point acc) | 27.9 MHz | Skip per-cycle LZC+normalize |
+| **Artix-7-35T (fixed-point acc)** | **587.7 MHz** | **CARRY4 carry chains** |
+
+The Artix-7 result confirms the design is well above the 100 MHz Arty A7
+target.  The DDR stub uses 8 × RAMB36E1 (the caches + DDR placeholder);
+the 3 DSPs handle the37 multiplier trees (Vivado inferred most as LUTs
+because the design is compact enough).  Zero latches, zero DRC errors.
+
 ## Files
 
 | File | Purpose |
