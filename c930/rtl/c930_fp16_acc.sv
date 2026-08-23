@@ -136,10 +136,10 @@ module c930_fp16_acc
                          (exp_a > {3'b0, lzc}) ? (exp_a - {3'b0, lzc}) : 8'd0;
 
   wire [31:0] result_pre =
-    (s_nan || p_nan)         ? {1'b0, 8'd255, 23'd1} :   // NaN
-    (s_inf || p_inf)         ? {1'b0, 8'd255, 23'd0} :   // Inf
-    (sum_raw_w == 28'd0)     ? {sum_sign_w, 8'd0, 23'd0} : // exact zero
-    (lzc == 5'd28)           ? {sum_sign_w, 8'd0, 23'd0} : // underflow
+    (s_nan || p_nan)         ? {sum_sign_w, 8'd255, 23'd1} :   // NaN
+    (s_inf || p_inf)         ? {sum_sign_w, 8'd255, 23'd0} :   // Inf
+    (sum_raw_w == 28'd0)     ? {sum_sign_w, 8'd0, 23'd0} :    // exact zero
+    (lzc == 5'd28)           ? {sum_sign_w, 8'd0, 23'd0} :    // underflow
     {sum_sign_w, exp_norm, norm_shifted[25:3]};
 
   assign o_ps_out = result_pre;

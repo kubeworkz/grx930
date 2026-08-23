@@ -260,7 +260,7 @@ The precision mode controls the element width of the systolic array PEs:
 - **INT8 (0):** 8-bit signed multiply-accumulate, 4 elements per AXI beat
 - **INT16 (1):** 16-bit signed multiply-accumulate, 2 elements per AXI beat
 - **FP16 (2):** half-precision IEEE 754 × FP32 multiply-accumulate, 2 elements per AXI beat
-- **BF16 (3):** bfloat16 (planned, not yet implemented)
+- **BF16 (3):** bfloat16 (1 sign + 8 exp + 7 mant, bias=127), 2 bytes/element
 
 The precision mode must be set before writing CTRL.START. Changing precision
 while the engine is busy is undefined.
@@ -518,7 +518,7 @@ The SoC testbench sweeps GEMM shapes including:
 |------|-------------|--------|
 | 1 | INT8 systolic GEMM + CSR + testbench | ✅ Done |
 | 2 | AXI4 DMA master for data plane | ✅ Done |
-| 3 | INT16 / FP16 datapaths + precision CSR | ✅ Done |
+| 3 | INT16 / FP16 / BF16 datapaths + precision CSR | ✅ Done |
 | 4 | RVV 1.0 vector unit + fused vector→matrix dispatch | Planned |
 | 5 | CHI coherent NPU port (SVM with CPU) | Planned |
 | 6 | Wide out-of-order core, DDR5/HBM, PCIe/CXL, IOMMU/AIA | Planned |

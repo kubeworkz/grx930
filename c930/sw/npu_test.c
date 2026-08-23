@@ -72,6 +72,7 @@ typedef unsigned int u32;
 #define PREC_INT8   0u
 #define PREC_INT16  1u
 #define PREC_FP16   2u
+#define PREC_BF16   3u
 
 // -----------------------------------------------------------------------------
 // MMIO stress. Regression coverage for two reference-core bugs that corrupted

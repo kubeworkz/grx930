@@ -7,21 +7,15 @@
 //   * Activation flows left -> right: o_a_out <= i_a_in (registered).
 //   * Partial sum flows top -> bottom.
 //
-// Supports two datapaths based on i_precision:
-//   - INT8/INT16 (precision 0/1): signed integer MAC (existing path)
+// Supports three datapaths based on i_precision:
+//   - INT8/INT16 (precision 0/1): signed integer MAC
 //   - FP16 (precision 2): FP16 × FP16 → FP32 multiplier + FP32 accumulator
-//
-// For INT8/INT16: All operands are signed two's complement. The product is
-// DIN_W × DIN_W multiply accumulated into a ACC_W-wide partial sum.
-//
-// For FP16: Inputs are FP16 bit patterns (reinterpreted from the signed
-// DIN_W bus). The FP16 multiplier produces FP32, and the FP32 accumulator
-// adds to the FP32 partial sum.
+//   - BF16 (precision 3): BF16 × BF16 → FP32 multiplier + FP32 accumulator
 // -----------------------------------------------------------------------------
 
 module c930_tensor_pe
 #(
-  parameter int DIN_W = 8,   // activation / weight bit width (16 for INT8/INT16/FP16)
+  parameter int DIN_W = 8,   // activation / weight bit width (16 for INT8/INT16/FP16/BF16)
   parameter int ACC_W = 32   // accumulator bit width (40 for int, 32 for FP32)
 )
 (
@@ -40,7 +34,7 @@ module c930_tensor_pe
   input  logic signed [ACC_W-1:0]     i_ps_in,
   output logic signed [ACC_W-1:0]     o_ps_out,
 
-  // Precision control: 0=INT8, 1=INT16, 2=FP16
+  // Precision control: 0=INT8, 1=INT16, 2=FP16, 3=BF16
   input  logic [1:0]                  i_precision
 );
 
@@ -76,12 +70,26 @@ module c930_tensor_pe
   assign fp16_w = w[15:0];
 
   // FP16 × FP16 → FP32 product (combinational)
-  logic [31:0] fp32_prod;
+  logic [31:0] fp16_prod;
   c930_fp16_mul u_fp16_mul (
     .i_a      (fp16_a),
     .i_b      (fp16_w),
-    .o_result (fp32_prod)
+    .o_result (fp16_prod)
   );
+
+  // ---- BF16 MAC path ----
+  // BF16: 1 sign + 8 exp + 7 mant, bias=127
+  // Same 16-bit interface as FP16, different internal layout
+  logic [31:0] bf16_prod;
+  c930_bf16_mul u_bf16_mul (
+    .i_a      (fp16_a),
+    .i_b      (fp16_w),
+    .o_result (bf16_prod)
+  );
+
+  // ---- MUX the FP32 product based on precision ----
+  logic [31:0] fp32_prod;
+  assign fp32_prod = (i_precision == 2'd3) ? bf16_prod : fp16_prod;
 
   // FP32 + FP32 → FP32 accumulator (registered, same stage as integer MAC)
   logic [31:0] fp32_ps_out;
@@ -97,8 +105,8 @@ module c930_tensor_pe
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
       o_ps_out <= '0;
-    else if (i_precision == 2'd2) begin
-      // FP16 mode: use FP32 accumulator output
+    else if (i_precision == 2'd2 || i_precision == 2'd3) begin
+      // FP16/BF16 mode: use FP32 accumulator output
       o_ps_out[ACC_W-1:32] <= '0;  // zero-extend upper bits (if ACC_W > 32)
       o_ps_out[31:0]        <= fp32_ps_out;
     end else begin

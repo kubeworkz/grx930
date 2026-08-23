@@ -475,9 +475,64 @@ still be worth re-evaluating as a pure IPC feature.
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
 | IF-stage BTB (64-entry) | **REVERTED** | 32.7 vs 35.3 baseline; predictor only removes taken-branch penalty, carry chain remains |
 
-The design's Fmax ceiling is **~35 MHz** on ECP5-85F with the 5-stage
-in-order pipeline. The branch-unit carry chain is inherent to the architecture
-(deep changes needed to break it further).
+The design's Fmax ceiling (INT8-only NPU) was **~35 MHz** on ECP5-85F with
+the 5-stage in-order pipeline. The branch-unit carry chain is inherent to the
+architecture (deep changes needed to break it further).
+
+### FP16/BF16 datapath synthesis (Aug 2026)
+
+The FP16 multiplier (`c930_fp16_mul.sv`), BF16 multiplier (`c930_bf16_mul.sv`),
+and FP32 accumulator (`c930_fp16_acc.sv`) were added to the systolic array
+PEs. The PE precision mux selects between the integer MAC and the FP16/BF16
+MAC, and the accumulator is shared.
+
+**Resource impact:**
+
+| Resource | INT8-only | With FP16/BF16 | Delta |
+|----------|-----------|----------------|-------|
+| LUT4 | 34,012 | **46,360** | +12,348 |
+| TRELLIS_FF | 10,707 | **13,642** | +2,935 |
+| CCU2C | 2,101 | **3,791** | +1,690 |
+| DP16KD (EBR) | 16 | **16** | 0 |
+| DPR16X4 | 416 | **456** | +40 |
+| MULT18X18D (DSP) | 21 | **37** | +16 (FP16+BF16 multipliers) |
+| Density | 41% | **55%** | +14% |
+
+**Fmax impact:** The FP16/BF16 multiplier and FP32 accumulator add a deep
+combinational chain in the systolic array PE. The critical path is:
+
+```
+A-mem read mux → precision mux → FP16/BF16 multiplier (MULT18X18D, 3.07 ns)
+→ fp32_prod normalization (8 LUT4s, ~5 ns) → fp32_prod alignment shift
+→ FP32 mantissa addition (24-bit carry chain, ~8 ns) → exponent normalization
+→ result mux → PE output register
+```
+
+The total internal critical path is ~40+ ns (19 ns logic + 21 ns routing).
+
+**Seed sweep (FP16 netlist):**
+
+| seed | routed Fmax |
+|------|-------------|
+| 1  | 14.44 MHz |
+| 7  | 14.33 MHz |
+| 13 | 14.43 MHz |
+| 17 | 14.42 MHz |
+| 23 | 14.46 MHz |
+
+All seeds cluster at ~14.4 MHz — the FP16 accumulator chain is the sole
+bottleneck, not routing variance.
+
+**Root cause:** The FP32 accumulator (`c930_fp16_acc.sv`) is entirely
+combinational: exponent difference → mantissa alignment shift → mantissa
+addition → normalization. On ECP5 without dedicated carry chains, the 24-bit
+mantissa addition maps to a LUT cascade (~8 ns), and the normalization adds
+another ~5 ns of LUT logic.
+
+**Mitigation path:** Pipeline the accumulator output (register the FP32
+result between PE columns) to break the carry chain. This adds 1 cycle
+latency per column but should restore ~30+ MHz. On Artix-7, the CARRY4
+chains would handle the mantissa addition in ~2 ns, giving ~50+ MHz.
 
 ## Files
 

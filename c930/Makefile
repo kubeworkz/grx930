@@ -36,6 +36,7 @@ CORE_RTL := $(wildcard ../rv64imac/RTL/*.sv)
 
 NPU_RTL := \
   rtl/c930_fp16_mul.sv \
+  rtl/c930_bf16_mul.sv \
   rtl/c930_fp16_acc.sv \
   rtl/c930_tensor_pe.sv \
   rtl/c930_systolic_array.sv \

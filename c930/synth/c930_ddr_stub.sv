@@ -98,7 +98,7 @@ module c930_ddr
   localparam int LINES = 16;   // 16 lines x 32 B = 512 B
   localparam int LW    = CACHE_LINE_WIDTH;
 
-  (* ram_style = "block" *) logic [31:0] mem [0:7][0:LINES-1];
+  logic [31:0] mem [0:7][0:LINES-1];
 
   wire [3:0] ic_line  = i_icache_rd_addr[8:5];
   wire [3:0] dc_line  = i_dcache_rd_addr[8:5];
