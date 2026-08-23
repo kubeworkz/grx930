@@ -16,7 +16,7 @@ module c930_npu_top
   parameter int NUM_ROWS = 8,
   parameter int NUM_COLS = 8,
   parameter int DIN_W    = 16,
-  parameter int ACC_W    = 40,
+  parameter int ACC_W    = 48,    // 48-bit fixed-point accumulator for FP modes
   parameter int MAX_M    = 64,
   parameter int MAX_K    = 256,
   parameter int MAX_N    = 8
@@ -88,7 +88,7 @@ module c930_npu_top
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
   logic [15:0]             c_raddr;
-  logic signed [ACC_W-1:0] c_rdata;
+  logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
   logic                    core_done, core_error;
 
   c930_npu_csr u_csr (

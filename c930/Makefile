@@ -38,6 +38,7 @@ NPU_RTL := \
   rtl/c930_fp16_mul.sv \
   rtl/c930_bf16_mul.sv \
   rtl/c930_fp16_acc.sv \
+  rtl/c930_fx_acc.sv \
   rtl/c930_tensor_pe.sv \
   rtl/c930_systolic_array.sv \
   rtl/c930_npu_core.sv \

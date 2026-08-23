@@ -24,7 +24,7 @@ module c930_npu_dma
   parameter int AXI_ADDR_W = 32,
   parameter int AXI_DATA_W = 32,
   parameter int DIN_W      = 16,
-  parameter int ACC_W      = 40,
+  parameter int ACC_W      = 48,    // 48-bit fixed-point accumulator
   parameter int MAX_M      = 64,
   parameter int MAX_K      = 256,
   parameter int MAX_N      = 8
@@ -57,7 +57,7 @@ module c930_npu_dma
   input  logic                    i_core_done,
   input  logic                    i_core_error,
   output logic [15:0]             o_c_raddr,
-  input  logic signed [ACC_W-1:0] i_c_rdata,
+  input  logic signed [31:0]      i_c_rdata,   // always 32-bit (normalized by core)
 
   // ---- AXI4 master: read address ----
   output logic [AXI_ADDR_W-1:0] m_axi_araddr,

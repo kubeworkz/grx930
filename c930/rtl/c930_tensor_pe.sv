@@ -7,21 +7,23 @@
 //   * Activation flows left -> right: o_a_out <= i_a_in (registered).
 //   * Partial sum flows top -> bottom.
 //
-// Supports three datapaths based on i_precision:
+// Supports four datapaths based on i_precision:
 //   - INT8/INT16 (precision 0/1): signed integer MAC
-//   - FP16 (precision 2): FP16 x FP16 -> FP32 multiplier + FP32 accumulator
-//   - BF16 (precision 3): BF16 x BF16 -> FP32 multiplier + FP32 accumulator
+//   - FP16 (precision 2): FP16 x FP16 -> FP32 multiplier + fixed-point accumulator
+//   - BF16 (precision 3): BF16 x BF16 -> FP32 multiplier + fixed-point accumulator
 //
 // Pipeline: the product (fp32_prod) is registered before the accumulator,
-// breaking the multiplier->accumulator carry chain.  The accumulator remains
-// combinational (from registered product + i_ps_in) and is captured by the
-// PE's output register.  Cost: 1 extra cycle of latency per PE column.
+// breaking the multiplier->accumulator carry chain.  The fixed-point
+// accumulator (c930_fx_acc) is purely combinational: sort+align+add with NO
+// per-cycle LZC/normalize — that is deferred to writeback.  The PE's output
+// register captures the result each cycle.  Cost: 1 extra cycle of latency
+// per PE column (product reg + output reg = 2-cycle PE latency).
 // -----------------------------------------------------------------------------
 
 module c930_tensor_pe
 #(
   parameter int DIN_W = 8,   // activation / weight bit width (16 for INT8/INT16/FP16/BF16)
-  parameter int ACC_W = 32   // accumulator bit width (40 for int, 32 for FP32)
+  parameter int ACC_W = 48   // accumulator bit width (48 for fixed-point FP modes)
 )
 (
   input  logic                        i_clk,
@@ -75,10 +77,9 @@ module c930_tensor_pe
   end
 
   logic signed [ACC_W-1:0] int_ps_out;
-  assign int_ps_out = i_ps_in + int_prod_reg;
+  assign int_ps_out = i_ps_in + {{(ACC_W-2*DIN_W){int_prod_reg[2*DIN_W-1]}}, int_prod_reg};
 
   // ---- FP16 MAC path ----
-  // Reinterpret DIN_W-bit signed inputs as unsigned FP16 bit patterns
   logic [15:0] fp16_a, fp16_w;
   assign fp16_a = i_a_in[15:0];
   assign fp16_w = w[15:0];
@@ -112,14 +113,14 @@ module c930_tensor_pe
       fp32_prod_reg <= fp32_prod;
   end
 
-  // FP32 + FP32 -> FP32 accumulator (combinational, from registered product + i_ps_in)
-  logic [31:0] fp32_ps_out;
-  c930_fp16_acc u_fp16_acc (
-    .i_clk    (i_clk),      // unused (combinational), kept for port compat
-    .i_rst_n  (i_rst_n),    // unused
-    .i_ps_in  (i_ps_in[31:0]),   // lower 32 bits of ACC_W partial sum
-    .i_prod   (fp32_prod_reg),   // REGISTERED product
-    .o_ps_out (fp32_ps_out)
+  // Fixed-point accumulator: sort+align+add, NO per-cycle normalize.
+  // Critical path: ~12 ns (vs ~25 ns for old FP32 accumulator).
+  // Normalization happens once at writeback (S_WRITE in the core).
+  logic [47:0] fx_ps_out;
+  c930_fx_acc u_fx_acc (
+    .i_ps_in  (i_ps_in[47:0]),   // 48-bit fixed-point partial sum
+    .i_prod   (fp32_prod_reg),   // REGISTERED FP32 product
+    .o_ps_out (fx_ps_out)        // 48-bit fixed-point result
   );
 
   // ---- Output mux based on precision ----
@@ -127,11 +128,10 @@ module c930_tensor_pe
     if (!i_rst_n)
       o_ps_out <= '0;
     else if (i_precision == 2'd2 || i_precision == 2'd3) begin
-      // FP16/BF16 mode: use FP32 accumulator output
-      o_ps_out[ACC_W-1:32] <= '0;  // zero-extend upper bits (if ACC_W > 32)
-      o_ps_out[31:0]        <= fp32_ps_out;
+      // FP16/BF16 mode: 48-bit fixed-point accumulator output
+      o_ps_out <= {{(ACC_W-48){fx_ps_out[47]}}, fx_ps_out};
     end else begin
-      // INT8/INT16 mode: use integer MAC output
+      // INT8/INT16 mode: integer MAC output
       o_ps_out <= int_ps_out;
     end
   end

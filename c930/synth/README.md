@@ -584,6 +584,44 @@ depth into two ~12 ns stages. This adds another cycle of latency but would
 push Fmax to ~40+ MHz. On Artix-7, the CARRY4 chains handle the mantissa
 addition in ~2 ns, giving ~50+ MHz.
 
+### Fixed-point accumulator (Aug 2026)
+
+Replaced the per-element FP32 accumulator (`c930_fp16_acc.sv`) with a
+fixed-point accumulator (`c930_fx_acc.sv`) that skips per-cycle LZC +
+normalization.  Accumulates in 48-bit fixed-point format
+(`{sign[47], exp[39:32], mantissa[31:0]}`); normalizes once at writeback
+(S_WRITE in the core) using a new `fx_to_fp32()` function.
+
+**Why the 2-stage pipeline didn't work:** Adding a pipeline register inside
+the accumulator shifts the PE output by 1 cycle, breaking the systolic cascade
+alignment — downstream PEs sample stale partial sums.  The fixed-point approach
+achieves the same critical-path reduction (skip LZC+normalize) without adding
+pipeline stages.
+
+**Resource impact (fixed-point netlist):**
+
+| Resource | Before (FP32 acc) | After (fx acc) | Delta |
+|----------|-------------------|----------------|-------|
+| LUT4 | 46,370 | **51,330** | +4,960 |
+| TRELLIS_FF | 14,650 | **14,634** | -16 |
+| MULT18X18D | 37 | **37** | 0 |
+| DP16KD | 16 | **16** | 0 |
+
+The +5K LUT increase comes from the wider 40-bit barrel shifter (vs 27-bit)
+and the 33-bit adder (vs 28-bit).  The FF count is essentially unchanged.
+
+**Routed Fmax:**
+
+| Metric | FP32 acc | Fixed-point acc |
+|--------|----------|------------------|
+| Fmax | 24.90 MHz | **27.91 MHz** |
+| Improvement | — | **+12%** |
+| Critical path | sort+align+add+normalize (~25 ns) | sort+align+add (~14 ns logic + ~7 ns routing) |
+
+The critical path is now the 33-bit mantissa addition carry chain
+(~7.4 ns) + routing (~7 ns).  On Artix-7, CARRY4 chains would handle the
+adder in ~1-2 ns, giving ~50+ MHz without further RTL changes.
+
 ## Files
 
 | File | Purpose |
