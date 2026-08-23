@@ -128,9 +128,12 @@ module c930_npu_core
         if ((t == r) && (r < kr_reg))
           act[r*DIN_W +: DIN_W] = a_mem[m_reg*i_dim_k + k_base_reg + r];
       end
-      // Column n's running accumulator pulses at cycle n (skew by n).
+      // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
+      // The 2-cycle pulse is needed because the PE registers the product before
+      // the accumulator; PE(0,c) captures ps_in at the first pulse and the
+      // accumulator uses the registered product at the second pulse.
       for (int n = 0; n < NUM_COLS; n++) begin
-        if (t == n)
+        if (t == n || t == n + 1)
           ps_in[n*ACC_W +: ACC_W] = acc[n];
       end
     end
@@ -221,15 +224,17 @@ module c930_npu_core
           end
         end
 
-        // Run one K tile: NUM_ROWS + NUM_COLS cycles. A partial tile (kr <
-        // NUM_ROWS) must drain through the unused (zero-weight, zero-activation)
-        // bottom rows before the result reaches the bottom edge.
+        // Run one K tile: NUM_ROWS + NUM_COLS + 1 cycles. The extra cycle
+        // accounts for the PE product registration (1 cycle added per column
+        // cascade, but only 1 total because the output register absorbs the
+        // per-PE delta). A partial tile (kr < NUM_ROWS) must drain through
+        // the unused (zero-weight, zero-activation) bottom rows.
         S_RUN: begin
-          // Staggered capture: column (t - NUM_ROWS) finishes at cycle t.
-          if (t >= NUM_ROWS)
-            acc[t - NUM_ROWS] <= ps_out[(t - NUM_ROWS)*ACC_W +: ACC_W];
+          // Staggered capture: column (t - NUM_ROWS - 1) finishes at cycle t.
+          if (t >= NUM_ROWS + 1)
+            acc[t - NUM_ROWS - 1] <= ps_out[(t - NUM_ROWS - 1)*ACC_W +: ACC_W];
 
-          if (t == NUM_ROWS + NUM_COLS - 1) begin
+          if (t == NUM_ROWS + NUM_COLS) begin
             t <= 0;
             if (kt_reg == num_k_tiles - 1) begin
               // all K tiles done for this (row, N tile) -> write results

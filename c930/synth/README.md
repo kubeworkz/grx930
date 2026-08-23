@@ -474,10 +474,13 @@ still be worth re-evaluating as a pure IPC feature.
 | IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
 | IF-stage BTB (64-entry) | **REVERTED** | 32.7 vs 35.3 baseline; predictor only removes taken-branch penalty, carry chain remains |
+| FP16/BF16 datapath | **14.4 MHz** | Multiplier+accumulator combinational chain |
+| PE product registration | **24.9 MHz** | fp32_prod/int_prod registered before accumulator |
 
 The design's Fmax ceiling (INT8-only NPU) was **~35 MHz** on ECP5-85F with
 the 5-stage in-order pipeline. The branch-unit carry chain is inherent to the
-architecture (deep changes needed to break it further).
+architecture (deep changes needed to break it further). With FP16/BF16, the
+ceiling is **~25 MHz** (accumulator combinational chain is the bottleneck).
 
 ### FP16/BF16 datapath synthesis (Aug 2026)
 
@@ -499,7 +502,8 @@ MAC, and the accumulator is shared.
 | Density | 41% | **55%** | +14% |
 
 **Fmax impact:** The FP16/BF16 multiplier and FP32 accumulator add a deep
-combinational chain in the systolic array PE. The critical path is:
+combinational chain in the systolic array PE. Without pipelining, the
+critical path is:
 
 ```
 A-mem read mux → precision mux → FP16/BF16 multiplier (MULT18X18D, 3.07 ns)
@@ -510,7 +514,7 @@ A-mem read mux → precision mux → FP16/BF16 multiplier (MULT18X18D, 3.07 ns)
 
 The total internal critical path is ~40+ ns (19 ns logic + 21 ns routing).
 
-**Seed sweep (FP16 netlist):**
+**Initial seed sweep (no product registration, FP16 netlist):**
 
 | seed | routed Fmax |
 |------|-------------|
@@ -523,16 +527,62 @@ The total internal critical path is ~40+ ns (19 ns logic + 21 ns routing).
 All seeds cluster at ~14.4 MHz — the FP16 accumulator chain is the sole
 bottleneck, not routing variance.
 
-**Root cause:** The FP32 accumulator (`c930_fp16_acc.sv`) is entirely
-combinational: exponent difference → mantissa alignment shift → mantissa
-addition → normalization. On ECP5 without dedicated carry chains, the 24-bit
-mantissa addition maps to a LUT cascade (~8 ns), and the normalization adds
-another ~5 ns of LUT logic.
+### PE product registration (Aug 2026)
 
-**Mitigation path:** Pipeline the accumulator output (register the FP32
-result between PE columns) to break the carry chain. This adds 1 cycle
-latency per column but should restore ~30+ MHz. On Artix-7, the CARRY4
-chains would handle the mantissa addition in ~2 ns, giving ~50+ MHz.
+The FP16/BF16 multiplier output (`fp32_prod`) and the integer product
+(`int_prod`) are now **registered inside the PE** before the accumulator.
+This breaks the multiplier→accumulator carry chain: the critical path is now
+`i_ps_in → accumulator → o_ps_out` (the accumulator alone, ~25 ns of
+alignment + addition + normalization + ~10 ns routing = ~35 ns total).
+
+The controller's `ps_in` pulse is extended to 2 cycles (cycles `n` and `n+1`
+for column `n`) so PE(0,c) captures the correct partial sum on the second
+cycle when the registered product is valid. S_RUN runs for `NUM_ROWS +
+NUM_COLS + 1` cycles (1 extra for the product registration delay) with
+staggered capture starting at `t >= NUM_ROWS + 1`.
+
+**Resource impact (product-registered netlist):**
+
+| Resource | Before (no prod reg) | After (prod reg) | Delta |
+|----------|---------------------|------------------|-------|
+| LUT4 | 46,360 | **46,370** | +10 |
+| TRELLIS_FF | 13,642 | **14,650** | +1,008 |
+| MULT18X18D | 37 | **37** | 0 |
+| DP16KD | 16 | **16** | 0 |
+
+**Seed sweep (product-registered netlist):**
+
+| seed | routed Fmax |
+|------|-------------|
+| default | **24.25 MHz** |
+| 3  | 23.72 MHz |
+| 5  | 23.96 MHz |
+| 7  | **24.90 MHz** |
+| 11 | 24.48 MHz |
+| 13 | 23.36 MHz |
+
+Best seed: **7 at 24.90 MHz** (up from 14.4 MHz — **73% Fmax improvement**).
+The critical path is now `t → NPU core state → ps_in → FP16 accumulator
+exp_b subtraction chain → mantissa alignment → addition → normalization →
+PE output register` (12.33 ns logic + 28.91 ns routing = 41.24 ns).
+
+**Root cause of remaining path:** The FP32 accumulator (`c930_fp16_acc.sv`)
+is still entirely combinational: exponent difference → mantissa alignment
+shift → mantissa addition → normalization. On ECP5 without dedicated carry
+chains, the 24-bit mantissa addition maps to a LUT cascade (~8 ns), and the
+normalization adds another ~5 ns of LUT logic. The routing term (70% of the
+path) is the dominant factor.
+
+**Throughput impact:** The product registration adds 1 extra cycle per K-tile
+(S_RUN = NUM_ROWS + NUM_COLS + 1 vs NUM_ROWS + NUM_COLS). For a 4×4 array:
+- Before: 14.4 MHz / 8 cycles = 1.80M tiles/sec
+- After: 24.9 MHz / 9 cycles = 2.77M tiles/sec (**54% throughput improvement**)
+
+**Further mitigation path:** Pipeline the accumulator itself (register the
+mantissa alignment result before the addition) to split the ~25 ns combinational
+depth into two ~12 ns stages. This adds another cycle of latency but would
+push Fmax to ~40+ MHz. On Artix-7, the CARRY4 chains handle the mantissa
+addition in ~2 ns, giving ~50+ MHz.
 
 ## Files
 

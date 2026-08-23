@@ -9,8 +9,13 @@
 //
 // Supports three datapaths based on i_precision:
 //   - INT8/INT16 (precision 0/1): signed integer MAC
-//   - FP16 (precision 2): FP16 × FP16 → FP32 multiplier + FP32 accumulator
-//   - BF16 (precision 3): BF16 × BF16 → FP32 multiplier + FP32 accumulator
+//   - FP16 (precision 2): FP16 x FP16 -> FP32 multiplier + FP32 accumulator
+//   - BF16 (precision 3): BF16 x BF16 -> FP32 multiplier + FP32 accumulator
+//
+// Pipeline: the product (fp32_prod) is registered before the accumulator,
+// breaking the multiplier->accumulator carry chain.  The accumulator remains
+// combinational (from registered product + i_ps_in) and is captured by the
+// PE's output register.  Cost: 1 extra cycle of latency per PE column.
 // -----------------------------------------------------------------------------
 
 module c930_tensor_pe
@@ -60,8 +65,17 @@ module c930_tensor_pe
   logic signed [2*DIN_W-1:0] int_prod;
   assign int_prod = i_a_in * w;
 
+  // Register the integer product (breaks multiply->add carry chain)
+  logic signed [2*DIN_W-1:0] int_prod_reg;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      int_prod_reg <= '0;
+    else
+      int_prod_reg <= int_prod;
+  end
+
   logic signed [ACC_W-1:0] int_ps_out;
-  assign int_ps_out = i_ps_in + int_prod;
+  assign int_ps_out = i_ps_in + int_prod_reg;
 
   // ---- FP16 MAC path ----
   // Reinterpret DIN_W-bit signed inputs as unsigned FP16 bit patterns
@@ -69,7 +83,7 @@ module c930_tensor_pe
   assign fp16_a = i_a_in[15:0];
   assign fp16_w = w[15:0];
 
-  // FP16 × FP16 → FP32 product (combinational)
+  // FP16 x FP16 -> FP32 product (combinational)
   logic [31:0] fp16_prod;
   c930_fp16_mul u_fp16_mul (
     .i_a      (fp16_a),
@@ -78,8 +92,6 @@ module c930_tensor_pe
   );
 
   // ---- BF16 MAC path ----
-  // BF16: 1 sign + 8 exp + 7 mant, bias=127
-  // Same 16-bit interface as FP16, different internal layout
   logic [31:0] bf16_prod;
   c930_bf16_mul u_bf16_mul (
     .i_a      (fp16_a),
@@ -91,13 +103,22 @@ module c930_tensor_pe
   logic [31:0] fp32_prod;
   assign fp32_prod = (i_precision == 2'd3) ? bf16_prod : fp16_prod;
 
-  // FP32 + FP32 → FP32 accumulator (registered, same stage as integer MAC)
+  // Register the FP32 product (breaks multiplier -> accumulator carry chain)
+  logic [31:0] fp32_prod_reg;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      fp32_prod_reg <= '0;
+    else
+      fp32_prod_reg <= fp32_prod;
+  end
+
+  // FP32 + FP32 -> FP32 accumulator (combinational, from registered product + i_ps_in)
   logic [31:0] fp32_ps_out;
   c930_fp16_acc u_fp16_acc (
-    .i_clk    (i_clk),
-    .i_rst_n  (i_rst_n),
+    .i_clk    (i_clk),      // unused (combinational), kept for port compat
+    .i_rst_n  (i_rst_n),    // unused
     .i_ps_in  (i_ps_in[31:0]),   // lower 32 bits of ACC_W partial sum
-    .i_prod   (fp32_prod),
+    .i_prod   (fp32_prod_reg),   // REGISTERED product
     .o_ps_out (fp32_ps_out)
   );
 
