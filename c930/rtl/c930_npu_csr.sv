@@ -52,7 +52,7 @@ module c930_npu_csr
   output logic [31:0] o_a_base,
   output logic [31:0] o_b_base,
   output logic [31:0] o_c_base,
-  output logic [1:0]  o_precision,
+  output logic [2:0]  o_precision,
   input  logic        i_busy,
   input  logic        i_done,
   input  logic        i_error
@@ -70,7 +70,7 @@ module c930_npu_csr
 
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
-  logic [1:0]  precision;
+  logic [2:0]  precision;
   logic        start_pulse;
   logic        done_latch;
 
@@ -100,7 +100,7 @@ module c930_npu_csr
       a_base        <= 32'd0;
       b_base        <= 32'd0;
       c_base        <= 32'd0;
-      precision     <= 2'd0;
+      precision     <= 3'd0;
       start_pulse   <= 1'b0;
       done_latch    <= 1'b0;
     end else begin
@@ -132,7 +132,7 @@ module c930_npu_csr
           ADDR_A_BASE: if (s_axi_wstrb[0]) a_base <= s_axi_wdata;
           ADDR_B_BASE: if (s_axi_wstrb[0]) b_base <= s_axi_wdata;
           ADDR_C_BASE: if (s_axi_wstrb[0]) c_base <= s_axi_wdata;
-          ADDR_PREC:   if (s_axi_wstrb[0]) precision <= s_axi_wdata[1:0];
+          ADDR_PREC:   if (s_axi_wstrb[0]) precision <= s_axi_wdata[2:0];
           default: ;
         endcase
 
@@ -168,7 +168,7 @@ module c930_npu_csr
           ADDR_A_BASE: s_axi_rdata <= a_base;
           ADDR_B_BASE: s_axi_rdata <= b_base;
           ADDR_C_BASE: s_axi_rdata <= c_base;
-          ADDR_PREC:   s_axi_rdata <= {30'd0, precision};
+          ADDR_PREC:   s_axi_rdata <= {29'd0, precision};
           default:     s_axi_rdata <= 32'd0;
         endcase
 

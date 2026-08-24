@@ -220,10 +220,22 @@ module tb_c930_soc;
   task automatic fill_ab(input int m, n, k, input int seed, input int prec);
     logic [31:0] s;
     logic [15:0] h;
+    logic [3:0]  nib;
+    int          byte_idx, nib_idx;
     s = seed;
     for (int i = 0; i < m * k; i++) begin
       s = lcg(s);
-      if (prec == 0) begin
+      if (prec == 4) begin
+        // INT4: generate 4-bit signed values in [-8, 7], packed 2 per byte
+        nib = s[3:0] & 4'hF;  // 4-bit unsigned
+        byte_idx = i / 2;
+        nib_idx  = i % 2;
+        // Pack into DDR as byte-addressable nibbles (lower nibble first)
+        if (nib_idx == 0)
+          dut.u_ddr.mem[A_ADDR + byte_idx] = {4'd0, nib};
+        else
+          dut.u_ddr.mem[A_ADDR + byte_idx] = {nib, dut.u_ddr.mem[A_ADDR + byte_idx][3:0]};
+      end else if (prec == 0) begin
         dut.u_ddr.mem[A_ADDR + i] = s[7:0];   // INT8: 1 byte per element
       end else if (prec == 1) begin
         dut.u_ddr.mem[A_ADDR + 2*i + 0] = s[7:0];   // INT16: 2 bytes LE per element
@@ -240,7 +252,15 @@ module tb_c930_soc;
     end
     for (int i = 0; i < k * n; i++) begin
       s = lcg(s);
-      if (prec == 0) begin
+      if (prec == 4) begin
+        nib = s[3:0] & 4'hF;
+        byte_idx = i / 2;
+        nib_idx  = i % 2;
+        if (nib_idx == 0)
+          dut.u_ddr.mem[B_ADDR + byte_idx] = {4'd0, nib};
+        else
+          dut.u_ddr.mem[B_ADDR + byte_idx] = {nib, dut.u_ddr.mem[B_ADDR + byte_idx][3:0]};
+      end else if (prec == 0) begin
         dut.u_ddr.mem[B_ADDR + i] = s[7:0];
       end else if (prec == 1) begin
         dut.u_ddr.mem[B_ADDR + 2*i + 0] = s[7:0];
@@ -448,7 +468,19 @@ module tb_c930_soc;
           // INT8/INT16: integer GEMM reference
           for (int ki = 0; ki < k; ki++) begin
             longint av, bv;
-            if (prec == 0) begin
+            if (prec == 4) begin
+              // INT4: unpack nibbles from packed bytes (2 nibbles per byte)
+              automatic int a_byte = (mi*k + ki) / 2;
+              automatic int a_nib  = (mi*k + ki) % 2;
+              automatic int b_byte = (ki*n + ni) / 2;
+              automatic int b_nib  = (ki*n + ni) % 2;
+              automatic logic [3:0] a4 = (a_nib[0] == 0) ? dut.u_ddr.mem[A_ADDR + a_byte][3:0]
+                                                          : dut.u_ddr.mem[A_ADDR + a_byte][7:4];
+              automatic logic [3:0] b4 = (b_nib[0] == 0) ? dut.u_ddr.mem[B_ADDR + b_byte][3:0]
+                                                          : dut.u_ddr.mem[B_ADDR + b_byte][7:4];
+              av = $signed({{12{a4[3]}}, a4});
+              bv = $signed({{12{b4[3]}}, b4});
+            end else if (prec == 0) begin
               av = $signed(dut.u_ddr.mem[A_ADDR + mi*k + ki]);
               bv = $signed(dut.u_ddr.mem[B_ADDR + ki*n + ni]);
             end else begin
@@ -648,6 +680,17 @@ module tb_c930_soc;
 
     // ---- Randomized INT8 M/N/K sweep ----
     run_sweep(10, 0);
+
+    // ---- INT4 edge cases (4-bit weights x 8-bit activations) ----
+    run_case(1, 1, 1, 4001, 4);    // minimal: M=1, K=1
+    run_case(2, 3, 1, 4002, 4);    // K=1 -> single partial tile
+    run_case(1, 4, 4, 4003, 4);    // M=1, partial K tile
+    run_case(8, 4, 8, 4004, 4);    // K == NUM_ROWS exactly
+    run_case(3, 4, 8, 4005, 4);    // K == NUM_ROWS, M=3
+    run_case(2, 3, 16, 4006, 4);   // K == 2 * NUM_ROWS
+    run_case(1, 8, 4, 4007, 4);    // N=8 (full NUM_COLS), partial K
+    run_case(4, 6, 8, 4008, 4);    // N-tiling + full K tile
+    run_sweep(6, 4);               // randomized INT4 sweep
 
     // ---- INT16 edge cases ----
     run_case(1, 1, 1, 2001, 1);    // minimal: M=1, K=1

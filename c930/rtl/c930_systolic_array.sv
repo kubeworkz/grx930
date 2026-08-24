@@ -48,7 +48,7 @@ module c930_systolic_array
   output signed [ACC_W*NUM_COLS-1:0]               o_ps_out,
 
   // Precision control: broadcast to all PEs
-  input  logic [1:0]                               i_precision
+  input  logic [2:0]                               i_precision
 );
 
   // Horizontal activation buses: a_h[r][c] enters PE(r,c); a_h[r][NUM_COLS] is

@@ -41,7 +41,7 @@ module c930_npu_dma
   input  logic [31:0] i_a_base,
   input  logic [31:0] i_b_base,
   input  logic [31:0] i_c_base,
-  input  logic [1:0]  i_precision,   // 0=INT8, 1=INT16
+  input  logic [2:0]  i_precision,   // 0=INT8, 1=INT16, 4=INT4
 
   // ---- Status (to the CSR / top) ----
   output logic        o_busy,
@@ -98,9 +98,10 @@ module c930_npu_dma
   localparam int BYTES_PER_BEAT = AXI_DATA_W / 8;   // 4
   localparam [2:0] BEAT_SIZE    = $clog2(BYTES_PER_BEAT);  // 2 -> 4 bytes/beat
 
-  // Precision-dependent element size: INT8=1 byte, INT16=2 bytes
-  logic [1:0] elem_size;   // 1 for INT8, 2 for INT16
-  int  elems_per_beat;     // 4 for INT8, 2 for INT16
+  // Precision-dependent element size: INT4=0.5 byte, INT8=1 byte, INT16=2 bytes
+  logic [2:0] elem_size;   // 1 for INT8, 2 for INT16, 0 for INT4 (special case)
+  int  elems_per_beat;     // 8 for INT4, 4 for INT8, 2 for INT16
+  logic is_int4;           // 1 if precision == 4 (INT4 mode)
 
   // ---- Phases ----
   localparam [2:0] P_IDLE    = 3'd0;
@@ -130,9 +131,10 @@ module c930_npu_dma
   logic [31:0] a_base_r, b_base_r, c_base_r;
 
   int  elem_cnt;      // bytes (A/B read) or words (C write) this phase
+  int  total_elems;   // total A/B elements (M*K or K*N) for bounds check
   int  rd_beats;      // ceil(elem_cnt / BYTES_PER_BEAT) for reads
   int  rd_beat;       // read beats received so far
-  int  flat_idx;      // flat byte index into the A/B buffer
+  int  flat_idx;      // flat element index into the A/B buffer
   int  unpack_idx;    // 0..BYTES_PER_BEAT-1 within the current beat
   int  c_idx;         // C element index (also C beat index)
   logic [AXI_DATA_W-1:0] rword;
@@ -194,10 +196,24 @@ module c930_npu_dma
               a_base_r <= i_a_base;
               b_base_r <= i_b_base;
               c_base_r <= i_c_base;
-              elem_size    <= (i_precision == 2'd0) ? 2'd1 : 2'd2;
-              elems_per_beat <= (i_precision == 2'd0) ? 4 : 2;
-              elem_cnt   <= i_dim_m * i_dim_k * ((i_precision == 2'd0) ? 1 : 2);  // A bytes
-              rd_beats   <= (i_dim_m * i_dim_k * ((i_precision == 2'd0) ? 1 : 2) + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+              is_int4     <= (i_precision == 3'd4);
+              total_elems <= i_dim_m * i_dim_k;  // A element count for bounds check
+              if (i_precision == 3'd4) begin
+                elem_size    <= 3'd0;     // INT4: 4 bits per element
+                elems_per_beat <= 8;      // 8 INT4 per 32-bit word
+                elem_cnt   <= (i_dim_m * i_dim_k + 1) / 2;  // A bytes (4 bits each, packed)
+                rd_beats   <= ((i_dim_m * i_dim_k + 1) / 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+              end else if (i_precision == 3'd0) begin
+                elem_size    <= 3'd1;     // INT8: 1 byte per element
+                elems_per_beat <= 4;      // 4 INT8 per 32-bit word
+                elem_cnt   <= i_dim_m * i_dim_k;  // A bytes
+                rd_beats   <= (i_dim_m * i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+              end else begin
+                elem_size    <= 3'd2;     // INT16/FP16/BF16: 2 bytes per element
+                elems_per_beat <= 2;      // 2 per 32-bit word
+                elem_cnt   <= i_dim_m * i_dim_k * 2;  // A bytes
+                rd_beats   <= (i_dim_m * i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+              end
               rd_beat    <= 0;
               flat_idx   <= 0;
               unpack_idx <= 0;
@@ -238,14 +254,20 @@ module c930_npu_dma
             end
 
             RS_UNPACK: begin
-              o_wen   <= 1'b1;
-              o_wsel  <= wsel_reg;
-              o_waddr <= flat_idx[15:0];
-              // INT8: sign-extend 8→16 bits; INT16: direct 16-bit
-              if (elem_size == 2'd1)
-                o_wdata <= {{8{rword[unpack_idx*8+7]}}, rword[unpack_idx*8 +: 8]};
-              else
-                o_wdata <= rword[unpack_idx*16 +: 16];
+              // Bounds check: only write if we haven't exceeded total elements
+              if (flat_idx < total_elems) begin
+                o_wen   <= 1'b1;
+                o_wsel  <= wsel_reg;
+                o_waddr <= flat_idx[15:0];
+                // INT4: extract 4-bit nibble, sign-extend to 16 bits
+                // INT8: sign-extend 8→16 bits; INT16: direct 16-bit
+                if (is_int4)
+                  o_wdata <= {{12{rword[unpack_idx*4+3]}}, rword[unpack_idx*4 +: 4]};
+                else if (elem_size == 3'd1)
+                  o_wdata <= {{8{rword[unpack_idx*8+7]}}, rword[unpack_idx*8 +: 8]};
+                else
+                  o_wdata <= rword[unpack_idx*16 +: 16];
+              end
               flat_idx   <= flat_idx + 1;
               unpack_idx <= unpack_idx + 1;
               if (unpack_idx == elems_per_beat - 1) begin
@@ -257,8 +279,17 @@ module c930_npu_dma
                     rd_sub <= RS_AR;
                   end else begin
                     // A loaded -> move on to B
-                    elem_cnt   <= dn * dk * elem_size;
-                    rd_beats   <= (dn * dk * elem_size + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                    total_elems <= dn * dk;  // B element count for bounds check
+                    if (is_int4) begin
+                      elem_cnt   <= (dn * dk + 1) / 2;
+                      rd_beats   <= ((dn * dk + 1) / 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                    end else if (elem_size == 3'd1) begin
+                      elem_cnt   <= dn * dk;
+                      rd_beats   <= (dn * dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                    end else begin
+                      elem_cnt   <= dn * dk * 2;
+                      rd_beats   <= (dn * dk * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                    end
                     rd_beat    <= 0;
                     flat_idx   <= 0;
                     unpack_idx <= 0;

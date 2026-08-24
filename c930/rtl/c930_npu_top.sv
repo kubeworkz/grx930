@@ -82,7 +82,7 @@ module c930_npu_top
   logic        busy, done, error;
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
-  logic [1:0]  precision;
+  logic [2:0]  precision;
 
   logic                    dma_wen, dma_wsel, core_start;
   logic [15:0]             dma_waddr;

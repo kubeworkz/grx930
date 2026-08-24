@@ -40,7 +40,7 @@ module c930_tensor_pe
   output logic signed [ACC_W-1:0]     o_ps_out,
 
   // Precision control: 0=INT8, 1=INT16, 2=FP16, 3=BF16
-  input  logic [1:0]                  i_precision
+  input  logic [2:0]                  i_precision
 );
 
   // ---- Weight register ----
@@ -100,7 +100,7 @@ module c930_tensor_pe
 
   // ---- MUX the FP32 product based on precision ----
   logic [31:0] fp32_prod;
-  assign fp32_prod = (i_precision == 2'd3) ? bf16_prod : fp16_prod;
+  assign fp32_prod = (i_precision == 3'd3) ? bf16_prod : fp16_prod;
 
   // Register the FP32 product (breaks multiplier -> accumulator carry chain)
   logic [31:0] fp32_prod_reg;
@@ -125,12 +125,12 @@ module c930_tensor_pe
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
       o_ps_out <= '0;
-    else if (i_precision == 2'd2 || i_precision == 2'd3) begin
+    else if (i_precision == 3'd2 || i_precision == 3'd3) begin
       // FP16/BF16 mode: use FP32 accumulator output (zero-extend upper bits)
       o_ps_out[ACC_W-1:32] <= '0;
       o_ps_out[31:0]        <= fp32_ps_out;
     end else begin
-      // INT8/INT16 mode: use integer MAC output
+      // INT8/INT16/INT4 mode: use integer MAC output
       o_ps_out <= int_ps_out;
     end
   end
