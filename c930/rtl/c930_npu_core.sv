@@ -51,7 +51,7 @@ module c930_npu_core
 
   // ---- Performance counters ----
   output logic [31:0]                 o_cycle_count,  // free-running cycles while busy
-  output logic [31:0]                 o_op_count,     // K-tile completions
+  output logic [31:0]                 o_op_count,     // total PE MAC operations
   output logic [31:0]                 o_stall_count   // cycles stalled (S_WLOAD or stall)
 );
 
@@ -139,9 +139,10 @@ module c930_npu_core
         op_cnt    <= 32'd0;
         stall_cnt <= 32'd0;
       end
-      // Count K-tile completions (when S_RUN finishes a K tile)
-      if (state == S_RUN && t == NUM_ROWS + NUM_COLS && kt_reg == num_k_tiles - 1)
-        op_cnt <= op_cnt + 1;
+      // Count PE MAC operations: all PEs fire each cycle during S_RUN.
+      // NUM_ROWS * NUM_COLS = 64 PEs, each doing one MAC per cycle.
+      if (state == S_RUN)
+        op_cnt <= op_cnt + NUM_ROWS * NUM_COLS;
       // Count stall cycles (S_WLOAD = weight loading, not compute)
       if (state == S_WLOAD)
         stall_cnt <= stall_cnt + 1;

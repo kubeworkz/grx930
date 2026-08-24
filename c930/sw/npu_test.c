@@ -765,8 +765,9 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
     unsigned long ops    = CSR_OP_CNT;
     unsigned long stalls = CSR_STALL;
 
-    // Compute TOPS: 2*M*N*K MACs per GEMM, TOPS = ops / cycles * clk_freq
-    // We store TOPS * 1000 as integer for display
+    // Compute TOPS from theoretical MAC count: 2*M*N*K multiply-accumulates.
+    // The hardware op_cnt counts raw PE firings (over-counts during pipeline
+    // fill/drain), so we use the formula for a meaningful achieved-TOPS number.
     unsigned long macs = 2ull * m * n * k;
     unsigned long tops_x1000 = 0;
     if (cycles > 0)
