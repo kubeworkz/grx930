@@ -181,9 +181,6 @@ module c930_npu_csr
           ADDR_CYCLE_LO:  s_axi_rdata <= i_cycle_count;
           ADDR_OP_COUNT:  s_axi_rdata <= i_op_count;
           ADDR_STALL_CT:  s_axi_rdata <= i_stall_count;
-          ADDR_CYCLE_LO: s_axi_rdata <= i_cycle_count;
-          ADDR_OP_COUNT: s_axi_rdata <= i_op_count;
-          ADDR_STALL_CT: s_axi_rdata <= i_stall_count;
           default:     s_axi_rdata <= 32'd0;
         endcase
 

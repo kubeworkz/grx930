@@ -64,6 +64,9 @@ typedef unsigned int u32;
 #define CSR_B_BASE  (*(volatile u32 *)(MMIO_BASE + 0x18))
 #define CSR_C_BASE  (*(volatile u32 *)(MMIO_BASE + 0x1C))
 #define CSR_PREC    (*(volatile u32 *)(MMIO_BASE + 0x20))
+#define CSR_CYCLE   (*(volatile u32 *)(MMIO_BASE + 0x24))  // cycle count (read-only)
+#define CSR_OP_CNT  (*(volatile u32 *)(MMIO_BASE + 0x2C))  // MAC op count (read-only)
+#define CSR_STALL   (*(volatile u32 *)(MMIO_BASE + 0x30))  // stall count (read-only)
 
 #define CSR_START   0x1u
 #define STATUS_DONE 0x2u
@@ -717,6 +720,90 @@ static void ecall_trigger(void)
     );
 }
 
+// -----------------------------------------------------------------------------
+// Performance benchmark. Runs large GEMMs across INT4/INT8/INT16/FP16/BF16 and
+// reports throughput (TOPS), cycle count, op count, and stall ratio.
+//
+// Each precision gets a representative GEMM: M=8 N=8 K=16 (2 K-tiles for
+// double-buffer exercise). Results are written to DDR for the testbench to
+// display.
+//
+// PERF_RES_ADDR layout (per case, 6 words = 24 bytes, 5 cases = 120 bytes):
+//   +0x00: cycles   +0x04: ops   +0x08: stalls
+//   +0x0C: tops_mhz (TOPS * 1000, integer)   +0x10: stall_pct (stalls/cycles * 100)
+//   +0x14: reserved
+// -----------------------------------------------------------------------------
+#define PERF_RES_ADDR 0x9500
+
+// NPU clock frequency in Hz (50 MHz on Arty A7 with CLK_DIV=2).
+// For simulation, cycles are absolute so TOPS = ops / cycles * clock_freq.
+#define NPU_CLK_HZ  50000000ull
+
+__attribute__((noinline))
+static void run_perf_case(int m, int n, int k, int prec, int case_idx)
+{
+    volatile u32 *res = (volatile u32 *)(PERF_RES_ADDR + case_idx * 24);
+    volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
+
+    *diag = 0xB00 + case_idx;
+    CSR_DIM_M  = m;
+    CSR_DIM_N  = n;
+    CSR_DIM_K  = k;
+    CSR_A_BASE = A_ADDR;
+    CSR_B_BASE = B_ADDR;
+    CSR_C_BASE = C_ADDR;
+    CSR_PREC   = prec;
+    {volatile u32 _b; _b = CSR_PREC; (void)_b;}
+
+    // Reset counters by reading (counters reset on START)
+    CSR_CTRL = CSR_START;
+    while (!(CSR_STATUS & STATUS_DONE))
+        ;
+
+    // Read performance counters (snapshot after completion)
+    unsigned long cycles = CSR_CYCLE;
+    unsigned long ops    = CSR_OP_CNT;
+    unsigned long stalls = CSR_STALL;
+
+    // Compute TOPS: 2*M*N*K MACs per GEMM, TOPS = ops / cycles * clk_freq
+    // We store TOPS * 1000 as integer for display
+    unsigned long macs = 2ull * m * n * k;
+    unsigned long tops_x1000 = 0;
+    if (cycles > 0)
+        tops_x1000 = (macs * NPU_CLK_HZ) / (cycles * 1000000ull);
+
+    unsigned long stall_pct = 0;
+    if (cycles > 0)
+        stall_pct = (stalls * 100) / cycles;
+
+    res[0] = cycles;
+    res[1] = ops;
+    res[2] = stalls;
+    res[3] = tops_x1000;
+    res[4] = stall_pct;
+    res[5] = 0;  // reserved
+}
+
+__attribute__((noinline))
+static void perf_bench(void)
+{
+    volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
+
+    *diag = 0xB00;
+    // INT4: M=8 N=8 K=16 (2 K-tiles, double-buffer exercised)
+    run_perf_case(8, 8, 16, 4, 0);
+    // INT8: M=8 N=8 K=16
+    run_perf_case(8, 8, 16, 0, 1);
+    // INT16: M=8 N=8 K=16
+    run_perf_case(8, 8, 16, 1, 2);
+    // FP16: M=8 N=8 K=16
+    run_perf_case(8, 8, 16, 2, 3);
+    // BF16: M=8 N=8 K=16
+    run_perf_case(8, 8, 16, 3, 4);
+
+    *diag = 0xBFF;
+}
+
 __attribute__((noreturn))
 void main(void)
 {
@@ -774,6 +861,12 @@ void main(void)
     *phase = 0x08;
     *(volatile u32 *)DONE_ADDR = DONE_MAGIC;
     *phase = 0x09;
+
+    // 5. Run performance benchmark across precisions (AFTER done signal so
+    //    the testbench captures C before we overwrite the buffers).
+    *phase = 0x10;
+    perf_bench();
+    *phase = 0x11;
 
     for (;;)
         ;
