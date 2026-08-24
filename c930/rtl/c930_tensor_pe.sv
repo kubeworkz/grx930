@@ -9,21 +9,19 @@
 //
 // Supports four datapaths based on i_precision:
 //   - INT8/INT16 (precision 0/1): signed integer MAC
-//   - FP16 (precision 2): FP16 x FP16 -> FP32 multiplier + fixed-point accumulator
-//   - BF16 (precision 3): BF16 x BF16 -> FP32 multiplier + fixed-point accumulator
+//   - FP16 (precision 2): FP16 x FP16 -> FP32 multiplier + FP32 accumulator
+//   - BF16 (precision 3): BF16 x BF16 -> FP32 multiplier + FP32 accumulator
 //
 // Pipeline: the product (fp32_prod) is registered before the accumulator,
-// breaking the multiplier->accumulator carry chain.  The fixed-point
-// accumulator (c930_fx_acc) is purely combinational: sort+align+add with NO
-// per-cycle LZC/normalize — that is deferred to writeback.  The PE's output
-// register captures the result each cycle.  Cost: 1 extra cycle of latency
-// per PE column (product reg + output reg = 2-cycle PE latency).
+// breaking the multiplier->accumulator carry chain.  The PE's output register
+// captures the result each cycle.  Cost: 1 extra cycle of latency per PE
+// column (product reg + output reg = 2-cycle PE latency).
 // -----------------------------------------------------------------------------
 
 module c930_tensor_pe
 #(
-  parameter int DIN_W = 8,   // activation / weight bit width (16 for INT8/INT16/FP16/BF16)
-  parameter int ACC_W = 48   // accumulator bit width (48 for fixed-point FP modes)
+  parameter int DIN_W = 16,  // activation / weight bit width (8 for INT8, 16 for INT16/FP16/BF16)
+  parameter int ACC_W = 48   // accumulator bit width (48 for INT8/INT16, FP uses lower 32)
 )
 (
   input  logic                        i_clk,
@@ -128,8 +126,8 @@ module c930_tensor_pe
     if (!i_rst_n)
       o_ps_out <= '0;
     else if (i_precision == 2'd2 || i_precision == 2'd3) begin
-      // FP16/BF16 mode: use FP32 accumulator output
-      o_ps_out[ACC_W-1:32] <= '0;  // zero-extend upper bits (if ACC_W > 32)
+      // FP16/BF16 mode: use FP32 accumulator output (zero-extend upper bits)
+      o_ps_out[ACC_W-1:32] <= '0;
       o_ps_out[31:0]        <= fp32_ps_out;
     end else begin
       // INT8/INT16 mode: use integer MAC output

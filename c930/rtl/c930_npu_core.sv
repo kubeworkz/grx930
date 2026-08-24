@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 // c930_npu_core.sv
 //
-// INT8 GEMM engine:  C[M x N] = A[M x K] * B[K x N],  INT8 in, INT32 acc.
+// INT8/INT16/FP16/BF16 GEMM engine:  C[M x N] = A[M x K] * B[K x N]
 //
 // The datapath is a weight-stationary systolic array (c930_systolic_array).
 // This controller:
@@ -20,7 +20,7 @@ module c930_npu_core
   parameter int NUM_ROWS = 8,     // systolic rows = reduction elements per pass
   parameter int NUM_COLS = 8,     // systolic cols = output elements per pass
   parameter int DIN_W    = 8,     // activation / weight width
-  parameter int ACC_W    = 48,    // accumulator width (48 for fixed-point FP modes)
+  parameter int ACC_W    = 48,    // accumulator width (48 for INT8/INT16)
   parameter int MAX_M    = 64,    // max output rows
   parameter int MAX_K    = 256,   // max reduction length
   parameter int MAX_N    = 8      // max output cols (tiled over NUM_COLS passes)
@@ -40,7 +40,7 @@ module c930_npu_core
   input  logic [15:0]                 i_dim_m,
   input  logic [15:0]                 i_dim_n,
   input  logic [15:0]                 i_dim_k,
-  input  logic [1:0]                  i_precision,  // 0=INT8, 1=INT16, 2=FP16
+  input  logic [1:0]                  i_precision,  // 0=INT8, 1=INT16, 2=FP16, 3=BF16
   output logic                        o_busy,
   output logic                        o_done,   // 1-cycle pulse
   output logic                        o_error,  // sticky, cleared on valid start
@@ -257,6 +257,8 @@ module c930_npu_core
         end
 
         // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.
+        // For FP16/BF16 modes, acc[n_cnt] is in FP32 format (zero-extended to ACC_W).
+        // For INT8/INT16, acc[n_cnt] is in integer format.
         S_WRITE: begin
           c_mem[m_reg*i_dim_n + n_base + n_cnt] <= acc[n_cnt][31:0];
           if (n_cnt == nc - 1) begin
