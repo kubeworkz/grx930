@@ -23,7 +23,7 @@ module tb_c930_npu;
   localparam int NUM_ROWS = 4;   // systolic rows (reduction per pass)
   localparam int NUM_COLS = 4;   // systolic cols (output width)
   localparam int DIN_W    = 8;
-  localparam int ACC_W    = 32;
+  localparam int ACC_W    = 48;
   localparam int MAX_M    = 8;
   localparam int MAX_K    = 16;
   localparam int MAX_N    = 12;  // > NUM_COLS so the sweep exercises N-tiling

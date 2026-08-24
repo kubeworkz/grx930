@@ -23,7 +23,7 @@ module c930_systolic_array
   parameter int NUM_ROWS = 8,   // reduction length per pass
   parameter int NUM_COLS = 8,   // output width
   parameter int DIN_W    = 8,   // activation / weight width
-  parameter int ACC_W    = 32   // accumulator width
+  parameter int ACC_W    = 48   // accumulator width (48 for fixed-point FP modes)
 )
 (
   input  logic                                     i_clk,

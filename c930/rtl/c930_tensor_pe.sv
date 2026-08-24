@@ -113,14 +113,14 @@ module c930_tensor_pe
       fp32_prod_reg <= fp32_prod;
   end
 
-  // Fixed-point accumulator: sort+align+add, NO per-cycle normalize.
-  // Critical path: ~12 ns (vs ~25 ns for old FP32 accumulator).
-  // Normalization happens once at writeback (S_WRITE in the core).
-  logic [47:0] fx_ps_out;
-  c930_fx_acc u_fx_acc (
-    .i_ps_in  (i_ps_in[47:0]),   // 48-bit fixed-point partial sum
+  // FP32 + FP32 -> FP32 accumulator (combinational, from registered product + i_ps_in)
+  logic [31:0] fp32_ps_out;
+  c930_fp16_acc u_fp16_acc (
+    .i_clk    (i_clk),
+    .i_rst_n  (i_rst_n),
+    .i_ps_in  (i_ps_in[31:0]),   // lower 32 bits of ACC_W partial sum
     .i_prod   (fp32_prod_reg),   // REGISTERED FP32 product
-    .o_ps_out (fx_ps_out)        // 48-bit fixed-point result
+    .o_ps_out (fp32_ps_out)
   );
 
   // ---- Output mux based on precision ----
@@ -128,10 +128,11 @@ module c930_tensor_pe
     if (!i_rst_n)
       o_ps_out <= '0;
     else if (i_precision == 2'd2 || i_precision == 2'd3) begin
-      // FP16/BF16 mode: 48-bit fixed-point accumulator output
-      o_ps_out <= {{(ACC_W-48){fx_ps_out[47]}}, fx_ps_out};
+      // FP16/BF16 mode: use FP32 accumulator output
+      o_ps_out[ACC_W-1:32] <= '0;  // zero-extend upper bits (if ACC_W > 32)
+      o_ps_out[31:0]        <= fp32_ps_out;
     end else begin
-      // INT8/INT16 mode: integer MAC output
+      // INT8/INT16 mode: use integer MAC output
       o_ps_out <= int_ps_out;
     end
   end

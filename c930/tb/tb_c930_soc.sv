@@ -21,11 +21,11 @@
 module tb_c930_soc;
 
   // Must track the DUT instantiation in c930_soc_top.
-  localparam int NUM_ROWS = 4;   // systolic rows (reduction per pass)
-  localparam int NUM_COLS = 4;   // systolic cols (output width)
+  localparam int NUM_ROWS = 8;   // systolic rows (reduction per pass)
+  localparam int NUM_COLS = 8;   // systolic cols (output width)
   localparam int MAX_M    = 8;
   localparam int MAX_K    = 16;
-  localparam int MAX_N    = 12;  // > NUM_COLS so the sweep exercises N-tiling
+  localparam int MAX_N    = 16;  // > NUM_COLS so the sweep exercises N-tiling
 
   // DDR workload layout (byte addresses, shared with sw/npu_test.c)
   localparam int A_ADDR      = 32'h8000;  // 512-byte slot, above stack (grows down from 0x8000)
@@ -635,15 +635,16 @@ module tb_c930_soc;
     run_case(1, 1, 1, 1001, 0);    // minimal: M=1, K=1
     run_case(2, 3, 1, 1002, 0);    // K=1 -> single partial tile (kr=1)
     run_case(8, 12, 1, 1003, 0);   // max M/N with K=1
-    run_case(1, 4, 4, 1004, 0);    // M=1, K == NUM_ROWS (one full tile)
-    run_case(8, 4, 4, 1005, 0);    // K == NUM_ROWS exactly
-    run_case(3, 4, 8, 1006, 0);    // K == 2 * NUM_ROWS
-    run_case(2, 3, 16, 1007, 0);   // K == MAX_K == 4 * NUM_ROWS
-    run_case(1, 2, 5, 1008, 0);    // M=1 with a partial K tile (kr=1)
+    run_case(1, 4, 4, 1004, 0);    // M=1, partial K tile (kr=4)
+    run_case(8, 4, 8, 1005, 0);    // K == NUM_ROWS exactly (full tile)
+    run_case(3, 4, 8, 1006, 0);    // K == NUM_ROWS, M=3
+    run_case(2, 3, 16, 1007, 0);   // K == 2 * NUM_ROWS (two full tiles)
+    run_case(1, 2, 5, 1008, 0);    // M=1 with a partial K tile (kr=5)
     run_case(5, 11, 7, 1009, 0);   // N > NUM_COLS (N-tiling) + partial K tile
-    run_case(8, 12, 16, 1010, 0);  // max dims: 3 N-tiles x 4 K-tiles
-    run_case(1, 12, 1, 1011, 0);   // M=1, K=1, 3 N-tiles
+    run_case(8, 12, 16, 1010, 0);  // max dims: 2 N-tiles x 2 K-tiles
+    run_case(1, 12, 1, 1011, 0);   // M=1, K=1, 2 N-tiles
     run_case(2, 6, 9, 1012, 0);    // odd K-tiling (kr=1) + N-tiling
+    run_case(8, 8, 12, 1013, 0);   // partial K tile (kr=4) + full N col
 
     // ---- Randomized INT8 M/N/K sweep ----
     run_sweep(10, 0);
@@ -652,15 +653,16 @@ module tb_c930_soc;
     run_case(1, 1, 1, 2001, 1);    // minimal: M=1, K=1
     run_case(2, 3, 1, 2002, 1);    // K=1 -> single partial tile
     run_case(8, 12, 1, 2003, 1);   // max M/N with K=1
-    run_case(1, 4, 4, 2004, 1);    // M=1, K == NUM_ROWS
-    run_case(8, 4, 4, 2005, 1);    // K == NUM_ROWS exactly
-    run_case(3, 4, 8, 2006, 1);    // K == 2 * NUM_ROWS
-    run_case(2, 3, 16, 2007, 1);   // K == MAX_K
+    run_case(1, 4, 4, 2004, 1);    // M=1, partial K tile
+    run_case(8, 4, 8, 2005, 1);    // K == NUM_ROWS exactly
+    run_case(3, 4, 8, 2006, 1);    // K == NUM_ROWS, M=3
+    run_case(2, 3, 16, 2007, 1);   // K == 2 * NUM_ROWS
     run_case(1, 2, 5, 2008, 1);    // M=1 partial K tile
     run_case(5, 11, 7, 2009, 1);   // N > NUM_COLS (N-tiling) + partial K
     run_case(8, 12, 16, 2010, 1);  // max dims
-    run_case(1, 12, 1, 2011, 1);   // M=1, K=1, 3 N-tiles
+    run_case(1, 12, 1, 2011, 1);   // M=1, K=1, 2 N-tiles
     run_case(2, 6, 9, 2012, 1);    // odd K-tiling + N-tiling
+    run_case(8, 8, 12, 2013, 1);   // partial K tile + full N col
 
     // ---- Randomized INT16 M/N/K sweep ----
     run_sweep(10, 1);
@@ -668,10 +670,10 @@ module tb_c930_soc;
     // ---- FP16 edge cases ----
     run_case(1, 1, 1, 3001, 2);    // minimal: M=1, K=1
     run_case(2, 3, 1, 3002, 2);    // K=1
-    run_case(1, 4, 4, 3003, 2);    // M=1, K == NUM_ROWS
-    run_case(2, 3, 4, 3004, 2);    // K == NUM_ROWS, small dims
-    run_case(1, 2, 8, 3005, 2);    // K == 2 * NUM_ROWS
-    run_case(2, 4, 8, 3006, 2);    // K == 2 * NUM_ROWS, N=4
+    run_case(1, 4, 4, 3003, 2);    // M=1, partial K tile
+    run_case(2, 3, 8, 3004, 2);    // K == NUM_ROWS, small dims
+    run_case(1, 2, 8, 3005, 2);    // K == NUM_ROWS, M=1
+    run_case(2, 4, 16, 3006, 2);   // K == 2 * NUM_ROWS, N=4
 
     // ---- Randomized FP16 M/N/K sweep ----
     run_sweep(6, 2);
@@ -992,11 +994,11 @@ module tb_c930_soc;
     // ======================================================================
     run_case(1, 1, 1, 7001, 3);    // minimal: M=1, K=1
     run_case(2, 3, 1, 7002, 3);    // K=1
-    run_case(1, 4, 4, 7003, 3);    // M=1, K == NUM_ROWS
-    run_case(2, 3, 4, 7004, 3);    // K == NUM_ROWS, small dims
-    run_case(1, 2, 8, 7005, 3);    // K == 2 * NUM_ROWS
-    run_case(2, 4, 8, 7006, 3);    // K == 2 * NUM_ROWS, N=4
-    run_case(8, 5, 6, 7007, 3);    // larger dims
+    run_case(1, 4, 4, 7003, 3);    // M=1, partial K tile
+    run_case(2, 3, 8, 7004, 3);    // K == NUM_ROWS, small dims
+    run_case(1, 2, 8, 7005, 3);    // K == NUM_ROWS, M=1
+    run_case(2, 4, 16, 7006, 3);   // K == 2 * NUM_ROWS, N=4
+    run_case(8, 5, 6, 7007, 3);    // partial K tile (kr=6)
     run_case(3, 4, 9, 7008, 3);    // odd K-tiling
     run_sweep(6, 3);               // randomized BF16 sweep
 
@@ -1005,11 +1007,11 @@ module tb_c930_soc;
     // precision-switching bugs in the CSR, DMA, and systolic array.
     // ======================================================================
     $display("[TEST] Mixed-precision stress");
-    run_case(2, 3, 4, 6001, 0);    // INT8
-    run_case(2, 3, 4, 6002, 2);    // FP16
-    run_case(2, 3, 4, 6003, 1);    // INT16
-    run_case(2, 3, 4, 6004, 2);    // FP16
-    run_case(2, 3, 4, 6005, 0);    // INT8
+    run_case(2, 3, 8, 6001, 0);    // INT8 (K == NUM_ROWS)
+    run_case(2, 3, 8, 6002, 2);    // FP16 (K == NUM_ROWS)
+    run_case(2, 3, 8, 6003, 1);    // INT16 (K == NUM_ROWS)
+    run_case(2, 3, 8, 6004, 2);    // FP16 (K == NUM_ROWS)
+    run_case(2, 3, 8, 6005, 0);    // INT8 (K == NUM_ROWS)
     run_case(1, 1, 1, 6006, 1);    // INT16 minimal
     run_case(1, 1, 1, 6007, 2);    // FP16 minimal
     run_case(1, 1, 1, 6008, 0);    // INT8 minimal

@@ -233,7 +233,7 @@ module c930_soc_top
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
     .DIN_W    (16),
-    .ACC_W    (40),
+    .ACC_W    (48),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
     .MAX_N    (MAX_N)

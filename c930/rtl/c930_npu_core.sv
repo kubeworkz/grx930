@@ -103,65 +103,6 @@ module c930_npu_core
 
   assign o_busy = (state != S_IDLE);
 
-  // ---------------------------------------------------------------------------
-  // Normalize 48-bit fixed-point accumulator to 32-bit FP32 (used in S_WRITE)
-  // Format: {sign[47], exp[39:32], mantissa[31:0]}
-  // ---------------------------------------------------------------------------
-  function automatic logic [31:0] fx_to_fp32(input logic [47:0] val);
-    logic        sign;
-    logic [7:0]  exp;
-    logic [31:0] mant;
-    logic [4:0]  lzc;
-    logic [31:0] norm_mant;
-    logic [7:0]  norm_exp;
-    begin
-      sign = val[47];
-      exp  = val[39:32];
-      mant = val[31:0];
-      // Leading zero count on 32-bit mantissa
-      if      (mant[31]) lzc = 5'd0;
-      else if (mant[30]) lzc = 5'd1;
-      else if (mant[29]) lzc = 5'd2;
-      else if (mant[28]) lzc = 5'd3;
-      else if (mant[27]) lzc = 5'd4;
-      else if (mant[26]) lzc = 5'd5;
-      else if (mant[25]) lzc = 5'd6;
-      else if (mant[24]) lzc = 5'd7;
-      else if (mant[23]) lzc = 5'd8;
-      else if (mant[22]) lzc = 5'd9;
-      else if (mant[21]) lzc = 5'd10;
-      else if (mant[20]) lzc = 5'd11;
-      else if (mant[19]) lzc = 5'd12;
-      else if (mant[18]) lzc = 5'd13;
-      else if (mant[17]) lzc = 5'd14;
-      else if (mant[16]) lzc = 5'd15;
-      else if (mant[15]) lzc = 5'd16;
-      else if (mant[14]) lzc = 5'd17;
-      else if (mant[13]) lzc = 5'd18;
-      else if (mant[12]) lzc = 5'd19;
-      else if (mant[11]) lzc = 5'd20;
-      else if (mant[10]) lzc = 5'd21;
-      else if (mant[9])  lzc = 5'd22;
-      else if (mant[8])  lzc = 5'd23;
-      else if (mant[7])  lzc = 5'd24;
-      else if (mant[6])  lzc = 5'd25;
-      else if (mant[5])  lzc = 5'd26;
-      else if (mant[4])  lzc = 5'd27;
-      else if (mant[3])  lzc = 5'd28;
-      else if (mant[2])  lzc = 5'd29;
-      else if (mant[1])  lzc = 5'd30;
-      else if (mant[0])  lzc = 5'd31;
-      else               lzc = 5'd32;
-      // Normalize
-      norm_mant = (mant << lzc);
-      norm_exp  = (lzc <= exp) ? (exp - {3'd0, lzc}) : 8'd0;
-      // Pack FP32
-      if (exp == 8'd255)       fx_to_fp32 = {sign, 8'd255, mant[30:8]}; // inf/nan passthrough
-      else if (mant == 32'd0)  fx_to_fp32 = {sign, 8'd0, 23'd0};       // zero
-      else                     fx_to_fp32 = {sign, norm_exp, norm_mant[30:8]};
-    end
-  endfunction
-
   // Registered K-tile helpers: k_base and kr are computed at the START of each
   // K tile (end of the previous tile) and held stable for the whole S_WLOAD +
   // S_RUN sequence.  This breaks the 32-bit subtraction carry chain
@@ -315,14 +256,9 @@ module c930_npu_core
           end
         end
 
-        // Write C[m_reg][n_base + n_cnt] = normalized FP32 for n_cnt in 0..nc-1.
-        // For FP modes: normalize 48-bit fixed-point -> 32-bit FP32.
-        // For INT modes: store lower 32 bits (sign-extended).
+        // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.
         S_WRITE: begin
-          if (i_precision == 2'd2 || i_precision == 2'd3)
-            c_mem[m_reg*i_dim_n + n_base + n_cnt] <= fx_to_fp32(acc[n_cnt][47:0]);
-          else
-            c_mem[m_reg*i_dim_n + n_base + n_cnt] <= acc[n_cnt][31:0];
+          c_mem[m_reg*i_dim_n + n_base + n_cnt] <= acc[n_cnt][31:0];
           if (n_cnt == nc - 1) begin
             n_cnt <= 0;
             if (nt_reg == num_n_tiles - 1) begin
