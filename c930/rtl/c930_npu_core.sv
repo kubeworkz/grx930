@@ -76,11 +76,12 @@ module c930_npu_core
   // Control FSM state and counters
   // ---------------------------------------------------------------------------
   // localparam state encoding (avoids iverilog's enum-label-in-port quirk)
-  localparam logic [1:0] S_IDLE  = 2'd0;
-  localparam logic [1:0] S_WLOAD = 2'd1;
-  localparam logic [1:0] S_RUN   = 2'd2;
-  localparam logic [1:0] S_WRITE = 2'd3;
-  logic [1:0] state;
+  localparam logic [2:0] S_IDLE    = 3'd0;
+  localparam logic [2:0] S_WLOAD   = 3'd1;
+  localparam logic [2:0] S_PRELOAD = 3'd2;  // preload next tile into inactive bank
+  localparam logic [2:0] S_RUN     = 3'd3;
+  localparam logic [2:0] S_WRITE   = 3'd4;
+  logic [2:0] state;
 
   int m_reg;        // current output row
   int nt_reg;       // current N tile
@@ -88,6 +89,15 @@ module c930_npu_core
   int t;            // cycle counter within a systolic run
   int w_r, w_n;     // weight-load row/col counters
   int n_cnt;        // result write counter
+
+  // Double-buffering: bank_sel toggles between 0/1; preload registers
+  // drive weight loading during S_RUN so the next tile's weights are
+  // ready when S_RUN finishes.
+  logic        bank_sel;           // which weight bank is active for compute
+  logic        preload_en;        // 1 while preloading next tile's weights during S_RUN
+  logic        preload_done;      // 1 when preload for next tile completed
+  int  preload_w_r, preload_w_n;  // preload address counters
+  int  preload_kr;                // kr for the next K tile being preloaded
 
   logic signed [ACC_W-1:0] acc [0:NUM_COLS-1];   // running accumulator per column
 
@@ -179,41 +189,64 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   logic signed [ACC_W*NUM_COLS-1:0] ps_out;   // flat; col c = bits [c*ACC_W +: ACC_W]
 
+  // Weight load mux: during S_WLOAD use main counters, during S_RUN use preload counters
+  logic        w_load_active;
+  logic        w_load_bank;
+  logic [$clog2(NUM_ROWS)-1:0] w_load_row;
+  logic [$clog2(NUM_COLS)-1:0] w_load_col;
+  logic signed [DIN_W-1:0]     w_load_data;
+
+  assign w_load_active = (state == S_WLOAD) || preload_en;
+  assign w_load_bank   = preload_en ? ~bank_sel : bank_sel;
+  assign w_load_row    = preload_en ? preload_w_r[$clog2(NUM_ROWS)-1:0] : w_r[$clog2(NUM_ROWS)-1:0];
+  assign w_load_col    = preload_en ? preload_w_n[$clog2(NUM_COLS)-1:0] : w_n[$clog2(NUM_COLS)-1:0];
+  assign w_load_data   = preload_en ?
+                         b_mem[((kt_reg+1)*NUM_ROWS + preload_w_r)*i_dim_n + n_base + preload_w_n] :
+                         b_mem[(k_base_reg + w_r)*i_dim_n + n_base + w_n];
+
   c930_systolic_array #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
     .DIN_W    (DIN_W),
     .ACC_W    (ACC_W)
   ) u_array (
-    .i_clk    (i_clk),
-    .i_rst_n  (i_rst_n),
-    .i_wen    (state == S_WLOAD),
-    .i_wrow   (w_r[$clog2(NUM_ROWS)-1:0]),
-    .i_wcol   (w_n[$clog2(NUM_COLS)-1:0]),
-    .i_wdata  (b_mem[(k_base_reg + w_r)*i_dim_n + n_base + w_n]),
-    .i_act    (act),
-    .i_ps_in  (ps_in),
-    .o_ps_out (ps_out),
+    .i_clk      (i_clk),
+    .i_rst_n    (i_rst_n),
+    .i_wen      (w_load_active),
+    .i_wbank    (w_load_bank),
+    .i_wrow     (w_load_row),
+    .i_wcol     (w_load_col),
+    .i_wdata    (w_load_data),
+    .i_bank_sel (bank_sel),
+    .i_act      (act),
+    .i_ps_in    (ps_in),
+    .o_ps_out   (ps_out),
     .i_precision(i_precision)
   );
 
   // ---------------------------------------------------------------------------
-  // FSM
+  // FSM  (double-buffered: preload next K tile during S_RUN)
   // ---------------------------------------------------------------------------
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      state      <= S_IDLE;
-      o_done     <= 1'b0;
-      o_error    <= 1'b0;
-      m_reg      <= 0;
-      nt_reg     <= 0;
-      kt_reg     <= 0;
-      t          <= 0;
-      w_r        <= 0;
-      w_n        <= 0;
-      n_cnt      <= 0;
-      k_base_reg <= 0;
-      kr_reg     <= 0;
+      state       <= S_IDLE;
+      o_done      <= 1'b0;
+      o_error     <= 1'b0;
+      m_reg       <= 0;
+      nt_reg      <= 0;
+      kt_reg      <= 0;
+      t           <= 0;
+      w_r         <= 0;
+      w_n         <= 0;
+      n_cnt       <= 0;
+      k_base_reg  <= 0;
+      kr_reg      <= 0;
+      bank_sel    <= 1'b0;
+      preload_en  <= 1'b0;
+      preload_done <= 1'b0;
+      preload_w_r <= 0;
+      preload_w_n <= 0;
+      preload_kr  <= 0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
       o_done <= 1'b0;
@@ -233,6 +266,9 @@ module c930_npu_core
               w_r        <= 0;
               w_n        <= 0;
               n_cnt      <= 0;
+              bank_sel    <= 1'b0;
+              preload_en  <= 1'b0;
+              preload_done <= 1'b0;
               // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)
               k_base_reg <= 0;
               kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
@@ -246,11 +282,21 @@ module c930_npu_core
         // Only the nc active columns of this N tile are loaded.
         S_WLOAD: begin
           if ((w_n == nc - 1) && (w_r == kr_reg - 1)) begin
-            // last weight of this tile
+            // last weight of this tile -- start preloading next K tile
             w_r   <= 0;
             w_n   <= 0;
             t     <= 0;
-            state <= S_RUN;
+            if (kt_reg + 1 < num_k_tiles) begin
+              // Preload next tile's weights into inactive bank
+              preload_en  <= 1'b1;
+              preload_w_r <= 0;
+              preload_w_n <= 0;
+              preload_kr  <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
+                             NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
+              state <= S_PRELOAD;  // run preload before S_RUN
+            end else begin
+              state <= S_RUN;  // last tile, no preload needed
+            end
           end else if (w_n == nc - 1) begin
             w_n <= 0;
             w_r <= w_r + 1;
@@ -259,11 +305,25 @@ module c930_npu_core
           end
         end
 
-        // Run one K tile: NUM_ROWS + NUM_COLS + 1 cycles. The extra cycle
-        // accounts for the PE product registration (1 cycle added per column
-        // cascade, but only 1 total because the output register absorbs the
-        // per-PE delta). A partial tile (kr < NUM_ROWS) must drain through
-        // the unused (zero-weight, zero-activation) bottom rows.
+        // Preload next K tile's weights into inactive bank.
+        // Runs for preload_kr * nc cycles using the same write port as S_WLOAD
+        // but targeting the other bank.
+        S_PRELOAD: begin
+          if ((preload_w_n == nc - 1) && (preload_w_r == preload_kr - 1)) begin
+            // preload done -- start compute
+            preload_en   <= 1'b0;
+            preload_done <= 1'b1;
+            t <= 0;
+            state <= S_RUN;
+          end else if (preload_w_n == nc - 1) begin
+            preload_w_n <= 0;
+            preload_w_r <= preload_w_r + 1;
+          end else begin
+            preload_w_n <= preload_w_n + 1;
+          end
+        end
+
+        // Run one K tile: NUM_ROWS + NUM_COLS + 1 cycles.
         S_RUN: begin
           // Staggered capture: column (t - NUM_ROWS - 1) finishes at cycle t.
           if (t >= NUM_ROWS + 1)
@@ -275,16 +335,30 @@ module c930_npu_core
               // all K tiles done for this (row, N tile) -> write results
               state <= S_WRITE;
               n_cnt <= 0;
+              preload_en <= 1'b0;  // stop any preload
             end else begin
-              // next K tile (accumulator is kept across tiles)
+              // next K tile: swap banks (weights were preloaded in S_PRELOAD)
               kt_reg <= kt_reg + 1;
-              // Pre-register k_base and kr for the next S_WLOAD + S_RUN
+              bank_sel <= ~bank_sel;
+              preload_done <= 1'b0;
+              // Update k_base and kr for the new tile
               k_base_reg <= (kt_reg + 1) * NUM_ROWS;
               kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
                              NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
-              w_r    <= 0;
-              w_n    <= 0;
-              state  <= S_WLOAD;
+              w_r <= 0;
+              w_n <= 0;
+              // Start preloading the tile AFTER next (if it exists)
+              if (kt_reg + 2 < num_k_tiles) begin
+                preload_en  <= 1'b1;
+                preload_w_r <= 0;
+                preload_w_n <= 0;
+                preload_kr  <= ((i_dim_k - (kt_reg + 2) * NUM_ROWS) >= NUM_ROWS) ?
+                               NUM_ROWS : (i_dim_k - (kt_reg + 2) * NUM_ROWS);
+                state <= S_PRELOAD;  // preload next-next tile before S_RUN
+              end else begin
+                preload_en <= 1'b0;
+                state <= S_RUN;  // no more tiles to preload, go directly to S_RUN
+              end
             end
           end else begin
             t <= t + 1;
