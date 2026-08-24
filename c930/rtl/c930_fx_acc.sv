@@ -65,14 +65,18 @@ module c930_fx_acc
   // 3. Sort: A has the larger (or equal) exponent
   // =========================================================================
 
-  wire swap = (p_exp > s_exp) || ((p_exp == s_exp) && (p_mant_full > {1'b0, s_mant[23:0]}));
+  // Mantissa hidden 1 is at bit 31; compare upper 24 bits.
+  wire swap = (p_exp > s_exp) || ((p_exp == s_exp) && (p_mant_full > s_mant[31:8]));
 
   wire [7:0]  exp_a  = swap ? p_exp  : s_exp;
-  wire [31:0] mant_a = swap ? {8'd0, p_mant_full} : s_mant;
+  // Store mantissa with hidden 1 at bit 31 (normalized position).
+  // Product: shift left by 8 to move hidden 1 from bit 23 to bit 31.
+  // Partial sum: already in this format from previous accumulator output.
+  wire [31:0] mant_a = swap ? {p_mant_full, 8'd0} : s_mant;
   wire        sign_a = swap ? p_sign : s_sign;
 
   wire [7:0]  exp_b  = swap ? s_exp  : p_exp;
-  wire [31:0] mant_b = swap ? s_mant : {8'd0, p_mant_full};
+  wire [31:0] mant_b = swap ? s_mant : {p_mant_full, 8'd0};
   wire        sign_b = swap ? s_sign : p_sign;
 
   wire [7:0] exp_diff = exp_a - exp_b;
@@ -83,7 +87,7 @@ module c930_fx_acc
 
   // Shift mant_b right by exp_diff (0..31).  Use a40-bit intermediate to
   // preserve guard bits during the shift, then truncate to 32 bits.
-  wire [39:0] mant_b_ext = {mant_b, 8'd0};  // 40-bit for shift headroom
+  wire [39:0] mant_b_ext = {8'd0, mant_b};  // 40-bit zero-padded at MSB for shift headroom
 
   wire [39:0] mant_b_shifted =
     (exp_diff == 8'd0)  ? mant_b_ext :

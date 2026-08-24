@@ -653,7 +653,8 @@ mantissa addition in ~0.15 ns/bit (vs ~8 ns on ECP5 LUT cascades).
 | ECP5-85F (FP16/BF16, no prod reg) | 14.4 MHz | Multiplier+accumulator chain |
 | ECP5-85F (FP16/BF16, prod reg) | 24.9 MHz | Break multiplier→accumulator |
 | ECP5-85F (fixed-point acc) | 27.9 MHz | Skip per-cycle LZC+normalize |
-| **Artix-7-35T (fixed-point acc)** | **587.7 MHz** | **CARRY4 carry chains** |
+| ECP5-85F (8x8 array) | 24.8 MHz | Wider interconnect |
+| **Artix-7-35T (8x8 array)** | **587.7 MHz** | **CARRY4 carry chains** |
 
 The Artix-7 result confirms the design is well above the 100 MHz Arty A7
 target.  The DDR stub uses 8 × RAMB36E1 (the caches + DDR placeholder);
