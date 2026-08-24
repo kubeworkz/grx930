@@ -40,14 +40,19 @@ module c930_npu_core
   input  logic [15:0]                 i_dim_m,
   input  logic [15:0]                 i_dim_n,
   input  logic [15:0]                 i_dim_k,
-  input  logic [1:0]                  i_precision,  // 0=INT8, 1=INT16, 2=FP16, 3=BF16
+  input  logic [2:0]                  i_precision,  // 0=INT8, 1=INT16, 2=FP16, 3=BF16, 4=INT4
   output logic                        o_busy,
   output logic                        o_done,   // 1-cycle pulse
   output logic                        o_error,  // sticky, cleared on valid start
 
   // ---- Result readback ----
   input  logic [15:0]                 i_c_raddr,
-  output logic signed [31:0]          o_c_rdata   // always 32-bit (normalized FP32 or INT32)
+  output logic signed [31:0]          o_c_rdata,  // always 32-bit (normalized FP32 or INT32)
+
+  // ---- Performance counters ----
+  output logic [31:0]                 o_cycle_count,  // free-running cycles while busy
+  output logic [31:0]                 o_op_count,     // K-tile completions
+  output logic [31:0]                 o_stall_count   // cycles stalled (S_WLOAD or stall)
 );
 
   // ---------------------------------------------------------------------------
@@ -102,6 +107,36 @@ module c930_npu_core
                        (i_dim_k >= 1) && (i_dim_k <= MAX_K);
 
   assign o_busy = (state != S_IDLE);
+
+  // ---------------------------------------------------------------------------
+  // Performance counters
+  // ---------------------------------------------------------------------------
+  logic [31:0] cycle_cnt, op_cnt, stall_cnt;
+  assign o_cycle_count = cycle_cnt;
+  assign o_op_count    = op_cnt;
+  assign o_stall_count = stall_cnt;
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      cycle_cnt <= 32'd0;
+      op_cnt    <= 32'd0;
+      stall_cnt <= 32'd0;
+    end else begin
+      if (state != S_IDLE)
+        cycle_cnt <= cycle_cnt + 1;
+      if (state == S_IDLE && i_start) begin
+        cycle_cnt <= 32'd0;
+        op_cnt    <= 32'd0;
+        stall_cnt <= 32'd0;
+      end
+      // Count K-tile completions (when S_RUN finishes a K tile)
+      if (state == S_RUN && t == NUM_ROWS + NUM_COLS && kt_reg == num_k_tiles - 1)
+        op_cnt <= op_cnt + 1;
+      // Count stall cycles (S_WLOAD = weight loading, not compute)
+      if (state == S_WLOAD)
+        stall_cnt <= stall_cnt + 1;
+    end
+  end
 
   // Registered K-tile helpers: k_base and kr are computed at the START of each
   // K tile (end of the previous tile) and held stable for the whole S_WLOAD +

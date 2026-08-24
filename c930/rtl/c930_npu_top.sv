@@ -90,6 +90,7 @@ module c930_npu_top
   logic [15:0]             c_raddr;
   logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
   logic                    core_done, core_error;
+  logic [31:0]             cycle_count, op_count, stall_count;
 
   c930_npu_csr u_csr (
     .i_clk         (i_clk),
@@ -121,7 +122,10 @@ module c930_npu_top
     .o_precision   (precision),
     .i_busy        (busy),
     .i_done        (done),
-    .i_error       (error)
+    .i_error       (error),
+    .i_cycle_count (cycle_count),
+    .i_op_count    (op_count),
+    .i_stall_count (stall_count)
   );
 
   c930_npu_dma #(
@@ -202,7 +206,10 @@ module c930_npu_top
     .o_done     (core_done),
     .o_error    (core_error),
     .i_c_raddr  (c_raddr),
-    .o_c_rdata  (c_rdata)
+    .o_c_rdata  (c_rdata),
+    .o_cycle_count (cycle_count),
+    .o_op_count    (op_count),
+    .o_stall_count (stall_count)
   );
 
   assign o_busy  = busy;

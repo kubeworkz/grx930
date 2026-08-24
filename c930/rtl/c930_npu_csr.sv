@@ -55,7 +55,12 @@ module c930_npu_csr
   output logic [2:0]  o_precision,
   input  logic        i_busy,
   input  logic        i_done,
-  input  logic        i_error
+  input  logic        i_error,
+
+  // Performance counters (written by the NPU core)
+  input  logic [31:0] i_cycle_count,   // free-running cycle counter
+  input  logic [31:0] i_op_count,      // MAC operations completed
+  input  logic [31:0] i_stall_count    // cycles stalled
 );
 
   localparam logic [3:0] ADDR_CTRL     = 4'h0;
@@ -67,6 +72,10 @@ module c930_npu_csr
   localparam logic [3:0] ADDR_B_BASE   = 4'h6;
   localparam logic [3:0] ADDR_C_BASE   = 4'h7;
   localparam logic [3:0] ADDR_PREC     = 4'h8;
+  localparam logic [3:0] ADDR_CYCLE_LO = 4'h9;
+  localparam logic [3:0] ADDR_CYCLE_HI = 4'hA;
+  localparam logic [3:0] ADDR_OP_COUNT  = 4'hB;
+  localparam logic [3:0] ADDR_STALL_CT  = 4'hC;
 
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
@@ -168,7 +177,13 @@ module c930_npu_csr
           ADDR_A_BASE: s_axi_rdata <= a_base;
           ADDR_B_BASE: s_axi_rdata <= b_base;
           ADDR_C_BASE: s_axi_rdata <= c_base;
-          ADDR_PREC:   s_axi_rdata <= {29'd0, precision};
+          ADDR_PREC:      s_axi_rdata <= {29'd0, precision};
+          ADDR_CYCLE_LO:  s_axi_rdata <= i_cycle_count;
+          ADDR_OP_COUNT:  s_axi_rdata <= i_op_count;
+          ADDR_STALL_CT:  s_axi_rdata <= i_stall_count;
+          ADDR_CYCLE_LO: s_axi_rdata <= i_cycle_count;
+          ADDR_OP_COUNT: s_axi_rdata <= i_op_count;
+          ADDR_STALL_CT: s_axi_rdata <= i_stall_count;
           default:     s_axi_rdata <= 32'd0;
         endcase
 
