@@ -791,16 +791,17 @@ static void perf_bench(void)
     volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
 
     *diag = 0xB00;
-    // INT4: M=8 N=8 K=16 (2 K-tiles, double-buffer exercised)
-    run_perf_case(8, 8, 16, 4, 0);
-    // INT8: M=8 N=8 K=16
-    run_perf_case(8, 8, 16, 0, 1);
-    // INT16: M=8 N=8 K=16
-    run_perf_case(8, 8, 16, 1, 2);
-    // FP16: M=8 N=8 K=16
-    run_perf_case(8, 8, 16, 2, 3);
-    // BF16: M=8 N=8 K=16
-    run_perf_case(8, 8, 16, 3, 4);
+    // --- Small GEMM (2 K-tiles) ---
+    run_perf_case(8, 8, 16, 4, 0);   // INT4  M=8  N=8  K=16
+    run_perf_case(8, 8, 16, 0, 1);   // INT8  M=8  N=8  K=16
+    run_perf_case(8, 8, 16, 1, 2);   // INT16 M=8  N=8  K=16
+    run_perf_case(8, 8, 16, 2, 3);   // FP16  M=8  N=8  K=16
+    run_perf_case(8, 8, 16, 3, 4);   // BF16  M=8  N=8  K=16
+    // --- Medium GEMM (4 K-tiles) ---
+    run_perf_case(8, 16, 32, 0, 5);  // INT8  M=8  N=16 K=32
+    run_perf_case(8, 16, 32, 2, 6);  // FP16  M=8  N=16 K=32
+    // --- Large-ish K (N-tiling) ---
+    run_perf_case(8, 8, 32, 0, 7);   // INT8  M=8  N=8  K=32 (4 K-tiles)
 
     *diag = 0xBFF;
 }
@@ -865,8 +866,11 @@ void main(void)
 
     // 5. Run performance benchmark across precisions (AFTER done signal so
     //    the testbench captures C before we overwrite the buffers).
-    *phase = 0x10;
-    perf_bench();
+    //    Only run once: check if the result buffer is already filled.
+    if (*(volatile u32 *)PERF_RES_ADDR == 0) {
+        *phase = 0x10;
+        perf_bench();
+    }
     *phase = 0x11;
 
     for (;;)

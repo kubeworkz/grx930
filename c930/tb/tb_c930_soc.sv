@@ -403,7 +403,7 @@ module tb_c930_soc;
   task automatic wait_perf(output int found);
     int timeout = 0;
     found = 0;
-    while (!found && timeout < 4000000) begin
+    while (!found && timeout < 40000000) begin
       @(posedge clk);
       timeout = timeout + 1;
       if (dut.u_ddr.mem[PHASE_ADDR] == 8'h11)
@@ -416,45 +416,50 @@ module tb_c930_soc;
     int cyc, ops, stl, tops_x, stl_pct;
     $display("");
     $display("=================================================================");
-    $display("  GRX930 NPU Performance Benchmark (M=8 N=8 K=16, 2 K-tiles)");
+    $display("  GRX930 NPU Performance Benchmark");
     $display("=================================================================");
-    $display("  %-8s %8s %8s %8s %10s %8s", "Prec", "Cycles", "Ops", "Stalls", "TOPS", "Stall%%");
-    $display("  %-8s %8s %8s %8s %10s %8s", "----", "------", "---", "------", "----------", "------");
-    // INT4
+    $display("  %-6s %6s %6s %6s %8s %8s %8s", "Prec", "M", "N", "K", "Cycles", "TOPS", "Stall%%");
+    $display("  %-6s %6s %6s %6s %8s %8s %8s", "----", "--", "--", "--", "------", "----------", "------");
+    // Case 0: INT4  M=8  N=8  K=16
     cyc    = {dut.u_ddr.mem[32'h9503], dut.u_ddr.mem[32'h9502], dut.u_ddr.mem[32'h9501], dut.u_ddr.mem[32'h9500]};
-    ops    = {dut.u_ddr.mem[32'h9507], dut.u_ddr.mem[32'h9506], dut.u_ddr.mem[32'h9505], dut.u_ddr.mem[32'h9504]};
-    stl    = {dut.u_ddr.mem[32'h950b], dut.u_ddr.mem[32'h950a], dut.u_ddr.mem[32'h9509], dut.u_ddr.mem[32'h9508]};
     tops_x = {dut.u_ddr.mem[32'h950f], dut.u_ddr.mem[32'h950e], dut.u_ddr.mem[32'h950d], dut.u_ddr.mem[32'h950c]};
     stl_pct= {dut.u_ddr.mem[32'h9513], dut.u_ddr.mem[32'h9512], dut.u_ddr.mem[32'h9511], dut.u_ddr.mem[32'h9510]};
-    $display("  %-8s %8d %8d %8d %5d.%03d %7d%%", "INT4", cyc, ops, stl, tops_x/1000, tops_x%1000, stl_pct);
-    // INT8
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "INT4", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 1: INT8  M=8  N=8  K=16
     cyc    = {dut.u_ddr.mem[32'h951b], dut.u_ddr.mem[32'h951a], dut.u_ddr.mem[32'h9519], dut.u_ddr.mem[32'h9518]};
-    ops    = {dut.u_ddr.mem[32'h951f], dut.u_ddr.mem[32'h951e], dut.u_ddr.mem[32'h951d], dut.u_ddr.mem[32'h951c]};
-    stl    = {dut.u_ddr.mem[32'h9523], dut.u_ddr.mem[32'h9522], dut.u_ddr.mem[32'h9521], dut.u_ddr.mem[32'h9520]};
     tops_x = {dut.u_ddr.mem[32'h9527], dut.u_ddr.mem[32'h9526], dut.u_ddr.mem[32'h9525], dut.u_ddr.mem[32'h9524]};
     stl_pct= {dut.u_ddr.mem[32'h952b], dut.u_ddr.mem[32'h952a], dut.u_ddr.mem[32'h9529], dut.u_ddr.mem[32'h9528]};
-    $display("  %-8s %8d %8d %8d %5d.%03d %7d%%", "INT8", cyc, ops, stl, tops_x/1000, tops_x%1000, stl_pct);
-    // INT16
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "INT8", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 2: INT16 M=8  N=8  K=16
     cyc    = {dut.u_ddr.mem[32'h9533], dut.u_ddr.mem[32'h9532], dut.u_ddr.mem[32'h9531], dut.u_ddr.mem[32'h9530]};
-    ops    = {dut.u_ddr.mem[32'h9537], dut.u_ddr.mem[32'h9536], dut.u_ddr.mem[32'h9535], dut.u_ddr.mem[32'h9534]};
-    stl    = {dut.u_ddr.mem[32'h953b], dut.u_ddr.mem[32'h953a], dut.u_ddr.mem[32'h9539], dut.u_ddr.mem[32'h9538]};
     tops_x = {dut.u_ddr.mem[32'h953f], dut.u_ddr.mem[32'h953e], dut.u_ddr.mem[32'h953d], dut.u_ddr.mem[32'h953c]};
     stl_pct= {dut.u_ddr.mem[32'h9543], dut.u_ddr.mem[32'h9542], dut.u_ddr.mem[32'h9541], dut.u_ddr.mem[32'h9540]};
-    $display("  %-8s %8d %8d %8d %5d.%03d %7d%%", "INT16", cyc, ops, stl, tops_x/1000, tops_x%1000, stl_pct);
-    // FP16
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "INT16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 3: FP16  M=8  N=8  K=16
     cyc    = {dut.u_ddr.mem[32'h954b], dut.u_ddr.mem[32'h954a], dut.u_ddr.mem[32'h9549], dut.u_ddr.mem[32'h9548]};
-    ops    = {dut.u_ddr.mem[32'h954f], dut.u_ddr.mem[32'h954e], dut.u_ddr.mem[32'h954d], dut.u_ddr.mem[32'h954c]};
-    stl    = {dut.u_ddr.mem[32'h9553], dut.u_ddr.mem[32'h9552], dut.u_ddr.mem[32'h9551], dut.u_ddr.mem[32'h9550]};
     tops_x = {dut.u_ddr.mem[32'h9557], dut.u_ddr.mem[32'h9556], dut.u_ddr.mem[32'h9555], dut.u_ddr.mem[32'h9554]};
     stl_pct= {dut.u_ddr.mem[32'h955b], dut.u_ddr.mem[32'h955a], dut.u_ddr.mem[32'h9559], dut.u_ddr.mem[32'h9558]};
-    $display("  %-8s %8d %8d %8d %5d.%03d %7d%%", "FP16", cyc, ops, stl, tops_x/1000, tops_x%1000, stl_pct);
-    // BF16
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "FP16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 4: BF16  M=8  N=8  K=16
     cyc    = {dut.u_ddr.mem[32'h9563], dut.u_ddr.mem[32'h9562], dut.u_ddr.mem[32'h9561], dut.u_ddr.mem[32'h9560]};
-    ops    = {dut.u_ddr.mem[32'h9567], dut.u_ddr.mem[32'h9566], dut.u_ddr.mem[32'h9565], dut.u_ddr.mem[32'h9564]};
-    stl    = {dut.u_ddr.mem[32'h956b], dut.u_ddr.mem[32'h956a], dut.u_ddr.mem[32'h9569], dut.u_ddr.mem[32'h9568]};
     tops_x = {dut.u_ddr.mem[32'h956f], dut.u_ddr.mem[32'h956e], dut.u_ddr.mem[32'h956d], dut.u_ddr.mem[32'h956c]};
     stl_pct= {dut.u_ddr.mem[32'h9573], dut.u_ddr.mem[32'h9572], dut.u_ddr.mem[32'h9571], dut.u_ddr.mem[32'h9570]};
-    $display("  %-8s %8d %8d %8d %5d.%03d %7d%%", "BF16", cyc, ops, stl, tops_x/1000, tops_x%1000, stl_pct);
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "BF16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 5: INT8  M=8  N=16 K=32 (medium, 4 K-tiles)
+    cyc    = {dut.u_ddr.mem[32'h957b], dut.u_ddr.mem[32'h957a], dut.u_ddr.mem[32'h9579], dut.u_ddr.mem[32'h9578]};
+    tops_x = {dut.u_ddr.mem[32'h9587], dut.u_ddr.mem[32'h9586], dut.u_ddr.mem[32'h9585], dut.u_ddr.mem[32'h9584]};
+    stl_pct= {dut.u_ddr.mem[32'h958b], dut.u_ddr.mem[32'h958a], dut.u_ddr.mem[32'h9589], dut.u_ddr.mem[32'h9588]};
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "INT8", 8, 16, 32, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 6: FP16  M=8  N=16 K=32
+    cyc    = {dut.u_ddr.mem[32'h9593], dut.u_ddr.mem[32'h9592], dut.u_ddr.mem[32'h9591], dut.u_ddr.mem[32'h9590]};
+    tops_x = {dut.u_ddr.mem[32'h959f], dut.u_ddr.mem[32'h959e], dut.u_ddr.mem[32'h959d], dut.u_ddr.mem[32'h959c]};
+    stl_pct= {dut.u_ddr.mem[32'h95a3], dut.u_ddr.mem[32'h95a2], dut.u_ddr.mem[32'h95a1], dut.u_ddr.mem[32'h95a0]};
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "FP16", 8, 16, 32, cyc, tops_x/1000, tops_x%1000, stl_pct);
+    // Case 7: INT8  M=8  N=8  K=32 (large K, 4 K-tiles)
+    cyc    = {dut.u_ddr.mem[32'h95ab], dut.u_ddr.mem[32'h95aa], dut.u_ddr.mem[32'h95a9], dut.u_ddr.mem[32'h95a8]};
+    tops_x = {dut.u_ddr.mem[32'h95b7], dut.u_ddr.mem[32'h95b6], dut.u_ddr.mem[32'h95b5], dut.u_ddr.mem[32'h95b4]};
+    stl_pct= {dut.u_ddr.mem[32'h95bb], dut.u_ddr.mem[32'h95ba], dut.u_ddr.mem[32'h95b9], dut.u_ddr.mem[32'h95b8]};
+    $display("  %-6s %6d %6d %6d %8d %5d.%03d %7d%%", "INT8", 8, 8, 32, cyc, tops_x/1000, tops_x%1000, stl_pct);
     $display("=================================================================");
     $display("");
   endtask
@@ -1135,8 +1140,15 @@ module tb_c930_soc;
     run_case(3, 5, 8, 6020, 3);  // BF16
 
     // ======================================================================
-    // Wait for the performance benchmark to finish.
+    // Final reboot: let the performance benchmark complete.
+    // The perf_bench() in the C driver runs AFTER the done signal, so each
+    // run_case() reboots the core before it can finish. This dedicated reboot
+    // with PERF_RES_ADDR pre-cleared gives the benchmark uninterrupted time.
     // ======================================================================
+    dut.u_ddr.mem[32'h9500] = 8'h00;  // clear PERF_RES_ADDR guard
+    rst_n = 1'b0;
+    repeat (8) @(posedge clk);
+    rst_n = 1'b1;
     wait_perf(perf_done);
     if (!perf_done)
       $display("[WARN] performance benchmark timed out");
@@ -1154,7 +1166,7 @@ module tb_c930_soc;
 
   // Failsafe watchdog
   initial begin
-    #80000000;
+    #200000000;
     $display("[FAIL] watchdog timeout");
     $fatal(1, "timeout");
   end
@@ -1217,6 +1229,29 @@ module tb_c930_soc;
       dut.u_ddr.mem[PHASE_ADDR],
       dut.u_ddr.mem[DIAG_ADDR],
       dut.u_cpu.if_pipe_pcf_new);
+  end
+
+  // ========================================================================
+  // Diagnostic: trace NPU state when the perf_bench polling loop is active.
+  // Fires when PC is in the run_perf_case loop (0x110-0x120).
+  // ========================================================================
+  initial begin
+    forever begin
+      @(posedge clk);
+      if (dut.u_cpu.if_pipe_pcf_new >= 32'h100 &&
+          dut.u_cpu.if_pipe_pcf_new <= 32'h130) begin
+        $display("[NPU-DIAG] pc=%h npu_busy=%0d npu_done=%0d dma_phase=%0d core_state=%0d csr_start=%0d csr_donelatch=%0d csr_prec=%0d dim_m=%0d dim_n=%0d dim_k=%0d",
+          dut.u_cpu.if_pipe_pcf_new,
+          dut.u_npu.o_busy, dut.u_npu.o_done,
+          dut.u_npu.u_dma.phase,
+          dut.u_npu.u_core.state,
+          dut.u_npu.u_csr.start_pulse,
+          dut.u_npu.u_csr.done_latch,
+          dut.u_npu.u_csr.precision,
+          dut.u_npu.u_csr.dim_m, dut.u_npu.u_csr.dim_n, dut.u_npu.u_csr.dim_k);
+        $fflush();
+      end
+    end
   end
 
 endmodule
