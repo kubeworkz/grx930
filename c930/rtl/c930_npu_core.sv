@@ -84,6 +84,7 @@ module c930_npu_core
   logic [2:0] state;
 
   int m_reg;        // current output row
+  int m_base;       // pre-computed m_reg * i_dim_k (breaks multiply from critical path)
   int nt_reg;       // current N tile
   int kt_reg;       // current K tile
   int t;            // cycle counter within a systolic run
@@ -172,7 +173,7 @@ module c930_npu_core
       // chain off the PE critical path.
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == r) && (r < kr_reg))
-          act[r*DIN_W +: DIN_W] = a_mem[m_reg*i_dim_k + k_base_reg + r];
+          act[r*DIN_W +: DIN_W] = a_mem[m_base + k_base_reg + r];  // m_base pre-computed
       end
       // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
       // The 2-cycle pulse is needed because the PE registers the product before
@@ -261,6 +262,7 @@ module c930_npu_core
             end else begin
               o_error    <= 1'b0;
               m_reg      <= 0;
+              m_base     <= 0;  // pre-computed m_reg * i_dim_k
               nt_reg     <= 0;
               kt_reg     <= 0;
               t          <= 0;
@@ -380,6 +382,7 @@ module c930_npu_core
                 state  <= S_IDLE;
               end else begin
                 m_reg      <= m_reg + 1;
+                m_base     <= (m_reg + 1) * i_dim_k;  // pre-compute for next M-row
                 nt_reg     <= 0;
                 kt_reg     <= 0;
                 k_base_reg <= 0;
