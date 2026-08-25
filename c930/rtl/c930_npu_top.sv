@@ -90,7 +90,7 @@ module c930_npu_top
   logic [15:0]             c_raddr;
   logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
   logic                    core_done, core_error;
-  logic [31:0]             cycle_count, op_count, stall_count;
+  logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count;
 
   c930_npu_csr u_csr (
     .i_clk         (i_clk),
@@ -125,7 +125,8 @@ module c930_npu_top
     .i_error       (error),
     .i_cycle_count (cycle_count),
     .i_op_count    (op_count),
-    .i_stall_count (stall_count)
+    .i_stall_count (stall_count),
+    .i_dma_cycle_count (dma_cycle_count)
   );
 
   c930_npu_dma #(
@@ -146,6 +147,7 @@ module c930_npu_top
     .o_busy        (busy),
     .o_done        (done),
     .o_error       (error),
+    .o_dma_cycle_count (dma_cycle_count),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
     .o_waddr       (dma_waddr),

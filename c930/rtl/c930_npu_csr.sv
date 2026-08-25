@@ -60,7 +60,8 @@ module c930_npu_csr
   // Performance counters (written by the NPU core)
   input  logic [31:0] i_cycle_count,   // free-running cycle counter
   input  logic [31:0] i_op_count,      // MAC operations completed
-  input  logic [31:0] i_stall_count    // cycles stalled
+  input  logic [31:0] i_stall_count,   // cycles stalled
+  input  logic [31:0] i_dma_cycle_count // DMA busy cycles (phase != P_IDLE)
 );
 
   localparam logic [3:0] ADDR_CTRL     = 4'h0;
@@ -76,6 +77,7 @@ module c930_npu_csr
   localparam logic [3:0] ADDR_CYCLE_HI = 4'hA;
   localparam logic [3:0] ADDR_OP_COUNT  = 4'hB;
   localparam logic [3:0] ADDR_STALL_CT  = 4'hC;
+  localparam logic [3:0] ADDR_DMA_CT   = 4'hD;  // DMA busy cycles
 
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
@@ -181,6 +183,7 @@ module c930_npu_csr
           ADDR_CYCLE_LO:  s_axi_rdata <= i_cycle_count;
           ADDR_OP_COUNT:  s_axi_rdata <= i_op_count;
           ADDR_STALL_CT:  s_axi_rdata <= i_stall_count;
+          ADDR_DMA_CT:    s_axi_rdata <= i_dma_cycle_count;
           default:     s_axi_rdata <= 32'd0;
         endcase
 

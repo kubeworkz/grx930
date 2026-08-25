@@ -47,6 +47,7 @@ module c930_npu_dma
   output logic        o_busy,
   output logic        o_done,
   output logic        o_error,
+  output logic [31:0] o_dma_cycle_count,  // cycles while DMA busy (phase != P_IDLE)
 
   // ---- Core data plane + control ----
   output logic                    o_wen,       // preload write enable
@@ -156,6 +157,7 @@ module c930_npu_dma
       wr_sub        <= WS_AW;
       o_done        <= 1'b0;
       o_error       <= 1'b0;
+      o_dma_cycle_count <= 32'd0;
       o_wen         <= 1'b0;
       o_core_start  <= 1'b0;
       launched      <= 1'b0;
@@ -173,6 +175,11 @@ module c930_npu_dma
     end else begin
       // Per-cycle defaults
       o_done        <= 1'b0;
+      // DMA cycle counter: counts while DMA is busy, resets on start
+      if (i_start && dims_ok)
+        o_dma_cycle_count <= 32'd0;
+      else if (phase != P_IDLE)
+        o_dma_cycle_count <= o_dma_cycle_count + 32'd1;
       o_wen         <= 1'b0;
       o_core_start  <= 1'b0;
       m_axi_arvalid <= 1'b0;

@@ -67,6 +67,7 @@ typedef unsigned int u32;
 #define CSR_CYCLE   (*(volatile u32 *)(MMIO_BASE + 0x24))  // cycle count (read-only)
 #define CSR_OP_CNT  (*(volatile u32 *)(MMIO_BASE + 0x2C))  // MAC op count (read-only)
 #define CSR_STALL   (*(volatile u32 *)(MMIO_BASE + 0x30))  // stall count (read-only)
+#define CSR_DMA_CT  (*(volatile u32 *)(MMIO_BASE + 0x34))  // DMA busy cycles (read-only)
 
 #define CSR_START   0x1u
 #define STATUS_DONE 0x2u
@@ -743,7 +744,7 @@ static void ecall_trigger(void)
 __attribute__((noinline))
 static void run_perf_case(int m, int n, int k, int prec, int case_idx)
 {
-    volatile u32 *res = (volatile u32 *)(PERF_RES_ADDR + case_idx * 24);
+    volatile u32 *res = (volatile u32 *)(PERF_RES_ADDR + case_idx * 28);  // 7 words per case
     volatile u32 *diag = (volatile u32 *)DIAG_ADDR;
 
     *diag = 0xB00 + case_idx;
@@ -762,9 +763,10 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
         ;
 
     // Read performance counters (snapshot after completion)
-    unsigned long cycles = CSR_CYCLE;
-    unsigned long ops    = CSR_OP_CNT;
-    unsigned long stalls = CSR_STALL;
+    unsigned long cycles   = CSR_CYCLE;   // NPU core cycles (S_WLOAD+S_LOAD+S_RUN+S_WRITE)
+    unsigned long dma_cyc  = CSR_DMA_CT;  // DMA busy cycles (P_READ_A+P_READ_B+P_WRITE_C)
+    unsigned long ops      = CSR_OP_CNT;
+    unsigned long stalls   = CSR_STALL;
 
     // Compute MAC count and theoretical minimum cycles.
     // 2*M*N*K multiply-accumulates (each MAC = 1 mult + 1 add).
@@ -778,24 +780,28 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
     unsigned long nc = (n > 8) ? 8 : n;
     unsigned long theo_cycles = m_tiles * k_tiles * (8 + nc);
 
+    // Total NPU pipeline time = core cycles + DMA cycles.
+    unsigned long total = cycles + dma_cyc;
+
     unsigned long tops_x1000 = 0;
-    if (cycles > 0)
-        tops_x1000 = (macs * NPU_CLK_HZ) / (cycles * 1000000ull);
+    if (total > 0)
+        tops_x1000 = (macs * NPU_CLK_HZ) / (total * 1000000ull);
 
     unsigned long stall_pct = 0;
-    if (cycles > 0)
-        stall_pct = (stalls * 100) / cycles;
+    if (total > 0)
+        stall_pct = (stalls * 100) / total;
 
     unsigned long eff_pct = 0;
-    if (cycles > 0 && theo_cycles > 0)
-        eff_pct = (theo_cycles * 100) / cycles;
+    if (total > 0 && theo_cycles > 0)
+        eff_pct = (theo_cycles * 100) / total;
 
-    res[0] = cycles;
-    res[1] = ops;
-    res[2] = stalls;
-    res[3] = tops_x1000;
-    res[4] = stall_pct;
-    res[5] = eff_pct;  // compute efficiency %
+    res[0] = cycles;      // NPU core cycles
+    res[1] = dma_cyc;     // DMA busy cycles
+    res[2] = ops;
+    res[3] = stalls;
+    res[4] = tops_x1000;
+    res[5] = stall_pct;
+    res[6] = eff_pct;     // compute efficiency %
 }
 
 __attribute__((noinline))

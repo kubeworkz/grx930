@@ -413,69 +413,80 @@ module tb_c930_soc;
 
   // Display the performance benchmark results from DDR.
   task automatic display_perf();
-    int cyc, ops, stl, tops_x, stl_pct, eff_pct;
+    int cyc, dma, ops, stl, tops_x, stl_pct, eff_pct;
     $display("");
-    $display("  CSR_CYCLE counts NPU core cycles (S_WLOAD+S_LOAD+S_RUN+S_WRITE)");
-    $display("  while state != S_IDLE. CPU boot overhead (dcache stress, trap test,");
-    $display("  mmio stress) is NOT included. TOPS = 2*M*N*K / cycles / 20ns.");
+    $display("  Core = NPU core cycles (S_WLOAD+S_LOAD+S_RUN+S_WRITE, state!=IDLE)");
+    $display("  DMA  = DMA busy cycles (P_READ_A+P_READ_B+P_WRITE_C, phase!=IDLE)");
+    $display("  CPU boot overhead (dcache stress, trap test, mmio stress) is NOT");
+    $display("  included in either counter. TOPS = 2*M*N*K / (Core+DMA) / 20ns.");
     $display("");
-    $display("=================================================================");
+    $display("=========================================================================");
     $display("  GRX930 NPU Performance Benchmark (50 MHz NPU clock)");
-    $display("=================================================================");
-    $display("  %-6s %3s %3s %3s %7s %9s %7s %5s", "Prec", "M", "N", "K", "Cycles", "TOPS", "Stall%%", "Eff%%");
-    $display("  %-6s %3s %3s %3s %7s %9s %7s %5s", "----", "--", "--", "--", "------", "---------", "------", "-----");
-    // Case 0: INT4  M=8  N=8  K=16
+    $display("=========================================================================");
+    $display("  %-6s %3s %3s %3s %7s %5s %9s %7s %5s", "Prec", "M", "N", "K", "Core", "DMA", "TOPS", "Stall%%", "Eff%%");
+    $display("  %-6s %3s %3s %3s %7s %5s %9s %7s %5s", "----", "--", "--", "--", "------", "---", "---------", "------", "-----");
+    // Case 0: INT4  M=8  N=8  K=16  (base=0x9500, 28 bytes)
     cyc    = {dut.u_ddr.mem[32'h9503], dut.u_ddr.mem[32'h9502], dut.u_ddr.mem[32'h9501], dut.u_ddr.mem[32'h9500]};
-    tops_x = {dut.u_ddr.mem[32'h950f], dut.u_ddr.mem[32'h950e], dut.u_ddr.mem[32'h950d], dut.u_ddr.mem[32'h950c]};
-    stl_pct= {dut.u_ddr.mem[32'h9513], dut.u_ddr.mem[32'h9512], dut.u_ddr.mem[32'h9511], dut.u_ddr.mem[32'h9510]};
-    eff_pct= {dut.u_ddr.mem[32'h9517], dut.u_ddr.mem[32'h9516], dut.u_ddr.mem[32'h9515], dut.u_ddr.mem[32'h9514]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "INT4", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 1: INT8  M=8  N=8  K=16
-    cyc    = {dut.u_ddr.mem[32'h951b], dut.u_ddr.mem[32'h951a], dut.u_ddr.mem[32'h9519], dut.u_ddr.mem[32'h9518]};
-    tops_x = {dut.u_ddr.mem[32'h9527], dut.u_ddr.mem[32'h9526], dut.u_ddr.mem[32'h9525], dut.u_ddr.mem[32'h9524]};
-    stl_pct= {dut.u_ddr.mem[32'h952b], dut.u_ddr.mem[32'h952a], dut.u_ddr.mem[32'h9529], dut.u_ddr.mem[32'h9528]};
-    eff_pct= {dut.u_ddr.mem[32'h952f], dut.u_ddr.mem[32'h952e], dut.u_ddr.mem[32'h952d], dut.u_ddr.mem[32'h952c]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "INT8", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 2: INT16 M=8  N=8  K=16
-    cyc    = {dut.u_ddr.mem[32'h9533], dut.u_ddr.mem[32'h9532], dut.u_ddr.mem[32'h9531], dut.u_ddr.mem[32'h9530]};
-    tops_x = {dut.u_ddr.mem[32'h953f], dut.u_ddr.mem[32'h953e], dut.u_ddr.mem[32'h953d], dut.u_ddr.mem[32'h953c]};
-    stl_pct= {dut.u_ddr.mem[32'h9543], dut.u_ddr.mem[32'h9542], dut.u_ddr.mem[32'h9541], dut.u_ddr.mem[32'h9540]};
-    eff_pct= {dut.u_ddr.mem[32'h9547], dut.u_ddr.mem[32'h9546], dut.u_ddr.mem[32'h9545], dut.u_ddr.mem[32'h9544]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "INT16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 3: FP16  M=8  N=8  K=16
-    cyc    = {dut.u_ddr.mem[32'h954b], dut.u_ddr.mem[32'h954a], dut.u_ddr.mem[32'h9549], dut.u_ddr.mem[32'h9548]};
-    tops_x = {dut.u_ddr.mem[32'h9557], dut.u_ddr.mem[32'h9556], dut.u_ddr.mem[32'h9555], dut.u_ddr.mem[32'h9554]};
-    stl_pct= {dut.u_ddr.mem[32'h955b], dut.u_ddr.mem[32'h955a], dut.u_ddr.mem[32'h9559], dut.u_ddr.mem[32'h9558]};
-    eff_pct= {dut.u_ddr.mem[32'h955f], dut.u_ddr.mem[32'h955e], dut.u_ddr.mem[32'h955d], dut.u_ddr.mem[32'h955c]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "FP16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 4: BF16  M=8  N=8  K=16
-    cyc    = {dut.u_ddr.mem[32'h9563], dut.u_ddr.mem[32'h9562], dut.u_ddr.mem[32'h9561], dut.u_ddr.mem[32'h9560]};
-    tops_x = {dut.u_ddr.mem[32'h956f], dut.u_ddr.mem[32'h956e], dut.u_ddr.mem[32'h956d], dut.u_ddr.mem[32'h956c]};
-    stl_pct= {dut.u_ddr.mem[32'h9573], dut.u_ddr.mem[32'h9572], dut.u_ddr.mem[32'h9571], dut.u_ddr.mem[32'h9570]};
-    eff_pct= {dut.u_ddr.mem[32'h9577], dut.u_ddr.mem[32'h9576], dut.u_ddr.mem[32'h9575], dut.u_ddr.mem[32'h9574]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "BF16", 8, 8, 16, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 5: INT8  M=8  N=16 K=32 (medium, 4 K-tiles)
-    cyc    = {dut.u_ddr.mem[32'h957b], dut.u_ddr.mem[32'h957a], dut.u_ddr.mem[32'h9579], dut.u_ddr.mem[32'h9578]};
-    tops_x = {dut.u_ddr.mem[32'h9587], dut.u_ddr.mem[32'h9586], dut.u_ddr.mem[32'h9585], dut.u_ddr.mem[32'h9584]};
-    stl_pct= {dut.u_ddr.mem[32'h958b], dut.u_ddr.mem[32'h958a], dut.u_ddr.mem[32'h9589], dut.u_ddr.mem[32'h9588]};
-    eff_pct= {dut.u_ddr.mem[32'h958f], dut.u_ddr.mem[32'h958e], dut.u_ddr.mem[32'h958d], dut.u_ddr.mem[32'h958c]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "INT8", 8, 16, 32, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 6: FP16  M=8  N=16 K=32
-    cyc    = {dut.u_ddr.mem[32'h9593], dut.u_ddr.mem[32'h9592], dut.u_ddr.mem[32'h9591], dut.u_ddr.mem[32'h9590]};
+    dma    = {dut.u_ddr.mem[32'h9507], dut.u_ddr.mem[32'h9506], dut.u_ddr.mem[32'h9505], dut.u_ddr.mem[32'h9504]};
+    tops_x = {dut.u_ddr.mem[32'h9513], dut.u_ddr.mem[32'h9512], dut.u_ddr.mem[32'h9511], dut.u_ddr.mem[32'h9510]};
+    stl_pct= {dut.u_ddr.mem[32'h9517], dut.u_ddr.mem[32'h9516], dut.u_ddr.mem[32'h9515], dut.u_ddr.mem[32'h9514]};
+    eff_pct= {dut.u_ddr.mem[32'h951b], dut.u_ddr.mem[32'h951a], dut.u_ddr.mem[32'h9519], dut.u_ddr.mem[32'h9518]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "INT4", 8, 8, 16, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 1: INT8  M=8  N=8  K=16  (base=0x951C)
+    cyc    = {dut.u_ddr.mem[32'h951f], dut.u_ddr.mem[32'h951e], dut.u_ddr.mem[32'h951d], dut.u_ddr.mem[32'h951c]};
+    dma    = {dut.u_ddr.mem[32'h9523], dut.u_ddr.mem[32'h9522], dut.u_ddr.mem[32'h9521], dut.u_ddr.mem[32'h9520]};
+    tops_x = {dut.u_ddr.mem[32'h952f], dut.u_ddr.mem[32'h952e], dut.u_ddr.mem[32'h952d], dut.u_ddr.mem[32'h952c]};
+    stl_pct= {dut.u_ddr.mem[32'h9533], dut.u_ddr.mem[32'h9532], dut.u_ddr.mem[32'h9531], dut.u_ddr.mem[32'h9530]};
+    eff_pct= {dut.u_ddr.mem[32'h9537], dut.u_ddr.mem[32'h9536], dut.u_ddr.mem[32'h9535], dut.u_ddr.mem[32'h9534]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "INT8", 8, 8, 16, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 2: INT16 M=8  N=8  K=16  (base=0x9538)
+    cyc    = {dut.u_ddr.mem[32'h953b], dut.u_ddr.mem[32'h953a], dut.u_ddr.mem[32'h9539], dut.u_ddr.mem[32'h9538]};
+    dma    = {dut.u_ddr.mem[32'h953f], dut.u_ddr.mem[32'h953e], dut.u_ddr.mem[32'h953d], dut.u_ddr.mem[32'h953c]};
+    tops_x = {dut.u_ddr.mem[32'h954b], dut.u_ddr.mem[32'h954a], dut.u_ddr.mem[32'h9549], dut.u_ddr.mem[32'h9548]};
+    stl_pct= {dut.u_ddr.mem[32'h954f], dut.u_ddr.mem[32'h954e], dut.u_ddr.mem[32'h954d], dut.u_ddr.mem[32'h954c]};
+    eff_pct= {dut.u_ddr.mem[32'h9553], dut.u_ddr.mem[32'h9552], dut.u_ddr.mem[32'h9551], dut.u_ddr.mem[32'h9550]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "INT16", 8, 8, 16, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 3: FP16  M=8  N=8  K=16  (base=0x9554)
+    cyc    = {dut.u_ddr.mem[32'h9557], dut.u_ddr.mem[32'h9556], dut.u_ddr.mem[32'h9555], dut.u_ddr.mem[32'h9554]};
+    dma    = {dut.u_ddr.mem[32'h955b], dut.u_ddr.mem[32'h955a], dut.u_ddr.mem[32'h9559], dut.u_ddr.mem[32'h9558]};
+    tops_x = {dut.u_ddr.mem[32'h9567], dut.u_ddr.mem[32'h9566], dut.u_ddr.mem[32'h9565], dut.u_ddr.mem[32'h9564]};
+    stl_pct= {dut.u_ddr.mem[32'h956b], dut.u_ddr.mem[32'h956a], dut.u_ddr.mem[32'h9569], dut.u_ddr.mem[32'h9568]};
+    eff_pct= {dut.u_ddr.mem[32'h956f], dut.u_ddr.mem[32'h956e], dut.u_ddr.mem[32'h956d], dut.u_ddr.mem[32'h956c]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "FP16", 8, 8, 16, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 4: BF16  M=8  N=8  K=16  (base=0x9570)
+    cyc    = {dut.u_ddr.mem[32'h9573], dut.u_ddr.mem[32'h9572], dut.u_ddr.mem[32'h9571], dut.u_ddr.mem[32'h9570]};
+    dma    = {dut.u_ddr.mem[32'h9577], dut.u_ddr.mem[32'h9576], dut.u_ddr.mem[32'h9575], dut.u_ddr.mem[32'h9574]};
+    tops_x = {dut.u_ddr.mem[32'h9583], dut.u_ddr.mem[32'h9582], dut.u_ddr.mem[32'h9581], dut.u_ddr.mem[32'h9580]};
+    stl_pct= {dut.u_ddr.mem[32'h9587], dut.u_ddr.mem[32'h9586], dut.u_ddr.mem[32'h9585], dut.u_ddr.mem[32'h9584]};
+    eff_pct= {dut.u_ddr.mem[32'h958b], dut.u_ddr.mem[32'h958a], dut.u_ddr.mem[32'h9589], dut.u_ddr.mem[32'h9588]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "BF16", 8, 8, 16, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 5: INT8  M=8  N=16 K=32 (medium, 4 K-tiles, base=0x958C)
+    cyc    = {dut.u_ddr.mem[32'h958f], dut.u_ddr.mem[32'h958e], dut.u_ddr.mem[32'h958d], dut.u_ddr.mem[32'h958c]};
+    dma    = {dut.u_ddr.mem[32'h9593], dut.u_ddr.mem[32'h9592], dut.u_ddr.mem[32'h9591], dut.u_ddr.mem[32'h9590]};
     tops_x = {dut.u_ddr.mem[32'h959f], dut.u_ddr.mem[32'h959e], dut.u_ddr.mem[32'h959d], dut.u_ddr.mem[32'h959c]};
     stl_pct= {dut.u_ddr.mem[32'h95a3], dut.u_ddr.mem[32'h95a2], dut.u_ddr.mem[32'h95a1], dut.u_ddr.mem[32'h95a0]};
     eff_pct= {dut.u_ddr.mem[32'h95a7], dut.u_ddr.mem[32'h95a6], dut.u_ddr.mem[32'h95a5], dut.u_ddr.mem[32'h95a4]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "FP16", 8, 16, 32, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    // Case 7: INT8  M=8  N=8  K=32 (large K, 4 K-tiles)
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "INT8", 8, 16, 32, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 6: FP16  M=8  N=16 K=32 (base=0x95A8)
     cyc    = {dut.u_ddr.mem[32'h95ab], dut.u_ddr.mem[32'h95aa], dut.u_ddr.mem[32'h95a9], dut.u_ddr.mem[32'h95a8]};
-    tops_x = {dut.u_ddr.mem[32'h95b7], dut.u_ddr.mem[32'h95b6], dut.u_ddr.mem[32'h95b5], dut.u_ddr.mem[32'h95b4]};
-    stl_pct= {dut.u_ddr.mem[32'h95bb], dut.u_ddr.mem[32'h95ba], dut.u_ddr.mem[32'h95b9], dut.u_ddr.mem[32'h95b8]};
-    eff_pct= {dut.u_ddr.mem[32'h95bf], dut.u_ddr.mem[32'h95be], dut.u_ddr.mem[32'h95bd], dut.u_ddr.mem[32'h95bc]};
-    $display("  %-6s %3d %3d %3d %7d %5d.%03d %6d%% %4d%%", "INT8", 8, 8, 32, cyc, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
-    $display("=================================================================");
-    $display("  Eff%% = theoretical_compute_cycles / actual_core_cycles");
-    $display("  Peak TOPS at ECP5 (24.9 MHz): divide by2.0x");
-    $display("  Peak TOPS at Artix-7 (587.7 MHz): multiply by11.75x");
+    dma    = {dut.u_ddr.mem[32'h95af], dut.u_ddr.mem[32'h95ae], dut.u_ddr.mem[32'h95ad], dut.u_ddr.mem[32'h95ac]};
+    tops_x = {dut.u_ddr.mem[32'h95bb], dut.u_ddr.mem[32'h95ba], dut.u_ddr.mem[32'h95b9], dut.u_ddr.mem[32'h95b8]};
+    stl_pct= {dut.u_ddr.mem[32'h95bf], dut.u_ddr.mem[32'h95be], dut.u_ddr.mem[32'h95bd], dut.u_ddr.mem[32'h95bc]};
+    eff_pct= {dut.u_ddr.mem[32'h95c3], dut.u_ddr.mem[32'h95c2], dut.u_ddr.mem[32'h95c1], dut.u_ddr.mem[32'h95c0]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "FP16", 8, 16, 32, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    // Case 7: INT8  M=8  N=8  K=32 (large K, 4 K-tiles, base=0x95C4)
+    cyc    = {dut.u_ddr.mem[32'h95c7], dut.u_ddr.mem[32'h95c6], dut.u_ddr.mem[32'h95c5], dut.u_ddr.mem[32'h95c4]};
+    dma    = {dut.u_ddr.mem[32'h95cb], dut.u_ddr.mem[32'h95ca], dut.u_ddr.mem[32'h95c9], dut.u_ddr.mem[32'h95c8]};
+    tops_x = {dut.u_ddr.mem[32'h95d7], dut.u_ddr.mem[32'h95d6], dut.u_ddr.mem[32'h95d5], dut.u_ddr.mem[32'h95d4]};
+    stl_pct= {dut.u_ddr.mem[32'h95db], dut.u_ddr.mem[32'h95da], dut.u_ddr.mem[32'h95d9], dut.u_ddr.mem[32'h95d8]};
+    eff_pct= {dut.u_ddr.mem[32'h95df], dut.u_ddr.mem[32'h95de], dut.u_ddr.mem[32'h95dd], dut.u_ddr.mem[32'h95dc]};
+    $display("  %-6s %3d %3d %3d %7d %5d %5d.%03d %6d%% %4d%%", "INT8", 8, 8, 32, cyc, dma, tops_x/1000, tops_x%1000, stl_pct, eff_pct);
+    $display("=========================================================================");
+    $display("");
+    $display("  Eff%% = theoretical_compute_cycles / (Core + DMA) total");
+    $display("  TOPS = 2*M*N*K / (Core + DMA) / 20ns (50 MHz NPU clock)");
+    $display("  At ECP5 (24.9 MHz): divide TOPS by 2.0x");
+    $display("  At Artix-7 (587.7 MHz): multiply TOPS by 11.75x");
     $display("");
   endtask
 
