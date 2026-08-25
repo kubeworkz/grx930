@@ -471,6 +471,7 @@ still be worth re-evaluating as a pure IPC feature.
 | ID-based CSR-read stall | 34.6 | CSR read-data mux off WB path |
 | Seed-7 placement | 35.9 | Best seed from 4-seed sweep |
 | Seed-42 placement (FP16/BF16) | **24.5** | 9-seed sweep, FP16/BF16+DMA netlist |
+| NPU done-detection retime | **25.7** | Separated o_done from FSM to break t→done path; 8-seed sweep |
 | NPU K-tile pipeline | 35.6 | PE subtraction carry chain broken |
 | IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
@@ -481,7 +482,7 @@ still be worth re-evaluating as a pure IPC feature.
 The design's Fmax ceiling (INT8-only NPU) was **~35 MHz** on ECP5-85F with
 the 5-stage in-order pipeline. The branch-unit carry chain is inherent to the
 architecture (deep changes needed to break it further). With FP16/BF16, the
-ceiling is **~25 MHz** (accumulator combinational chain is the bottleneck).
+ceiling is **~25.7 MHz** (accumulator combinational chain is the bottleneck).
 
 ### FP16/BF16 datapath synthesis (Aug 2026)
 
@@ -675,8 +676,43 @@ was run on the FP16/BF16+DMA netlist (48K LUTs, 36 DSPs, 16 DP16KD):
 | 42 | **24.54 MHz** |
 
 Best: **seed 42 at 24.54 MHz** (+4.9% over the 23.38 MHz default). The critical
-path is NPU core's `t[25]` done-detection chain (routing-dominated). `run_synth.sh`
-pins `--seed 42`.
+path was NPU core's `t[25]` done-detection chain (routing-dominated).
+
+### NPU done-detection retime (Aug 2026)
+
+The critical path after the seed-42 sweep started at `t[25]` (the K-tile cycle
+counter) and threaded through ~10 LUT4s of FSM state-decode logic to reach
+the `o_done` flip-flop. Yosys was sharing FSM state-next and done-next logic
+in the same `always_ff` block, creating a combinational path from `t` through
+the state decode into `o_done`. The fix in `c930_npu_core.sv`:
+
+- A standalone `always_comb` computes `done_cond = (state == S_WRITE) &&
+  (n_cnt == nc-1) && (nt_reg == num_n_tiles-1) && (m_reg == i_dim_m-1)`,
+  depending only on registered state/counters (not `t`).
+- The FSM's `always_ff` uses `o_done <= done_cond` instead of the nested if
+  chain. This forces yosys to build a separate combinational cone for `o_done`,
+  breaking the `t` → state-decode → `o_done` path.
+
+Verified: full SoC sweep + hazard-unit test pass. Result: LUT count dropped
+48,573 → **47,462** (-1,111), FFs 16,373 → **15,355** (-1,018). The `t[25]`
+chain is gone from the critical path — the new worst path starts at `t[4]`
+→ preload-enable → PE partial-sum input (different bottleneck, shorter chain).
+
+**Seed sweep after done-detection retime:**
+
+| seed | routed Fmax |
+|------|-------------|
+| 0  | 24.79 MHz |
+| 2  | **25.66 MHz** |
+| 5  | 23.40 MHz |
+| 7  | 23.96 MHz |
+| 11 | 23.57 MHz |
+| 13 | 25.12 MHz |
+| 17 | 25.32 MHz |
+| 42 | 23.57 MHz |
+
+Best: **seed 2 at 25.66 MHz** (+4.6% over the previous 24.54 MHz best).
+`run_synth.sh` now pins `--seed 2`.
 
 The Artix-7 result confirms the design is well above the 100 MHz Arty A7
 target.  The DDR stub uses 8 × RAMB36E1 (the caches + DDR placeholder);

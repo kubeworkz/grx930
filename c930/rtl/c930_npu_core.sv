@@ -120,6 +120,19 @@ module c930_npu_core
   assign o_busy = (state != S_IDLE);
 
   // ---------------------------------------------------------------------------
+  // o_done: separated from FSM always_ff to break t[25] critical path.
+  // yosys shares FSM state-decode logic between state_next (which uses t)
+  // and o_done_next in the same always_ff block, creating a t[25] -> o_done
+  // chain.  Computing o_done from a dedicated combinational cone that depends
+  // only on registered state/counters (not t) breaks this path.
+  // ---------------------------------------------------------------------------
+  logic done_cond;
+  assign done_cond = (state == S_WRITE) &&
+                     (n_cnt  == nc - 1) &&
+                     (nt_reg == num_n_tiles - 1) &&
+                     (m_reg  == i_dim_m - 1);
+
+  // ---------------------------------------------------------------------------
   // Performance counters
   // ---------------------------------------------------------------------------
   logic [31:0] cycle_cnt, op_cnt, stall_cnt;
@@ -251,7 +264,7 @@ module c930_npu_core
       preload_kr  <= 0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
-      o_done <= 1'b0;
+      o_done <= done_cond;
 
       case (state)
 
@@ -378,7 +391,7 @@ module c930_npu_core
             if (nt_reg == num_n_tiles - 1) begin
               // last N tile for this row
               if (m_reg == i_dim_m - 1) begin
-                o_done <= 1'b1;
+                // o_done is now driven by done_cond (see above)
                 state  <= S_IDLE;
               end else begin
                 m_reg      <= m_reg + 1;
