@@ -766,10 +766,18 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
     unsigned long ops    = CSR_OP_CNT;
     unsigned long stalls = CSR_STALL;
 
-    // Compute TOPS from theoretical MAC count: 2*M*N*K multiply-accumulates.
-    // The hardware op_cnt counts raw PE firings (over-counts during pipeline
-    // fill/drain), so we use the formula for a meaningful achieved-TOPS number.
+    // Compute MAC count and theoretical minimum cycles.
+    // 2*M*N*K multiply-accumulates (each MAC = 1 mult + 1 add).
     unsigned long macs = 2ull * m * n * k;
+
+    // Theoretical core cycles (compute only, no weight-load overhead):
+    //   M-tiles = ceil(m/8), K-tiles = ceil(k/8), N-tiles = ceil(n/8)
+    //   Per (M-tile, K-tile): 8 fill + nc compute cycles
+    unsigned long m_tiles = (m + 7) / 8;
+    unsigned long k_tiles = (k + 7) / 8;
+    unsigned long nc = (n > 8) ? 8 : n;
+    unsigned long theo_cycles = m_tiles * k_tiles * (8 + nc);
+
     unsigned long tops_x1000 = 0;
     if (cycles > 0)
         tops_x1000 = (macs * NPU_CLK_HZ) / (cycles * 1000000ull);
@@ -778,12 +786,16 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
     if (cycles > 0)
         stall_pct = (stalls * 100) / cycles;
 
+    unsigned long eff_pct = 0;
+    if (cycles > 0 && theo_cycles > 0)
+        eff_pct = (theo_cycles * 100) / cycles;
+
     res[0] = cycles;
     res[1] = ops;
     res[2] = stalls;
     res[3] = tops_x1000;
     res[4] = stall_pct;
-    res[5] = 0;  // reserved
+    res[5] = eff_pct;  // compute efficiency %
 }
 
 __attribute__((noinline))
