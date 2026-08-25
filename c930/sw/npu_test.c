@@ -734,6 +734,7 @@ static void ecall_trigger(void)
 //   +0x14: reserved
 // -----------------------------------------------------------------------------
 #define PERF_RES_ADDR 0x9500
+#define PERF_BUF_ADDR 0x9C00  // C buffer for perf_bench (above CONS_BASE+0x80, below stack)
 
 // NPU clock frequency in Hz (50 MHz on Arty A7 with CLK_DIV=2).
 // For simulation, cycles are absolute so TOPS = ops / cycles * clock_freq.
@@ -751,7 +752,7 @@ static void run_perf_case(int m, int n, int k, int prec, int case_idx)
     CSR_DIM_K  = k;
     CSR_A_BASE = A_ADDR;
     CSR_B_BASE = B_ADDR;
-    CSR_C_BASE = C_ADDR;
+    CSR_C_BASE = PERF_BUF_ADDR;  // separate C buf so perf_bench doesn't clobber GEMM C
     CSR_PREC   = prec;
     {volatile u32 _b; _b = CSR_PREC; (void)_b;}
 
@@ -833,6 +834,14 @@ void main(void)
     trap_test();
     *phase = 0x0B;
 
+    // 5. Run performance benchmark across precisions BEFORE the GEMM so
+    //    the testbench captures C after the GEMM completes (not after perf_bench
+    //    overwrites it). Only run once: check if the result buffer is already filled.
+    if (*(volatile u32 *)PERF_RES_ADDR == 0) {
+        *phase = 0x10;
+        perf_bench();
+    }
+
     // 1. Read the workload descriptor the testbench staged in DDR.
     u32 m = *(volatile u32 *)(DIMS_ADDR + 0x00);
     u32 n = *(volatile u32 *)(DIMS_ADDR + 0x04);
@@ -863,15 +872,6 @@ void main(void)
     *phase = 0x08;
     *(volatile u32 *)DONE_ADDR = DONE_MAGIC;
     *phase = 0x09;
-
-    // 5. Run performance benchmark across precisions (AFTER done signal so
-    //    the testbench captures C before we overwrite the buffers).
-    //    Only run once: check if the result buffer is already filled.
-    if (*(volatile u32 *)PERF_RES_ADDR == 0) {
-        *phase = 0x10;
-        perf_bench();
-    }
-    *phase = 0x11;
 
     for (;;)
         ;

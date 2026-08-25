@@ -139,7 +139,7 @@ always_comb begin : FSM_TRANSITION_BLOCK
         // perturbs the scheduling and lets the sim advance. Sim-only: yosys
         // defines SYNTHESIS and skips this (it cannot parse $time here).
 `ifndef SYNTHESIS
-        if ($time == 0) $display("[T0P] icache FSM probe");
+        //if ($time == 0) $display("[T0P] icache FSM probe");
 `endif
 // DEFAULT VALUES //
 o_rd_en = 0;

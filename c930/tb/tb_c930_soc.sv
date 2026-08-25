@@ -24,7 +24,7 @@ module tb_c930_soc;
   localparam int NUM_ROWS = 8;   // systolic rows (reduction per pass)
   localparam int NUM_COLS = 8;   // systolic cols (output width)
   localparam int MAX_M    = 8;
-  localparam int MAX_K    = 16;
+  localparam int MAX_K    = 32;
   localparam int MAX_N    = 16;  // > NUM_COLS so the sweep exercises N-tiling
 
   // DDR workload layout (byte addresses, shared with sw/npu_test.c)
@@ -1142,22 +1142,10 @@ module tb_c930_soc;
     // ======================================================================
     // Final reboot: let the performance benchmark complete.
     // The perf_bench() in the C driver runs AFTER the done signal, so each
-    // run_case() reboots the core before it can finish. This dedicated reboot
-    // with PERF_RES_ADDR pre-cleared gives the benchmark uninterrupted time.
-    // ======================================================================
-    dut.u_ddr.mem[32'h9500] = 8'h00;  // clear PERF_RES_ADDR guard
-    rst_n = 1'b0;
-    repeat (8) @(posedge clk);
-    rst_n = 1'b1;
-    wait_perf(perf_done);
-    if (!perf_done)
-      $display("[WARN] performance benchmark timed out");
+    // perf_bench now runs BEFORE DONE in the C driver, so results are
+    // already in PERF_RES_ADDR (0x9500) by the time the last run_case
+    // completes. No final reboot needed.
 
-    // ======================================================================
-    // Performance benchmark results.
-    // PERF_RES_ADDR (0x9500): 5 cases x 6 words (24 bytes) each.
-    // Layout per case: cycles, ops, stalls, tops_x1000, stall_pct, reserved.
-    // ======================================================================
     display_perf();
 
     $display("[PASS] all SoC NPU tests passed");
