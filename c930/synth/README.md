@@ -470,6 +470,7 @@ still be worth re-evaluating as a pure IPC feature.
 | Registered MMIO-bridge AXI | 31.9 | Bridge issue path registered |
 | ID-based CSR-read stall | 34.6 | CSR read-data mux off WB path |
 | Seed-7 placement | 35.9 | Best seed from 4-seed sweep |
+| Seed-42 placement (FP16/BF16) | **24.5** | 9-seed sweep, FP16/BF16+DMA netlist |
 | NPU K-tile pipeline | 35.6 | PE subtraction carry chain broken |
 | IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
@@ -655,6 +656,27 @@ mantissa addition in ~0.15 ns/bit (vs ~8 ns on ECP5 LUT cascades).
 | ECP5-85F (fixed-point acc) | 27.9 MHz | Skip per-cycle LZC+normalize |
 | ECP5-85F (8x8 array) | 24.8 MHz | Wider interconnect |
 | **Artix-7-35T (8x8 array)** | **587.7 MHz** | **CARRY4 carry chains** |
+
+### Seed sweep after MAX_K=32/MAX_N=16 reversion (Aug 2026)
+
+After reverting MAX_K/MAX_N to 16/12 (matching ECP5 budget), a 9-seed sweep
+was run on the FP16/BF16+DMA netlist (48K LUTs, 36 DSPs, 16 DP16KD):
+
+| seed | routed Fmax |
+|------|-------------|
+| 0  | 24.20 MHz |
+| 2  | 23.63 MHz |
+| 3  | 22.75 MHz |
+| 5  | 23.65 MHz |
+| 7  | 23.23 MHz |
+| 11 | 23.46 MHz |
+| 13 | 23.91 MHz |
+| 17 | 23.60 MHz |
+| 42 | **24.54 MHz** |
+
+Best: **seed 42 at 24.54 MHz** (+4.9% over the 23.38 MHz default). The critical
+path is NPU core's `t[25]` done-detection chain (routing-dominated). `run_synth.sh`
+pins `--seed 42`.
 
 The Artix-7 result confirms the design is well above the 100 MHz Arty A7
 target.  The DDR stub uses 8 × RAMB36E1 (the caches + DDR placeholder);

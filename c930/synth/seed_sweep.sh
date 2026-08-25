@@ -45,8 +45,8 @@ for seed in "${SEEDS[@]}"; do
         --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 \
         --seed "$seed" --textcfg "$CFG" > /dev/null 2>&1
 
-    routed=$(grep -a "ERROR: Max frequency" "$LOG" | sed 's/.*: //' | head -1)
-    plest=$(grep -a "Info: Max frequency" "$LOG" | sed 's/.*: //' | head -1)
+    routed=$(grep -a "Max frequency for clock" "$LOG" | tail -1 | sed 's/.*: *//' | sed 's/ .*//')
+    plest=$(grep -a "Max frequency for clock" "$LOG" | head -1 | sed 's/.*: *//' | sed 's/ .*//')
     echo "seed $seed: routed $routed  (placement-est $plest)" | tee -a "$RESULT"
 done
 

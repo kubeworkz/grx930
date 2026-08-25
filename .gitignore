@@ -19,6 +19,15 @@ c930/synth_xilinx/*.cache/
 c930/synth_xilinx/*.hw/
 c930/synth_xilinx/*.srcs/
 
+# Compiled firmware binaries (rebuildable)
+c930/sw/*.hex
+c930/sw/*.elf
+c930/sw/*.bin
+
+# Temp simulation logs
+c930/Cï*
+/tmp/soc_*.log
+
 # Vendored xpack RISC-V toolchain (re-downloadable; see c930/toolchain/README.md)
 c930/toolchain/*
 !c930/toolchain/README.md
