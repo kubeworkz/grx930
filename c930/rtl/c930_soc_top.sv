@@ -22,8 +22,8 @@ module c930_soc_top
   parameter int NUM_ROWS = 4,
   parameter int NUM_COLS = 4,
   parameter int MAX_M    = 8,
-  parameter int MAX_K    = 32,
-  parameter int MAX_N    = 16,
+  parameter int MAX_K    = 16,
+  parameter int MAX_N    = 12,
   parameter int MEM_BYTES = 65536,
   // Core clock divider. 1 = run the whole SoC on the input clock (default;
   // used by the Icarus testbenches and the ECP5 flow). >1 divides the input

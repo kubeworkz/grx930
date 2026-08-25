@@ -113,7 +113,7 @@ module tb_npu_benchmark;
   end
 
   // ---- NPU ----
-  c930_npu_top #(.MAX_M(8), .MAX_K(16), .MAX_N(12)) u_npu (
+  c930_npu_top #(.MAX_M(8), .MAX_K(32), .MAX_N(16)) u_npu (
     .i_clk(clk), .i_rst_n(rst_n),
     .s_axi_awaddr(csr_awaddr), .s_axi_awvalid(csr_awvalid), .s_axi_awready(csr_awready),
     .s_axi_wdata(csr_wdata), .s_axi_wstrb(csr_wstrb), .s_axi_wvalid(csr_wvalid), .s_axi_wready(csr_wready),

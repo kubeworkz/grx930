@@ -816,11 +816,6 @@ static void perf_bench(void)
     run_perf_case(8, 8, 16, 1, 2);   // INT16 M=8  N=8  K=16
     run_perf_case(8, 8, 16, 2, 3);   // FP16  M=8  N=8  K=16
     run_perf_case(8, 8, 16, 3, 4);   // BF16  M=8  N=8  K=16
-    // --- Medium GEMM (4 K-tiles) ---
-    run_perf_case(8, 16, 32, 0, 5);  // INT8  M=8  N=16 K=32
-    run_perf_case(8, 16, 32, 2, 6);  // FP16  M=8  N=16 K=32
-    // --- Large-ish K (N-tiling) ---
-    run_perf_case(8, 8, 32, 0, 7);   // INT8  M=8  N=8  K=32 (4 K-tiles)
 
     *diag = 0xBFF;
 }
