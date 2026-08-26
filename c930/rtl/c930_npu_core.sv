@@ -64,9 +64,9 @@ module c930_npu_core
 
   assign o_c_rdata = c_mem[i_c_raddr];
 
-  // Preload A/B (blocked while the engine is running)
+  // Preload A/B (allow DMA writes during compute for double-buffered reads)
   always_ff @(posedge i_clk) begin
-    if (i_wen && !o_busy) begin
+    if (i_wen) begin
       if (i_wsel) b_mem[i_waddr] <= i_wdata;
       else        a_mem[i_waddr] <= i_wdata;
     end

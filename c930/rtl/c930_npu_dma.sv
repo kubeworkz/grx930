@@ -143,6 +143,21 @@ module c930_npu_dma
   logic wsel_reg;     // 0 = reading A, 1 = reading B
   logic launched;
 
+  // ---- Prefetch sub-state machine (double-buffered A reads) ----
+  // While the core computes row 0, the DMA prefetches rows 1..M-1 of A
+  // into a_mem, overlapping DDR reads with systolic compute.
+  localparam [1:0] PF_IDLE = 2'd0;
+  localparam [1:0] PF_AR   = 2'd1;
+  localparam [1:0] PF_R    = 2'd2;
+  localparam [1:0] PF_UNPK = 2'd3;
+  logic [1:0] pf_state;
+  int  pf_row;           // next row to prefetch (1..dm-1)
+  int  pf_flat_idx;      // element index within the row
+  int  pf_rd_beat;       // beats received for current prefetch
+  int  pf_unpack_idx;    // byte index within beat
+  int  pf_rd_beats;      // total beats per row (computed in P_IDLE)
+  logic [AXI_DATA_W-1:0] pf_rword;  // latched read word for prefetch
+
   logic dims_ok;
   assign dims_ok = (i_dim_m >= 1) && (i_dim_m <= MAX_M) &&
                    (i_dim_n >= 1) && (i_dim_n <= MAX_N) &&
@@ -161,6 +176,8 @@ module c930_npu_dma
       o_wen         <= 1'b0;
       o_core_start  <= 1'b0;
       launched      <= 1'b0;
+      pf_state      <= PF_IDLE;
+      pf_row        <= 1;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
       m_axi_awvalid <= 1'b0;
@@ -204,22 +221,32 @@ module c930_npu_dma
               b_base_r <= i_b_base;
               c_base_r <= i_c_base;
               is_int4     <= (i_precision == 3'd4);
-              total_elems <= i_dim_m * i_dim_k;  // A element count for bounds check
+              // INT4: nibble-packing means rows share bytes, read all A upfront.
+              // INT8/16/FP16/BF16: read first row only, prefetch rest during compute.
               if (i_precision == 3'd4) begin
+                total_elems <= i_dim_m * i_dim_k;  // all rows (nibble packing)
+                pf_row      <= i_dim_m;             // disable prefetch
                 elem_size    <= 3'd0;     // INT4: 4 bits per element
                 elems_per_beat <= 8;      // 8 INT4 per 32-bit word
-                elem_cnt   <= (i_dim_m * i_dim_k + 1) / 2;  // A bytes (4 bits each, packed)
+                elem_cnt   <= (i_dim_m * i_dim_k + 1) / 2;
                 rd_beats   <= ((i_dim_m * i_dim_k + 1) / 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf_rd_beats <= 0;
               end else if (i_precision == 3'd0) begin
+                total_elems <= i_dim_k;  // first row only (rest prefetched)
+                pf_row      <= 1;        // prefetch starts at row 1
                 elem_size    <= 3'd1;     // INT8: 1 byte per element
                 elems_per_beat <= 4;      // 4 INT8 per 32-bit word
-                elem_cnt   <= i_dim_m * i_dim_k;  // A bytes
-                rd_beats   <= (i_dim_m * i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                elem_cnt   <= i_dim_k;
+                rd_beats   <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf_rd_beats <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
               end else begin
+                total_elems <= i_dim_k;  // first row only (rest prefetched)
+                pf_row      <= 1;        // prefetch starts at row 1
                 elem_size    <= 3'd2;     // INT16/FP16/BF16: 2 bytes per element
                 elems_per_beat <= 2;      // 2 per 32-bit word
-                elem_cnt   <= i_dim_m * i_dim_k * 2;  // A bytes
-                rd_beats   <= (i_dim_m * i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                elem_cnt   <= i_dim_k * 2;
+                rd_beats   <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf_rd_beats <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
               end
               rd_beat    <= 0;
               flat_idx   <= 0;
@@ -315,12 +342,77 @@ module c930_npu_dma
         end
 
         // ---------------------------------------------------------------------
+        // P_LAUNCH: start core + prefetch remaining A rows during compute.
+        // Row 0's A was loaded in P_READ_A. Rows 1..M-1 are prefetched here
+        // via the AXI read channel, overlapping DDR reads with systolic compute.
+        // ---------------------------------------------------------------------
         P_LAUNCH: begin
+          // --- Prefetch sub-state machine (runs in parallel with core) ---
+          case (pf_state)
+            PF_IDLE: begin
+              if (launched && pf_row < dm) begin
+                pf_flat_idx   <= 0;
+                pf_rd_beat    <= 0;
+                pf_unpack_idx <= 0;
+                pf_state      <= PF_AR;
+              end
+            end
+            PF_AR: begin
+              if (m_axi_arvalid && m_axi_arready) begin
+                pf_state     <= PF_R;
+                m_axi_rready <= 1'b1;
+              end else begin
+                m_axi_arvalid <= 1'b1;
+                m_axi_arlen   <= pf_rd_beats - 1;
+                m_axi_arsize  <= BEAT_SIZE;
+                m_axi_arburst <= 2'b01;           // INCR
+                m_axi_araddr  <= a_base_r + pf_row * dk * elem_size;
+              end
+            end
+            PF_R: begin
+              if (m_axi_rvalid && m_axi_rready) begin
+                pf_rword      <= m_axi_rdata;
+                pf_rd_beat    <= pf_rd_beat + 1;
+                pf_unpack_idx <= 0;
+                pf_state      <= PF_UNPK;
+              end else begin
+                m_axi_rready <= 1'b1;
+              end
+            end
+            PF_UNPK: begin
+              // Bounds check: only write dk elements per row
+              if (pf_flat_idx < dk) begin
+                o_wen   <= 1'b1;
+                o_wsel  <= 1'b0;   // A
+                o_waddr <= pf_row * dk + pf_flat_idx;
+                if (is_int4)
+                  o_wdata <= {{12{pf_rword[pf_unpack_idx*4+3]}}, pf_rword[pf_unpack_idx*4 +: 4]};
+                else if (elem_size == 3'd1)
+                  o_wdata <= {{8{pf_rword[pf_unpack_idx*8+7]}}, pf_rword[pf_unpack_idx*8 +: 8]};
+                else
+                  o_wdata <= pf_rword[pf_unpack_idx*16 +: 16];
+              end
+              pf_flat_idx   <= pf_flat_idx + 1;
+              pf_unpack_idx <= pf_unpack_idx + 1;
+              if (pf_unpack_idx == elems_per_beat - 1) begin
+                if (pf_rd_beat == pf_rd_beats) begin
+                  pf_row   <= pf_row + 1;
+                  pf_state <= PF_IDLE;
+                end else begin
+                  pf_state    <= PF_R;
+                  m_axi_rready <= 1'b1;
+                end
+              end
+            end
+          endcase
+
+          // --- Core start / completion (original logic) ---
           if (!launched) begin
             o_core_start <= 1'b1;
             launched     <= 1'b1;
           end else if (i_core_done) begin
             launched <= 1'b0;
+            pf_state <= PF_IDLE;  // stop any in-flight prefetch
             if (i_core_error) begin
               o_error <= 1'b1;
               phase   <= P_DONE;
