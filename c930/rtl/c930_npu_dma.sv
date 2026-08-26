@@ -412,8 +412,11 @@ module c930_npu_dma
             launched     <= 1'b1;
           end else if (i_core_done) begin
             launched <= 1'b0;
-            pf_state <= PF_IDLE;  // stop any in-flight prefetch
+            // Do NOT stop prefetch here -- let it continue during
+            // P_WRITE_C so A prefetch overlaps with C write-back
+            // (AXI read and write channels are independent).
             if (i_core_error) begin
+              pf_state <= PF_IDLE;  // stop prefetch on error
               o_error <= 1'b1;
               phase   <= P_DONE;
             end else begin
@@ -425,7 +428,70 @@ module c930_npu_dma
         end
 
         // ---------------------------------------------------------------------
+        // P_WRITE_C: write C results back via AXI write channel.
+        // The prefetch sub-state machine continues in parallel via the
+        // AXI read channel, overlapping A row prefetch with C write-back.
+        // ---------------------------------------------------------------------
         P_WRITE_C: begin
+          // --- Prefetch continues during C write-back ---
+          case (pf_state)
+            PF_IDLE: begin
+              if (pf_row < dm) begin
+                pf_flat_idx   <= 0;
+                pf_rd_beat    <= 0;
+                pf_unpack_idx <= 0;
+                pf_state      <= PF_AR;
+              end
+            end
+            PF_AR: begin
+              if (m_axi_arvalid && m_axi_arready) begin
+                pf_state     <= PF_R;
+                m_axi_rready <= 1'b1;
+              end else begin
+                m_axi_arvalid <= 1'b1;
+                m_axi_arlen   <= pf_rd_beats - 1;
+                m_axi_arsize  <= BEAT_SIZE;
+                m_axi_arburst <= 2'b01;
+                m_axi_araddr  <= a_base_r + pf_row * dk * elem_size;
+              end
+            end
+            PF_R: begin
+              if (m_axi_rvalid && m_axi_rready) begin
+                pf_rword      <= m_axi_rdata;
+                pf_rd_beat    <= pf_rd_beat + 1;
+                pf_unpack_idx <= 0;
+                pf_state      <= PF_UNPK;
+              end else begin
+                m_axi_rready <= 1'b1;
+              end
+            end
+            PF_UNPK: begin
+              if (pf_flat_idx < dk) begin
+                o_wen   <= 1'b1;
+                o_wsel  <= 1'b0;   // A
+                o_waddr <= pf_row * dk + pf_flat_idx;
+                if (is_int4)
+                  o_wdata <= {{12{pf_rword[pf_unpack_idx*4+3]}}, pf_rword[pf_unpack_idx*4 +: 4]};
+                else if (elem_size == 3'd1)
+                  o_wdata <= {{8{pf_rword[pf_unpack_idx*8+7]}}, pf_rword[pf_unpack_idx*8 +: 8]};
+                else
+                  o_wdata <= pf_rword[pf_unpack_idx*16 +: 16];
+              end
+              pf_flat_idx   <= pf_flat_idx + 1;
+              pf_unpack_idx <= pf_unpack_idx + 1;
+              if (pf_unpack_idx == elems_per_beat - 1) begin
+                if (pf_rd_beat == pf_rd_beats) begin
+                  pf_row   <= pf_row + 1;
+                  pf_state <= PF_IDLE;
+                end else begin
+                  pf_state    <= PF_R;
+                  m_axi_rready <= 1'b1;
+                end
+              end
+            end
+          endcase
+
+          // --- C write-back (original logic) ---
           case (wr_sub)
             WS_AW: begin
               if (m_axi_awvalid && m_axi_awready) begin
@@ -478,6 +544,7 @@ module c930_npu_dma
 
         // ---------------------------------------------------------------------
         P_DONE: begin
+          pf_state <= PF_IDLE;  // ensure prefetch stopped
           o_done <= 1'b1;
           phase  <= P_IDLE;
         end
