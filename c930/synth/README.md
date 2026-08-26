@@ -831,10 +831,36 @@ wider bus.
 | DP16KD | 16 | 16 |
 | MULT18X18D | 36 | 42 (+6) |
 
-ECP5 P&R could not complete on the test machine (8 GB RAM) due to the
-larger netlist at 74% density. The 64-bit AXI datapath adds muxes that
-tip the routing pressure. A larger FPGA (ECP5-85K with more BRAM or
-ECP5G) or more memory would be needed for P&R.
+ECP5 P&R completed on WSL with 5GB RAM (seed 2). The larger netlist
+routes to completion in ~15 min with 4GB+ WSL memory.
+
+### 64-bit AXI + DMA prefetch + C packing (Aug 2026)
+
+After widening AXI to 64-bit, adding DMA prefetch, and packing two INT32
+values per C write beat, the netlist grew from 48,488 to 54,375 LUTs and
+15,611 to 15,955 FFs. ECP5 P&R on seed 2 routed to completion.
+
+**Resource summary:**
+
+| Resource | Before | After |
+|----------|--------|-------|
+| LUT4 | 48,488 | 54,375 (+5,887) |
+| TRELLIS_FF | 15,611 | 15,955 (+344) |
+| DP16KD | 16 | 16 |
+| MULT18X18D | 36 | 42 (+6) |
+| CCU2C | - | 4,454 |
+| DPR16X4 | - | 456 |
+
+**Fmax: 29.58 MHz** (vs 30.04 MHz before AXI changes, -1.5%).
+The FP16 accumulator mantissa extension carry chain remains the
+critical path: `fp32_prod_reg[10] -> mant_b_ext LUT chain ->
+CCU2C carry -> mantissa addition -> normalization -> PE output`
+totals 37.4 ns (0.40 ns clk-to-Q + 1.40 ns routing + 25.6 ns
+logic in carry chain + 10 ns final routing).
+
+The second critical path is the cross-domain path from
+`phase[2]` to the async `npu_busy` output pin (9.43 ns, 26.77 MHz)
+— a routing-only constraint that affects the I/O pin timing.
 
 ## DMA prefetch / A-row pipelining (Aug 2026)
 

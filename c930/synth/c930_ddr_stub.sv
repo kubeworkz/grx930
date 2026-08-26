@@ -356,7 +356,6 @@ module c930_ddr
         rd_data[gk] <= mem[gk][rd_line_q];
       end
     end
-    end
   endgenerate
 
   // -------------------------------------------------------------------------
