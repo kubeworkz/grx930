@@ -6,7 +6,7 @@
 //
 //   * CPU instruction-cache read port  (256-bit cache line)
 //   * CPU data-cache read/write ports  (256-bit line read, 64-bit byte-strobe write)
-//   * AXI4 full slave                  (NPU DMA master: 32-bit INCR bursts)
+//   * AXI4 full slave                  (NPU DMA master: 64-bit INCR bursts)
 //
 // The CPU cache ports mirror the reference main_mem + mem_shifter semantics
 // (registered read done/line, registered write done, write data shifted by the
@@ -47,7 +47,7 @@ module c930_ddr
   input  logic [7:0]  s_axi_arlen,
   input  logic        s_axi_arvalid,
   output logic        s_axi_arready,
-  output logic [31:0] s_axi_rdata,
+  output logic [63:0] s_axi_rdata,
   output logic [1:0]  s_axi_rresp,
   output logic        s_axi_rlast,
   output logic        s_axi_rvalid,
@@ -56,8 +56,8 @@ module c930_ddr
   input  logic [7:0]  s_axi_awlen,
   input  logic        s_axi_awvalid,
   output logic        s_axi_awready,
-  input  logic [31:0] s_axi_wdata,
-  input  logic [3:0]  s_axi_wstrb,
+  input  logic [63:0] s_axi_wdata,
+  input  logic [7:0]  s_axi_wstrb,
   input  logic        s_axi_wlast,
   input  logic        s_axi_wvalid,
   output logic        s_axi_wready,
@@ -160,10 +160,10 @@ module c930_ddr
   assign s_axi_rvalid  = r_busy;
   assign s_axi_rlast   = (r_beat == r_len);
   assign s_axi_rresp   = 2'b00;
-  assign s_axi_rdata   = { mem[r_addr + r_beat*4 + 3],
-                           mem[r_addr + r_beat*4 + 2],
-                           mem[r_addr + r_beat*4 + 1],
-                           mem[r_addr + r_beat*4 + 0] };
+  assign s_axi_rdata   = { mem[r_addr + r_beat*8 + 7], mem[r_addr + r_beat*8 + 6],
+                           mem[r_addr + r_beat*8 + 5], mem[r_addr + r_beat*8 + 4],
+                           mem[r_addr + r_beat*8 + 3], mem[r_addr + r_beat*8 + 2],
+                           mem[r_addr + r_beat*8 + 1], mem[r_addr + r_beat*8 + 0] };
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -216,7 +216,7 @@ module c930_ddr
         w_busy <= 1'b1;
       end
       if (w_busy && s_axi_wvalid && s_axi_wready) begin
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 8; i++)
           if (s_axi_wstrb[i])
             mem[w_addr + w_beat*4 + i] <= s_axi_wdata[i*8 +: 8];
         if (w_beat == w_len) begin

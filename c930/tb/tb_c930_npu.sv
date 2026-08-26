@@ -62,7 +62,7 @@ module tb_c930_npu;
   logic [1:0]  m_axi_arburst;
   logic        m_axi_arvalid;
   logic        m_axi_arready;
-  logic [31:0] m_axi_rdata;
+  logic [63:0] m_axi_rdata;
   logic [1:0]  m_axi_rresp;
   logic        m_axi_rlast;
   logic        m_axi_rvalid;
@@ -73,8 +73,8 @@ module tb_c930_npu;
   logic [1:0]  m_axi_awburst;
   logic        m_axi_awvalid;
   logic        m_axi_awready;
-  logic [31:0] m_axi_wdata;
-  logic [3:0]  m_axi_wstrb;
+  logic [63:0] m_axi_wdata;
+  logic [7:0]  m_axi_wstrb;
   logic        m_axi_wlast;
   logic        m_axi_wvalid;
   logic        m_axi_wready;
@@ -171,7 +171,7 @@ module tb_c930_npu;
   assign m_axi_arready = ~r_busy;
   assign m_axi_rvalid  = r_busy;
   assign m_axi_rlast   = (r_beat == r_len);
-  assign m_axi_rdata   = mem[(r_addr >> 2) + r_beat];
+  assign m_axi_rdata   = {mem[(r_addr >> 2) + r_beat*2 + 1], mem[(r_addr >> 2) + r_beat*2]};
   assign m_axi_rresp   = 2'b00;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -223,7 +223,14 @@ module tb_c930_npu;
         w_busy <= 1'b1;
       end
       if (w_busy && m_axi_wvalid && m_axi_wready) begin
-        mem[(w_addr >> 2) + w_beat] <= m_axi_wdata;
+        begin
+          for (int i = 0; i < 4; i++)
+            if (m_axi_wstrb[i])
+              mem[(w_addr >> 2) + w_beat*2][i*8 +: 8] <= m_axi_wdata[i*8 +: 8];
+          for (int i = 0; i < 4; i++)
+            if (m_axi_wstrb[i+4])
+              mem[(w_addr >> 2) + w_beat*2 + 1][i*8 +: 8] <= m_axi_wdata[(i+4)*8 +: 8];
+        end
         if (w_beat == w_len) begin
           w_busy  <= 1'b0;
           b_valid <= 1'b1;

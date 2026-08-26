@@ -798,3 +798,40 @@ because the design is compact enough).  Zero latches, zero DRC errors.
 - CSR-dependency stall pulse consumed by overlapping cache stalls (mepc
   corruption in the trap handler) — the pulse tracker now re-arms after any
   cache/M-extension stall; caught by the SoC sweep with the icache hit-stall.
+
+## 64-bit AXI bus widening (Aug 2026)
+
+The NPU DMA AXI bus was widened from 32-bit to 64-bit (`AXI_DATA_W=64`)
+across all modules: `c930_npu_dma`, `c930_npu_top`, `c930_soc_top`,
+`c930_ddr`, and the synth stubs/testbenches. The DMA unpack logic now
+decodes 8 elements per beat (INT8) instead of 4, halving A/B read beats.
+C write-back keeps 32-bit stride (INT32 = 4 bytes) since the core
+returns 32-bit results.
+
+**Simulation results (M=8, N=8, K=16):**
+
+| Prec | DMA Before (32b) | DMA After (64b) | Δ |
+|------|-----------------|----------------|---|
+| INT4 | 1931 | 1915 | -0.8% |
+| INT8 | 1823 | 1805 | -1.0% |
+| INT16 | 1859 | 1823 | -1.9% |
+| FP16 | 1859 | 1823 | -1.9% |
+| BF16 | 1859 | 1823 | -1.9% |
+
+Improvement is modest because the C write-back (INT32, 4 bytes/beat)
+still dominates DMA time. The A/B read path benefits fully from the
+wider bus.
+
+**Synthesis (yosys, ECP5-85K placeholder):**
+
+| Resource | Before (32b) | After (64b) |
+|----------|-------------|-------------|
+| LUT4 | 48,488 | 49,146 (+658) |
+| FF | 15,611 | 15,857 (+246) |
+| DP16KD | 16 | 16 |
+| MULT18X18D | 36 | 42 (+6) |
+
+ECP5 P&R could not complete on the test machine (8 GB RAM) due to the
+larger netlist at 74% density. The 64-bit AXI datapath adds muxes that
+tip the routing pressure. A larger FPGA (ECP5-85K with more BRAM or
+ECP5G) or more memory would be needed for P&R.

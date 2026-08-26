@@ -39,7 +39,7 @@ module c930_ddr #(
   input  logic [1:0]  s_axi_arburst,
   output logic        s_axi_rvalid,
   input  logic        s_axi_rready,
-  output logic [31:0] s_axi_rdata,
+  output logic [63:0] s_axi_rdata,
   output logic [1:0]  s_axi_rresp,
   output logic        s_axi_rlast,
   input  logic        s_axi_awvalid,
@@ -50,8 +50,8 @@ module c930_ddr #(
   input  logic [1:0]  s_axi_awburst,
   input  logic        s_axi_wvalid,
   output logic        s_axi_wready,
-  input  logic [31:0] s_axi_wdata,
-  input  logic [3:0]  s_axi_wstrb,
+  input  logic [63:0] s_axi_wdata,
+  input  logic [7:0]  s_axi_wstrb,
   input  logic        s_axi_wlast,
   output logic        s_axi_bvalid,
   input  logic        s_axi_bready,
@@ -186,7 +186,7 @@ module c930_ddr #(
   assign s_axi_rvalid  = r_busy;
   assign s_axi_rlast   = (r_beat == r_len);
   assign s_axi_rresp   = 2'b00;
-  assign s_axi_rdata   = mem[(r_addr[8:5] * 8) + {1'b0, r_addr[4:2]}];
+  assign s_axi_rdata   = {32'd0, mem[(r_addr[8:5] * 8) + {1'b0, r_addr[4:2]}]};
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -238,11 +238,15 @@ module c930_ddr #(
         end
         WS_DATA: begin
           if (s_axi_wvalid) begin
-            // Byte-enables for the 4-byte word
+            // Byte-enables for the 8-byte (64-bit) beat
             if (s_axi_wstrb[0]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]}][7:0]   <= s_axi_wdata[7:0];
             if (s_axi_wstrb[1]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]}][15:8]  <= s_axi_wdata[15:8];
             if (s_axi_wstrb[2]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]}][23:16] <= s_axi_wdata[23:16];
             if (s_axi_wstrb[3]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]}][31:24] <= s_axi_wdata[31:24];
+            if (s_axi_wstrb[4]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]} + 1][7:0]   <= s_axi_wdata[39:32];
+            if (s_axi_wstrb[5]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]} + 1][15:8]  <= s_axi_wdata[47:40];
+            if (s_axi_wstrb[6]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]} + 1][23:16] <= s_axi_wdata[55:48];
+            if (s_axi_wstrb[7]) mem[w_addr[8:5]*8 + {1'b0, w_addr[4:2]} + 1][31:24] <= s_axi_wdata[63:56];
             w_beat <= w_beat + 8'd1;
             w_addr <= w_addr + BYTES_PER_BEAT;
             if (w_beat == w_len) begin

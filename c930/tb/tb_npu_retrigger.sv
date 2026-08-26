@@ -40,7 +40,7 @@ module tb_npu_retrigger;
   wire [1:0]  npu_arburst;
   wire        npu_arvalid;
   wire        npu_arready;
-  wire [31:0] npu_rdata;
+  wire [63:0] npu_rdata;
   wire [1:0]  npu_rresp;
   wire        npu_rlast;
   wire        npu_rvalid;
@@ -51,8 +51,8 @@ module tb_npu_retrigger;
   wire [1:0]  npu_awburst;
   wire        npu_awvalid;
   wire        npu_awready;
-  wire [31:0] npu_wdata;
-  wire [3:0]  npu_wstrb;
+  wire [63:0] npu_wdata;
+  wire [7:0]  npu_wstrb;
   wire        npu_wlast;
   wire        npu_wvalid;
   wire        npu_wready;
@@ -81,10 +81,10 @@ module tb_npu_retrigger;
   assign npu_rvalid  = ddr_r_busy;
   assign npu_rlast   = (ddr_r_beat == ddr_r_len);
   assign npu_rresp   = 2'b00;
-  assign npu_rdata   = {ddr_mem[npu_araddr + ddr_r_beat*4 + 3],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 2],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 1],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 0]};
+  assign npu_rdata   = {ddr_mem[npu_araddr + ddr_r_beat*8 + 7], ddr_mem[npu_araddr + ddr_r_beat*8 + 6],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 5], ddr_mem[npu_araddr + ddr_r_beat*8 + 4],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 3], ddr_mem[npu_araddr + ddr_r_beat*8 + 2],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 1], ddr_mem[npu_araddr + ddr_r_beat*8 + 0]};
 
   assign npu_awready = ~ddr_w_busy;
   assign npu_wready  = ddr_w_busy;
@@ -116,9 +116,9 @@ module tb_npu_retrigger;
         ddr_w_busy <= 1;
       end
       if (ddr_w_busy && npu_wvalid && npu_wready) begin
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 8; i++)
           if (npu_wstrb[i])
-            ddr_mem[ddr_w_addr + ddr_w_beat*4 + i] <= npu_wdata[i*8 +: 8];
+            ddr_mem[ddr_w_addr + ddr_w_beat*8 + i] <= npu_wdata[i*8 +: 8];
         if (ddr_w_beat == ddr_w_len) begin
           ddr_w_busy <= 0;
           ddr_b_valid <= 1;

@@ -16,13 +16,13 @@
 // C is one INT32 per 32-bit beat: beat (m*N + n).
 //
 // Bursts are INCR with 4-byte beats. The R channel is back-pressured while a
-// beat's 4 bytes are unpacked into the core (one byte per cycle), so the read
+// beat's 8 bytes are unpacked into the core (one byte per cycle), so the read
 // rate is naturally throttled by the unpacking rate.
 // -----------------------------------------------------------------------------
 module c930_npu_dma
 #(
   parameter int AXI_ADDR_W = 32,
-  parameter int AXI_DATA_W = 32,
+  parameter int AXI_DATA_W = 64,
   parameter int DIN_W      = 16,
   parameter int ACC_W      = 48,    // 48-bit fixed-point accumulator
   parameter int MAX_M      = 64,
@@ -96,12 +96,12 @@ module c930_npu_dma
   output logic                  m_axi_bready
 );
 
-  localparam int BYTES_PER_BEAT = AXI_DATA_W / 8;   // 4
-  localparam [2:0] BEAT_SIZE    = $clog2(BYTES_PER_BEAT);  // 2 -> 4 bytes/beat
+  localparam int BYTES_PER_BEAT = AXI_DATA_W / 8;   // 8
+  localparam [2:0] BEAT_SIZE    = $clog2(BYTES_PER_BEAT);  // 3 -> 8 bytes/beat
 
   // Precision-dependent element size: INT4=0.5 byte, INT8=1 byte, INT16=2 bytes
-  logic [2:0] elem_size;   // 1 for INT8, 2 for INT16, 0 for INT4 (special case)
-  int  elems_per_beat;     // 8 for INT4, 4 for INT8, 2 for INT16
+  logic [3:0] elem_size;   // 1 for INT8, 2 for INT16, 0 for INT4 (special case)
+  int  elems_per_beat;     // 16 for INT4, 8 for INT8, 4 for INT16
   logic is_int4;           // 1 if precision == 4 (INT4 mode)
 
   // ---- Phases ----
@@ -227,7 +227,7 @@ module c930_npu_dma
                 total_elems <= i_dim_m * i_dim_k;  // all rows (nibble packing)
                 pf_row      <= i_dim_m;             // disable prefetch
                 elem_size    <= 3'd0;     // INT4: 4 bits per element
-                elems_per_beat <= 8;      // 8 INT4 per 32-bit word
+                elems_per_beat <= 16;     // 16 INT4 per 64-bit word (2 nibbles/byte, 8 bytes/beat)
                 elem_cnt   <= (i_dim_m * i_dim_k + 1) / 2;
                 rd_beats   <= ((i_dim_m * i_dim_k + 1) / 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 pf_rd_beats <= 0;
@@ -235,7 +235,7 @@ module c930_npu_dma
                 total_elems <= i_dim_k;  // first row only (rest prefetched)
                 pf_row      <= 1;        // prefetch starts at row 1
                 elem_size    <= 3'd1;     // INT8: 1 byte per element
-                elems_per_beat <= 4;      // 4 INT8 per 32-bit word
+                elems_per_beat <= 8;      // 8 INT8 per 64-bit word
                 elem_cnt   <= i_dim_k;
                 rd_beats   <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 pf_rd_beats <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
@@ -243,7 +243,7 @@ module c930_npu_dma
                 total_elems <= i_dim_k;  // first row only (rest prefetched)
                 pf_row      <= 1;        // prefetch starts at row 1
                 elem_size    <= 3'd2;     // INT16/FP16/BF16: 2 bytes per element
-                elems_per_beat <= 2;      // 2 per 32-bit word
+                elems_per_beat <= 4;      // 4 INT16/FP16/BF16 per 64-bit word
                 elem_cnt   <= i_dim_k * 2;
                 rd_beats   <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 pf_rd_beats <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
@@ -500,7 +500,7 @@ module c930_npu_dma
               end else begin
                 m_axi_awvalid <= 1'b1;
                 m_axi_awlen   <= dn * dm - 1;    // <= 95, int -> 8-bit truncates cleanly
-                m_axi_awsize  <= BEAT_SIZE;
+                m_axi_awsize  <= 3'd2;            // 4 bytes (INT32) per write beat
                 m_axi_awburst <= 2'b01;           // INCR
                 m_axi_awaddr  <= c_base_r;
               end
@@ -528,7 +528,7 @@ module c930_npu_dma
               end else begin
                 m_axi_wvalid <= 1'b1;
                 m_axi_wdata  <= wdata_reg;
-                m_axi_wstrb  <= {BYTES_PER_BEAT{1'b1}};
+                m_axi_wstrb  <= 8'h0F;            // lower 4 bytes only (INT32)
                 m_axi_wlast  <= (c_idx == dn * dm - 1);
               end
             end

@@ -167,7 +167,7 @@ module c930_soc_top
   logic [1:0]   m_axi_arburst;
   logic         m_axi_arvalid;
   logic         m_axi_arready;
-  logic [31:0]  m_axi_rdata;
+  logic [63:0]  m_axi_rdata;
   logic [1:0]   m_axi_rresp;
   logic         m_axi_rlast;
   logic         m_axi_rvalid;
@@ -178,8 +178,8 @@ module c930_soc_top
   logic [1:0]   m_axi_awburst;
   logic         m_axi_awvalid;
   logic         m_axi_awready;
-  logic [31:0]  m_axi_wdata;
-  logic [3:0]   m_axi_wstrb;
+  logic [63:0]  m_axi_wdata;
+  logic [7:0]   m_axi_wstrb;
   logic         m_axi_wlast;
   logic         m_axi_wvalid;
   logic         m_axi_wready;

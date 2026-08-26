@@ -72,7 +72,7 @@ module c930_ddr
   input  logic [7:0]  s_axi_arlen,
   input  logic        s_axi_arvalid,
   output logic        s_axi_arready,
-  output logic [31:0] s_axi_rdata,
+  output logic [63:0] s_axi_rdata,
   output logic [1:0]  s_axi_rresp,
   output logic        s_axi_rlast,
   output logic        s_axi_rvalid,
@@ -81,8 +81,8 @@ module c930_ddr
   input  logic [7:0]  s_axi_awlen,
   input  logic        s_axi_awvalid,
   output logic        s_axi_awready,
-  input  logic [31:0] s_axi_wdata,
-  input  logic [3:0]  s_axi_wstrb,
+  input  logic [63:0] s_axi_wdata,
+  input  logic [7:0]  s_axi_wstrb,
   input  logic        s_axi_wlast,
   input  logic        s_axi_wvalid,
   output logic        s_axi_wready,
@@ -334,10 +334,10 @@ module c930_ddr
                            (ax_wr && (gk == ax_bank));
       wire [3:0] b_wr_be = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
                            (gk[0] ? i_dcache_wr_strobe[7:4] : i_dcache_wr_strobe[3:0]) :
-                           s_axi_wstrb;
+                           s_axi_wstrb[3:0];
       wire [31:0] b_wr_dt = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
                             (gk[0] ? i_dcache_wr_data[63:32] : i_dcache_wr_data[31:0]) :
-                            s_axi_wdata;
+                            s_axi_wdata[31:0];
       wire [3:0]  b_wr_ad = (dc_wr && (gk == dc_ba || gk == dc_bb)) ? dcw_line : w_waddr[8:5];
 
       always_ff @(posedge i_clk) begin
@@ -356,14 +356,13 @@ module c930_ddr
   logic [31:0] r_addr;
   logic [7:0]  r_len;
   logic [7:0]  r_beat;
-  logic        r_busy;
-  wire  [31:0] r_waddr = r_addr + r_beat*4;   // byte address of the current beat
+  logic        r_busy;  wire [31:0] r_waddr = r_addr + r_beat*8;   // byte address of the current beat (64-bit)
 
   assign s_axi_arready = ~r_busy;
   assign s_axi_rvalid  = (rd_state == RD_DATA) && (rd_src_q == 2'b10);
   assign s_axi_rlast   = (r_beat == r_len);
   assign s_axi_rresp   = 2'b00;
-  assign s_axi_rdata   = bank_line[rd_wordidx_q*32 +: 32];
+  assign s_axi_rdata   = bank_line[rd_wordidx_q*32 +: 64];
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -395,8 +394,7 @@ module c930_ddr
   logic [7:0]  w_len;
   logic [7:0]  w_beat;
   logic        w_busy;
-  logic        b_valid;
-  wire  [31:0] w_waddr = w_addr + w_beat*4;   // byte address of the current beat
+  logic        b_valid;  wire [31:0] w_waddr = w_addr + w_beat*4;   // byte address of the current beat (32-bit write)
 
   assign s_axi_awready = ~w_busy;
   assign s_axi_wready  = w_busy && !ax_conf;

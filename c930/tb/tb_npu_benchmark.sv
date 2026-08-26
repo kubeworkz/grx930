@@ -39,7 +39,7 @@ module tb_npu_benchmark;
   wire [2:0]  npu_arsize;
   wire [1:0]  npu_arburst;
   wire        npu_arvalid, npu_arready;
-  wire [31:0] npu_rdata;
+  wire [63:0] npu_rdata;
   wire [1:0]  npu_rresp;
   wire        npu_rlast, npu_rvalid, npu_rready;
   wire [31:0] npu_awaddr;
@@ -47,8 +47,8 @@ module tb_npu_benchmark;
   wire [2:0]  npu_awsize;
   wire [1:0]  npu_awburst;
   wire        npu_awvalid, npu_awready;
-  wire [31:0] npu_wdata;
-  wire [3:0]  npu_wstrb;
+  wire [63:0] npu_wdata;
+  wire [7:0]  npu_wstrb;
   wire        npu_wlast, npu_wvalid, npu_wready;
   wire [1:0]  npu_bresp;
   wire        npu_bvalid, npu_bready;
@@ -69,10 +69,10 @@ module tb_npu_benchmark;
   assign npu_rvalid  = ddr_r_busy;
   assign npu_rlast   = (ddr_r_beat == ddr_r_len);
   assign npu_rresp   = 2'b00;
-  assign npu_rdata   = {ddr_mem[npu_araddr + ddr_r_beat*4 + 3],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 2],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 1],
-                         ddr_mem[npu_araddr + ddr_r_beat*4 + 0]};
+  assign npu_rdata   = {ddr_mem[npu_araddr + ddr_r_beat*8 + 7], ddr_mem[npu_araddr + ddr_r_beat*8 + 6],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 5], ddr_mem[npu_araddr + ddr_r_beat*8 + 4],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 3], ddr_mem[npu_araddr + ddr_r_beat*8 + 2],
+                         ddr_mem[npu_araddr + ddr_r_beat*8 + 1], ddr_mem[npu_araddr + ddr_r_beat*8 + 0]};
   assign npu_awready = ~ddr_w_busy;
   assign npu_wready  = ddr_w_busy;
   assign npu_bvalid  = ddr_b_valid;
@@ -101,9 +101,9 @@ module tb_npu_benchmark;
         ddr_w_busy <= 1;
       end
       if (ddr_w_busy && npu_wvalid && npu_wready) begin
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 8; i++)
           if (npu_wstrb[i])
-            ddr_mem[ddr_w_addr + ddr_w_beat*4 + i] <= npu_wdata[i*8 +: 8];
+            ddr_mem[ddr_w_addr + ddr_w_beat*8 + i] <= npu_wdata[i*8 +: 8];
         if (ddr_w_beat == ddr_w_len) begin
           ddr_w_busy <= 0; ddr_b_valid <= 1;
         end else ddr_w_beat <= ddr_w_beat + 1;
