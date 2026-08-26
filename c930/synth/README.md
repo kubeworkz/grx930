@@ -472,6 +472,7 @@ still be worth re-evaluating as a pure IPC feature.
 | Seed-7 placement | 35.9 | Best seed from 4-seed sweep |
 | Seed-42 placement (FP16/BF16) | **24.5** | 9-seed sweep, FP16/BF16+DMA netlist |
 | NPU done-detection retime | **25.7** | Separated o_done from FSM to break t→done path; 8-seed sweep |
+| NPU act/ps_in registration | **30.0** | Register act/ps_in to break FP16 accumulator chain; 8-seed sweep |
 | NPU K-tile pipeline | 35.6 | PE subtraction carry chain broken |
 | IF-stage PC+4 register | 35.3 | Fetch-PC mux chain broken |
 | Branch-unit register | **REVERTED** | Breaks forwarding protocol |
@@ -482,7 +483,7 @@ still be worth re-evaluating as a pure IPC feature.
 The design's Fmax ceiling (INT8-only NPU) was **~35 MHz** on ECP5-85F with
 the 5-stage in-order pipeline. The branch-unit carry chain is inherent to the
 architecture (deep changes needed to break it further). With FP16/BF16, the
-ceiling is **~25.7 MHz** (accumulator combinational chain is the bottleneck).
+ceiling is **~30 MHz** (act/ps_in registration broke the accumulator chain; routing is now the bottleneck).
 
 ### FP16/BF16 datapath synthesis (Aug 2026)
 
@@ -713,6 +714,48 @@ chain is gone from the critical path — the new worst path starts at `t[4]`
 
 Best: **seed 2 at 25.66 MHz** (+4.6% over the previous 24.54 MHz best).
 `run_synth.sh` now pins `--seed 2`.
+
+### NPU act/ps_in registration (Aug 2026)
+
+The critical path after the done-detection retime started at `t[23]` and
+threaded through the preload/state decode into the systolic array's `ps_in`
+mux, then through the entire FP16 accumulator (exp_b subtraction → mantissa
+alignment → mantissa addition → normalization), totaling ~26 ns. The `t`
+register fed into the `t == n` comparison that selects which PE column gets
+the partial-sum value, and yosys merged this with the accumulator's combinational
+cone.
+
+The fix in `c930_npu_core.sv`:
+
+- `act` and `ps_in` are computed combinationally (`act_comb`, `ps_in_comb`) as
+  before, then **registered** into `act` and `ps_in` at every clock edge.
+- The registered versions feed the systolic array, so the `t` → comparison →
+  accumulator path is broken at the register boundary.
+- S_RUN runs for `NUM_ROWS + NUM_COLS + 2` cycles (vs +1 before) to
+  compensate for the 1-cycle registration delay. The staggered capture shifts
+  by 1 accordingly (`acc[t - NUM_ROWS - 2]`).
+
+Verified: full SoC sweep + hazard-unit test pass (all precisions correct).
+Result: LUT count 47,462 → **48,488** (+1,026 for registration + muxes),
+FFs 15,355 → **15,611** (+256). The FP16 accumulator carry chain is **gone**
+from the critical path.
+
+**Seed sweep after act/ps_in registration:**
+
+| seed | routed Fmax |
+|------|-------------|
+| 0  | 29.32 MHz |
+| 2  | **30.04 MHz** |
+| 5  | 29.51 MHz |
+| 7  | 29.96 MHz |
+| 11 | 29.09 MHz |
+| 13 | 29.18 MHz |
+| 17 | 29.37 MHz |
+| 42 | 29.46 MHz |
+
+Best: **seed 2 at 30.04 MHz** (+17% over the previous 25.66 MHz best).
+All 8 seeds route above 29 MHz — the routing term is now dominant and the
+logic is no longer the bottleneck.
 
 The Artix-7 result confirms the design is well above the 100 MHz Arty A7
 target.  The DDR stub uses 8 × RAMB36E1 (the caches + DDR placeholder);

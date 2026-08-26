@@ -171,31 +171,48 @@ module c930_npu_core
   int  kr_reg;          // min(NUM_ROWS, i_dim_k - k_base), registered
 
   // ---------------------------------------------------------------------------
-  // Systolic-array feed (combinational): skew generation
+  // Systolic-array feed (registered): skew generation
   // ---------------------------------------------------------------------------
-  logic signed [NUM_ROWS*DIN_W-1:0] act;    // row r in bits [r*DIN_W +: DIN_W]
-  logic signed [NUM_COLS*ACC_W-1:0] ps_in;  // col n in bits [n*ACC_W +: ACC_W]
+  // The act/ps_in outputs are registered to break the t[] -> state-decode ->
+  // PE FP16-accumulator critical path.  Without registration yosys merges
+  // the t==n comparison with the accumulator's combinational cone, creating a
+  // ~26 ns path from t[23] through the exp_b subtraction / mantissa add.
+  //
+  // Registration adds 1 cycle of latency; S_RUN runs for
+  // NUM_ROWS + NUM_COLS + 2 cycles (vs +1 before) to compensate, and the
+  // staggered capture shifts by 1.
+  // ---------------------------------------------------------------------------
+  logic signed [NUM_ROWS*DIN_W-1:0] act_comb;    // combinational
+  logic signed [NUM_COLS*ACC_W-1:0] ps_in_comb;  // combinational
+  logic signed [NUM_ROWS*DIN_W-1:0] act;          // registered -> PE
+  logic signed [NUM_COLS*ACC_W-1:0] ps_in;        // registered -> PE
 
   always_comb begin
-    act   = '0;
-    ps_in = '0;
+    act_comb   = '0;
+    ps_in_comb = '0;
 
     if (state == S_RUN) begin
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
-      // Uses registered k_base_reg and kr_reg to keep the subtraction carry
-      // chain off the PE critical path.
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == r) && (r < kr_reg))
-          act[r*DIN_W +: DIN_W] = a_mem[m_base + k_base_reg + r];  // m_base pre-computed
+          act_comb[r*DIN_W +: DIN_W] = a_mem[m_base + k_base_reg + r];
       end
       // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
-      // The 2-cycle pulse is needed because the PE registers the product before
-      // the accumulator; PE(0,c) captures ps_in at the first pulse and the
-      // accumulator uses the registered product at the second pulse.
       for (int n = 0; n < NUM_COLS; n++) begin
         if (t == n || t == n + 1)
-          ps_in[n*ACC_W +: ACC_W] = acc[n];
+          ps_in_comb[n*ACC_W +: ACC_W] = acc[n];
       end
+    end
+  end
+
+  // Register act/ps_in to break the t[] -> PE critical path.
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      act   <= '0;
+      ps_in <= '0;
+    end else begin
+      act   <= act_comb;
+      ps_in <= ps_in_comb;
     end
   end
 
@@ -339,13 +356,15 @@ module c930_npu_core
           end
         end
 
-        // Run one K tile: NUM_ROWS + NUM_COLS + 1 cycles.
+        // Run one K tile: NUM_ROWS + NUM_COLS + 2 cycles.
+        // (+1 vs before because act/ps_in are registered, adding 1 cycle
+        // of pipeline latency to the systolic array inputs.)
         S_RUN: begin
-          // Staggered capture: column (t - NUM_ROWS - 1) finishes at cycle t.
-          if (t >= NUM_ROWS + 1)
-            acc[t - NUM_ROWS - 1] <= ps_out[(t - NUM_ROWS - 1)*ACC_W +: ACC_W];
+          // Staggered capture: column (t - NUM_ROWS - 2) finishes at cycle t.
+          if (t >= NUM_ROWS + 2)
+            acc[t - NUM_ROWS - 2] <= ps_out[(t - NUM_ROWS - 2)*ACC_W +: ACC_W];
 
-          if (t == NUM_ROWS + NUM_COLS) begin
+          if (t == NUM_ROWS + NUM_COLS + 1) begin
             t <= 0;
             if (kt_reg == num_k_tiles - 1) begin
               // all K tiles done for this (row, N tile) -> write results

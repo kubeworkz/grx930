@@ -73,9 +73,9 @@ echo "== yosys synth_ecp5 (c930_soc_top) [$NOTE] =="
 cmd //c "yosys -ql build/synth/$LOG build/synth/run_$MODE.ys"
 
 echo "== nextpnr-ecp5 P&R (ECP5-85F placeholder) =="
-# Seed 2 was the best of an 8-seed sweep after the done-detection retime
-# (25.66 MHz routed vs 24.54 MHz for seed 42 before the retime); pin it so
-# the canonical flow reproduces the best result.
+# Seed 2 was the best of an 8-seed sweep after the act/ps_in registration
+# (30.04 MHz routed vs 25.66 MHz before); pin it so the canonical flow
+# reproduces the best result.
 cmd //c "nextpnr-ecp5 -l build/synth/pnr.log --json build/synth/$JSON --lpf synth/ecp5_85f.lpf --85k --package CABGA381 --speed 8 --seed 2 --textcfg build/synth/ecp5.config"
 
 echo
