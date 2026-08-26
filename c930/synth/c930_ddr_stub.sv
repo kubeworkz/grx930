@@ -332,21 +332,30 @@ module c930_ddr
     for (gk = 0; gk < 8; gk = gk + 1) begin : g_bank
       wire       b_wr_en = (dc_wr && (gk == dc_ba || gk == dc_bb)) ||
                            (ax_wr && (gk == ax_bank));
-      wire [3:0] b_wr_be = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
-                           (gk[0] ? i_dcache_wr_strobe[7:4] : i_dcache_wr_strobe[3:0]) :
-                           s_axi_wstrb[3:0];
-      wire [31:0] b_wr_dt = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
-                            (gk[0] ? i_dcache_wr_data[63:32] : i_dcache_wr_data[31:0]) :
-                            s_axi_wdata[31:0];
+      // Dcache: 32-bit write, AXI: 64-bit write (8 bytes)
+      wire [7:0]  b_wr_be_all = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
+                                {4'b0, (gk[0] ? i_dcache_wr_strobe[7:4] : i_dcache_wr_strobe[3:0])} :
+                                s_axi_wstrb;
+      wire [63:0] b_wr_dt_all = (dc_wr && (gk == dc_ba || gk == dc_bb)) ?
+                                {32'b0, (gk[0] ? i_dcache_wr_data[63:32] : i_dcache_wr_data[31:0])} :
+                                s_axi_wdata;
       wire [3:0]  b_wr_ad = (dc_wr && (gk == dc_ba || gk == dc_bb)) ? dcw_line : w_waddr[8:5];
+      wire [3:0]  b_wr_ad2 = b_wr_ad + 4'd1; // next word in same bank (512B line)
 
       always_ff @(posedge i_clk) begin
+        // Low 32 bits
         if (b_wr_en)
           for (int bb = 0; bb < 4; bb++)
-            if (b_wr_be[bb])
-              mem[gk][b_wr_ad][bb*8 +: 8] <= b_wr_dt[bb*8 +: 8];
+            if (b_wr_be_all[bb])
+              mem[gk][b_wr_ad][bb*8 +: 8] <= b_wr_dt_all[bb*8 +: 8];
+        // High 32 bits (AXI only, when upper strobes active)
+        if (b_wr_en && (b_wr_be_all[7:4] != 4'h0) && !dc_wr)
+          for (int bb = 0; bb < 4; bb++)
+            if (b_wr_be_all[bb+4])
+              mem[gk][b_wr_ad2][bb*8 +: 8] <= b_wr_dt_all[(bb+4)*8 +: 8];
         rd_data[gk] <= mem[gk][rd_line_q];
       end
+    end
     end
   endgenerate
 
@@ -394,7 +403,7 @@ module c930_ddr
   logic [7:0]  w_len;
   logic [7:0]  w_beat;
   logic        w_busy;
-  logic        b_valid;  wire [31:0] w_waddr = w_addr + w_beat*4;   // byte address of the current beat (32-bit write)
+  logic        b_valid;  wire [31:0] w_waddr = w_addr + w_beat*8;   // byte address of the current beat (64-bit write)
 
   assign s_axi_awready = ~w_busy;
   assign s_axi_wready  = w_busy && !ax_conf;

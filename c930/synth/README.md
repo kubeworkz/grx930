@@ -835,3 +835,34 @@ ECP5 P&R could not complete on the test machine (8 GB RAM) due to the
 larger netlist at 74% density. The 64-bit AXI datapath adds muxes that
 tip the routing pressure. A larger FPGA (ECP5-85K with more BRAM or
 ECP5G) or more memory would be needed for P&R.
+
+## DMA prefetch / A-row pipelining (Aug 2026)
+
+While the core computes on the first row of A, the DMA prefetches rows 1..M-1
+via the AXI read channel, overlapping DDR reads with systolic compute. INT4 is
+excluded (nibble-packing means rows share bytes). The prefetch FSM runs in
+parallel with the core in P_LAUNCH and continues through P_WRITE_C (AXI
+read/write channels are independent).
+
+**Simulation results (M=8, N=8, K=16):**
+
+| Prec | DMA Before | DMA After | Delta |
+|------|-----------|-----------|-------|
+| INT8 | 1947 | 1823 | -6.4% |
+| INT16 | 2011 | 1859 | -7.6% |
+| FP16 | 2011 | 1859 | -7.6% |
+
+Improvement modest because DDR port is shared; prefetch fills idle slots.
+
+## Two-element C write packing (Aug 2026)
+
+The C write-back now packs two INT32 results into each 64-bit AXI beat,
+halving the write burst length. A WS_PACK state reads the second C element
+while the first is held in a c_lo register, then drives the packed 64-bit
+word with wstrb=8'hFF. Odd-tail beat uses wstrb=8'h0F. The DDR and synth
+stub write strides updated from w_beat*4 to w_beat*8.
+
+C beat count drops from dm*dn to ceil(dm*dn/2). The DMA cycle counter
+includes core compute time (~1376 cycles) which dwarfs the ~64-cycle C
+write savings, so benchmark numbers are unchanged at M=N=8. The
+improvement becomes visible at larger matrix sizes.

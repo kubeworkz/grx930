@@ -218,7 +218,7 @@ module c930_ddr
       if (w_busy && s_axi_wvalid && s_axi_wready) begin
         for (int i = 0; i < 8; i++)
           if (s_axi_wstrb[i])
-            mem[w_addr + w_beat*4 + i] <= s_axi_wdata[i*8 +: 8];
+            mem[w_addr + w_beat*8 + i] <= s_axi_wdata[i*8 +: 8];
         if (w_beat == w_len) begin
           w_busy  <= 1'b0;
           b_valid <= 1'b1;

@@ -117,12 +117,13 @@ module c930_npu_dma
   localparam [1:0] RS_R      = 2'd1;
   localparam [1:0] RS_UNPACK = 2'd2;
 
-  // ---- Write sub-states (3 bits: five states) ----
-  localparam [2:0] WS_AW    = 3'd0;
-  localparam [2:0] WS_ADDR  = 3'd1;
-  localparam [2:0] WS_DATA  = 3'd2;
-  localparam [2:0] WS_DRIVE = 3'd3;
-  localparam [2:0] WS_B     = 3'd4;
+  // ---- Write sub-states ----
+  localparam [2:0] WS_AW    = 3'd0;  // issue AXI write address
+  localparam [2:0] WS_ADDR  = 3'd1;  // set core C read address
+  localparam [2:0] WS_DATA  = 3'd2;  // latch C value (high or low)
+  localparam [2:0] WS_PACK  = 3'd3;  // pack second C value into high word
+  localparam [2:0] WS_DRIVE = 3'd4;  // drive AXI write data
+  localparam [2:0] WS_B     = 3'd5;  // wait for write response
 
   logic [2:0] phase;
   logic [1:0] rd_sub;
@@ -137,7 +138,10 @@ module c930_npu_dma
   int  rd_beat;       // read beats received so far
   int  flat_idx;      // flat element index into the A/B buffer
   int  unpack_idx;    // 0..BYTES_PER_BEAT-1 within the current beat
-  int  c_idx;         // C element index (also C beat index)
+  int  c_idx;         // C element index
+  int  c_beat;        // AXI beat counter for C writes
+  logic [31:0] c_lo;  // low 32 bits of packed pair
+  logic        c_odd; // last beat is odd (wstrb = 0x0F)
   logic [AXI_DATA_W-1:0] rword;
   logic [AXI_DATA_W-1:0] wdata_reg;
   logic wsel_reg;     // 0 = reading A, 1 = reading B
@@ -178,6 +182,8 @@ module c930_npu_dma
       launched      <= 1'b0;
       pf_state      <= PF_IDLE;
       pf_row        <= 1;
+      c_beat        <= 0;
+      c_odd         <= 1'b0;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
       m_axi_awvalid <= 1'b0;
@@ -421,6 +427,7 @@ module c930_npu_dma
               phase   <= P_DONE;
             end else begin
               c_idx  <= 0;
+              c_beat <= 0;
               wr_sub <= WS_AW;
               phase  <= P_WRITE_C;
             end
@@ -496,40 +503,63 @@ module c930_npu_dma
             WS_AW: begin
               if (m_axi_awvalid && m_axi_awready) begin
                 c_idx  <= 0;
+                c_odd  <= ((dm * dn) % 2) != 0;
                 wr_sub <= WS_ADDR;
               end else begin
                 m_axi_awvalid <= 1'b1;
-                m_axi_awlen   <= dn * dm - 1;    // <= 95, int -> 8-bit truncates cleanly
-                m_axi_awsize  <= 3'd2;            // 4 bytes (INT32) per write beat
+                // Two INT32 values packed per 64-bit beat
+                m_axi_awlen   <= (dm * dn + 1) / 2 - 1;  // ceil(n/2) - 1
+                m_axi_awsize  <= 3'd3;            // 8 bytes per beat (64-bit)
                 m_axi_awburst <= 2'b01;           // INCR
                 m_axi_awaddr  <= c_base_r;
               end
             end
 
             WS_ADDR: begin
+              // c_idx always points to the first element of the pair
               o_c_raddr <= c_idx[15:0];
               wr_sub    <= WS_DATA;
             end
 
             WS_DATA: begin
-              wdata_reg <= i_c_rdata;                       // latches c_mem[c_idx]
+              // Latch low word (first element of pair)
+              c_lo <= i_c_rdata;
+              if (c_idx + 1 < dm * dn) begin
+                // Second element exists: request it next cycle
+                o_c_raddr <= c_idx + 1;
+                wr_sub <= WS_PACK;
+              end else begin
+                // Single remaining element (odd count): pack low only
+                wdata_reg <= {32'b0, i_c_rdata};
+                wr_sub <= WS_DRIVE;
+              end
+            end
+
+            WS_PACK: begin
+              // Pack: {c_high[31:0], c_lo[31:0]} into 64-bit word
+              wdata_reg <= {i_c_rdata, c_lo};
               wr_sub    <= WS_DRIVE;
             end
 
             WS_DRIVE: begin
               if (m_axi_wvalid && m_axi_wready) begin
-                if (c_idx == dn * dm - 1) begin
+                // Advance to next pair.  c_idx still points to the first
+                // element of the pair we just wrote (WS_DATA incremented
+                // the address wire but not c_idx, so c_idx is correct).
+                // Check if next pair would be past the end:
+                if (c_idx + 2 >= dm * dn) begin
                   wr_sub       <= WS_B;
                   m_axi_bready <= 1'b1;
                 end else begin
-                  c_idx  <= c_idx + 1;
+                  c_idx  <= c_idx + 2;
                   wr_sub <= WS_ADDR;
                 end
               end else begin
                 m_axi_wvalid <= 1'b1;
                 m_axi_wdata  <= wdata_reg;
-                m_axi_wstrb  <= 8'h0F;            // lower 4 bytes only (INT32)
-                m_axi_wlast  <= (c_idx == dn * dm - 1);
+                // Odd last element: only lower 32 bits valid
+                m_axi_wstrb  <= (c_idx + 1 >= dm * dn && c_odd) ? 8'h0F : 8'hFF;
+                m_axi_wlast  <= (c_idx + 2 >= dm * dn);
               end
             end
 
