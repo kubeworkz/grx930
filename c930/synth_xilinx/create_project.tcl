@@ -6,7 +6,7 @@
 
 set proj_name "c930_artix7"
 set proj_dir  "[file dirname [info script]]/../build/vivado"
-set part      "xc7a35tcsg324-1"
+set part      "xc7a100tcsg324-1"
 
 # ---- Create project ----
 create_project $proj_name $proj_dir -part $part -force

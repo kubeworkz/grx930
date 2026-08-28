@@ -25,15 +25,17 @@ create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports { i
 ## The DONT_TOUCH attribute on clk_cnt and clk_div in the RTL helps preserve
 ## the hierarchy, but Vivado may still rename or flatten the generate block.
 ##
-## Attempt the cell-wildcard approach; if it fails the CRITICAL WARNING is
-## harmless (conservative timing).
-catch {
-    set _div_ff [get_cells -hier \
-        -filter {NAME =~ *g_clkgen*clk_div_reg || NAME =~ *g_clkgen*clk_div}]
-    create_generated_clock -name core_clk \
-        -source [get_ports {i_clk}] \
-        -divide_by 2 [get_pins $_div_ff/Q]
-}
+## Create a generated clock on the divider register output.
+## Vivado flattens the c930_soc_top wrapper during synthesis, so the
+## divider FF appears as g_clkgen.clk_div_reg (no top-level prefix).
+## The post-implementation clock_utilization report confirms this path.
+## CRITICAL: create_generated_clock needs a PIN (not a cell), so use
+## get_pins with the flat name.  The /C pin works because it is the
+## clock input to the divider — Vivado infers the /Q output.
+create_generated_clock -name core_clk \
+    -source [get_ports {i_clk}] \
+    -divide_by 2 \
+    [get_pins g_clkgen.clk_div_reg/Q]
 
 ## ---- Reset (active-low directly button) ----
 set_property -dict { PACKAGE_PIN N15  IOSTANDARD LVCMOS33 } [get_ports { i_rst_n }]

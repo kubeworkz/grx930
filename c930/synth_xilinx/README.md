@@ -1,7 +1,11 @@
 # C930 SoC -- Xilinx Artix-7 Port
 
 This directory contains the Vivado project flow for synthesizing the C930 SoC
-on a **Digilent Arty A7-35T** board (XC7A35TCSG324-1).
+on a **Digilent Arty A7-100T** board (XC7A100TCSG324-1).
+
+> **Note:** The original -35T target (20.8K LUTs) was too small for the full
+> NPU+DMA+64-bit-AXI design (~32K LUTs). The -100T (63.4K LUTs) fits
+> comfortably at 52% utilization.
 
 ## Why Artix-7?
 
@@ -29,38 +33,43 @@ The **636 CARRY4** slices mean all 64-bit adders/subtractors use dedicated carry
 hardware instead of routing through general interconnect -- this is the key to
 higher Fmax.
 
-## Measured results (Vivado 2026.1 P&R, XC7A35TCSG324-1)
+## Measured results (Vivado 2026.1 P&R, XC7A100TCSG324-1)
 
-Routed with Vivado 2026.1 WebPACK (Basic license) on an 8 GB machine through
-WSL (native-filesystem work copy, `-jobs 2`).
+Routed with Vivado 2026.1 WebPACK on an 8 GB machine through WSL
+(native-filesystem work copy, `-jobs 2`). Target: Arty A7-100T board
+(upgraded from -35T which was too small for the full 64-bit AXI NPU).
 
 | Metric | Value |
 |--------|-------|
 | **Core clock (CLK_DIV=2)** | **50 MHz** (100 MHz board / 2) |
-| **Routed Fmax (conservative)** | **587 MHz** (WNS +8.30 ns @ 100 MHz timing) |
-| **Effective margin at 50 MHz** | **>13 ns** (critical path ~1.7 ns) |
-| Slice LUTs | 15,731 / 20,800 (75.6%) |
-| Slice Registers (FFs) | 12,722 / 41,600 (30.6%) |
-| DSP48E1 | 3 / 90 (3.3%) -- most multiplies mapped to LUTs |
-| RAMB36E1 | 17 / 50 (34%) -- icache + dcache + NPU + stub banks |
-| Distributed RAM | 604 (6.3%) -- NPU small buffers |
-| Hold / Pulse-width | 0 failing endpoints |
-| DRC (post-impl) | **0 errors** (29 warnings, all benign) |
-| **Critical path** | NPU systolic MAC carry chain (~1.7 ns on Artix-7) |
+| **Routed Fmax (core_clk)** | **44.6 MHz** (WNS -2.439 ns at 50 MHz) |
+| Setup WNS (core_clk) | -2.439 ns (739 failing endpoints) |
+| Setup WNS (sys_clk_pin) | +8.234 ns (0 failing) |
+| Hold WNS | +0.071 ns (0 failing) |
+| Pulse-width WNS | +4.500 ns (0 failing) |
+| Slice LUTs | 32,767 / 63,400 (51.68%) |
+| Slice Registers (FFs) | 14,939 / 126,800 (11.78%) |
+| DSP48E1 | 43 / 240 (17.92%) |
+| RAMB36E1 | 8 / 135 (5.93%) |
+| DRC (post-impl) | **0 errors** (163 warnings: DSP pipelining + async RAM) |
+| **Bitstream** | `build/vivado/c930_soc_top.bit` (3.7 MB) |
+| **Critical path** | FP16 accumulator mantissa chain in PE(r1,c0): 21.4 ns |
+|   Logic | 7.0 ns (32.8%) -- 15x CARRY4 + 18x LUT |
+|   Route  | 14.4 ns (67.2%) -- routing-dominated |
 
-**CLK_DIV=2** divides the 100 MHz board oscillator to a 50 MHz core clock,
-keeping the core comfortably below routed Fmax. The DONT_TOUCH attributes on
-the divider FFs preserve the clock generation hierarchy; Vivado times all
-logic at 100 MHz (conservative), and the positive WNS confirms the design
-also meets timing at50 MHz with massive margin.
+**44.6 MHz on Artix-7 vs 29.6 MHz on ECP5** -- a **51% improvement**. The
+dedicated CARRY4 carry chains reduce the FP16 mantissa extension from ~26 ns
+logic on ECP5 to ~7 ns on Artix-7. The critical path remains routing-dominated
+(67%), suggesting further gains from Vivado's post-place physical optimization
+or a faster speed grade part.
 
-**~16x over ECP5** effective Fmax headroom (587 MHz estimated vs 35.31 MHz) --
-Artix-7's dedicated CARRY4 slices eliminate ~22 ns of routing from the 64-bit
-arithmetic paths. The remaining bottleneck is the NPU PE accumulator carry
-chain, same as on ECP5 but with a much shorter carry chain.
+The design fits comfortably on xc7a100t at 52% LUT utilization (was 76% on
+-35T which caused placement failure). The 64-bit AXI widening, DMA prefetch,
+and C write packing features from the ECP5 flow carry over unchanged.
 
-The Yosys estimate (~21K LUTs) was pessimistic -- actual routed LUT count is
-15.7K, well within the -35T budget (75.6%).
+**vs ECP5 comparison:** 44.6 MHz / 29.6 MHz = **1.51x Fmax improvement**. The
+critical path is the same FP16 accumulator but Artix-7's CARRY4 slices cut the
+logic depth from 40 LUT levels to 33 levels + 15 CARRY4.
 
 ## Boot firmware: LEDs light on power-up
 
@@ -176,7 +185,7 @@ make reports
 | DSP slices | TRELLIS_DSP | DSP48E1 |
 | Constraints | `.lpf` | `.xdc` |
 | Router | nextpnr (open-source) | Vivado (proprietary) |
-| Expected Fmax | ~35 MHz | ~60-80 MHz |
+| Measured Fmax | 29.6 MHz (seed 2) | **44.6 MHz** |
 
 ## What stays the same
 
