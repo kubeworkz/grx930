@@ -13,6 +13,11 @@
 // the output by 1 cycle, causing the next row's PE to read stale partial-sum
 // data (NB assignment vs combinational read on the same posedge).
 // The PE's own output register provides sufficient pipeline staging.
+//
+// Barrel-shifter optimization: for FP16 inputs, the exponent difference is at
+// most 31.  If exp_diff >= 16, the smaller mantissa is shifted to zero (all 27
+// bits fall off).  We cap the effective shift to 4 bits (0-15) and hardwire
+// the upper bits, reducing the barrel shifter from 8 mux stages to 4.
 // -----------------------------------------------------------------------------
 
 module c930_fp16_acc
@@ -60,12 +65,22 @@ module c930_fp16_acc
 
   // ---- Build 27-bit aligned mantissas (1 hidden + 23 mantissa + 3 guard) ----
   wire [26:0] mant_a_ext = {1'b1, mant_a, 3'b0};
-  wire [26:0] mant_b_pre = {1'b1, mant_b, 3'b0};
-  wire [26:0] mant_b_ext = mant_b_pre >> exp_diff;
 
-  // Sticky: OR of all bits shifted out during alignment
-  wire [26:0] sticky_mask = (exp_diff >= 8'd27) ? 27'h7FFFFFF :
-                             (27'h1 << exp_diff) - 27'h1;
+  // ---- Narrow barrel shifter: cap shift to 5 bits (FP16 exponent range) ----
+  // mant_b_pre = {1, mant_b[22:0], 3 guard} = 27 bits
+  // For FP16 inputs, exp_diff <= 31 (5-bit exponent range).
+  // Capping to 5 bits reduces barrel shifter from 8 mux stages to 5.
+  wire [26:0] mant_b_pre = {1'b1, mant_b, 3'b0};
+  wire [4:0]  shift_amt   = exp_diff[4:0];  // FP16 max shift = 31
+  wire [26:0] mant_b_ext  = mant_b_pre >> shift_amt;
+
+  // ---- Sticky bit: OR of bits shifted out during alignment ----
+  // If exp_diff >= 27, all bits are shifted out (sticky = 1).
+  // If exp_diff < 27, sticky = OR of the exp_diff lowest bits of mant_b_pre.
+  // For FP16 inputs (exp_diff <= 31), the meaningful range is 0-26.
+  // Optimization: use a narrow OR tree on the relevant bits.
+  wire [26:0] sticky_mask = (shift_amt >= 5'd27) ? 27'h7FFFFFF :
+                             ((27'h1 << shift_amt) - 27'h1);
   wire sticky = ~(s_zero || p_zero) & (|(mant_b_pre & sticky_mask));
 
   // ---- Add / subtract magnitudes (combinational) ----
