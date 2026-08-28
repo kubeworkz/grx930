@@ -57,7 +57,11 @@ module c930_fp16_acc
   wire [22:0] mant_b = swap ? s_mant : p_mant;
   wire        sign_b = swap ? s_sign : p_sign;
 
-  wire [7:0] exp_diff = exp_a - exp_b;
+  // ---- Carry-lookahead exponent difference ----
+  // Breaks the 8-bit ripple-carry subtraction off the critical path.
+  // CLA computes all 8 result bits in ~3 LUT levels vs ~8 for ripple.
+  wire [7:0] exp_diff;
+  c930_cla_sub u_cla_exp (.i_a(exp_a), .i_b(exp_b), .o_diff(exp_diff));
 
   // ---- Derived flags ----
   wire both_zero  = s_zero && p_zero;
