@@ -862,6 +862,25 @@ The second critical path is the cross-domain path from
 `phase[2]` to the async `npu_busy` output pin (9.43 ns, 26.77 MHz)
 — a routing-only constraint that affects the I/O pin timing.
 
+## FP16 accumulator pipeline limitation (Aug 2026)
+
+A pipeline register inside `c930_fp16_acc` (registering the barrel-shift
+alignment output) was attempted to break the critical path. **It does not
+work**: the systolic array's partial-sum cascade depends on each PE's output
+being combinationally valid within the same cycle as its inputs. The pipeline
+register delays the output by 1 cycle via non-blocking assignment, causing the
+next row's PE to read stale partial-sum data on the same posedge.
+
+Root cause: at posedge T, PE(r) updates o_ps_out (NB assignment) while
+PE(r+1) reads i_ps_in (the OLD value before the NB update). With a pipeline
+register in the accumulator, PE(r)'s output is delayed by 1 cycle, so
+PE(r+1) reads garbage instead of PE(r)'s result.
+
+**The FP16 accumulator must remain purely combinational.** The PE's own
+output register provides sufficient pipeline staging. Fmax improvement must
+come from other techniques (e.g., the act/ps_in registration that already
+improved from 14 MHz to 30 MHz).
+
 ## DMA prefetch / A-row pipelining (Aug 2026)
 
 While the core computes on the first row of A, the DMA prefetches rows 1..M-1

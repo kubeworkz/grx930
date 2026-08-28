@@ -6,6 +6,13 @@
 //
 // Avoids part-selects inside always_comb (Icarus Verilog limitation) by using
 // continuous assignments for all output field extraction.
+//
+// NOTE: This module must be PURELY COMBINATIONAL. The systolic array's
+// partial-sum cascade depends on each PE's output being valid within the same
+// cycle as its inputs. A pipeline register inside the accumulator would delay
+// the output by 1 cycle, causing the next row's PE to read stale partial-sum
+// data (NB assignment vs combinational read on the same posedge).
+// The PE's own output register provides sufficient pipeline staging.
 // -----------------------------------------------------------------------------
 
 module c930_fp16_acc
@@ -47,6 +54,10 @@ module c930_fp16_acc
 
   wire [7:0] exp_diff = exp_a - exp_b;
 
+  // ---- Derived flags ----
+  wire both_zero  = s_zero && p_zero;
+  wire signs_same = (sign_a == sign_b);
+
   // ---- Build 27-bit aligned mantissas (1 hidden + 23 mantissa + 3 guard) ----
   wire [26:0] mant_a_ext = {1'b1, mant_a, 3'b0};
   wire [26:0] mant_b_pre = {1'b1, mant_b, 3'b0};
@@ -57,28 +68,24 @@ module c930_fp16_acc
                              (27'h1 << exp_diff) - 27'h1;
   wire sticky = ~(s_zero || p_zero) & (|(mant_b_pre & sticky_mask));
 
-  // ---- Add / subtract magnitudes ----
-  wire both_zero = s_zero && p_zero;
-  wire signs_same = (sign_a == sign_b);
-
-  wire [27:0] sum_same  = {1'b0, mant_a_ext} + {1'b0, mant_b_ext};
+  // ---- Add / subtract magnitudes (combinational) ----
+  wire [27:0] sum_same   = {1'b0, mant_a_ext} + {1'b0, mant_b_ext};
   wire [27:0] sum_diff_a = {1'b0, mant_a_ext} - {1'b0, mant_b_ext};
   wire [27:0] sum_diff_b = {1'b0, mant_b_ext} - {1'b0, mant_a_ext};
-  wire        a_geq_b = (mant_a_ext >= mant_b_ext);
+  wire        a_geq_b    = (mant_a_ext >= mant_b_ext);
 
   // Subtraction sticky clamp: if exact cancellation with sticky, set to 1
   wire [27:0] sum_diff_clamped_a = (sum_diff_a == 28'd0 && sticky) ? 28'd1 : sum_diff_a;
   wire [27:0] sum_diff_clamped_b = (sum_diff_b == 28'd0 && sticky) ? 28'd1 : sum_diff_b;
 
   // Mux the result based on case
-  // Using a 28-bit intermediate to avoid always_comb part-selects
   wire [27:0] sum_raw_w;
   wire        sum_sign_w;
 
   assign sum_raw_w =
     both_zero        ? 28'd0 :
-    s_zero           ? {1'b0, mant_a_ext} :    // result = product (in A slot)
-    p_zero           ? {1'b0, mant_a_ext} :    // result = partial sum (in A slot)
+    s_zero           ? {1'b0, mant_a_ext} :
+    p_zero           ? {1'b0, mant_a_ext} :
     signs_same       ? sum_same :
     a_geq_b          ? sum_diff_clamped_a :
                        sum_diff_clamped_b;
@@ -124,22 +131,19 @@ module c930_fp16_acc
                     5'd28;
 
   // ---- Normalize: shift so hidden 1 lands at bit 26 ----
-  // Overflow case (bit 27 set): shift right by 1
-  // Normal case: shift left by lzc
   wire        is_overflow = (lzc == 5'd0) && sum_raw_w[27];
   wire [27:0] norm_shifted = is_overflow ? (sum_raw_w >> 1) :
                                              (sum_raw_w << lzc);
 
   // ---- Compute final exponent and mantissa ----
-  // Use wide intermediate to avoid part-selects inside always_comb
   wire [7:0] exp_norm = is_overflow ? (exp_a + 8'd1) :
                          (exp_a > {3'b0, lzc}) ? (exp_a - {3'b0, lzc}) : 8'd0;
 
   wire [31:0] result_pre =
-    (s_nan || p_nan)         ? {sum_sign_w, 8'd255, 23'd1} :   // NaN
-    (s_inf || p_inf)         ? {sum_sign_w, 8'd255, 23'd0} :   // Inf
-    (sum_raw_w == 28'd0)     ? {sum_sign_w, 8'd0, 23'd0} :    // exact zero
-    (lzc == 5'd28)           ? {sum_sign_w, 8'd0, 23'd0} :    // underflow
+    (s_nan || p_nan)       ? {sum_sign_w, 8'd255, 23'd1} :
+    (s_inf || p_inf)       ? {sum_sign_w, 8'd255, 23'd0} :
+    (sum_raw_w == 28'd0)   ? {sum_sign_w, 8'd0, 23'd0} :
+    (lzc == 5'd28)         ? {sum_sign_w, 8'd0, 23'd0} :
     {sum_sign_w, exp_norm, norm_shifted[25:3]};
 
   assign o_ps_out = result_pre;

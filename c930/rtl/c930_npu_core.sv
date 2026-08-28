@@ -170,6 +170,10 @@ module c930_npu_core
   int  k_base_reg;      // kt_reg * NUM_ROWS, registered
   int  kr_reg;          // min(NUM_ROWS, i_dim_k - k_base), registered
 
+  // NOTE: FP16/BF16 accumulator must remain purely combinational.
+  // A pipeline register inside the accumulator breaks the systolic
+  // partial-sum cascade (NB assignment timing issue).
+
   // ---------------------------------------------------------------------------
   // Systolic-array feed (registered): skew generation
   // ---------------------------------------------------------------------------
@@ -356,9 +360,9 @@ module c930_npu_core
           end
         end
 
-        // Run one K tile: NUM_ROWS + NUM_COLS + 2 cycles.
-        // (+1 vs before because act/ps_in are registered, adding 1 cycle
-        // of pipeline latency to the systolic array inputs.)
+        // Run one K tile.  Cycles: NUM_ROWS + NUM_COLS + 2
+        // (All precisions have 2-cycle PE latency: product reg + output reg.)
+        // The FP16 accumulator is combinational to preserve cascade timing.
         S_RUN: begin
           // Staggered capture: column (t - NUM_ROWS - 2) finishes at cycle t.
           if (t >= NUM_ROWS + 2)

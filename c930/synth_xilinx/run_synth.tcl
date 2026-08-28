@@ -74,6 +74,8 @@ if {$wns ne "" && $wns ne "N/A"} {
 }
 
 # ---- Implementation (place + route, resumable) ----
+# xc7a100t has 62K LUTs — plenty for the full NPU design.
+
 set impl_status [get_property STATUS [get_runs impl_1]]
 if {![string match -nocase "*complete*" $impl_status]} {
     puts "INFO: Running implementation..."
