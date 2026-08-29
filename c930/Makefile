@@ -38,6 +38,8 @@ NPU_RTL := \
   rtl/c930_fp16_mul.sv \
   rtl/c930_bf16_mul.sv \
   rtl/c930_fp16_acc.sv \
+  rtl/c930_cla_sub.sv \
+  rtl/c930_cla_comp.sv \
   rtl/c930_fx_acc.sv \
   rtl/c930_tensor_pe.sv \
   rtl/c930_systolic_array.sv \
@@ -122,6 +124,33 @@ synth:
 # estimate of the logic fabric (core + NPU + bridge + DMA).
 synth-fit:
 	@bash synth/run_synth.sh fit
+
+# ---------------------------------------------------------------------------
+# Verilator cycle-accurate RTL simulation
+# ---------------------------------------------------------------------------
+VERILATOR := $(OSS_DIR)/bin/verilator
+VERILATOR_FLAGS := --cc --exe --build -Wall -Wno-DECLFILENAME \
+  -I../rv64imac/RTL --top-module c930_soc_verilator
+# Use synth/c930_ddr_stub.sv instead of rtl/c930_ddr.sv to avoid
+# module redefinition (the stub provides the same ports for synthesis/sim).
+VERIL_RTL := $(NPU_RTL) \
+  rtl/c930_cla_sub.sv \
+  rtl/c930_cla_comp.sv \
+  rtl/c930_mmio_bridge.sv \
+  rtl/c930_soc_top.sv \
+  synth/c930_ddr_stub.sv
+VERIL_TB := sim/tb_verilator.cc
+VERIL_TOP := sim/c930_soc_verilator.sv
+VERIL_OUT := $(BUILD_DIR)/verilator
+
+verilate: $(SW_HEX)
+	@mkdir -p $(VERIL_OUT)
+	$(VERILATOR) $(VERILATOR_FLAGS) \
+	  --Mdir $(VERIL_OUT) \
+	  $(VERIL_TOP) $(VERIL_TB) $(CORE_RTL) $(VERIL_RTL)
+
+verilate-run: verilate
+	$(VERIL_OUT)/Vc930_soc_verilator
 
 clean:
 	rm -rf $(BUILD_DIR)
