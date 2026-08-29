@@ -27,6 +27,8 @@ c930/sw/*.bin
 # Temp simulation logs
 c930/Cï*
 /tmp/soc_*.log
+c930/soc_*.log
+c930/soc_bench_*.log
 
 # Vendored xpack RISC-V toolchain (re-downloadable; see c930/toolchain/README.md)
 c930/toolchain/*
