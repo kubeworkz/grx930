@@ -163,6 +163,16 @@ verilate-npu: $(SW_HEX)
 	  --Mdir $(NPU_DPI_OUT) \
 	  $(NPU_DPI_SRC) $(NPU_DPI_RTL)
 
+# GRXCP integration reference test (boots firmware, reports NPU status)
+VERIL_GRXCP_TB := sim/tb_grxcp_ref.cc
+VERIL_GRXCP_OUT := $(BUILD_DIR)/grxcp_ref
+
+verilate-grxcp: $(SW_HEX)
+	@mkdir -p $(VERIL_GRXCP_OUT)
+	$(VERILATOR) $(VERILATOR_FLAGS) \
+	  --Mdir $(VERIL_GRXCP_OUT) \
+	  $(VERIL_TOP) $(VERIL_GRXCP_TB) $(CORE_RTL) $(VERIL_RTL)
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
