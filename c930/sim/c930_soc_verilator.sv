@@ -25,8 +25,3 @@ module c930_soc_verilator (
   );
 
 endmodule
-
-// DPI functions for DDR memory access from C++ test harness.
-// These poke the DDR stub's internal memory through hierarchical references.
-import "DPI-C" function int c930_dpi_mem_read(input int byte_addr);
-import "DPI-C" function void c930_dpi_mem_write(input int byte_addr, input int data, input int strobe);

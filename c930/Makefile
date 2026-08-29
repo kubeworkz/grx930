@@ -128,17 +128,16 @@ synth-fit:
 # ---------------------------------------------------------------------------
 # Verilator cycle-accurate RTL simulation
 # ---------------------------------------------------------------------------
-VERILATOR := $(OSS_DIR)/bin/verilator
-VERILATOR_FLAGS := --cc --exe --build -Wall -Wno-DECLFILENAME \
-  -I../rv64imac/RTL --top-module c930_soc_verilator
-# Use synth/c930_ddr_stub.sv instead of rtl/c930_ddr.sv to avoid
-# module redefinition (the stub provides the same ports for synthesis/sim).
+OSS_DIR ?= toolchain/oss-cad-suite
+VERILATOR := $(OSS_DIR)/bin/verilator_bin.exe
+VERILATOR_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal \
+  -Wno-EOFNEWLINE -Wno-REDEFMACRO --threads 0 -I../rv64imac/RTL --top-module c930_soc_verilator
+# Use sim/c930_ddr_verilator.sv (flat 1D byte array) instead of
+# synth/c930_ddr_stub.sv (2D banked array that won't init in Verilator).
 VERIL_RTL := $(NPU_RTL) \
-  rtl/c930_cla_sub.sv \
-  rtl/c930_cla_comp.sv \
   rtl/c930_mmio_bridge.sv \
   rtl/c930_soc_top.sv \
-  synth/c930_ddr_stub.sv
+  sim/c930_ddr_verilator.sv
 VERIL_TB := sim/tb_verilator.cc
 VERIL_TOP := sim/c930_soc_verilator.sv
 VERIL_OUT := $(BUILD_DIR)/verilator
