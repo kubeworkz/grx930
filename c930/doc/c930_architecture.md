@@ -523,3 +523,148 @@ The SoC testbench sweeps GEMM shapes including:
 | 5 | CHI coherent NPU port (SVM with CPU) | Planned |
 | 6 | Wide out-of-order core, DDR5/HBM, PCIe/CXL, IOMMU/AIA | Planned |
 | 7 | grxcp Phase 7 backend integration | **Ready** (this doc) |
+
+---
+
+## 14. grxcp Integration Guide
+
+### 14.1 Hardware limits vs synthesis defaults
+
+The SoC top-level (`c930_soc_top.sv`) instantiates the NPU with **synthesis defaults**
+that fit the 64KB DDR stub BRAM:
+
+| Parameter | SoC default | NPU core max | Notes |
+|-----------|-------------|-------------|-------|
+| MAX_M | 8 | **64** | Output rows, sequential loop |
+| MAX_K | 16 | **256** | Reduction length, K-tiled |
+| MAX_N | 12 | **8** | Output cols, N-tiled |
+| NUM_ROWS | 4 | **8** | Systolic rows (PE count per tile) |
+| NUM_COLS | 4 | **8** | Systolic cols (PE count per tile) |
+
+**Key implication:** If the grxcp backend needs larger GEMMs, the SoC parameters
+must be overridden. The NPU core itself supports M up to 64 and K up to 256.
+N is limited to 8 (one column tile) unless N-tiling is used.
+
+The A/B/C DDR address layout in the default firmware (`npu_boot.c`) is:
+
+| Address | Size | Content |
+|---------|------|---------|
+| `0x8000` | M×K bytes | A matrix (INT8, row-major) |
+| `0x8400` | K×N bytes | B matrix (INT8, row-major) |
+| `0x8800` | M×N×4 bytes | C result (INT32, one word per element) |
+| `0x9000` | 4 bytes | DONE magic (`0xDEADBEEF`) |
+| `0x9400` | 24 bytes | Performance benchmark results |
+
+### 14.2 Register model (for grxcp backend)
+
+The grxcp backend needs a **register-model-accurate** simulation of the NPU.
+A green run on `simx` (software model) is NOT sufficient — the backend's
+decision logic must be gated against the actual hardware register map.
+
+**Available register models:**
+
+1. **c930_architecture.md §5** — canonical register map (this document)
+2. **c930_npu_csr.sv** — RTL implementation of the CSR block
+3. **npu_dpi.h** — C++ header with CSR addresses and high-level API
+4. **c930_npu_dpi.sv** — standalone NPU Verilator model with DPI functions
+
+**Recommended approach for grxcp testing:**
+
+```c
+#include "npu_dpi.h"
+
+// Load A/B data into DDR
+for (int i = 0; i < M*K; i++)
+    dpi_npu_mem_write(A_ADDR + i, A[i], 0x1);
+
+// Configure NPU via AXI4-Lite CSRs
+dpi_npu_csr_write(NPU_CSR_DIM_M,  M);
+dpi_npu_csr_write(NPU_CSR_DIM_N,  N);
+dpi_npu_csr_write(NPU_CSR_DIM_K,  K);
+dpi_npu_csr_write(NPU_CSR_A_BASE, A_ADDR);
+dpi_npu_csr_write(NPU_CSR_B_BASE, B_ADDR);
+dpi_npu_csr_write(NPU_CSR_C_BASE, C_ADDR);
+dpi_npu_csr_write(NPU_CSR_PREC,   0);  // INT8
+
+// Trigger and wait
+dpi_npu_csr_write(NPU_CSR_START, 1);
+while (!(dpi_npu_csr_read(NPU_CSR_STATUS) & 0x2))  // poll DONE bit
+    ;
+
+// Read C results
+for (int i = 0; i < M*N; i++)
+    C[i] = dpi_npu_mem_read(C_ADDR + i * 4);
+```
+
+### 14.3 RTLSIM requirements (AGENTS.md §4)
+
+Every conformance test must run on both `simx` (software model) and `rtlsim`
+(cycle-accurate RTL). Current status:
+
+| Requirement | Status | Path |
+|-------------|--------|------|
+| Icarus RTL testbench | ✅ Complete | `c930/tb/tb_c930_soc.sv` — 22-case sweep + stress |
+| Verilator cycle-accurate | ⚠️ Build works, DDR init issue | `c930/sim/c930_soc_verilator.sv` |
+| Standalone NPU DPI wrapper | ✅ Complete | `c930/sim/c930_npu_dpi.sv` |
+| C++ DPI test harness | ✅ Complete | `c930/sim/npu_dpi_test.cc` |
+
+**Build commands:**
+
+```bash
+# Full SoC simulation (Icarus)
+cd c930 && make soc
+
+# Standalone NPU DPI model (Verilator)
+cd c930 && make verilate-npu
+
+# Full SoC Verilator model (needs DDR init fix)
+cd c930 && make verilate
+```
+
+**Known issue:** The Verilator model's DDR stub uses a 2D banked memory
+(`mem[k][L]`) that doesn't initialize properly in Verilator. The Icarus
+model works correctly. Fix: replace the 2D array with a flat 1D array in
+a Verilator-specific DDR stub.
+
+### 14.4 Performance counters
+
+The NPU provides three performance counters accessible via MMIO:
+
+| CSR | Address | Description |
+|-----|---------|-------------|
+| CYCLE_COUNT | `0x4000_002C` | Free-running cycles while NPU is busy |
+| OP_COUNT | `0x4000_0030` | Total PE MAC operations (NUM_ROWS × NUM_COLS × cycles) |
+| STALL_COUNT | `0x4000_0034` | Cycles stalled (weight loading) |
+
+**TOPS calculation:**
+```
+TOPS = (2 × M × N × K) / (cycle_count × clock_period)
+```
+The factor of 2 accounts for multiply + accumulate per MAC.
+
+### 14.5 Precision modes
+
+| PREC | Mode | Input format | Output format | Notes |
+|------|------|-------------|---------------|-------|
+| 0 | INT8 | Signed 8-bit, packed 4/word | INT32, 1/word | Default, fastest |
+| 1 | INT16 | Signed 16-bit, packed 2/word | INT32, 1/word | |
+| 2 | FP16 | IEEE 754 half, packed 2/word | FP32, 1/word | CLA-accelerated |
+| 3 | BF16 | Brain float16, packed 2/word | FP32, 1/word | |
+| 4 | INT4 | Signed 4-bit, packed 8/word | INT32, 1/word | Experimental |
+
+**FP16/BF16 accumulator** uses a combinational FP32 adder with CLA
+exponent comparator and subtractor. Fmax on ECP5: ~32 MHz, Artix-7: ~45 MHz.
+
+### 14.6 What the grxcp backend needs from the NPU
+
+The grxcp backend dispatches GEMMs through the NPU by:
+
+1. **Allocating DDR buffers** for A, B, C at known addresses
+2. **Loading A/B data** via DMA or direct DDR writes
+3. **Writing CSRs** (DIM_M, DIM_N, DIM_K, A_BASE, B_BASE, C_BASE, PREC)
+4. **Triggering** (write 1 to START)
+5. **Polling** STATUS register until DONE bit is set
+6. **Reading C results** from DDR
+
+The NPU is a **blocking accelerator** — only one GEMM runs at a time.
+The grxcp backend must serialize GEMM dispatches through the NPU.
