@@ -152,6 +152,18 @@ verilate: $(SW_HEX)
 verilate-run: verilate
 	$(VERIL_OUT)/Vc930_soc_verilator
 
+# Standalone NPU DPI wrapper for grxcp backend testing
+NPU_DPI_RTL := $(NPU_RTL) rtl/c930_npu_top.sv
+NPU_DPI_SRC := sim/c930_npu_dpi.sv sim/npu_dpi.cc sim/npu_dpi_test.cc
+NPU_DPI_OUT := $(BUILD_DIR)/npu_dpi
+
+verilate-npu: $(SW_HEX)
+	@mkdir -p $(NPU_DPI_OUT)
+	$(VERILATOR) $(VERILATOR_FLAGS) \
+	  --top-module c930_npu_dpi \
+	  --Mdir $(NPU_DPI_OUT) \
+	  $(NPU_DPI_SRC) $(NPU_DPI_RTL)
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
