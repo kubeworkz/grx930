@@ -40,3 +40,7 @@ rv64imac/*
 # Personal FlexLM license files (never commit these)
 *.lic
 *.lic.txt
+
+# Vivado journal/log at repo root
+vivado.jou
+vivado.log
