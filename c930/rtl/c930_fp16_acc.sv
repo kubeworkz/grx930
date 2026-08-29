@@ -47,7 +47,12 @@ module c930_fp16_acc
   wire p_nan  = (p_exp == 8'd255) && (p_mant != 23'd0);
 
   // ---- Sort: A has the larger (or equal) exponent ----
-  wire swap = (p_exp > s_exp) || ((p_exp == s_exp) && (p_mant > s_mant));
+  // CLA comparator breaks the exponent comparison off the critical path.
+  // exp_gt: p_exp > s_exp  (8-bit CLA, ~3 LUT levels)
+  // exp_eq: p_exp == s_exp  (XOR + NOR, 2 LUT levels)
+  wire exp_gt, exp_eq;
+  c930_cla_comp u_cla_cmp (.i_a(p_exp), .i_b(s_exp), .o_gt(exp_gt), .o_eq(exp_eq));
+  wire swap = exp_gt || (exp_eq && (p_mant > s_mant));
 
   wire [7:0]  exp_a  = swap ? p_exp  : s_exp;
   wire [22:0] mant_a = swap ? p_mant : s_mant;
