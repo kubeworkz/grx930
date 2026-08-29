@@ -173,6 +173,16 @@ verilate-grxcp: $(SW_HEX)
 	  --Mdir $(VERIL_GRXCP_OUT) \
 	  $(VERIL_TOP) $(VERIL_GRXCP_TB) $(CORE_RTL) $(VERIL_RTL)
 
+# Verilator vs Icarus timing comparison
+VERIL_TIMING_TB := sim/tb_timing_compare.cc
+VERIL_TIMING_OUT := $(BUILD_DIR)/timing_compare
+
+verilate-timing: $(SW_HEX)
+	@mkdir -p $(VERIL_TIMING_OUT)
+	$(VERILATOR) $(VERILATOR_FLAGS) \
+	  --Mdir $(VERIL_TIMING_OUT) \
+	  $(VERIL_TOP) $(VERIL_TIMING_TB) $(CORE_RTL) $(VERIL_RTL)
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
