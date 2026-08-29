@@ -479,11 +479,13 @@ still be worth re-evaluating as a pure IPC feature.
 | IF-stage BTB (64-entry) | **REVERTED** | 32.7 vs 35.3 baseline; predictor only removes taken-branch penalty, carry chain remains |
 | FP16/BF16 datapath | **14.4 MHz** | Multiplier+accumulator combinational chain |
 | PE product registration | **24.9 MHz** | fp32_prod/int_prod registered before accumulator |
+| CLA exponent subtractor | **32.2 MHz** | Carry-lookahead breaks exp_diff ripple; seed 3 from 8-seed sweep |
 
 The design's Fmax ceiling (INT8-only NPU) was **~35 MHz** on ECP5-85F with
 the 5-stage in-order pipeline. The branch-unit carry chain is inherent to the
 architecture (deep changes needed to break it further). With FP16/BF16, the
-ceiling is **~30 MHz** (act/ps_in registration broke the accumulator chain; routing is now the bottleneck).
+ceiling is **~32 MHz** (CLA subtractor broke the exponent carry chain;
+the CPU ALU carry chain is now the bottleneck).
 
 ### FP16/BF16 datapath synthesis (Aug 2026)
 
