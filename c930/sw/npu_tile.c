@@ -8,16 +8,22 @@
 #include "npu_tile.h"
 
 // ---- Static state ----
+// Supports two modes: context-free (firmware) and context-aware (host test)
 
-static npu_read_fn  s_read  = 0;
-static npu_write_fn s_write = 0;
+static npu_read_fn      s_read     = 0;
+static npu_write_fn     s_write    = 0;
+static npu_read_ctx_fn  s_read_ctx = 0;
+static npu_write_ctx_fn s_write_ctx= 0;
+static void            *s_ctx      = 0;
 
 static inline void csr_write(unsigned int reg, unsigned int val) {
-    s_write(reg, val);
+    if (s_write_ctx) s_write_ctx(s_ctx, reg, val);
+    else             s_write(reg, val);
 }
 
 static inline unsigned int csr_read(unsigned int reg) {
-    return s_read(reg);
+    if (s_read_ctx) return s_read_ctx(s_ctx, reg);
+    else            return s_read(reg);
 }
 
 // ---- Init ----
@@ -25,6 +31,15 @@ static inline unsigned int csr_read(unsigned int reg) {
 void npu_tile_init(npu_read_fn read_fn, npu_write_fn write_fn) {
     s_read  = read_fn;
     s_write = write_fn;
+    s_read_ctx = 0; s_write_ctx = 0; s_ctx = 0;
+}
+
+void npu_tile_init_ctx(void *ctx, npu_read_ctx_fn read_fn,
+                       npu_write_ctx_fn write_fn) {
+    s_ctx      = ctx;
+    s_read_ctx = read_fn;
+    s_write_ctx= write_fn;
+    s_read = 0; s_write = 0;
 }
 
 // ---- DDR memory copy helpers (byte-granularity, works on any RISC-V) ----
@@ -220,6 +235,15 @@ void npu_tile_gemm(int M, int N, int K, int prec,
             }
         }
     }
+}
+
+// ---- Context-aware GEMM (thin wrapper) ----
+// The ctx and callbacks are already set via npu_tile_init_ctx();
+// npu_tile_gemm uses csr_read/csr_write which dispatch automatically.
+void npu_tile_gemm_ctx(int M, int N, int K, int prec,
+                       unsigned int a_src, unsigned int b_src,
+                       unsigned int c_dst, unsigned int tmp_buf) {
+    npu_tile_gemm(M, N, K, prec, a_src, b_src, c_dst, tmp_buf);
 }
 
 // ---- Stats ----

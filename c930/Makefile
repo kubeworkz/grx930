@@ -211,6 +211,25 @@ $(OUT_TILE): $(SOC_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(TILE_SW_HEX)
 tile_test: $(OUT_TILE)
 	$(VVP) $(OUT_TILE)
 
+# ---------------------------------------------------------------------------
+# Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
+# ---------------------------------------------------------------------------
+HOST_CC     ?= gcc
+NPU_DPI_OBJ := $(BUILD_DIR)/npu_dpi_shim.o
+NPU_DPI_LIB := $(BUILD_DIR)/libnpu_dpi_shim.a
+
+$(NPU_DPI_OBJ): sim/npu_dpi_shim.c sim/npu_dpi_shim.h
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) -c -Wall -Wextra -fPIC -o $@ sim/npu_dpi_shim.c
+
+$(NPU_DPI_LIB): $(NPU_DPI_OBJ)
+	rcs $@ $<
+
+npu-shim: $(NPU_DPI_LIB)
+	@echo "Built $(NPU_DPI_LIB)"
+	@echo "Link with: -L$(BUILD_DIR) -lnpu_dpi_shim"
+	@echo "Include:   sim/npu_dpi_shim.h"
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)

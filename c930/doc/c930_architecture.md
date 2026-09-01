@@ -553,7 +553,7 @@ the corresponding MAX parameter because the buffers are statically sized.
 The SoC top-level (`c930_soc_top.sv`) instantiates the NPU with **synthesis
 defaults** that fit a small DDR stub:
 
-| Parameter | SoC default | NPU core max | Notes |
+| Parameter | SoC default | Core default | Notes |
 |-----------|-------------|-------------|-------|
 | MAX_M | 8 | **64** | A/C buffer rows |
 | MAX_K | 16 | **256** | A/B buffer reduction length |
@@ -658,7 +658,7 @@ cd c930 && make soc
 # Standalone NPU DPI model (Verilator)
 cd c930 && make verilate-npu
 
-# Full SoC Verilator model (needs DDR init fix)
+# Full SoC Verilator model
 cd c930 && make verilate
 ```
 

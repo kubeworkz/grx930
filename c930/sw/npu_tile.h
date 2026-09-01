@@ -49,7 +49,7 @@ extern "C" {
 #define NPU_MAX_K   16
 #endif
 #ifndef NPU_NUM_COLS
-#define NPU_NUM_COLS 8
+#define NPU_NUM_COLS 4   // SoC default; override for different instantiations
 #endif
 
 // Precision modes
@@ -89,9 +89,16 @@ static inline int npu_tile_elem_size(int prec) {
      NPU_TILE_C_SIZE(NPU_MAX_M, NPU_MAX_N) * 2)
 
 // ---- NPU register access (caller provides read/write functions) ----
+//
+// Two variants:
+//   Context-free: for firmware on the RV64 core (one NPU, no injection needed)
+//   Context-aware: for host-side test harnesses that inject register models
+//                  via a void* ctx (matches grxcp's npu_c930_read_fn signature).
 
 typedef unsigned int (*npu_read_fn)(unsigned int addr);
 typedef void (*npu_write_fn)(unsigned int addr, unsigned int val);
+typedef unsigned int (*npu_read_ctx_fn)(void *ctx, unsigned int addr);
+typedef void (*npu_write_ctx_fn)(void *ctx, unsigned int addr, unsigned int val);
 
 // Register addresses (byte-addressed, matching c930_npu_csr.sv)
 #define NPU_REG_CTRL    0x40000000u
@@ -133,22 +140,34 @@ typedef struct {
     npu_tile_t tiles[NPU_TILE_MAX_TILES];
 } npu_tile_plan_t;
 
-// ---- API ----
+// ---- API (context-free, for firmware) ----
 
 // Initialize the library with NPU access functions.
 // Must be called before any other npu_tile_* function.
 void npu_tile_init(npu_read_fn read_fn, npu_write_fn write_fn);
 
-// Compute a tiling plan for a GEMM of size M x N x K.
-// Returns 0 on success, -1 if the plan exceeds NPU_TILE_MAX_TILES.
-int npu_tile_plan(int M, int N, int K, int prec, npu_tile_plan_t *plan);
-
 // High-level: execute a full GEMM with automatic tiling.
-// a_src/b_src/c_dst are byte addresses in DDR.
-// tmp_buf is the temporary buffer.
 void npu_tile_gemm(int M, int N, int K, int prec,
                    unsigned int a_src, unsigned int b_src,
                    unsigned int c_dst, unsigned int tmp_buf);
+
+// ---- API (context-aware, for host-side test harnesses) ----
+// These carry a void* ctx that gets passed to the read/write callbacks,
+// enabling injection of different register models (absent, dead bus,
+// live, never-finishes) without global state.
+
+void npu_tile_init_ctx(void *ctx, npu_read_ctx_fn read_fn,
+                       npu_write_ctx_fn write_fn);
+
+void npu_tile_gemm_ctx(int M, int N, int K, int prec,
+                       unsigned int a_src, unsigned int b_src,
+                       unsigned int c_dst, unsigned int tmp_buf);
+
+// ---- Shared ----
+
+// Compute a tiling plan for a GEMM of size M x N x K.
+// Returns 0 on success, -1 if the plan exceeds NPU_TILE_MAX_TILES.
+int npu_tile_plan(int M, int N, int K, int prec, npu_tile_plan_t *plan);
 
 // Read NPU performance counters after the last tile execution.
 typedef struct {
