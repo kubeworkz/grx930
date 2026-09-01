@@ -59,7 +59,8 @@ extern "C" {
 //   7  0x1C  C_BASE
 //   8  0x20  PREC
 //   9  0x24  CYCLE_LO     free-running cycle counter (low)
-//  10  0x28  CYCLE_HI     free-running cycle counter (high, reserved)
+//  10  0x28  (reserved)   dead code — ADDR_CYCLE_HI defined in RTL but
+//                          not wired in any case statement, always reads 0
 //  11  0x2C  OP_COUNT     MAC operations completed
 //  12  0x30  STALL_COUNT  cycles stalled
 //  13  0x34  DMA_CT       DMA busy cycles

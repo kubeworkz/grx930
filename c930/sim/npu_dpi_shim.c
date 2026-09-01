@@ -21,7 +21,7 @@ static uint8_t ddr[NPU_DDR_SIZE];
 // Indices match c930_npu_csr.sv localparams exactly.
 //   0  CTRL, 1  STATUS, 2  DIM_M, 3  DIM_N, 4  DIM_K,
 //   5  A_BASE, 6  B_BASE, 7  C_BASE, 8  PREC,
-//   9  CYCLE_LO, 10 CYCLE_HI, 11 OP_COUNT, 12 STALL_CT, 13 DMA_CT
+//   9  CYCLE_LO, 10 (reserved, dead), 11 OP_COUNT, 12 STALL_CT, 13 DMA_CT
 static uint32_t csr[14];
 static int      npu_busy;       // mirrors STATUS bit 0
 static int      npu_cycles_left; // countdown for npu_dpi_run()

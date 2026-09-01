@@ -280,6 +280,51 @@ The precision mode controls the element width of the systolic array PEs:
 The precision mode must be set before writing CTRL.START. Changing precision
 while the engine is busy is undefined.
 
+### CYCLE_COUNT (0x24) — Read-only
+
+| Bits | Description |
+|------|-------------|
+| [31:0] | Free-running 32-bit cycle counter. Increments every clock cycle while the NPU is not idle (any state except S_IDLE). Resets to 0 when START is written. |
+
+**Note:** This is a 32-bit counter. The address 0x28 (`CYCLE_HI`) is defined in the RTL as a localparam but is dead code — it is not wired in any read/write case statement and always reads as 0. Do not depend on 0x28.
+
+### OP_COUNT (0x2C) — Read-only
+
+| Bits | Description |
+|------|-------------|
+| [31:0] | Number of PE MAC operations completed: `M × N × K × 2` (multiply + accumulate per element). Updated when GEMM completes. Resets to 0 on START. |
+
+### STALL_COUNT (0x30) — Read-only
+
+| Bits | Description |
+|------|-------------|
+| [31:0] | Number of cycles the NPU core was stalled (waiting for DMA or pipeline). Resets to 0 on START. |
+
+### DMA_CT (0x34) — Read-only
+
+| Bits | Description |
+|------|-------------|
+| [31:0] | Number of cycles the DMA was busy (phase != P_IDLE). Resets to 0 on START. |
+
+### Full register index map
+
+| Index | Offset | Name | RTL localparam | Notes |
+|-------|--------|------|----------------|-------|
+| 0 | 0x00 | CTRL | ADDR_CTRL | Write-only |
+| 1 | 0x04 | STATUS | ADDR_STAT | Read-only |
+| 2 | 0x08 | DIM_M | ADDR_DIM_M | |
+| 3 | 0x0C | DIM_N | ADDR_DIM_N | |
+| 4 | 0x10 | DIM_K | ADDR_DIM_K | |
+| 5 | 0x14 | A_BASE | ADDR_A_BASE | |
+| 6 | 0x18 | B_BASE | ADDR_B_BASE | |
+| 7 | 0x1C | C_BASE | ADDR_C_BASE | |
+| 8 | 0x20 | PREC | ADDR_PREC | |
+| 9 | 0x24 | CYCLE_COUNT | ADDR_CYCLE_LO | 32-bit free-running |
+| 10 | 0x28 | *(reserved)* | ADDR_CYCLE_HI | Dead code, always reads 0 |
+| 11 | 0x2C | OP_COUNT | ADDR_OP_COUNT | |
+| 12 | 0x30 | STALL_COUNT | ADDR_STALL_CT | |
+| 13 | 0x34 | DMA_CT | ADDR_DMA_CT | |
+
 ---
 
 ## 6. NPU Data Format and Byte Layout
