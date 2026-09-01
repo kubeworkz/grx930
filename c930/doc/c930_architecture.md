@@ -143,19 +143,34 @@ Weight-stationary dataflow (TPU-style). Default configuration: 4×4 PEs.
 
 ### 4.2 Tiling
 
-The NPU handles arbitrary M/N/K through three nested loops:
+The NPU handles M/N/K through three nested loops **within the on-chip buffer limits**:
 
 - **K-tiling:** `ceil(K / NUM_ROWS)` tiles; accumulator feeds back into top edge
 - **N-tiling:** `ceil(N / NUM_COLS)` column tiles; fresh accumulator per tile
 - **M-tiling:** output rows looped sequentially
 
-With default parameters (NUM_ROWS=4, NUM_COLS=4, MAX_M=8, MAX_K=16, MAX_N=12):
+**Internal tiling bounds** — M, N, K must all be ≤ their respective MAX parameter
+because the A/B/C buffers are statically sized by MAX_M, MAX_N, MAX_K:
 
-| Dimension | Range | Tiling passes |
-|-----------|-------|---------------|
-| M | 1–8 | M passes (1 each) |
+| Buffer | Size (elements) | Width | Purpose |
+|--------|----------------|-------|---------|
+| `a_mem` | MAX_M × MAX_K | DIN_W bits | A matrix (activation) |
+| `b_mem` | MAX_K × MAX_N | DIN_W bits | B matrix (weight) |
+| `c_mem` | MAX_M × MAX_N | 32 bits | C result (INT32 or FP32) |
+
+If the grxcp backend needs GEMMs larger than MAX_M/MAX_N/MAX_K, it must
+tile externally — see §14.7.
+
+With default SoC parameters (NUM_ROWS=4, NUM_COLS=4, MAX_M=8, MAX_K=16, MAX_N=12):
+
+| Dimension | Range | Internal tiling passes |
+|-----------|-------|------------------------|
+| M | 1–8 | M passes (1 row each) |
 | N | 1–12 | 1–3 N-tile passes (4 columns each) |
 | K | 1–16 | 1–4 K-tile passes (4 rows each) |
+| M>8 | — | **External tiling required** (split into ≤8-row chunks) |
+| N>12 | — | **External tiling required** (split into ≤12-col chunks) |
+| K>16 | — | **External tiling required** (split into ≤16-length chunks) |
 
 ### 4.3 Precision
 
@@ -528,22 +543,48 @@ The SoC testbench sweeps GEMM shapes including:
 
 ## 14. grxcp Integration Guide
 
-### 14.1 Hardware limits vs synthesis defaults
+### 14.1 Buffer sizes (MAX_M/N/K) and synthesis defaults
 
-The SoC top-level (`c930_soc_top.sv`) instantiates the NPU with **synthesis defaults**
-that fit the 64KB DDR stub BRAM:
+**MAX_M, MAX_N, MAX_K are buffer sizes**, not hard computational limits. They
+determine how much on-chip SRAM (BRAM) the NPU allocates for A, B, and C
+matrices. The runtime GEMM dimensions (set via DIM_M/N/K CSRs) must be ≤
+the corresponding MAX parameter because the buffers are statically sized.
+
+The SoC top-level (`c930_soc_top.sv`) instantiates the NPU with **synthesis
+defaults** that fit a small DDR stub:
 
 | Parameter | SoC default | NPU core max | Notes |
 |-----------|-------------|-------------|-------|
-| MAX_M | 8 | **64** | Output rows, sequential loop |
-| MAX_K | 16 | **256** | Reduction length, K-tiled |
-| MAX_N | 12 | **8** | Output cols, N-tiled |
-| NUM_ROWS | 4 | **8** | Systolic rows (PE count per tile) |
-| NUM_COLS | 4 | **8** | Systolic cols (PE count per tile) |
+| MAX_M | 8 | **64** | A/C buffer rows |
+| MAX_K | 16 | **256** | A/B buffer reduction length |
+| MAX_N | 12 | **8** | B/C buffer columns |
+| NUM_ROWS | 4 | **8** | Systolic rows per tile |
+| NUM_COLS | 4 | **8** | Systolic cols per tile |
 
-**Key implication:** If the grxcp backend needs larger GEMMs, the SoC parameters
-must be overridden. The NPU core itself supports M up to 64 and K up to 256.
-N is limited to 8 (one column tile) unless N-tiling is used.
+**BRAM cost formulas** (for the grxcp SoC integrator):
+
+| Buffer | Elements | Bits per element | Total bits |
+|--------|----------|------------------|------------|
+| a_mem  | MAX_M × MAX_K | DIN_W (8 or 16) | MAX_M × MAX_K × DIN_W |
+| b_mem  | MAX_K × MAX_N | DIN_W (8 or 16) | MAX_K × MAX_N × DIN_W |
+| c_mem  | MAX_M × MAX_N | 32 | MAX_M × MAX_N × 32 |
+
+**Example:** With MAX_M=64, MAX_K=256, MAX_N=8, DIN_W=8:
+- a_mem: 64 × 256 × 8 = 131,072 bits = 16 KB
+- b_mem: 256 × 8 × 8 = 16,384 bits = 2 KB  
+- c_mem: 64 × 8 × 32 = 16,384 bits = 2 KB
+- **Total: ~20 KB** (fits in a single ECP5 BRAM block or Artix-7 RAMB18)
+
+With MAX_M=8, MAX_K=16, MAX_N=12 (SoC defaults):
+- a_mem: 8 × 16 × 8 = 1,024 bits = 128 B
+- b_mem: 16 × 12 × 8 = 1,536 bits = 192 B
+- c_mem: 8 × 12 × 32 = 3,072 bits = 384 B
+- **Total: ~704 B** (fits in a single small BRAM)
+
+**Key implication:** The grxcp backend should parameterize MAX_M/N/K to
+match the target FPGA's BRAM budget. Larger MAX values give bigger on-chip
+tiles (fewer NPU invocations for a given GEMM) but cost more BRAM.
+For dimensions exceeding MAX, the backend must tile externally (§14.7).
 
 The A/B/C DDR address layout in the default firmware (`npu_boot.c`) is:
 
@@ -604,7 +645,7 @@ Every conformance test must run on both `simx` (software model) and `rtlsim`
 | Requirement | Status | Path |
 |-------------|--------|------|
 | Icarus RTL testbench | ✅ Complete | `c930/tb/tb_c930_soc.sv` — 22-case sweep + stress |
-| Verilator cycle-accurate | ⚠️ Build works, DDR init issue | `c930/sim/c930_soc_verilator.sv` |
+| Verilator cycle-accurate | ✅ Complete | `c930/sim/c930_soc_verilator.sv` |
 | Standalone NPU DPI wrapper | ✅ Complete | `c930/sim/c930_npu_dpi.sv` |
 | C++ DPI test harness | ✅ Complete | `c930/sim/npu_dpi_test.cc` |
 
@@ -621,10 +662,10 @@ cd c930 && make verilate-npu
 cd c930 && make verilate
 ```
 
-**Known issue:** The Verilator model's DDR stub uses a 2D banked memory
-(`mem[k][L]`) that doesn't initialize properly in Verilator. The Icarus
-model works correctly. Fix: replace the 2D array with a flat 1D array in
-a Verilator-specific DDR stub.
+**Note:** The Verilator model uses a flat-1D DDR stub (`c930_ddr_verilator.sv`)
+instead of the synth stub's 2D banked array, because Verilator doesn't handle
+2D memory initialization correctly. Both models produce identical cycle counts
+(verified: NPU done at cycle 180 in both Icarus and Verilator).
 
 ### 14.4 Performance counters
 
@@ -668,3 +709,81 @@ The grxcp backend dispatches GEMMs through the NPU by:
 
 The NPU is a **blocking accelerator** — only one GEMM runs at a time.
 The grxcp backend must serialize GEMM dispatches through the NPU.
+
+**For GEMMs larger than MAX_M × MAX_N × MAX_K:** the backend must tile
+externally — see §14.7 for the tiling algorithm and DDR buffer layout.
+
+### 14.7 External tiling for large GEMMs
+
+When a GEMM dimension exceeds the on-chip MAX parameter, the grxcp backend
+must split it into tiles that fit within the buffer limits. The NPU's internal
+tiling (§4.2) only handles dimensions ≤ MAX_M/MAX_N/MAX_K.
+
+**Tiling rules:**
+
+| Dimension | Max on-chip | Tiling strategy |
+|-----------|------------|------------------|
+| M | MAX_M | Split into chunks of ≤MAX_M rows |
+| N | MAX_N | Split into chunks of ≤MAX_N columns |
+| K | MAX_K | Split into chunks of ≤MAX_K, accumulate partial sums |
+
+**M-tiling** (M > MAX_M):
+```
+For each m_chunk in range(0, M, MAX_M):
+    mc = min(MAX_M, M - m_chunk)
+    Load A[m_chunk:m_chunk+mc, 0:K] into DDR at A_ADDR
+    Configure DIM_M = mc, DIM_N = N, DIM_K = K
+    Trigger NPU, wait for DONE
+    Read C[0:mc, 0:N] from DDR at C_ADDR
+    Store to output C[m_chunk:m_chunk+mc, 0:N]
+```
+
+**N-tiling** (N > MAX_N):
+```
+For each n_chunk in range(0, N, MAX_N):
+    nc = min(MAX_N, N - n_chunk)
+    Load A[0:M, 0:K] into DDR at A_ADDR
+    Load B[0:K, n_chunk:n_chunk+nc] into DDR at B_ADDR
+    Configure DIM_M = M, DIM_N = nc, DIM_K = K
+    Trigger NPU, wait for DONE
+    Read C[0:M, 0:nc] from DDR at C_ADDR
+    Store to output C[0:M, n_chunk:n_chunk+nc]
+```
+
+**K-tiling** (K > MAX_K) — requires **partial-sum accumulation**:
+```
+For each k_chunk in range(0, K, MAX_K):
+    kc = min(MAX_K, K - k_chunk)
+    Load A[0:M, k_chunk:k_chunk+kc] into DDR at A_ADDR
+    Load B[0:kc, 0:N] into DDR at B_ADDR
+    if k_chunk == 0:
+        Configure DIM_M = M, DIM_N = N, DIM_K = kc
+        Trigger NPU, wait for DONE
+        Read C[0:M, 0:N] (this is the partial sum)
+    else:
+        // Accumulate: C_partial += NPU(A_tile, B_tile)
+        // The backend must add NPU output to existing C in DDR
+        Configure NPU for this tile
+        Trigger, wait, read C and ADD to running sum
+```
+
+**DDR buffer layout for external tiling:**
+
+The backend must manage DDR addresses to avoid overwriting live data:
+- Double-buffer A/B: while NPU processes tile N, load tile N+1
+- For K-tiling accumulation: keep partial C in DDR, accumulate in-place
+- Minimum DDR requirement: A tile + B tile + C result simultaneously
+
+**Minimum DDR for one tile:**
+```
+A_tile = MAX_M × MAX_K × element_size
+B_tile = MAX_K × MAX_N × element_size  
+C_tile = MAX_M × MAX_N × 4  (always 32-bit output)
+Total  = A_tile + B_tile + C_tile
+```
+
+With MAX_M=64, MAX_K=256, MAX_N=8, INT8:
+- A_tile: 64 × 256 × 1 = 16 KB
+- B_tile: 256 × 8 × 1 = 2 KB
+- C_tile: 64 × 8 × 4 = 2 KB
+- **Total: 20 KB** (fits in 64 KB DDR with room for firmware)
