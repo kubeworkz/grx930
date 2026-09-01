@@ -1,0 +1,67 @@
+# Line endings for this repository.
+#
+# WHY THIS EXISTS. Every text file in the index is LF and always has been --
+# `git ls-files --eol` reports i/lf for all 150 of them. Nothing is wrong with
+# the history. What happened is that an editor on Windows rewrote 73 working-
+# tree files as CRLF, and with no attributes and core.autocrlf unset there was
+# nothing to tell git those endings were not wanted. The result was a 2080-line
+# diff across the NPU RTL, the firmware image and four testbenches in which not
+# one byte of content had changed.
+#
+# That is the cost this file prevents: a real change -- a moved MAX_N, a fixed
+# CSR bound -- landing as four lines inside two thousand, where no reviewer will
+# see it.
+#
+# Attributes rather than core.autocrlf on purpose. autocrlf is per-clone config
+# that every contributor has to set for themselves and that travels with nobody;
+# this file travels with the repository and wins over autocrlf wherever the two
+# disagree.
+
+# Everything git decides is text is LF in the index AND LF on checkout, on every
+# platform. `text=auto` is the detection; `eol=lf` is what makes a Windows
+# checkout write LF rather than CRLF, which is the half that was missing.
+* text=auto eol=lf
+
+# --- files where CRLF is not cosmetic ---------------------------------------
+#
+# A shell script with CRLF fails as `\r: command not found`; there are 9 of
+# them here. The Yosys and linker scripts are the same shape of problem, and
+# tb_c930_soc.sv loads the firmware image through $readmemh, which is only
+# whitespace-tolerant by convention rather than by the standard. Named
+# explicitly so they stay LF even if the auto-detection is ever narrowed.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.ys   text eol=lf
+*.tcl  text eol=lf
+*.ld   text eol=lf
+*.S    text eol=lf
+*.hex  text eol=lf
+
+# --- source ------------------------------------------------------------------
+*.sv   text eol=lf
+*.v    text eol=lf
+*.c    text eol=lf
+*.cc   text eol=lf
+*.h    text eol=lf
+*.md   text eol=lf
+*.xdc  text eol=lf
+*.lpf  text eol=lf
+*.abc  text eol=lf
+
+# --- binary: never touched, never diffed as text -----------------------------
+#
+# git already detects these four (i/-text). Declaring them means the detection
+# is not what stands between a firmware image and a corrupting rewrite.
+*.bin  binary
+*.elf  binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+
+# --- tool droppings that are neither source nor worth diffing ----------------
+#
+# Vivado writes these into the working tree; -text keeps git from deciding they
+# are text and rewriting them, without claiming they are meaningful binaries.
+*.jou  -text
+*.log  -text
+*.lic  -text
