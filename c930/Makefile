@@ -183,6 +183,35 @@ verilate-timing: $(SW_HEX)
 	  --Mdir $(VERIL_TIMING_OUT) \
 	  $(VERIL_TOP) $(VERIL_TIMING_TB) $(CORE_RTL) $(VERIL_RTL)
 
+# ---------------------------------------------------------------------------
+# NPU tiling library test
+# ---------------------------------------------------------------------------
+TILE_SW_ELF := sw/npu_tile_test.elf
+TILE_SW_BIN := sw/npu_tile_test.bin
+TILE_SW_HEX := sw/npu_tile_prog.hex
+OUT_TILE    := $(BUILD_DIR)/tb_npu_tile.vvp
+
+$(TILE_SW_ELF): sw/start.S sw/npu_tile_test.c sw/npu_tile.c sw/npu_tile.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/npu_tile_test.c sw/npu_tile.c
+
+$(TILE_SW_BIN): $(TILE_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(TILE_SW_HEX): $(TILE_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(TILE_SW_BIN) $(TILE_SW_HEX)
+
+tile_sw: $(TILE_SW_HEX)
+
+$(OUT_TILE): $(SOC_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(TILE_SW_HEX)
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_RTL) tb/tb_npu_tile.sv
+
+tile_test: $(OUT_TILE)
+	$(VVP) $(OUT_TILE)
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
+	rm -f $(TILE_SW_ELF) $(TILE_SW_BIN) $(TILE_SW_HEX)
