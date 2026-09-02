@@ -93,6 +93,14 @@ extern "C" {
 // ---- DDR size (must match c930_ddr.sv MEM_BYTES) ----
 #define NPU_DDR_SIZE      65536
 
+// ---- Backend identifier (for grxcp device enumeration) ----
+// When grxcp attaches this shim as a register model, it should set the
+// device backend to this value instead of GRX_BACKEND_SILICON.
+// Value chosen to not collide with grxcp's existing backend enum.
+#define NPU_DPI_BACKEND_EMULATION  0x10  // shim / software model
+#define NPU_DPI_BACKEND_SIMULATION 0x11  // Verilator / RTL-backed sim
+#define NPU_DPI_BACKEND_SILICON    0x00  // real hardware (grxcp default)
+
 // ---- Precision constants (must match c930_npu_core.sv) ----
 #define NPU_PREC_INT8     0
 #define NPU_PREC_INT16    1
