@@ -21,8 +21,8 @@ foreach f [glob -nocomplain "$core_rtl_dir/*.sv"] {
 # NPU + SoC RTL (all top-level c930/rtl/*.sv except the behavioral DDR model)
 set npu_rtl_dir "[file dirname [info script]]/../rtl"
 foreach f [glob -nocomplain "$npu_rtl_dir/*.sv"] {
-    if {[string match "*c930_ddr.sv" $f]} {
-        continue    ;# behavioral 64 KB DDR model -> replaced by the synth stub below
+    if {[string match "*c930_ddr.sv" $f] || [string match "*c930_ddr3l.sv" $f]} {
+        continue    ;# behavioral DDR model and DDR3L MIG wrapper excluded
     }
     add_files -norecurse $f
 }

@@ -630,28 +630,40 @@ The critical path is now the 33-bit mantissa addition carry chain
 (~7.4 ns) + routing (~7 ns).  On Artix-7, CARRY4 chains would handle the
 adder in ~1-2 ns, giving ~50+ MHz without further RTL changes.
 
-### Artix-7 Vivado results (Aug 2026)
+### Artix-7 Vivado results (Sep 2026)
 
-Full Vivado 2026.1 implementation on xc7a35tcsg324-1 (Arty A7-35T),
+Full Vivado 2026.1 synthesis on xc7a100tcsg324-1 (Arty A7-100T),
 CLK_DIV=2 (50 MHz core clock), DDR stub in BRAM.
 
-**Fmax: 587.7 MHz** (WNS = 8.298 ns against 100 MHz constraint).
-The worst-path delay is only 1.7 ns — CARRY4 chains handle the 33-bit
-mantissa addition in ~0.15 ns/bit (vs ~8 ns on ECP5 LUT cascades).
-
-**Utilization:**
+#### 4×4 array (proven, fits)
 
 | Resource | Used | Available | Util% |
 |----------|------|-----------|-------|
-| Slice LUTs | 16,335 | 20,800 | 78.5% |
-| LUT as Logic | 15,731 | 20,800 | 75.6% |
-| LUT as Memory | 604 | 9,600 | 6.3% |
-| Slice Registers (FF) | 12,722 | 41,600 | 30.6% |
-| Block RAM (RAMB36) | 8 | 50 | 16.0% |
-| DSP48E1 | 3 | 90 | 3.3% |
-| F7 Muxes | 1,163 | 16,300 | 7.1% |
-| F8 Muxes | 455 | 8,150 | 5.6% |
-| Latches | 0 | — | 0.0% |
+| Slice LUTs | 32,951 | 63,400 | 52.0% |
+| Slice Registers (FF) | 14,936 | 126,800 | 11.8% |
+| Block RAM (RAMB36) | 8 | 135 | 5.9% |
+| DSP48E1 | 43 | 240 | 17.9% |
+
+Routed Fmax: **44.6 MHz** (previous P&R run).
+
+#### 8×8 array (does not fit)
+
+| Resource | Used | Available | Util% |
+|----------|------|-----------|-------|
+| Slice LUTs | **75,876** | 63,400 | **119.7%** ❌ |
+| Slice Registers (FF) | 21,872 | 126,800 | 17.2% |
+| Block RAM (RAMB36) | 8 | 135 | 5.9% |
+| DSP48E1 | 139 | 240 | 57.9% |
+
+**The 8×8 array with FP16 accumulators needs ~76K LUTs — 20% more than the
+Artix-7-100T provides.** The FP16 CLA subtractor and barrel shifter dominate
+the LUT count (each PE's accumulator is ~800 LUTs × 64 PEs = ~51K LUTs
+just for the accumulators).
+
+**Options to fit 8×8:**
+1. **Artix-7 200T** (xc7a200t, 215K LUTs) — fits at ~35% utilization
+2. **Drop FP16 accumulator** — keep 8×8 for INT8 only (~35K LUTs, fits)
+3. **4×8 array** (32 PEs) — ~50K LUTs, fits at ~79%
 
 **Fmax progression across platforms:**
 
@@ -662,7 +674,8 @@ mantissa addition in ~0.15 ns/bit (vs ~8 ns on ECP5 LUT cascades).
 | ECP5-85F (FP16/BF16, prod reg) | 24.9 MHz | Break multiplier→accumulator |
 | ECP5-85F (fixed-point acc) | 27.9 MHz | Skip per-cycle LZC+normalize |
 | ECP5-85F (8x8 array) | 24.8 MHz | Wider interconnect |
-| **Artix-7-35T (8x8 array)** | **587.7 MHz** | **CARRY4 carry chains** |
+| **Artix-7-100T (4x4 array)** | **44.6 MHz** | **CARRY4 carry chains** |
+| Artix-7-100T (8x8 array) | — | **Does not fit (120% LUTs)** |
 
 ### Seed sweep after MAX_K=32/MAX_N=16 reversion (Aug 2026)
 
