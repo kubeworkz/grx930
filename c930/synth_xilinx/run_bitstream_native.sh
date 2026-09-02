@@ -1,6 +1,6 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
-# run_bitstream_native.sh  --  Generate the Arty A7-35T .bit from the WSL
+# run_bitstream_native.sh  --  Generate the Arty A7-100T .bit from the WSL
 # native-filesystem work copy (see run_impl_native.sh for why native FS).
 #
 # Launch detached so it survives terminal exit:

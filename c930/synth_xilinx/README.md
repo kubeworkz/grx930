@@ -93,7 +93,7 @@ stub + firmware that goes into the bitstream; `[KICK PASS] busy=1 done=1
 error=0`, C={1,2,5,6}). Program the board with:
 
 ```bash
-openFPGALoader -b arty_a7_35t c930/build/vivado/c930_soc_top.bit
+openFPGALoader -b arty_a7_100t c930/build/vivado/c930_soc_top.bit
 ```
 
 The board clock is divided to 50 MHz via CLK_DIV=2, keeping the core well
@@ -203,9 +203,11 @@ make reports
 ### Different Arty board variant
 
 Change the `part` in `create_project.tcl`:
-- Arty A7-100T: `xc7a100tcsg324-1`
-- Nexys A7-50T:  `xc7a50tcsg324-1`
-- Basys 3:       `xc7a35tcpg236-1` (update XDC pins)
+- Arty A7-100T: `xc7a100tcsg324-1` (**current target** — `arty_a7_100t.xdc`)
+- Arty A7-35T:   `xc7a35tcsg324-1` (too small for full NPU+DMA)
+- Nexys A7-100T: `xc7a100tcsg324-1` (same FPGA, more I/O; use `arty_a7_100t.xdc`)
+- Nexys A7-50T:  `xc7a50tcsg324-1` (borderline fit)
+- Basys 3:       `xc7a35tcpg236-1` (too small; update XDC pins)
 
 ### Real DDR3 memory
 

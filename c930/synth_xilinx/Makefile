@@ -29,7 +29,7 @@ all: yosys
 # ---- Create project ----
 project: $(PROJ_DIR)/$(PROJ_NAME).xpr
 
-$(PROJ_DIR)/$(PROJ_NAME).xpr: create_project.tcl arty_a7_35t.xdc
+$(PROJ_DIR)/$(PROJ_NAME).xpr: create_project.tcl arty_a7_100t.xdc
 	@mkdir -p $(PROJ_DIR)
 	$(VIVADO) -mode batch -source create_project.tcl -log $(PROJ_DIR)/create_project.log -journal $(PROJ_DIR)/create_project.jou
 
