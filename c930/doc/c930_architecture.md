@@ -284,7 +284,7 @@ while the engine is busy is undefined.
 
 | Bits | Description |
 |------|-------------|
-| [31:0] | Free-running 32-bit cycle counter. Increments every clock cycle while the NPU is not idle (any state except S_IDLE). Resets to 0 when START is written. |
+| [31:0] | Free-running 32-bit cycle counter in the NPU core. Increments every clock cycle while `state != S_IDLE`. Resets to 0 when the core receives `i_start` (which fires after the DMA finishes loading A/B). |
 
 **Note:** This is a 32-bit counter. The address 0x28 (`CYCLE_HI`) is defined in the RTL as a localparam but is dead code — it is not wired in any read/write case statement and always reads as 0. Do not depend on 0x28.
 
@@ -292,19 +292,28 @@ while the engine is busy is undefined.
 
 | Bits | Description |
 |------|-------------|
-| [31:0] | Number of PE MAC operations completed: `M × N × K × 2` (multiply + accumulate per element). Updated when GEMM completes. Resets to 0 on START. |
+| [31:0] | Hardware PE MAC operation count. Increments by `NUM_ROWS × NUM_COLS` each cycle during `S_RUN` (all PEs fire each cycle). Resets to 0 when the core receives `i_start`. |
+
+**Note:** This counts hardware PE firings, not problem-sized operations. For a problem M×N×K on a `NUM_ROWS×NUM_COLS` array, the RTL count is:
+```
+OP_COUNT = m_tiles × n_tiles × k_tiles × NUM_ROWS × NUM_COLS
+         = ceil(M/NUM_ROWS) × ceil(N'/NUM_COLS) × ceil(K/NUM_ROWS) × NUM_ROWS × NUM_COLS
+```
+where N' = min(N, MAX_N). This is **not** `M×N×K×2` — it depends on the array size and tiling. The shim's `M×N×K×2` is a software metric; the RTL's count reflects actual hardware PE firings.
 
 ### STALL_COUNT (0x30) — Read-only
 
 | Bits | Description |
 |------|-------------|
-| [31:0] | Number of cycles the NPU core was stalled (waiting for DMA or pipeline). Resets to 0 on START. |
+| [31:0] | Number of cycles the NPU core was in `S_WLOAD` (weight loading, not compute). Resets to 0 when the core receives `i_start`. |
 
 ### DMA_CT (0x34) — Read-only
 
 | Bits | Description |
 |------|-------------|
-| [31:0] | Number of cycles the DMA was busy (phase != P_IDLE). Resets to 0 on START. |
+| [31:0] | Number of cycles the DMA was busy (`phase != P_IDLE`). Resets to 0 when the DMA receives `i_start` (from the CSR block). |
+
+**Note:** DMA_CT and CYCLE_COUNT are on **different time bases**. DMA_CT starts counting when the CSR fires `CTRL.START` and counts through the entire DMA phase (A/B load + core compute + C writeback). CYCLE_COUNT starts later (when the core receives `i_start` from the DMA) and only counts during core activity. DMA_CT ≥ CYCLE_COUNT for any GEMM, and the difference includes the DMA overhead for A/B loading and C writeback. |
 
 ### Full register index map
 
