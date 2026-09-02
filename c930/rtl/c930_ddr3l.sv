@@ -171,9 +171,9 @@ end
 // Synchroniser into ui_clk domain
 always_ff @(posedge ui_clk or negedge sys_rst_i) begin
   if (!sys_rst_i) begin
-    ic_req_toggle_ui <= '{2{1'b0}};
-    dc_req_toggle_ui <= '{2{1'b0}};
-    dcw_req_toggle_ui <= '{2{1'b0}};
+    ic_req_toggle_ui <= 2'b00;
+    dc_req_toggle_ui <= 2'b00;
+    dcw_req_toggle_ui <= 2'b00;
   end else begin
     ic_req_toggle_ui <= {ic_req_toggle_ui[0], ic_req_toggle_core};
     dc_req_toggle_ui <= {dc_req_toggle_ui[0], dc_req_toggle_core};
@@ -434,9 +434,9 @@ logic dcw_done_toggle_core[2];
 
 always_ff @(posedge i_clk or negedge i_rst_n) begin
   if (!i_rst_n) begin
-    ic_done_toggle_core  <= '{2{1'b0}};
-    dc_done_toggle_core  <= '{2{1'b0}};
-    dcw_done_toggle_core <= '{2{1'b0}};
+    ic_done_toggle_core  <= 2'b00;
+    dc_done_toggle_core  <= 2'b00;
+    dcw_done_toggle_core <= 2'b00;
   end else begin
     ic_done_toggle_core  <= {ic_done_toggle_core[0],  ic_done_toggle_ui};
     dc_done_toggle_core  <= {dc_done_toggle_core[0],  dc_done_toggle_ui};

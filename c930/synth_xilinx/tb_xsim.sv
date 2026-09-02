@@ -11,8 +11,8 @@ module tb_xsim;
   logic npu_busy, npu_done, npu_error, npu_irq;
 
   c930_soc_top #(
-    .NUM_ROWS(4),
-    .NUM_COLS(4),
+    .NUM_ROWS(8),
+    .NUM_COLS(8),
     .MAX_M(8),
     .MAX_K(16),
     .MAX_N(12),

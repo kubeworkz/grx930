@@ -19,8 +19,8 @@
 // -----------------------------------------------------------------------------
 module c930_soc_top
 #(
-  parameter int NUM_ROWS = 4,
-  parameter int NUM_COLS = 4,
+  parameter int NUM_ROWS = 8,
+  parameter int NUM_COLS = 8,
   parameter int MAX_M    = 8,
   parameter int MAX_K    = 16,
   parameter int MAX_N    = 12,

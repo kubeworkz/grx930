@@ -117,7 +117,10 @@ router1): after the tag arrays moved to DPR16X4 the net count dropped enough
 that the router converges (it had oscillated for 1.5+ hours at the 61%-density
 build). The routed result in `pnr.log` / `ecp5.config` (full bitstream config):
 
-- **Routed Fmax: ~24.3 MHz** (worst FF path 36.2 ns = 8.6 ns logic + 27.6 ns
+- **8×8 array: ~103K LUT4** (154% of ECP5-85F — does not fit; needs Artix-7-100T)
+**4×4 array: ~34K LUT4** (41% of ECP5-85F)
+
+**Routed Fmax: ~24.3 MHz** (worst FF path 36.2 ns = 8.6 ns logic + 27.6 ns
   routing; constrained at 400 MHz to expose the true critical path).
   Direction-setting, not a board-validated number.
 

@@ -61,6 +61,7 @@ fi
     echo -n "read_verilog -sv "
     for f in ../rv64imac/RTL/*.sv rtl/*.sv; do
         [ "$f" = "rtl/c930_ddr.sv" ] && continue   # behavioral 64KB array -> synth stub
+        [ "$f" = "rtl/c930_ddr3l.sv" ] && continue  # DDR3L MIG wrapper (Vivado only)
         echo -n "$f "
     done
     echo -n " $DDRSTUB "

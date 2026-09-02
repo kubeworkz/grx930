@@ -1171,12 +1171,9 @@ module tb_c930_soc;
   integer lv_edges = 0;
   always @(posedge clk) begin
     lv_edges = lv_edges + 1;
-    if ((lv_edges % 1000) == 0) begin
-      $display("[LV] %0d cycles pc=%h stl_if=%b dcm=%0d npudone=%b",
+    if ((lv_edges % 10000) == 0) begin
+      $display("[LV] %0d cycles npudone=%b",
         lv_edges,
-        dut.u_cpu.if_pipe_pcf_new,
-        dut.u_cpu.hu_stall_if,
-        dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE,
         dut.u_npu.o_done);
       $fflush();
     end
@@ -1208,11 +1205,9 @@ module tb_c930_soc;
       dut.u_ddr.mem[AMO_BASE+27], dut.u_ddr.mem[AMO_BASE+26],
       dut.u_ddr.mem[AMO_BASE+25], dut.u_ddr.mem[AMO_BASE+24],
       dut.u_ddr.mem[32'h94A0+3], dut.u_ddr.mem[32'h94A0+2],
-      dut.u_ddr.mem[32'h94A0+1], dut.u_ddr.mem[32'h94A0+0],
-      dut.u_cpu.if_pipe_pcf_new,
-      dut.u_cpu.u_riscv_core_dcache_top.dcache_controller.STATE);
+      dut.u_ddr.mem[32'h94A0+1], dut.u_ddr.mem[32'h94A0+0]);
     #4000000; $display("[T5M] reached");
-    $display("[DUMP2] done=%02x%02x%02x%02x stress=%02x%02x%02x%02x amo=%02x%02x%02x%02x phase=%02x diag=%02x pc=%h",
+    $display("[DUMP2] done=%02x%02x%02x%02x stress=%02x%02x%02x%02x amo=%02x%02x%02x%02x phase=%02x diag=%02x",
       dut.u_ddr.mem[DONE_ADDR+3], dut.u_ddr.mem[DONE_ADDR+2],
       dut.u_ddr.mem[DONE_ADDR+1], dut.u_ddr.mem[DONE_ADDR+0],
       dut.u_ddr.mem[STRESS_ADDR+3], dut.u_ddr.mem[STRESS_ADDR+2],
@@ -1220,31 +1215,7 @@ module tb_c930_soc;
       dut.u_ddr.mem[AMO_RES_ADDR+3], dut.u_ddr.mem[AMO_RES_ADDR+2],
       dut.u_ddr.mem[AMO_RES_ADDR+1], dut.u_ddr.mem[AMO_RES_ADDR+0],
       dut.u_ddr.mem[PHASE_ADDR],
-      dut.u_ddr.mem[DIAG_ADDR],
-      dut.u_cpu.if_pipe_pcf_new);
-  end
-
-  // ========================================================================
-  // Diagnostic: trace NPU state when the perf_bench polling loop is active.
-  // Fires when PC is in the run_perf_case loop (0x110-0x120).
-  // ========================================================================
-  initial begin
-    forever begin
-      @(posedge clk);
-      if (dut.u_cpu.if_pipe_pcf_new >= 32'h100 &&
-          dut.u_cpu.if_pipe_pcf_new <= 32'h130) begin
-        $display("[NPU-DIAG] pc=%h npu_busy=%0d npu_done=%0d dma_phase=%0d core_state=%0d csr_start=%0d csr_donelatch=%0d csr_prec=%0d dim_m=%0d dim_n=%0d dim_k=%0d",
-          dut.u_cpu.if_pipe_pcf_new,
-          dut.u_npu.o_busy, dut.u_npu.o_done,
-          dut.u_npu.u_dma.phase,
-          dut.u_npu.u_core.state,
-          dut.u_npu.u_csr.start_pulse,
-          dut.u_npu.u_csr.done_latch,
-          dut.u_npu.u_csr.precision,
-          dut.u_npu.u_csr.dim_m, dut.u_npu.u_csr.dim_n, dut.u_npu.u_csr.dim_k);
-        $fflush();
-      end
-    end
+      dut.u_ddr.mem[DIAG_ADDR]);
   end
 
 endmodule

@@ -20,8 +20,8 @@
 // -----------------------------------------------------------------------------
 module tb_c930_npu;
 
-  localparam int NUM_ROWS = 4;   // systolic rows (reduction per pass)
-  localparam int NUM_COLS = 4;   // systolic cols (output width)
+  localparam int NUM_ROWS = 8;   // systolic rows (reduction per pass)
+  localparam int NUM_COLS = 8;   // systolic cols (output width)
   localparam int DIN_W    = 8;
   localparam int ACC_W    = 48;
   localparam int MAX_M    = 8;

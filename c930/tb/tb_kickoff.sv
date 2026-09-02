@@ -23,8 +23,8 @@
 // -----------------------------------------------------------------------------
 module tb_kickoff;
 
-  localparam int NUM_ROWS = 4;   // systolic rows
-  localparam int NUM_COLS = 4;   // systolic cols
+  localparam int NUM_ROWS = 8;   // systolic rows
+  localparam int NUM_COLS = 8;   // systolic cols
   localparam int MAX_M    = 8;
   localparam int MAX_K    = 16;
   localparam int MAX_N    = 12;
