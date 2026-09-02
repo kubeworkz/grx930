@@ -534,19 +534,65 @@ the NPU does not support).
 
 ---
 
-## 11. FPGA Resource Utilization (Artix-7-35T)
+## 11. FPGA Resource Utilization and Board Recommendation
+
+### Target board: Digilent Arty A7-100T
+
+**Part:** XC7A100TCSG324-1 | **Board:** ~$130 | **DDR3L:** 256 MB on-board
+
+The Arty A7-100T is the recommended board for the C930 SoC. The -35T variant
+(20.8K LUTs) was too small for the full NPU+DMA+64-bit-AXI design (~32K LUTs);
+the -100T (63.4K LUTs) fits at 52% utilization with room to spare.
+
+### Artix-7-100T (Vivado 2026.1, routed implementation)
 
 | Resource | Used | Available | Utilization |
 |----------|------|-----------|-------------|
-| Slice LUTs | 15,731 | 20,800 | 75.6% |
-| Slice Registers | 12,722 | 41,600 | 30.6% |
-| DSP48E1 | 3 | 90 | 3.3% |
-| RAMB36E1 | 17 | 50 | 34.0% |
-| Distributed RAM | 604 | 9,600 | 6.3% |
+| Slice LUTs | 32,767 | 63,400 | 51.7% |
+| Slice Registers | 14,939 | 126,800 | 11.8% |
+| DSP48E1 | 43 | 240 | 17.9% |
+| RAMB36E1 | 8 | 135 | 5.9% |
 
-**Core clock:** 50 MHz (100 MHz / CLK_DIV=2).
-**Routed Fmax:** >587 MHz (WNS +8.30 ns at 100 MHz timing constraint).
-**DRC:** 0 errors, 29 warnings (all benign).
+**Core clock:** 50 MHz (100 MHz board oscillator / CLK_DIV=2).
+**Routed Fmax:** **44.6 MHz** (WNS -2.439 ns at 50 MHz constraint).
+**DRC:** 0 errors (post-implementation).
+
+### ECP5-85F (nextpnr, for comparison)
+
+| Resource | Used | Available | Utilization |
+|----------|------|-----------|-------------|
+| LUT4 | 34,012 | 83,640 | 41% |
+| TRELLIS_FF | 10,707 | 83,640 | 13% |
+| DP16KD | 16 | 156 | 10% |
+| MULT18X18D | 21 | 156 | 13% |
+
+**Routed Fmax:** 29.6 MHz (seed 2, best of sweep).
+
+### Why Artix-7 is faster
+
+Artix-7 has **dedicated CARRY4 carry-chain primitives** — the same 64-bit
+arithmetic paths that consumed ~26 ns of logic on ECP5 become ~7 ns on
+Artix-7. The FP16 accumulator critical path drops from 40 LUT levels
+(ECP5) to 33 LUT levels + 15 CARRY4 slices.
+
+**Fmax improvement: 44.6 MHz / 29.6 MHz = 1.51× over ECP5.**
+
+### Other boards considered
+
+| Board | Part | LUTs | Fit? | Notes |
+|-------|------|------|------|-------|
+| **Arty A7-100T** | XC7A100TCSG324-1 | 63.4K | ✅ 52% | **Current target** |
+| Arty A7-35T | XC7A35TCSG324-1 | 20.8K | ❌ 76% | Too small |
+| Nexys A7-100T | XC7A100TCSG324-1 | 63.4K | ✅ | Same FPGA, more I/O, $180 |
+| Basys 3 | XC7A35TCPG236-1 | 20.8K | ❌ | Too small |
+| Genesys ZU | ZU3EG | 154K | ✅ | Overkill — Zynq UltraScale+, $350 |
+
+### DDR3L integration
+
+The Arty A7-100T has a 256 MB DDR3L chip (MT41K128M16JT-125) directly
+connected to the FPGA. The `c930_ddr3l` module replaces the behavioral DDR
+stub with a MIG 7 Series controller, bridging the CPU cache-line ports and
+NPU DMA to the real DDR3L chip. See Section 14.8 for integration details.
 
 ---
 

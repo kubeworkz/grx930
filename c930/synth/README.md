@@ -1,8 +1,8 @@
 # C930 SoC synthesis (Yosys + nextpnr, ECP5)
 
 > **For higher Fmax:** See [`synth_xilinx/`](../synth_xilinx/) for the
-> Xilinx Artix-7 port. Dedicated CARRY4 carry chains on Artix-7 should push
-> Fmax from ~35 MHz (ECP5) to ~60-80 MHz.
+> Xilinx Artix-7 port (Arty A7-100T). Dedicated CARRY4 carry chains on
+> Artix-7 push Fmax from ~30 MHz (ECP5) to **44.6 MHz** (1.51× improvement).
 
 Zero-hardware FPGA feasibility flow for `c930_soc_top`, using the vendored
 **oss-cad-suite** under `c930/toolchain/` (portable; download the release and
