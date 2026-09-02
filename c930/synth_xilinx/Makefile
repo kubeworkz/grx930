@@ -42,8 +42,14 @@ synth: $(PROJ_DIR)/$(PROJ_NAME).xpr
 	@cat $(PROJ_DIR)/post_synth_utilization.rpt | grep -A 20 "Slice Logic" || true
 
 # ---- Full implementation (synth + place + route, ~15-30 min) ----
+# Use USE_DDR3L=1 for Arty A7-100T with MIG DDR3L controller
 impl: $(PROJ_DIR)/$(PROJ_NAME).xpr
-	$(VIVADO) -mode batch -source run_synth.tcl -log $(PROJ_DIR)/impl.log -journal $(PROJ_DIR)/impl.jou
+	$(VIVADO) -mode batch -source run_synth.tcl -tclargs "" -log $(PROJ_DIR)/impl.log -journal $(PROJ_DIR)/impl.jou
+
+# ---- Full implementation with DDR3L (Arty A7-100T) ----
+# Requires MIG IP: run `vivado -source mig_7series_arty_a7_100t.tcl` first
+impl-ddr3l: $(PROJ_DIR)/$(PROJ_NAME).xpr
+	$(VIVADO) -mode batch -source run_synth.tcl -tclargs "" -log $(PROJ_DIR)/impl_ddr3l.log -journal $(PROJ_DIR)/impl_ddr3l.jou
 	@echo "=== Post-implementation timing ==="
 	@cat $(PROJ_DIR)/post_impl_timing.rpt | grep -A 2 "Design Timing Summary" || true
 	@echo "---"

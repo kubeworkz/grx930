@@ -155,6 +155,67 @@ make impl       # ~20min -- full place + route + timing
 make reports
 ```
 
+## DDR3L (MT41K128M16JT-125) integration
+
+The Arty A7-100T has a 256 MB DDR3L chip directly connected to the FPGA.
+The c930_ddr3l module replaces the behavioral DDR stub (c930_ddr.sv) with
+a MIG 7 Series controller that bridges the CPU cache-line ports and NPU DMA
+to the real DDR3L chip.
+
+### Architecture
+
+The DDR3L wrapper (rtl/c930_ddr3l.sv) has the same port list as c930_ddr,
+so c930_soc_top instantiates it unchanged via the `USE_DDR3L` parameter:
+
+- `USE_DDR3L = 0` (default): behavioral DDR (simulation, ECP5 flow)
+- `USE_DDR3L = 1`: MIG DDR3L controller (Arty A7-100T synthesis)
+
+The DDR3L wrapper includes:
+1. Cache-line → AXI4 bridge FSM (icache/dcache reads → 4-beat bursts)
+2. AXI4 arbiter (icache > dcache > NPU DMA priority)
+3. MIG 7 Series IP instantiation (AXI4 slave interface)
+4. Clock domain crossing (core_clk ↔ ui_clk via toggle synchronisers)
+
+### MIG IP generation
+
+Before synthesis with DDR3L, the MIG IP must be generated:
+
+```bash
+cd c930/synth_xilinx
+# Option A: Vivado GUI
+vivado -source mig_7series_arty_a7_100t.tcl
+# Option B: Vivado batch mode
+vivado -mode batch -source mig_7series_arty_a7_100t.tcl
+```
+
+This creates `mig_7series_0.xci` in the project directory. The MIG IP
+automatically constrains the DDR3L physical pins — you do NOT need to
+manually add ddr3_dq, ddr3_addr, etc. to the XDC.
+
+### Synthesis with DDR3L
+
+Update `create_project.tcl` to set the generic:
+```tcl
+set_property generic {USE_DDR3L=1} [get_runs synth_1]
+```
+
+Or override in the Makefile:
+```bash
+make impl EXTRAGeneric="-generic USE_DDR3L 1"
+```
+
+The DDR3L XDC (ddr3l.xdc) adds false-path constraints for the
+clock-domain crossing between core_clk and ui_clk.
+
+### DDR3L memory map
+
+The DDR3L provides 256 MB of flat, byte-addressed memory:
+- 0x0000_0000 .. 0x0000_FFFF : first 64 KB (firmware + NPU buffers)
+- 0x0001_0000 .. 0x0FFF_FFFF : remainder (general data)
+
+The firmware must be loaded via JTAG/UART before the first boot,
+as DDR3L is volatile and uninitialized at power-up.
+
 ## Output files
 
 | File | Description |
