@@ -56,7 +56,7 @@ SOC_RTL := $(NPU_RTL) \
 OUT_NPU := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC := $(BUILD_DIR)/tb_c930_soc.vvp
 
-.PHONY: all sw soc npu hazard synth synth-fit wave clean
+.PHONY: all sw soc npu hazard synth synth-fit wave clean bringup
 
 all: sw soc
 
@@ -75,6 +75,27 @@ $(SW_HEX): $(SW_BIN) sw/bin2hex.py
 	$(PYTHON) sw/bin2hex.py $(SW_BIN) $(SW_HEX)
 
 sw: $(SW_HEX)
+
+# ---------------------------------------------------------------------------
+# Board bring-up firmware (Arty A7-100T + DDR3L)
+# ---------------------------------------------------------------------------
+BRINGUP_ELF := sw/npu_bringup.elf
+BRINGUP_HEX := sw/npu_bringup.hex
+
+$(BRINGUP_ELF): sw/start_bringup.S sw/npu_bringup.c sw/link_bringup.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_bringup.ld -Wl,--build-id=none \
+	  -o $@ sw/start_bringup.S sw/npu_bringup.c
+
+$(BRINGUP_HEX): $(BRINGUP_ELF) sw/bin2hex.py
+	$(OBJCOPY) -O binary $< sw/npu_bringup.bin
+	$(PYTHON) sw/bin2hex.py sw/npu_bringup.bin $(BRINGUP_HEX)
+
+bringup: $(BRINGUP_HEX)
+	@echo "Firmware built: $(BRINGUP_HEX)"
+	@echo "Flash via JTAG: openocd -f openocd.cfg -c 'init; halt; load_image $(BRINGUP_HEX) 0 bin; resume; exit'"
+	@echo "Read results:   openocd -c 'init; halt; md32 0x9490 1; md32 0x9500 1; exit'"
+	@echo "Expected: PHASE=0xFF RESULT=0xBEEF0002 (all tests passed)"
 
 # ---------------------------------------------------------------------------
 # Standalone NPU testbench
