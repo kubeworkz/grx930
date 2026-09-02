@@ -174,6 +174,14 @@ module c930_npu_csr
   // D_IDLE:   engine idle. If FIFO non-empty, pop and dispatch from head.
   //           If FIFO empty, dispatch immediately from live CSRs.
   // D_WAIT:   engine busy — wait for done, then return to D_IDLE.
+  //
+  // pending_start: latches a START that arrived while D_WAIT.  Without this,
+  // a rapid back-to-back START (CTA1 + CTA2 within one DMA registration
+  // cycle) is lost: the dispatcher is in D_WAIT, so start_requested is
+  // ignored, and the FIFO push condition fails because i_busy hasn't gone
+  // high yet.  The pending_start flag ensures the FIFO push fires when the
+  // engine becomes busy, and the dispatcher sees the queued command when it
+  // returns to D_IDLE.
   // ---------------------------------------------------------------------------
   typedef enum logic [1:0] {
     D_IDLE,
@@ -181,12 +189,14 @@ module c930_npu_csr
   } disp_state_t;
 
   disp_state_t disp_state;
+  logic        pending_start;  // START captured while dispatcher is in D_WAIT
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       disp_state    <= D_IDLE;
       start_pulse   <= 1'b0;
       fifo_pop      <= 1'b0;
+      pending_start <= 1'b0;
       cur_dim_m     <= 16'd0;
       cur_dim_n     <= 16'd0;
       cur_dim_k     <= 16'd0;
@@ -200,7 +210,26 @@ module c930_npu_csr
 
       case (disp_state)
         D_IDLE: begin
-          if (start_requested) begin
+          // Check for a pending START that arrived while we were dispatching
+          if (pending_start && !fifo_empty) begin
+            // Previous pending_start pushed to FIFO — dispatch from head
+            cur_dim_m     <= fifo_head[15:0];
+            cur_dim_n     <= fifo_head[31:16];
+            cur_dim_k     <= fifo_head[47:32];
+            cur_a_base    <= fifo_head[79:48];
+            cur_b_base    <= fifo_head[111:80];
+            cur_c_base    <= fifo_head[143:112];
+            cur_precision <= fifo_head[146:144];
+            fifo_pop      <= 1'b1;
+            pending_start <= 1'b0;
+            start_pulse   <= 1'b1;
+            disp_state    <= D_WAIT;
+          end else if (pending_start && fifo_empty) begin
+            // Pending start but FIFO push hasn't registered yet.
+            // Wait one cycle for do_push to update fifo_count.
+            // (do_push fires combinationally when pending_start && i_busy,
+            //  so the FIFO entry is being written this cycle.)
+          end else if (start_requested) begin
             if (!fifo_empty) begin
               // FIFO has queued commands — dispatch from head
               cur_dim_m     <= fifo_head[15:0];
@@ -227,6 +256,10 @@ module c930_npu_csr
         end
 
         D_WAIT: begin
+          if (start_requested) begin
+            // START arrived while engine busy — latch it for later dispatch
+            pending_start <= 1'b1;
+          end
           if (!i_busy)
             disp_state <= D_IDLE;
         end
@@ -238,7 +271,13 @@ module c930_npu_csr
 
   // ---------------------------------------------------------------------------
   // Push/pop enable signals (combinational)
-  wire do_push = start_requested && !fifo_full && (i_busy || !fifo_empty);
+  //
+  // Push fires when:
+  //  (a) normal START while engine busy or FIFO non-empty, OR
+  //  (b) pending_start latched while engine is still busy (the START arrived
+  //      in D_WAIT before i_busy went high, so we need to push retroactively)
+  wire do_push = (start_requested && !fifo_full && (i_busy || !fifo_empty)) ||
+                (pending_start && !fifo_full && i_busy);
   wire do_pop  = fifo_pop && !fifo_empty;
 
   // ---------------------------------------------------------------------------
@@ -250,11 +289,10 @@ module c930_npu_csr
       fifo_rd_ptr <= 0;
       fifo_count  <= 0;
     end else begin
-      // Push: START writes snapshot to FIFO only when the command cannot
-      // be dispatched immediately (engine busy or FIFO non-empty).
-      // When idle + FIFO empty, the dispatcher dispatches from live CSRs
-      // directly — no need to queue.
-      if (start_requested && !fifo_full && (i_busy || !fifo_empty)) begin
+      // Push: START writes snapshot to FIFO when the command cannot be
+      // dispatched immediately (engine busy or FIFO non-empty), or when a
+      // pending_start is waiting for the engine to go busy.
+      if (do_push) begin
         fifo_mem[fifo_wr_idx] <= cmd_snapshot;
         fifo_wr_ptr <= fifo_wr_ptr + 1;
       end

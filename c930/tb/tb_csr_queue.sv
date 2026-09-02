@@ -33,18 +33,26 @@ module tb_csr_queue;
     .i_cycle_count(0), .i_op_count(0), .i_stall_count(0), .i_dma_cycle_count(0)
   );
 
-  // Simulate DMA: assert busy after start, deassert after 10 cycles
+  // Simulate DMA: assert busy 1 CYCLE AFTER start (simulates DMA registering
+  // i_start in the next cycle — this is the exact timing that causes the
+  // back-to-back START deadlock).  Deassert after 10 cycles.
   logic [3:0] dma_cnt;
+  logic       dma_start_pending;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       dma_cnt <= 0;
       i_busy <= 0;
       i_done <= 0;
+      dma_start_pending <= 0;
     end else begin
       i_done <= 0;
+      dma_start_pending <= 0;
       if (o_start) begin
-        i_busy <= 1;
+        dma_start_pending <= 1;  // register the start pulse
+      end else if (dma_start_pending && !i_busy) begin
+        i_busy <= 1;  // go busy ONE cycle after start
         dma_cnt <= 10;
+        dma_start_pending <= 0;
       end else if (i_busy && dma_cnt > 0) begin
         dma_cnt <= dma_cnt - 1;
         if (dma_cnt == 1) begin
@@ -138,6 +146,53 @@ module tb_csr_queue;
     $display("  QUEUE_STAT = %h (occupancy=%0d, full=%0d)", rdata_var, rdata_var[3:0], rdata_var[4]);
     if (rdata_var[3:0] == 0) begin pass_cnt++; $display("  [PASS]"); end
     else begin fail_cnt++; $display("  [FAIL]"); end
+
+
+    // Test 4: DEADLOCK REGRESSION — two STARTs with 1-cycle gap.
+    // This is the exact scenario that causes the grxcp tensor unit
+    // deadlock (Gap 7.12): the second START arrives while the DMA
+    // hasn't gone busy yet, so the FIFO push condition fails.
+    // The pending_start flag must capture it and push when i_busy goes high.
+    $display("\n[TEST 4] Deadlock regression: back-to-back START (1 cycle gap)");
+    // Set up CTA1 params
+    axi_write(32'h08, 4);   // DIM_M = 4
+    axi_write(32'h0C, 4);   // DIM_N = 4
+    axi_write(32'h10, 4);   // DIM_K = 4
+    axi_write(32'h14, 32'h1000); // A_BASE
+    axi_write(32'h18, 32'h2000); // B_BASE
+    axi_write(32'h1C, 32'h3000); // C_BASE
+    axi_write(32'h20, 0);   // PREC = INT8
+    // Fire CTA1 START
+    axi_write(32'h00, 1);   // CTRL.START
+    // Wait ONE cycle (DMA hasn't gone busy yet)
+    @(posedge clk);
+    // Set up CTA2 params (overwrite CSRs)
+    axi_write(32'h08, 2);   // DIM_M = 2
+    axi_write(32'h0C, 2);   // DIM_N = 2
+    axi_write(32'h10, 2);   // DIM_K = 2
+    axi_write(32'h14, 32'h5000); // A_BASE
+    axi_write(32'h18, 32'h6000); // B_BASE
+    axi_write(32'h1C, 32'h7000); // C_BASE
+    axi_write(32'h20, 1);   // PREC = INT16
+    // Fire CTA2 START — 1 cycle after CTA1, DMA not yet busy
+    axi_write(32'h00, 1);   // CTRL.START
+    // Wait for first GEMM to complete
+    wait(i_done); @(posedge clk);
+    $display("  First GEMM completed, i_busy=%b", i_busy);
+    // Wait for second GEMM to complete.
+    // The i_done pulse from the DMA model is a registered signal that
+    // fires for exactly one clock cycle.  We detect it by polling with
+    // a small delay to ensure NBA values are visible.
+    wait(i_done);  // catches second i_done pulse (level-sensitive)
+    @(posedge clk);
+    $display("  Second GEMM completed (no deadlock)");
+    // Verify QUEUE_STAT is empty
+    axi_read(32'h38, rdata_var);
+    if (rdata_var[3:0] == 0) begin
+      pass_cnt++; $display("  [PASS]");
+    end else begin
+      fail_cnt++; $display("  [FAIL] QUEUE_STAT=%h (expected 0)", rdata_var);
+    end
 
     $display("\n=== RESULTS: %0d PASSED, %0d FAILED ===", pass_cnt, fail_cnt);
     $finish;
