@@ -24,6 +24,7 @@ static uint8_t ddr[NPU_DDR_SIZE];
 //   9  CYCLE_LO, 10 (reserved, dead), 11 OP_COUNT, 12 STALL_CT, 13 DMA_CT
 static uint32_t csr[14];
 static int      npu_busy;       // mirrors STATUS bit 0
+static int      npu_done_latch; // latched when GEMM completes (matches RTL done_latch)
 static int      npu_cycles_left; // countdown for npu_dpi_run()
 static int      npu_busy_cycles; // cycles to hold BUSY before DONE
 static int      npu_error;      // mirrors STATUS bit 2
@@ -50,8 +51,11 @@ static int      npu_error;      // mirrors STATUS bit 2
 
 // ---- Build STATUS value from internal state ----
 static uint32_t build_status(void) {
+    // Bit 0 = BUSY, Bit 1 = DONE (latched), Bit 2 = ERROR
+    // DONE is a latch set at completion, cleared on CTRL.START.
+    // It does NOT depend on counter values.
     return (uint32_t)((npu_error ? 4 : 0) |
-                      ((csr[9] || csr[11]) && !npu_busy ? 2 : 0) |
+                      (npu_done_latch ? 2 : 0) |
                       (npu_busy ? 1 : 0));
 }
 
@@ -60,6 +64,7 @@ void npu_dpi_init(void) {
     memset(csr, 0, sizeof(csr));
     memset(ddr, 0, sizeof(ddr));
     npu_busy = 0;
+    npu_done_latch = 0;
     npu_cycles_left = 0;
     npu_busy_cycles = 0;
     npu_error = 0;
@@ -72,6 +77,10 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
 
     // START bit (CTRL register, bit 0) triggers the NPU
     if (idx == 0 && (data & 1)) {
+        // Clear DONE and ERROR on START (matches RTL behavior)
+        npu_done_latch = 0;
+        npu_error = 0;
+
         if (!npu_busy) {
             uint32_t m = CSR_DIM_M;
             uint32_t n = CSR_DIM_N;
@@ -80,30 +89,34 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
 
             if (m == 0 || n == 0 || k == 0) return;
 
-            // Bounds check: A, B, C must fit in 64KB
-            uint32_t a_end, b_end, c_end;
+            // Bounds check: A, B, C must fit in 64KB.
+            // Use wrap-safe arithmetic: check base < SIZE and extent <= SIZE - base
+            // to prevent uint32_t overflow from bypassing the check.
+            uint32_t a_size, b_size, c_size;
 
             if (prec == NPU_PREC_INT4) {
-                // INT4: 4 bits per element, packed
-                a_end = CSR_A_BASE + (m * k + 1) / 2;
-                b_end = CSR_B_BASE + (k * n + 1) / 2;
-                c_end = CSR_C_BASE + m * n * 4;
+                a_size = (m * k + 1) / 2;
+                b_size = (k * n + 1) / 2;
+                c_size = m * n * 4;
             } else if (prec == NPU_PREC_INT8) {
-                a_end = CSR_A_BASE + m * k;
-                b_end = CSR_B_BASE + k * n;
-                c_end = CSR_C_BASE + m * n * 4;
+                a_size = m * k;
+                b_size = k * n;
+                c_size = m * n * 4;
             } else if (prec == NPU_PREC_INT16) {
-                a_end = CSR_A_BASE + m * k * 2;
-                b_end = CSR_B_BASE + k * n * 2;
-                c_end = CSR_C_BASE + m * n * 4;
+                a_size = m * k * 2;
+                b_size = k * n * 2;
+                c_size = m * n * 4;
             } else {
                 // FP16, BF16: 2 bytes per element
-                a_end = CSR_A_BASE + m * k * 2;
-                b_end = CSR_B_BASE + k * n * 2;
-                c_end = CSR_C_BASE + m * n * 4;
+                a_size = m * k * 2;
+                b_size = k * n * 2;
+                c_size = m * n * 4;
             }
 
-            if (a_end > NPU_DDR_SIZE || b_end > NPU_DDR_SIZE || c_end > NPU_DDR_SIZE) {
+            // Wrap-safe: base + size <= NPU_DDR_SIZE iff base < NPU_DDR_SIZE && size <= NPU_DDR_SIZE - base
+            if (CSR_A_BASE >= NPU_DDR_SIZE || a_size > NPU_DDR_SIZE - CSR_A_BASE ||
+                CSR_B_BASE >= NPU_DDR_SIZE || b_size > NPU_DDR_SIZE - CSR_B_BASE ||
+                CSR_C_BASE >= NPU_DDR_SIZE || c_size > NPU_DDR_SIZE - CSR_C_BASE) {
                 npu_error = 1;
                 return;
             }
@@ -192,7 +205,18 @@ uint32_t npu_dpi_csr_read(uint32_t addr) {
 
 // ---- DDR byte access (bounds-checked) ----
 void npu_dpi_mem_write(uint32_t addr, uint32_t data, uint32_t strb) {
-    if (addr + 3 >= NPU_DDR_SIZE) {
+    // Wrap-safe: check base < SIZE and each written byte is in range
+    if (addr >= NPU_DDR_SIZE) {
+        npu_error = 1;
+        return;
+    }
+    // Check highest byte written
+    int highest = -1;
+    if (strb & 0x1) highest = 0;
+    if (strb & 0x2) highest = 1;
+    if (strb & 0x4) highest = 2;
+    if (strb & 0x8) highest = 3;
+    if (highest >= 0 && addr + (uint32_t)highest >= NPU_DDR_SIZE) {
         npu_error = 1;
         return;
     }
@@ -224,8 +248,9 @@ void npu_dpi_run(int n_cycles) {
         } else {
             npu_cycles_left--;
             if (npu_cycles_left <= 0) {
-                // GEMM complete
+                // GEMM complete: latch DONE (matches RTL done_latch behavior)
                 npu_busy = 0;
+                npu_done_latch = 1;
 
                 // Update OP_COUNT: M * N * K * 2 (MAC per element)
                 CSR_OP_COUNT = CSR_DIM_M * CSR_DIM_N * CSR_DIM_K * 2;
