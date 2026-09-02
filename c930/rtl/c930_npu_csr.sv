@@ -1,25 +1,35 @@
 // -----------------------------------------------------------------------------
 // c930_npu_csr.sv
 //
-// Control/status register file for the NPU with a simplified AXI4-Lite slave.
-//
-// The slave accepts one outstanding transaction at a time and pairs the AW and
-// W channels (the write is committed when both AWVALID and WVALID are high).
-// This is sufficient for an MMIO programming interface and mirrors the simple
-// handshake style used by the reference riscv_core_axi4lite bridge.
+// Control/status register file for the NPU with a command queue.
 //
 // Register map (word offsets):
-//   0x00 CTRL    (W) bit0 START
-//   0x04 STATUS  (R) bit0 BUSY, bit1 DONE (latched), bit2 ERROR
-//   0x08 DIM_M   (R/W) output rows
-//   0x0C DIM_N   (R/W) output cols
-//   0x10 DIM_K   (R/W) reduction length
-//   0x14 A_BASE  (R/W) A matrix base address (DMA read source)
-//   0x18 B_BASE  (R/W) B matrix base address (DMA read source)
-//   0x1C C_BASE  (R/W) C matrix base address (DMA write sink)
-//   0x20 PREC    (R/W) bit[1:0] precision: 0=INT8, 1=INT16, 2=FP16, 3=BF16
+//   0x00 CTRL       (W)  bit0 START — push command to queue
+//   0x04 STATUS     (R)  bit0 BUSY, bit1 DONE (latched), bit2 ERROR
+//   0x08 DIM_M      (R/W) output rows
+//   0x0C DIM_N      (R/W) output cols
+//   0x10 DIM_K      (R/W) reduction length
+//   0x14 A_BASE     (R/W) A matrix base address
+//   0x18 B_BASE     (R/W) B matrix base address
+//   0x1C C_BASE     (R/W) C matrix base address
+//   0x20 PREC       (R/W) bit[2:0] precision
+//   0x24 CYCLE_LO   (R)  free-running cycle counter
+//   0x2C OP_COUNT   (R)  MAC operations completed
+//   0x30 STALL_CT   (R)  stall cycles
+//   0x34 DMA_CT     (R)  DMA busy cycles
+//   0x38 QUEUE_STAT (R)  bit[3:0] occupancy, bit[4] full
+//   0x3C QUEUE_MAX  (R)  max depth (compile-time)
+//
+// Command queue:
+//   CTRL.START snapshots the current CSR values into a FIFO. If the engine
+//   is idle and the FIFO is empty, the command dispatches immediately from
+//   the live CSRs. If the engine is busy, the command waits in the FIFO and
+//   dispatches automatically when the engine completes. The CPU never blocks.
 // -----------------------------------------------------------------------------
 module c930_npu_csr
+#(
+  parameter int CMD_QUEUE_DEPTH = 4
+)
 (
   input  logic        i_clk,
   input  logic        i_rst_n,
@@ -44,7 +54,7 @@ module c930_npu_csr
   output logic        s_axi_rvalid,
   input  logic        s_axi_rready,
 
-  // ---- NPU core interface ----
+  // ---- NPU core interface (driven from dispatch register) ----
   output logic        o_start,
   output logic [15:0] o_dim_m,
   output logic [15:0] o_dim_n,
@@ -57,44 +67,212 @@ module c930_npu_csr
   input  logic        i_done,
   input  logic        i_error,
 
-  // Performance counters (written by the NPU core)
-  input  logic [31:0] i_cycle_count,   // free-running cycle counter
-  input  logic [31:0] i_op_count,      // MAC operations completed
-  input  logic [31:0] i_stall_count,   // cycles stalled
-  input  logic [31:0] i_dma_cycle_count // DMA busy cycles (phase != P_IDLE)
+  // Performance counters
+  input  logic [31:0] i_cycle_count,
+  input  logic [31:0] i_op_count,
+  input  logic [31:0] i_stall_count,
+  input  logic [31:0] i_dma_cycle_count
 );
 
-  localparam logic [3:0] ADDR_CTRL     = 4'h0;
-  localparam logic [3:0] ADDR_STAT     = 4'h1;
-  localparam logic [3:0] ADDR_DIM_M    = 4'h2;
-  localparam logic [3:0] ADDR_DIM_N    = 4'h3;
-  localparam logic [3:0] ADDR_DIM_K    = 4'h4;
-  localparam logic [3:0] ADDR_A_BASE   = 4'h5;
-  localparam logic [3:0] ADDR_B_BASE   = 4'h6;
-  localparam logic [3:0] ADDR_C_BASE   = 4'h7;
-  localparam logic [3:0] ADDR_PREC     = 4'h8;
-  localparam logic [3:0] ADDR_CYCLE_LO = 4'h9;
-  localparam logic [3:0] ADDR_CYCLE_HI = 4'hA;
+  localparam logic [3:0] ADDR_CTRL      = 4'h0;
+  localparam logic [3:0] ADDR_STAT      = 4'h1;
+  localparam logic [3:0] ADDR_DIM_M     = 4'h2;
+  localparam logic [3:0] ADDR_DIM_N     = 4'h3;
+  localparam logic [3:0] ADDR_DIM_K     = 4'h4;
+  localparam logic [3:0] ADDR_A_BASE    = 4'h5;
+  localparam logic [3:0] ADDR_B_BASE    = 4'h6;
+  localparam logic [3:0] ADDR_C_BASE    = 4'h7;
+  localparam logic [3:0] ADDR_PREC      = 4'h8;
+  localparam logic [3:0] ADDR_CYCLE_LO  = 4'h9;
   localparam logic [3:0] ADDR_OP_COUNT  = 4'hB;
   localparam logic [3:0] ADDR_STALL_CT  = 4'hC;
-  localparam logic [3:0] ADDR_DMA_CT   = 4'hD;  // DMA busy cycles
+  localparam logic [3:0] ADDR_DMA_CT    = 4'hD;
+  localparam logic [3:0] ADDR_QUEUE_STAT = 4'hE;
+  localparam logic [3:0] ADDR_QUEUE_MAX  = 4'hF;
 
+  // ---------------------------------------------------------------------------
+  // Live CSR registers
+  // ---------------------------------------------------------------------------
   logic [15:0] dim_m, dim_n, dim_k;
   logic [31:0] a_base, b_base, c_base;
   logic [2:0]  precision;
-  logic        start_pulse;
   logic        done_latch;
 
-  assign o_dim_m     = dim_m;
-  assign o_dim_n     = dim_n;
-  assign o_dim_k     = dim_k;
-  assign o_a_base    = a_base;
-  assign o_b_base    = b_base;
-  assign o_c_base    = c_base;
-  assign o_precision = precision;
+  // ---------------------------------------------------------------------------
+  // Dispatch register — drives o_dim_m etc. to the DMA.
+  // Loaded either from live CSRs (idle, FIFO empty) or from FIFO head.
+  // ---------------------------------------------------------------------------
+  logic [15:0] cur_dim_m, cur_dim_n, cur_dim_k;
+  logic [31:0] cur_a_base, cur_b_base, cur_c_base;
+  logic [2:0]  cur_precision;
+  logic        start_pulse;
 
-  // Start only when the engine is idle.
-  assign o_start = start_pulse & ~i_busy;
+  assign o_dim_m     = cur_dim_m;
+  assign o_dim_n     = cur_dim_n;
+  assign o_dim_k     = cur_dim_k;
+  assign o_a_base    = cur_a_base;
+  assign o_b_base    = cur_b_base;
+  assign o_c_base    = cur_c_base;
+  assign o_precision = cur_precision;
+  assign o_start     = start_pulse;
+
+  // ---------------------------------------------------------------------------
+  // Command FIFO (147 bits per entry)
+  // ---------------------------------------------------------------------------
+  localparam int CMD_W = 32 + 32 + 32 + 16 + 16 + 16 + 3;
+
+  logic [CMD_W-1:0] fifo_mem [0:CMD_QUEUE_DEPTH-1];
+  logic [$clog2(CMD_QUEUE_DEPTH):0] fifo_wr_ptr, fifo_rd_ptr;
+  logic [$clog2(CMD_QUEUE_DEPTH):0] fifo_count;
+  logic fifo_push, fifo_pop;
+  logic [CMD_W-1:0] fifo_head;
+
+  wire [$clog2(CMD_QUEUE_DEPTH)-1:0] fifo_wr_idx = fifo_wr_ptr[$clog2(CMD_QUEUE_DEPTH)-1:0];
+  wire [$clog2(CMD_QUEUE_DEPTH)-1:0] fifo_rd_idx = fifo_rd_ptr[$clog2(CMD_QUEUE_DEPTH)-1:0];
+
+  assign fifo_head = fifo_mem[fifo_rd_idx];
+  wire   fifo_empty = (fifo_count == 0);
+  wire   fifo_full  = (fifo_count == CMD_QUEUE_DEPTH);
+
+  wire [CMD_W-1:0] cmd_snapshot = {
+    c_base, b_base, a_base,
+    dim_k, dim_n, dim_m,
+    precision
+  };
+
+  // Initialize
+  integer fi;
+  initial begin
+    fifo_wr_ptr = 0;
+    fifo_rd_ptr = 0;
+    fifo_count  = 0;
+    fifo_pop    = 0;
+    fifo_push   = 0;
+    for (fi = 0; fi < CMD_QUEUE_DEPTH; fi = fi + 1)
+      fifo_mem[fi] = '0;
+  end
+
+  // ---------------------------------------------------------------------------
+  // Start detection (rising edge of CTRL.START write)
+  // ---------------------------------------------------------------------------
+  logic start_written;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      start_written <= 1'b0;
+    else if (s_axi_awvalid && s_axi_wvalid && !s_axi_bvalid &&
+             s_axi_awaddr[5:2] == ADDR_CTRL && s_axi_wstrb[0] && s_axi_wdata[0])
+      start_written <= 1'b1;
+    else
+      start_written <= 1'b0;
+  end
+
+  wire start_requested = start_written;
+
+  // ---------------------------------------------------------------------------
+  // Dispatcher FSM
+  //
+  // D_IDLE:   engine idle. If FIFO non-empty, pop and dispatch from head.
+  //           If FIFO empty, dispatch immediately from live CSRs.
+  // D_WAIT:   engine busy — wait for done, then return to D_IDLE.
+  // ---------------------------------------------------------------------------
+  typedef enum logic [1:0] {
+    D_IDLE,
+    D_WAIT
+  } disp_state_t;
+
+  disp_state_t disp_state;
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      disp_state    <= D_IDLE;
+      start_pulse   <= 1'b0;
+      fifo_pop      <= 1'b0;
+      cur_dim_m     <= 16'd0;
+      cur_dim_n     <= 16'd0;
+      cur_dim_k     <= 16'd0;
+      cur_a_base    <= 32'd0;
+      cur_b_base    <= 32'd0;
+      cur_c_base    <= 32'd0;
+      cur_precision <= 3'd0;
+    end else begin
+      start_pulse <= 1'b0;
+      fifo_pop    <= 1'b0;
+
+      case (disp_state)
+        D_IDLE: begin
+          if (start_requested) begin
+            if (!fifo_empty) begin
+              // FIFO has queued commands — dispatch from head
+              cur_dim_m     <= fifo_head[15:0];
+              cur_dim_n     <= fifo_head[31:16];
+              cur_dim_k     <= fifo_head[47:32];
+              cur_a_base    <= fifo_head[79:48];
+              cur_b_base    <= fifo_head[111:80];
+              cur_c_base    <= fifo_head[143:112];
+              cur_precision <= fifo_head[146:144];
+              fifo_pop      <= 1'b1;
+            end else begin
+              // FIFO empty — dispatch directly from live CSRs (zero bubble)
+              cur_dim_m     <= dim_m;
+              cur_dim_n     <= dim_n;
+              cur_dim_k     <= dim_k;
+              cur_a_base    <= a_base;
+              cur_b_base    <= b_base;
+              cur_c_base    <= c_base;
+              cur_precision <= precision;
+            end
+            start_pulse <= 1'b1;
+            disp_state  <= D_WAIT;
+          end
+        end
+
+        D_WAIT: begin
+          if (!i_busy)
+            disp_state <= D_IDLE;
+        end
+
+        default: disp_state <= D_IDLE;
+      endcase
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Push/pop enable signals (combinational)
+  wire do_push = start_requested && !fifo_full && (i_busy || !fifo_empty);
+  wire do_pop  = fifo_pop && !fifo_empty;
+
+  // ---------------------------------------------------------------------------
+  // FIFO push/pop
+  // ---------------------------------------------------------------------------
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      fifo_wr_ptr <= 0;
+      fifo_rd_ptr <= 0;
+      fifo_count  <= 0;
+    end else begin
+      // Push: START writes snapshot to FIFO only when the command cannot
+      // be dispatched immediately (engine busy or FIFO non-empty).
+      // When idle + FIFO empty, the dispatcher dispatches from live CSRs
+      // directly — no need to queue.
+      if (start_requested && !fifo_full && (i_busy || !fifo_empty)) begin
+        fifo_mem[fifo_wr_idx] <= cmd_snapshot;
+        fifo_wr_ptr <= fifo_wr_ptr + 1;
+      end
+
+      // Pop: dispatcher requested a pop
+      if (fifo_pop && !fifo_empty) begin
+        fifo_rd_ptr <= fifo_rd_ptr + 1;
+      end
+
+      // Count update
+      if (do_push && do_pop)
+        fifo_count <= fifo_count;           // push+pop cancel
+      else if (do_push)
+        fifo_count <= fifo_count + 1;
+      else if (do_pop)
+        fifo_count <= fifo_count - 1;
+    end
+  end
 
   // ---------------------------------------------------------------------------
   // Write channel
@@ -112,11 +290,8 @@ module c930_npu_csr
       b_base        <= 32'd0;
       c_base        <= 32'd0;
       precision     <= 3'd0;
-      start_pulse   <= 1'b0;
       done_latch    <= 1'b0;
     end else begin
-      start_pulse <= 1'b0;
-
       if (i_done)
         done_latch <= 1'b1;
 
@@ -132,10 +307,8 @@ module c930_npu_csr
 
         case (s_axi_awaddr[5:2])
           ADDR_CTRL: begin
-            if (s_axi_wstrb[0] && s_axi_wdata[0]) begin
-              start_pulse <= 1'b1;
-              done_latch  <= 1'b0;
-            end
+            if (s_axi_wstrb[0] && s_axi_wdata[0])
+              done_latch <= 1'b0;
           end
           ADDR_DIM_M:  if (s_axi_wstrb[0]) dim_m <= s_axi_wdata[15:0];
           ADDR_DIM_N:  if (s_axi_wstrb[0]) dim_n <= s_axi_wdata[15:0];
@@ -172,19 +345,21 @@ module c930_npu_csr
         s_axi_arready <= 1'b1;
 
         case (s_axi_araddr[5:2])
-          ADDR_STAT:   s_axi_rdata <= {29'd0, i_error, done_latch, i_busy};
-          ADDR_DIM_M:  s_axi_rdata <= {16'd0, dim_m};
-          ADDR_DIM_N:  s_axi_rdata <= {16'd0, dim_n};
-          ADDR_DIM_K:  s_axi_rdata <= {16'd0, dim_k};
-          ADDR_A_BASE: s_axi_rdata <= a_base;
-          ADDR_B_BASE: s_axi_rdata <= b_base;
-          ADDR_C_BASE: s_axi_rdata <= c_base;
-          ADDR_PREC:      s_axi_rdata <= {29'd0, precision};
-          ADDR_CYCLE_LO:  s_axi_rdata <= i_cycle_count;
-          ADDR_OP_COUNT:  s_axi_rdata <= i_op_count;
-          ADDR_STALL_CT:  s_axi_rdata <= i_stall_count;
-          ADDR_DMA_CT:    s_axi_rdata <= i_dma_cycle_count;
-          default:     s_axi_rdata <= 32'd0;
+          ADDR_STAT:       s_axi_rdata <= {29'd0, i_error, done_latch, i_busy};
+          ADDR_DIM_M:      s_axi_rdata <= {16'd0, dim_m};
+          ADDR_DIM_N:      s_axi_rdata <= {16'd0, dim_n};
+          ADDR_DIM_K:      s_axi_rdata <= {16'd0, dim_k};
+          ADDR_A_BASE:     s_axi_rdata <= a_base;
+          ADDR_B_BASE:     s_axi_rdata <= b_base;
+          ADDR_C_BASE:     s_axi_rdata <= c_base;
+          ADDR_PREC:       s_axi_rdata <= {29'd0, precision};
+          ADDR_CYCLE_LO:   s_axi_rdata <= i_cycle_count;
+          ADDR_OP_COUNT:   s_axi_rdata <= i_op_count;
+          ADDR_STALL_CT:   s_axi_rdata <= i_stall_count;
+          ADDR_DMA_CT:     s_axi_rdata <= i_dma_cycle_count;
+          ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
+          ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
+          default:         s_axi_rdata <= 32'd0;
         endcase
 
         s_axi_rvalid <= 1'b1;
