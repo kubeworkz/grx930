@@ -35,10 +35,24 @@ ADDR_STAT: s_axi_rdata <= {29'd0, i_error, done_latch, i_busy};
 ```
 
 Bit 0 of STATUS is directly wired to the core's `i_busy` output, which is
-driven by `c930_npu_core.sv` whenever `state != S_IDLE`. The shim now
-replicates this: `STATUS.BUSY` is asserted for 2 cycles after `CTRL.START`
-(pipeline fill), then deasserted when the GEMM completes and `STATUS.DONE` is
-set. A host that waits on BUSY will see it transition 0→1→0, matching silicon.
+driven by `c930_npu_core.sv` whenever `state != S_IDLE`.
+
+**RTL simulation proof** (`tb_status_busy.sv`, Icarus Verilog):
+
+```plaintext
+[TEST] i_busy = 0 (before boot)
+[TEST] done_latch=1 at cycle 6910
+[TEST] i_busy = 0 (after GEMM)
+[TEST] i_cycle_count = 1728
+  [PASS] RTL drove i_busy=1 for 2171 cycles
+  [PASS] GEMM completed (done_latch=1)
+```
+
+The NPU core drove `i_busy` high for 2171 cycles during the first GEMM
+(M=4 N=4 K=8 INT8). The shim now replicates this: `STATUS.BUSY` is
+asserted for 2 cycles after `CTRL.START` (pipeline fill), then deasserted
+when the GEMM completes and `STATUS.DONE` is set. A host that waits on
+BUSY will see it transition 0→1→0, matching silicon.
 
 ## Defect fixes (all at 3070806)
 
