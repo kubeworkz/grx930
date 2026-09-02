@@ -171,6 +171,39 @@ for (uint32_t i = 0; i < M; i++) {
 printf("All %u elements match\n", M * N);
 ```
 
+## Column-major (BLAS) vs row-major (NPU)
+
+The NPU reads A row-major (`A[i*K + p]`) and B row-major (`B[p*N + j]`).
+BLAS/cuBLAS libraries use column-major layout. A column-major matrix read
+row-major **is its transpose**, so:
+
+```
+C(col-major, m x n) = A(m x k) . B(k x n)
+```
+
+is the same bytes as:
+
+```
+C^T(row-major, n x m) = B^T(n x k) . A^T(k x m)
+```
+
+The engine computes this correctly if handed **B where it expects A, A where
+it expects B, and the dimensions swapped** — no copy, no transpose pass.
+
+**Consequence:** the engine's bounds apply to the caller's dimensions crossed.
+The caller's `n` must fit `MAX_M` (8) and the caller's `m` must fit `MAX_N`
+(12). The largest legal shape is `m=MAX_N, n=MAX_M, k=MAX_K`.
+
+```c
+// Column-major BLAS: swap A/B and m/n for the NPU
+npu_dpi_csr_write(NPU_CSR_DIM_M,  N);  // caller's N -> engine's M
+npu_dpi_csr_write(NPU_CSR_DIM_N,  M);  // caller's M -> engine's N
+npu_dpi_csr_write(NPU_CSR_DIM_K,  K);
+npu_dpi_csr_write(NPU_CSR_A_BASE, b_off);  // B -> A slot
+npu_dpi_csr_write(NPU_CSR_B_BASE, a_off);  // A -> B slot
+npu_dpi_csr_write(NPU_CSR_C_BASE, c_off);
+```
+
 ## Integration with grxcp device model seam
 
 The grxcp team needs to route `npu_c930_read/write` calls through the shim.
@@ -253,5 +286,25 @@ FP16/BF16:        cycles = ceil(M/4) × ceil(N'/4) × ceil(K/4) × (4 + 4 + 4 + 
 
 where N' = min(N, 12), and N-tiling handles N > NUM_COLS internally.
 ```
+
+For N > MAX_N: the caller must tile externally (see `npu_tile.h` and
+`c930_architecture.md` §14.7).
+
+## Verilator path (RTL-backed simulation)
+
+The recommended path for grxcp to drive the actual RTL is **not** through
+the DPI wrapper (`sim/c930_npu_dpi.sv`) — that layer has non-functional
+DPI functions and a separate DDR array. Instead, `c930_npu_top` verilates
+standalone and exposes AXI4-Lite (CSR) and AXI4 (DDR) at top-level ports:
+
+```cpp
+// Drive CSR via AXI4-Lite slave ports (s_axi_awaddr, s_axi_wdata, etc.)
+// Service DDR via AXI4 master ports (m_axi_araddr, m_axi_rdata, etc.)
+// against a C++ byte array.
+```
+
+This gives grxcp the actual RTL behind the same register map the shim uses,
+with no DPI, no CPU, no firmware, and no dependency on files that fail to
+build. Results from this path report `GRX_BACKEND_RTLSIM`, not `GRX_BACKEND_MODEL`.
 
 For N > MAX_N: the caller must tile externally (see `npu_tile.h` §14.7).

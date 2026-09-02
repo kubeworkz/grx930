@@ -12,10 +12,6 @@
 // Build: verilator --cc --exe + g++ with npu_dpi.cc
 
 module c930_npu_dpi
-  import "DPI-C" function void dpi_npu_csr_write(input int addr, input int data);
-  import "DPI-C" function int  dpi_npu_csr_read(input int addr);
-  import "DPI-C" function void dpi_npu_mem_write(input int addr, input int data, input int strb);
-  import "DPI-C" function int  dpi_npu_mem_read(input int addr);
 #(
   parameter int NUM_ROWS = 4,
   parameter int NUM_COLS = 4,
@@ -32,6 +28,12 @@ module c930_npu_dpi
   output logic o_error,
   output logic o_irq
 );
+
+  // ---- DPI imports (must be module items, not header imports) ----
+  import "DPI-C" function void dpi_npu_csr_write(input int addr, input int data);
+  import "DPI-C" function int  dpi_npu_csr_read(input int addr);
+  import "DPI-C" function void dpi_npu_mem_write(input int addr, input int data, input int strb);
+  import "DPI-C" function int  dpi_npu_mem_read(input int addr);
 
   // ---- DDR memory (flat byte array) ----
   logic [7:0] ddr_mem [0:MEM_BYTES-1];
