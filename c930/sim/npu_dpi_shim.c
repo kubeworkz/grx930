@@ -210,13 +210,13 @@ void npu_dpi_mem_write(uint32_t addr, uint32_t data, uint32_t strb) {
         npu_error = 1;
         return;
     }
-    // Check highest byte written
-    int highest = -1;
+    // Check highest byte written (wrap-safe: addr is already < NPU_DDR_SIZE)
+    uint32_t highest = 0;
     if (strb & 0x1) highest = 0;
     if (strb & 0x2) highest = 1;
     if (strb & 0x4) highest = 2;
     if (strb & 0x8) highest = 3;
-    if (highest >= 0 && addr + (uint32_t)highest >= NPU_DDR_SIZE) {
+    if (highest >= NPU_DDR_SIZE - addr) {
         npu_error = 1;
         return;
     }

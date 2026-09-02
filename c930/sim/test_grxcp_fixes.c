@@ -44,6 +44,17 @@ int main() {
     st = npu_dpi_csr_read(NPU_CSR_STATUS);
     check("mem_write at 0xFFFFFFFF: ERROR", st & 4);
 
+    // Wrapping base near end of uint32_t (grxcp's recommended smoke case)
+    npu_dpi_init();
+    npu_dpi_csr_write(NPU_CSR_DIM_M, 1); npu_dpi_csr_write(NPU_CSR_DIM_N, 1);
+    npu_dpi_csr_write(NPU_CSR_DIM_K, 1);
+    npu_dpi_csr_write(NPU_CSR_A_BASE, 0xFFFFFFF0);
+    npu_dpi_csr_write(NPU_CSR_B_BASE, 0x8400);
+    npu_dpi_csr_write(NPU_CSR_C_BASE, 0x8800);
+    npu_dpi_csr_write(NPU_CSR_CTRL, 1);
+    st = npu_dpi_csr_read(NPU_CSR_STATUS);
+    check("Base 0xFFFFFFF0: ERROR (wrap)", st & 4);
+
     printf("\n=== Allocator fixes ===\n");
     npu_ddr_alloc_t ddr;
     npu_ddr_alloc_init(&ddr, 0x0000, 0x10000);
