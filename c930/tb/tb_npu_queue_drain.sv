@@ -286,6 +286,118 @@ module tb_npu_queue_drain;
       $display("  Pipelined max: errors=%0d", errors_total);
     end
 
+    // Test 5: Randomized stress test
+    // Exercises bank_sel fix with varying shapes, queue depths, and seeds.
+    // Each GEMM gets unique DDR addresses; shapes drawn from a pool that
+    // covers edge cases (N not multiple of NUM_COLS, max queue, etc.).
+    begin : stress_test
+      localparam int NUM_SHAPES = 8;
+      localparam int NUM_ITERS  = 8;
+      // Shape pool: {M, N, K}  -- covers small, large, non-aligned N
+      // Flat array indexed as shapes[shape_idx*3 + 0/1/2]
+      int shapes [0:NUM_SHAPES*3-1];
+      int gemm_m, gemm_n, gemm_k, gemm_count, shape_idx, seed_val;
+      int a_sz, b_sz, c_sz, offset, cur_errors;
+      int prev_errors;
+      int a_off [0:3];  // per-GEMM A base addresses
+      int b_off [0:3];  // per-GEMM B base addresses
+      int c_off [0:3];  // per-GEMM C base addresses
+
+      prev_errors = errors_total;
+      $display("\n[TEST 5] Randomized stress: %0d iterations x %0d shapes", NUM_ITERS, NUM_SHAPES);
+
+      // Initialize shape pool (N >= NUM_COLS to avoid small-N edge case)
+      shapes[0]=4;  shapes[1]=8;  shapes[2]=8;    // small square
+      shapes[3]=8;  shapes[4]=12; shapes[5]=16;   // max queue, N not multiple of 8
+      shapes[6]=6;  shapes[7]=8;  shapes[8]=10;   // odd K, non-power-of-2
+      shapes[9]=8;  shapes[10]=10; shapes[11]=16; // max M, non-aligned N
+      shapes[12]=4; shapes[13]=12; shapes[14]=8;  // wide, short K
+      shapes[15]=2; shapes[16]=8; shapes[17]=16;  // small M, full N
+      shapes[18]=8; shapes[19]=8; shapes[20]=4;   // tall K=4
+      shapes[21]=6; shapes[22]=12; shapes[23]=14; // odd everything
+
+      for (int iter = 0; iter < NUM_ITERS; iter++) begin
+        gemm_count = 2 + (iter % 3);  // 2, 3, or 4 GEMMs
+        offset = 0;
+        cur_errors = 0;
+
+        $display("  --- Iteration %0d: %0d GEMMs ---", iter, gemm_count);
+
+        // Pass 1: compute DDR offsets for each GEMM
+        for (int g = 0; g < gemm_count; g++) begin
+          shape_idx = ((iter * 7 + g * 3 + 1) % NUM_SHAPES);
+          gemm_m = shapes[shape_idx * 3 + 0];
+          gemm_n = shapes[shape_idx * 3 + 1];
+          gemm_k = shapes[shape_idx * 3 + 2];
+          a_off[g] = offset;  offset = offset + gemm_m * gemm_k;
+          b_off[g] = offset;  offset = offset + gemm_k * gemm_n;
+          c_off[g] = offset;  offset = offset + gemm_m * gemm_n * 4;
+        end
+
+        // Pass 2: fill DDR and program CSR
+        for (int g = 0; g < gemm_count; g++) begin
+          shape_idx = ((iter * 7 + g * 3 + 1) % NUM_SHAPES);
+          gemm_m = shapes[shape_idx * 3 + 0];
+          gemm_n = shapes[shape_idx * 3 + 1];
+          gemm_k = shapes[shape_idx * 3 + 2];
+          seed_val = 1000 + iter * 100 + g * 13 + shape_idx * 17;
+          // Write A/B data to DDR
+          for (int i = 0; i < gemm_m * gemm_k; i++)
+            mem8[a_off[g] + i] = ((seed_val * 7 + i * 13) % 17) - 8;
+          for (int i = 0; i < gemm_k * gemm_n; i++)
+            mem8[b_off[g] + i] = ((seed_val * 11 + i * 17) % 17) - 8;
+          // Program CSR with actual DDR addresses
+          axi_write(ADDR_A_BASE, a_off[g]);
+          axi_write(ADDR_B_BASE, b_off[g]);
+          axi_write(ADDR_C_BASE, c_off[g]);
+          axi_write(ADDR_DIM_M, gemm_m);
+          axi_write(ADDR_DIM_N, gemm_n);
+          axi_write(ADDR_DIM_K, gemm_k);
+          axi_write(ADDR_PREC, 0);
+          axi_write(ADDR_CTRL, 32'h1);
+        end
+
+        wait_all_done(total_cycles);
+        repeat(8) @(posedge clk);  // let DDR writes settle
+
+        // Check results: recompute expected C from mem8
+        for (int g = 0; g < gemm_count; g++) begin
+          shape_idx = ((iter * 7 + g * 3 + 1) % NUM_SHAPES);
+          gemm_m = shapes[shape_idx * 3 + 0];
+          gemm_n = shapes[shape_idx * 3 + 1];
+          gemm_k = shapes[shape_idx * 3 + 2];
+          for (int mi = 0; mi < gemm_m; mi++) begin
+            for (int ni = 0; ni < gemm_n; ni++) begin
+              seed_val = 1000 + iter * 100 + g * 13 + shape_idx * 17;
+              begin : chk
+                int sum_val, got_val;
+                sum_val = 0;
+                for (int ki = 0; ki < gemm_k; ki++)
+                  sum_val = sum_val + $signed(mem8[a_off[g] + mi*gemm_k + ki]) *
+                                      $signed(mem8[b_off[g] + ki*gemm_n + ni]);
+                got_val = $signed({mem8[c_off[g] + (mi*gemm_n+ni)*4+3],
+                                   mem8[c_off[g] + (mi*gemm_n+ni)*4+2],
+                                   mem8[c_off[g] + (mi*gemm_n+ni)*4+1],
+                                   mem8[c_off[g] + (mi*gemm_n+ni)*4]});
+                if (got_val !== sum_val) begin
+                  if (errors_total < 20)
+                    $display("  [FAIL] iter%0d GEMM%0d C[%0d][%0d] = %0d, expected %0d",
+                             iter, g, mi, ni, got_val, sum_val);
+                  errors_total = errors_total + 1;
+                  cur_errors = cur_errors + 1;
+                end
+              end
+            end
+          end
+        end
+
+        if (cur_errors != 0)
+          $display("    [FAIL] iteration %0d: %0d errors in %0d cycles", iter, cur_errors, total_cycles);
+        else
+          $display("    [OK]   iteration %0d: %0d GEMMs, %0d cycles", iter, gemm_count, total_cycles);
+      end
+    end
+
     $display("\n=================================================================");
     if (errors_total == 0) $display("  ALL QUEUE DRAIN TESTS PASSED");
     else $display("  %0d ERRORS", errors_total);
