@@ -6,7 +6,7 @@
 
 set proj_name "c930_artix7"
 set proj_dir  "[file dirname [info script]]/../build/vivado"
-set part      "xc7a100tcsg324-1"
+set part      "xc7a200tfbg484-1"
 
 # ---- Create project ----
 create_project $proj_name $proj_dir -part $part -force
@@ -31,7 +31,7 @@ foreach f [glob -nocomplain "$npu_rtl_dir/*.sv"] {
 add_files -norecurse "[file dirname [info script]]/../synth/c930_ddr_stub.sv"
 
 # ---- Constraints ----
-add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/arty_a7_100t.xdc"
+add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/xc7a200t_clock.xdc"
 
 # ---- Top module ----
 set_property top c930_soc_top [current_fileset]

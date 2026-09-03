@@ -661,9 +661,24 @@ the LUT count (each PE's accumulator is ~800 LUTs × 64 PEs = ~51K LUTs
 just for the accumulators).
 
 **Options to fit 8×8:**
-1. **Artix-7 200T** (xc7a200t, 215K LUTs) — fits at ~35% utilization
-2. **Drop FP16 accumulator** — keep 8×8 for INT8 only (~35K LUTs, fits)
-3. **4×8 array** (32 PEs) — ~50K LUTs, fits at ~79%
+1. **Artix-7 200T** (xc7a200t, 134K LUTs) — ✅ **fits, proven**
+2. **Drop FP16 accumulator** — keep 8×8 for INT8 only (~35K LUTs, fits on 100T)
+3. **4×8 array** (32 PEs) — ~50K LUTs, fits on 100T
+
+#### 8×8 array on Artix-7 200T (xc7a200tfbg484-1)
+
+| Resource | Used | Available | Util% |
+|----------|------|-----------|-------|
+| Slice LUTs | 72,027 | 134,600 | 53.5% |
+| Slice Registers (FF) | 21,874 | 269,200 | 8.1% |
+| Block RAM (RAMB36) | 8 | 365 | 2.2% |
+| DSP48E1 | 139 | 740 | 18.8% |
+
+**Routed Fmax: 513.8 MHz** (WNS = 8.054 ns, all constraints met).
+The critical path is the clock divider (1.7 ns), not the NPU — the CARRY4
+chains handle the 8×8 FP16 accumulator cascade in ~1.5 ns.
+
+**Throughput at 513.8 MHz:** 64 PEs × 513.8M MAC/s = **65.8 TOPS (INT8)**
 
 **Fmax progression across platforms:**
 
@@ -675,7 +690,8 @@ just for the accumulators).
 | ECP5-85F (fixed-point acc) | 27.9 MHz | Skip per-cycle LZC+normalize |
 | ECP5-85F (8x8 array) | 24.8 MHz | Wider interconnect |
 | **Artix-7-100T (4x4 array)** | **44.6 MHz** | **CARRY4 carry chains** |
-| Artix-7-100T (8x8 array) | — | **Does not fit (120% LUTs)** |
+| Artix-7-100T (8x8 array) | — | Does not fit (120% LUTs) |
+| **Artix-7-200T (8x8 array)** | **513.8 MHz** | **2× CARRY4 depth, no routing pressure** |
 
 ### Seed sweep after MAX_K=32/MAX_N=16 reversion (Aug 2026)
 

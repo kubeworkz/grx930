@@ -577,11 +577,28 @@ Artix-7. The FP16 accumulator critical path drops from 40 LUT levels
 
 **Fmax improvement: 44.6 MHz / 29.6 MHz = 1.51× over ECP5.**
 
+### Artix-7 200T (8×8 NPU array)
+
+| Resource | Used | Available | Utilization |
+|----------|------|-----------|-------------|
+| Slice LUTs | 72,027 | 134,600 | 53.5% |
+| Slice Registers | 21,874 | 269,200 | 8.1% |
+| DSP48E1 | 139 | 740 | 18.8% |
+| RAMB36E1 | 8 | 365 | 2.2% |
+
+**Routed Fmax:** **513.8 MHz** (WNS = 8.054 ns, all constraints met).
+**Throughput:** 64 PEs × 513.8M MAC/s = **65.8 TOPS (INT8)**.
+
+The 8×8 array with FP16 accumulators needs ~72K LUTs — fits comfortably
+on the 200T (53.5%). The FP16 CLA subtractor and barrel shifter dominate
+(~800 LUTs/PE × 64 PEs = ~51K LUTs for accumulators alone).
+
 ### Other boards considered
 
 | Board | Part | LUTs | Fit? | Notes |
 |-------|------|------|------|-------|
-| **Arty A7-100T** | XC7A100TCSG324-1 | 63.4K | ✅ 52% | **Current target** |
+| **Arty A7-100T** | XC7A100TCSG324-1 | 63.4K | ✅ 52% | **4×4 array target** |
+| **Artix-7 200T** | XC7A200TFBG484-1 | 134.6K | ✅ 53% | **8×8 array target, 513.8 MHz** |
 | Arty A7-35T | XC7A35TCSG324-1 | 20.8K | ❌ 76% | Too small |
 | Nexys A7-100T | XC7A100TCSG324-1 | 63.4K | ✅ | Same FPGA, more I/O, $180 |
 | Basys 3 | XC7A35TCPG236-1 | 20.8K | ❌ | Too small |
