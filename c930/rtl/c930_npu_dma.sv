@@ -59,10 +59,12 @@ module c930_npu_dma
   output logic        o_error,
   output logic [31:0] o_dma_cycle_count,  // cycles while DMA busy (phase != P_IDLE)
   output logic [31:0] o_dma_last_count,   // latched cycle count from last completed GEMM
+  output logic        o_bank_sel,        // bank select for double-buffered A/B memories
 
   // ---- Core data plane + control ----
   output logic                    o_wen,       // preload write enable
   output logic                    o_wsel,      // 0 = A, 1 = B
+  output logic                    o_wbank,     // which bank to write: 0=bank0, 1=bank1
   output logic [15:0]             o_waddr,
   output logic signed [DIN_W-1:0] o_wdata,
 
@@ -147,6 +149,8 @@ module c930_npu_dma
   logic [2:0] phase;
   logic [1:0] rd_sub;
   logic [2:0] wr_sub;
+  logic       bank_sel;    // double-buffer bank select: 0=bank0, 1=bank1
+  assign o_bank_sel = bank_sel;
 
   logic [15:0] dm, dn, dk;
   logic [31:0] a_base_r, b_base_r, c_base_r;
@@ -245,11 +249,13 @@ module c930_npu_dma
       phase         <= P_IDLE;
       rd_sub        <= RS_AR;
       wr_sub        <= WS_AW;
+      bank_sel      <= 1'b0;
       o_done        <= 1'b0;
       o_error       <= 1'b0;
       o_dma_cycle_count <= 32'd0;
       o_dma_last_count  <= 32'd0;
       o_wen         <= 1'b0;
+      o_wbank       <= 1'b0;
       o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
       launched      <= 1'b0;
@@ -292,6 +298,7 @@ module c930_npu_dma
       else if (phase != P_IDLE)
         o_dma_cycle_count <= o_dma_cycle_count + 32'd1;
       o_wen         <= 1'b0;
+      o_wbank       <= bank_sel;  // default: write to active bank (for P_READ_A/B)
       o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
       m_axi_arvalid <= 1'b0;
@@ -913,7 +920,9 @@ module c930_npu_dma
               staging_load_a <= 1'b0;
               launched       <= 1'b0;
               phase          <= P_LAUNCH;
-  
+              // Flip bank: staging loaded data into the inactive bank.
+              // Now make it active so the core reads from it during compute.
+              bank_sel       <= ~bank_sel;
             end
           end
         end
@@ -934,12 +943,10 @@ module c930_npu_dma
             m_axi_rready <= 1'b1;
             if (m_axi_rlast) begin
               phase <= P_IDLE;
-    
             end
           end else begin
             // No pending read — safe to return to P_IDLE immediately
             phase <= P_IDLE;
-
           end
         end
 

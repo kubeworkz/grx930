@@ -44,6 +44,8 @@ module c930_npu_core
   input  logic signed [DIN_W-1:0]     i_staging_wdata,
 
   // ---- Control ----
+  input  logic                        i_bank_sel, // bank select from DMA: 0=bank0, 1=bank1 (core reads)
+  input  logic                        i_wbank,    // write bank select from DMA: 0=bank0, 1=bank1
   input  logic                        i_start,  // 1-cycle pulse, sampled in IDLE
   input  logic [15:0]                 i_dim_m,
   input  logic [15:0]                 i_dim_n,
@@ -64,10 +66,17 @@ module c930_npu_core
 );
 
   // ---------------------------------------------------------------------------
-  // Operand / result buffers
+  // Operand / result buffers (double-buffered for pipelined GEMM execution)
   // ---------------------------------------------------------------------------
-  logic signed [DIN_W-1:0] a_mem [0:MAX_M*MAX_K-1];   // A stored row-major, stride K
-  logic signed [DIN_W-1:0] b_mem [0:MAX_K*MAX_N-1];   // B stored row-major, stride N
+  // bank 0 and bank 1: while the core computes with bank i_bank_sel,
+  // the DMA loads the next GEMM's A/B into the other bank.
+  // Icarus Verilog doesn't support 2D dynamic indexing, so we flatten.
+  localparam int A_DEPTH = MAX_M * MAX_K;
+  localparam int B_DEPTH = MAX_K * MAX_N;
+  logic signed [DIN_W-1:0] a_mem_0 [0:A_DEPTH-1];
+  logic signed [DIN_W-1:0] a_mem_1 [0:A_DEPTH-1];
+  logic signed [DIN_W-1:0] b_mem_0 [0:B_DEPTH-1];
+  logic signed [DIN_W-1:0] b_mem_1 [0:B_DEPTH-1];
 
   // C matrix: inferred as Block RAM when synthesis tool supports it.
   // For MAX_M=8/MAX_N=12 (SoC defaults): 384 bytes, fits in LUTRAM.
@@ -78,17 +87,25 @@ module c930_npu_core
 
   assign o_c_rdata = c_mem[i_c_raddr];
 
-  // Preload A/B: mux between DMA normal writes and staging buffer loads.
-  // staging_wen has priority - it fires during P_STAGING when the core is
-  // idle and the write port is free.  i_wen fires during P_READ_A/P_READ_B
-  // and P_WRITE_C (via PF prefetch).
+  // Preload A/B: write port always targets the INACTIVE bank (~i_bank_sel).
+  // staging_wen has priority — fires during P_STAGING when the core is
+  // idle.  i_wen fires during P_READ_A/P_READ_B and P_WRITE_C (via PF prefetch).
+  // i_bank_sel: core reads from this bank during compute.
+  // i_wbank: DMA writes to this bank (set by DMA per-phase:
+  //   P_READ_A/B -> bank_sel, PF2 -> ~bank_sel, staging -> bank_sel)
+  wire write_a = i_staging_wen ? ~i_staging_wsel : (i_wen ? ~i_wsel : 1'b0);
+  wire write_b = i_staging_wen ? i_staging_wsel : (i_wen ? i_wsel : 1'b0);
+  wire [15:0] write_addr = i_staging_wen ? i_staging_waddr : i_waddr;
+  wire signed [DIN_W-1:0] write_data = i_staging_wen ? i_staging_wdata : i_wdata;
+
   always_ff @(posedge i_clk) begin
-    if (i_staging_wen) begin
-      if (i_staging_wsel) b_mem[i_staging_waddr] <= i_staging_wdata;
-      else                a_mem[i_staging_waddr] <= i_staging_wdata;
-    end else if (i_wen) begin
-      if (i_wsel) b_mem[i_waddr] <= i_wdata;
-      else        a_mem[i_waddr] <= i_wdata;
+    if (write_a) begin
+      if (i_wbank) a_mem_1[write_addr] <= write_data;
+      else         a_mem_0[write_addr] <= write_data;
+    end
+    if (write_b) begin
+      if (i_wbank) b_mem_1[write_addr] <= write_data;
+      else         b_mem_0[write_addr] <= write_data;
     end
   end
 
@@ -219,7 +236,8 @@ module c930_npu_core
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == r) && (r < kr_reg))
-          act_comb[r*DIN_W +: DIN_W] = a_mem[m_base + k_base_reg + r];
+          act_comb[r*DIN_W +: DIN_W] = i_bank_sel ? a_mem_1[m_base + k_base_reg + r] :
+                                                       a_mem_0[m_base + k_base_reg + r];
       end
       // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
       for (int n = 0; n < NUM_COLS; n++) begin
@@ -256,9 +274,13 @@ module c930_npu_core
   assign w_load_bank   = preload_en ? ~bank_sel : bank_sel;
   assign w_load_row    = preload_en ? preload_w_r[$clog2(NUM_ROWS)-1:0] : w_r[$clog2(NUM_ROWS)-1:0];
   assign w_load_col    = preload_en ? preload_w_n[$clog2(NUM_COLS)-1:0] : w_n[$clog2(NUM_COLS)-1:0];
-  assign w_load_data   = preload_en ?
-                         b_mem[((kt_reg+1)*NUM_ROWS + preload_w_r)*i_dim_n + n_base + preload_w_n] :
-                         b_mem[(k_base_reg + w_r)*i_dim_n + n_base + w_n];
+  // Double-buffered B read: select bank via i_bank_sel
+  logic signed [DIN_W-1:0] b_read_data;
+  wire [15:0] b_read_addr = preload_en ?
+    ((kt_reg+1)*NUM_ROWS + preload_w_r)*i_dim_n + n_base + preload_w_n :
+    (k_base_reg + w_r)*i_dim_n + n_base + w_n;
+  assign b_read_data = i_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
+  assign w_load_data = b_read_data;
 
   c930_systolic_array #(
     .NUM_ROWS (NUM_ROWS),
@@ -323,7 +345,7 @@ module c930_npu_core
               w_r        <= 0;
               w_n        <= 0;
               n_cnt      <= 0;
-              bank_sel    <= 1'b0;
+              bank_sel    <= i_bank_sel;  // match DMA's active bank for weight loading
               preload_en  <= 1'b0;
               preload_done <= 1'b0;
               // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)

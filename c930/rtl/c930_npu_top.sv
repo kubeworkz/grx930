@@ -96,6 +96,8 @@ module c930_npu_top
   logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
   logic                    core_done, core_error;
   logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count, dma_last_count;
+  logic                    dma_bank_sel;
+  logic                    dma_wbank;
 
   // FIFO head (next GEMM params for cross-GEMM prefetch)
   logic        fifo_valid;
@@ -177,8 +179,10 @@ module c930_npu_top
     .o_error       (error),
     .o_dma_cycle_count (dma_cycle_count),
     .o_dma_last_count  (dma_last_count),
+    .o_bank_sel       (dma_bank_sel),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
+    .o_wbank       (dma_wbank),
     .o_waddr       (dma_waddr),
     .o_wdata       (dma_wdata),
     .o_staging_wen   (staging_wen),
@@ -236,6 +240,8 @@ module c930_npu_top
     .i_staging_wsel  (staging_wsel),
     .i_staging_waddr (staging_waddr),
     .i_staging_wdata (staging_wdata),
+    .i_bank_sel (dma_bank_sel),
+    .i_wbank    (dma_wbank),
     .i_start    (core_start),
     .i_dim_m    (dim_m),
     .i_dim_n    (dim_n),
