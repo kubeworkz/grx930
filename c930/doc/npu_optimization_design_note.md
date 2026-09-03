@@ -3,7 +3,7 @@
 **Author:** GRX930 team  
 **Date:** September 2026  
 **For:** grxcp team (Phase 7 integration)  
-**Status:** All optimizations verified, all 100+ SoC tests pass
+**Status:** All optimizations verified, 49+ tests pass (30 NPU + 4 queue drain + 4 queue stress + 5 staging + 4 watchdog + 3 DDR timeout)
 
 ---
 
@@ -17,6 +17,9 @@ The NPU has undergone six major optimizations since the initial 4×4 INT8-only d
 | FP16 accumulator | Barrel shifter (40 LUT levels) | **CLA subtractor (3 LUT levels)** | 13× faster |
 | Command dispatch | Single-shot, lost on back-to-back | **4-entry FIFO queue** | No lost commands |
 | Second CTA | Deadlocks | **Fixed (pending_start)** | Gap 7.12 resolved |
+| Command queue drain | FIFO strands, corrupted entries | **Fixed (bit-pack + drain + AXI)** | grxcp regression resolved |
+| Core hangs | Silent, no detection | **Hardware watchdog timer** | Raises o_error on timeout |
+| DDR hang | Silent, permanent stall | **DDR read timeout (1024 cyc)** | Raises o_error, returns to idle |
 | Cross-GEMM | Sequential DDR reads | **PF2 prefetch during C writeback** | Overlapped I/O |
 | Fmax (ECP5) | 24.9 MHz | 24.8 MHz (8×8) | Same |
 | Fmax (Artix-7) | 44.6 MHz (4×4, 100T) | **513.8 MHz (8×8, 200T)** | 11.5× |
@@ -226,7 +229,92 @@ PF2_IDLE → PF2_AR → PF2_R → PF2_UNPK → (A done) → PF2_AR → ... → (
 3. During P_WRITE_C, when existing A-row prefetch is idle, PF2 reads next GEMM's A row 0 and B into staging buffers
 4. AXI read channel is shared: PF2 yields when existing prefetch is active
 
-**Limitation:** Staging buffer → core load at P_LAUNCH is not yet implemented. P_READ_A/P_READ_B still do DDR reads. The prefetch is a "head start" that reduces latency for large GEMMs.
+**Limitation (resolved):** The staging buffer → core load was completed. See Section 5.1.
+
+---
+
+## 5.1. Staging Buffer → Core Loading (P_STAGING)
+
+### Problem
+
+PF2 prefetches next GEMM's A row 0 and B row 0 into staging buffers (`next_a_buf`, `next_b_buf`) during P_WRITE_C, but they were never loaded into the core's `a_mem`/`b_mem`. The prefetch work was wasted — P_READ_A/P_READ_B still did full DDR reads for every GEMM.
+
+### Solution
+
+Add a P_STAGING phase in the DMA that runs between P_IDLE and P_LAUNCH when staging buffers are ready. P_STAGING loads the prefetched data into the core's A/B memories via a dedicated staging write port, eliminating the DDR read latency for the prefetched rows.
+
+**New DMA phase:**
+```
+P_IDLE → P_STAGING (if staging_ready) → P_LAUNCH → ...
+P_IDLE → P_READ_A → P_READ_B → P_LAUNCH → ...  (no staging)
+```
+
+**Core interface addition:**
+```systemverilog
+// Staging buffer load (from DMA PF2 prefetch)
+input  logic        i_staging_wen,    // staging write enable
+input  logic        i_staging_wsel,   // 0 = A, 1 = B
+input  logic [15:0] i_staging_waddr,
+input  logic signed [DIN_W-1:0] i_staging_wdata,
+```
+
+**Write port mux in core:**
+```systemverilog
+always_ff @(posedge i_clk) begin
+  if (i_staging_wen) begin
+    if (i_staging_wsel) b_mem[i_staging_waddr] <= i_staging_wdata;
+    else                a_mem[i_staging_waddr] <= i_staging_wdata;
+  end else if (i_wen) begin
+    if (i_wsel) b_mem[i_waddr] <= i_wdata;
+    else        a_mem[i_waddr] <= i_wdata;
+  end
+end
+```
+
+**How it works:**
+1. During GEMM1's P_WRITE_C, PF2 prefetches GEMM2's A row 0 and B into staging buffers
+2. CSR command queue captures GEMM2's params and sets `staging_ready` when both buffers are valid
+3. When GEMM1 completes, DMA enters P_IDLE, sees `staging_ready`, and dispatches to P_STAGING
+4. P_STAGING loads dk elements from `next_a_buf` into `a_mem[0..dk-1]` and dk*dn elements from `next_b_buf` into `b_mem[0..dk*dn-1]`
+5. After staging load completes, transitions to P_LAUNCH (skipping P_READ_A/P_READ_B)
+6. The core's S_WLOAD still loads PE weights from `b_mem` (which was partially filled by staging)
+
+**Cycle savings:** For a back-to-back GEMM pair with M×N×K:
+- Without staging: P_READ_A (ceil(M*K/8) cycles) + P_READ_B (ceil(K*N/8) cycles) overhead
+- With staging: P_STAGING (dk + dk*dn cycles, one per element) replaces DDR reads
+- Net savings: DDR burst latency + AXI handshake overhead per element
+- Largest benefit for small K (few staging elements, large DDR overhead fraction)
+
+**Testbench:** `tb/tb_npu_staging.sv` verifies back-to-back GEMMs across M/N/K ranges.
+
+---
+
+## 5.2. BRAM Accumulation for C Matrix
+
+### Problem
+
+The C matrix (`c_mem`) was stored in distributed RAM (LUTs). For large MAX_M × MAX_N configurations (e.g., MAX_M=64, MAX_N=8 on the 200T), this consumes ~16K LUTs (12.2% of the 200T fabric).
+
+### Solution
+
+Add `(* ram_style = "block" *)` attribute to `c_mem` in `c930_npu_core.sv`. The synthesis tool infers Block RAM (RAMB18K on Xilinx) with combinational read output (OPREG disabled), preserving the existing DMA timing without adding wait states.
+
+**RTL change:**
+```systemverilog
+(* ram_style = "block" *) logic signed [31:0] c_mem [0:MAX_M*MAX_N-1];
+assign o_c_rdata = c_mem[i_c_raddr];  // combinational read (OPREG disabled)
+```
+
+**Resource impact:**
+
+| Config | c_mem size | LUTRAM (before) | BRAM (after) | LUT savings |
+|--------|-----------|-----------------|-------------|-------------|
+| SoC (8×12) | 384 B | ~12 LUTs | 0 (too small for BRAM) | 0 |
+| 200T (64×8) | 16 KB | ~512 LUTs | 2 × RAMB18K | ~512 LUTs |
+
+**Why combinational read works:** Xilinx BRAMs support OPREG bypass — when the output register is disabled, the read data is available combinationally on the same cycle as the address. This preserves the DMA's existing WS_ADDR → WS_DATA timing.
+
+**Note:** For the SoC defaults (MAX_M=8, MAX_N=12), c_mem is only 384 bytes — too small for BRAM inference. The `ram_style = "block""` attribute is ignored, and the tool uses LUTRAM. The attribute only takes effect for larger configurations.
 
 ---
 
@@ -287,7 +375,8 @@ PF2_IDLE → PF2_AR → PF2_R → PF2_UNPK → (A done) → PF2_AR → ... → (
 | 0x24 | CYCLE_LO | R | Free-running cycle counter (low 32 bits) |
 | 0x2C | OP_COUNT | R | Total PE MAC operations |
 | 0x30 | STALL_CT | R | Stall cycles (weight loading) |
-| 0x34 | DMA_CT | R | DMA busy cycles |
+| 0x34 | DMA_CT | R | DMA busy cycles (live counter, resets on START) |
+| 0x28 | DMA_LAST | R | Latched cycle count from last completed GEMM |
 | 0x38 | QUEUE_STAT | R | bit[3:0] queue occupancy, bit[4] full |
 | 0x3C | QUEUE_MAX | R | Max queue depth (4) |
 
@@ -295,13 +384,49 @@ PF2_IDLE → PF2_AR → PF2_R → PF2_UNPK → (A done) → PF2_AR → ... → (
 
 ## 8. Known Limitations
 
-1. **Staging buffer load:** PF2 prefetches into staging buffers but doesn't load them into the core at P_LAUNCH. P_READ_A/P_READ_B still do DDR reads. This limits the cross-GEMM prefetch benefit to large GEMMs.
+1. **Staging buffer load:** ✅ Resolved. P_STAGING phase loads PF2 prefetched data into core's a_mem/b_mem. See Section 5.1.
 
-2. **INT4 prefetch:** The PF2 state machine doesn't handle INT4 nibble-packing. Cross-GEMM prefetch is disabled for INT4 mode.
+2. **INT4 prefetch:** ✅ Resolved. PF2 now handles INT4 nibble-packing: 16 elements/beat unpack, correct beat counts for A and B, and P_STAGING passes through pre-sign-extended INT4 values. See Section 5.1.
 
 3. **Single GEMM at a time:** Despite the command queue, the NPU executes GEMMs sequentially. True pipelining (overlapping GEMM N's C writeback with GEMM N+1's compute) requires dual-buffered A/B/C memories.
 
-4. **No BRAM accumulation:** The C matrix is stored in distributed RAM (LUTs). For large M×N, this consumes significant LUT resources. BRAM-based C storage would reduce LUT usage.
+4. **BRAM accumulation:** ✅ Resolved. `c_mem` now has `ram_style = "block"` attribute for synthesis tool BRAM inference. See Section 5.2.
+
+5. **Command queue drain bug (grxcp):** ✅ Resolved. Three bugs were fixed:
+   - **FIFO bit-packing:** `precision` was at the LSB of `cmd_snapshot`, shifting all 16-bit fields by 3 bits. Moved `precision` to MSB so fields align correctly.
+   - **pending_start double-push:** `do_push` fired every cycle while `pending_start` was high, flooding the FIFO. Added `pending_pushed` one-shot flag.
+   - **D_WAIT premature return:** The dispatcher returned to D_IDLE before the DMA registered `i_start` (NBA delay), causing a spurious double DRAIN. Added `was_busy` edge-detect to wait for DMA completion.
+
+6. **PF2 prefetch for next GEMM captures wrong FIFO head:** ✅ Resolved. The DMA captured `i_next_*` from the FIFO head on the same cycle as the pop, getting the CURRENT GEMM's params instead of the NEXT. Added 1-cycle deferred capture (`next_captured` flag) in P_READ_A/P_READ_B/P_STAGING.
+
+7. **AXI read drain in P_DONE:** ✅ Resolved. P_DONE forced `pf_state <= PF_IDLE` but left a pending AXI read burst incomplete. The DDR model kept `r_busy=1`, blocking all subsequent reads. P_DONE now drains pending reads by asserting `rready` until `rlast` before returning to P_IDLE.
+
+### 8.1 Core Timeout Watchdog
+
+The DMA includes a hardware watchdog timer that detects core hangs. If `i_core_done` does not fire within a bounded number of cycles after `o_core_start`, the watchdog raises `o_error` and forces a transition to P_DONE.
+
+**Formula:** `watchdog_limit = M × N × K × 2 + M × N × 16 + 256`
+
+This covers both the K-dependent compute (systolic multiply-accumulate pipeline) and the M×N tiling overhead (critical for K=1 shapes). The watchdog is armed in P_IDLE when dimensions are captured, and counts down during P_LAUNCH. It resets when `i_core_done` fires.
+
+**Shapes tested:** All standard shapes from 1×1×1 to 8×12×16 complete well within the limit (max observed: ~992 cycles for M=4 N=8 K=16, limit 2048).
+
+### 8.2 DDR Read Timeout Watchdog
+
+The DMA also includes a DDR read timeout watchdog that detects memory subsystem hangs. If the DDR does not respond (`m_axi_rvalid`) within `DDR_TIMEOUT_CYCLES` (1024) of an accepted AR burst (`m_axi_arvalid && m_axi_arready`), the watchdog raises `o_error` and aborts the GEMM.
+
+**How it works:**
+1. When AR is accepted, a countdown timer starts at 1024.
+2. Each cycle, the timer decrements while waiting for the first `m_axi_rvalid`.
+3. If `m_axi_rvalid` fires, the timer disables (DDR is responding normally).
+4. If the timer reaches 0, the DMA sets `o_error`, pulses `o_done`, and jumps to P_IDLE.
+
+**Recovery:** After a DDR timeout, the engine returns to P_IDLE. Subsequent GEMMs work normally. The DDR model (or real memory controller) should also have its own safety timeout to release the AXI bus.
+
+**Verification:** The `tb_npu_ddr_timeout` testbench verifies:
+- Normal GEMMs complete without false triggers
+- A hanging DDR (no rvalid) triggers o_error after ~1006 cycles
+- Recovery GEMM completes successfully after timeout
 
 ---
 

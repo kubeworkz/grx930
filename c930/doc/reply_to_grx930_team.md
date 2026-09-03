@@ -1,65 +1,61 @@
-# grxcp → GRX930: `grxblasGemmEx` runs on the c930 RTL
+# grxcp → GRX930: the queue fix does not change the two-command case
 
-Thank you for the three fixes. We took the standalone route we described and it worked — the whole grxcp stack now runs against your design under Verilator.
+We ran it rather than taking it, on `c930_npu_top` under Verilator at the SoC's own parameters, against `3df215b` and its parent. Four things, in the order they matter. The first is the one to act on.
 
-```plaintext
-grxcp: GRX930 NPU detected at 0x40000000 (device 1)
-       -- THROUGH THE RTL UNDER VERILATOR, not hardware
+## 1. Back-to-back still strands, identically, before and after the fix
 
-  *** THIS IS THE c930 RTL UNDER VERILATOR, NOT SILICON. ***
-
-INT8 GEMM through the whole stack, against the RTL:
-  ok    2x2x2       ok    4x4x4       ok    8x8x8      ok    1x1x1
-  ok    m=1         ok    n=1         ok    k=1        ok    k=MAX_K
-the crossed bounds, on the RTL rather than on our arithmetic:
-  ok    m=MAX_N, n=MAX_M, k=MAX_K (largest legal)
-  ok    n=9 is refused: the engine's M would be 9 > MAX_M=8
-
-
-```
-
-`grxMalloc` carves the DDR window, `grxMemcpy` moves A and B into it, `grxblasGemmEx` routes to the NPU engine and programs the CSRs, your RTL runs the GEMM through its own AXI master, and `grxMemcpy` reads C back. Ten shapes, all matching a column-major host reference exactly.
-
-**No DPI, no CPU, no firmware, no **`.hex`**.** Every port of `c930_npu_top` is top-level, so Verilator hands them to C++ as plain members: our harness drives the AXI4-Lite slave and services the AXI4 master against a C++ DDR array. That is the whole bridge, about 150 lines. We deferred your item 4 (the two `BLKLOOPINIT`s) because this route never touches the core, and we did not need `verilate-npu` either.
-
-One build detail worth putting in the integration guide, because it is 7.26 in live form: `c930_npu_top`'s own parameter defaults are the **core** defaults — `NUM_ROWS=8, NUM_COLS=8, MAX_M=64, MAX_K=256, MAX_N=8` — while `c930_soc_top` instantiates `4/4/8/16/12`. Verilating with the defaults builds a different machine than the one the SoC has. We pass `-GNUM_ROWS=4 -GNUM_COLS=4 -GMAX_M=8 -GMAX_K=16 -GMAX_N=12`.
-
-## Two things the RTL settled that no model could
-
-**The transposed operands are right on the design.** The A↔B / m↔n swap was derived from the layout conventions and then checked against your software shim — which shares our assumptions, so agreement there proved less than it looked. The RTL agrees with a column-major host reference on every legal shape.
-
-**The crossed bounds are yours, not our arithmetic.** A caller's `n = 9` makes the engine's `M = 9`, and our library refuses it; a caller's `m = 12, n = 8` is accepted and computes correctly. The wall is exactly where we said, confirmed by the thing that owns the wall.
-
-It also confirmed, from `c930_npu_csr.sv` rather than from any header, that `0x28` reads 0 — `ADDR_CYCLE_HI` declared and never decoded.
-
-## The one finding: the shim's counters are not the RTL's
-
-Same shapes, engine M=4 N=4 K=8 INT8, read through the same registers:
+Submitting two GEMMs without waiting for the first — which is what the queue exists to allow — leaves one in the queue forever:
 
 <table>
-  <tr><th>register</th><th>shim</th><th>c930 RTL</th><th></th></tr>
-  <tr><td>CYCLE_LO 0x24</td><td>22</td><td>224</td><td>10.2×</td></tr>
-  <tr><td>OP_COUNT 0x2c</td><td>256</td><td>1280</td><td>5×</td></tr>
-  <tr><td>STALL_CT 0x30</td><td>0</td><td>64</td><td>the shim declares no stalls</td></tr>
-  <tr><td>DMA_CT 0x34</td><td>22</td><td>320</td><td>14.5×</td></tr>
+  <tr><th></th><th>sequential (control)</th><th>two pipelined</th></tr>
+  <tr><td>3df215b^ (queue, pre-fix)</td><td>all four correct</td><td>occupancy stuck at 1, 1.6M cycles</td></tr>
+  <tr><td>3df215b (the fix)</td><td>all four correct</td><td>occupancy 1, STATUS=0x2, 1600060 cycles</td></tr>
 </table>
 
-They do not merely differ in scale — they count different quantities. The shim's `OP_COUNT` is `M*N*K*2`, a property of the problem; the RTL's rises with the tiling instead (1×1×1 → 160, 4×4×4 → 640, 8×8×8 → 5120).
+Not similar. **Identical** — same final `QUEUE_STATUS`, same `STATUS`, same cycle count to the digit. For two commands the fix is a no-op.
 
-**And one that may be worth a look on your side:** the RTL's `DMA_CT` exceeds its own `CYCLE_LO` on every shape we measured — 320 vs 224, and 3077 vs 2592 at 8×12×16. A DMA-busy count larger than the cycle count means the two are not on the same time base, or one of them keeps running after the other stops. We are not reading these counters in grxcp today, so this is an observation rather than a blocker, but it is the kind of thing that is much cheaper to explain now than after someone quotes a throughput figure from it.
+At three or more it does change behaviour, but not in the direction intended: `STATUS.ERROR` is set and `QUEUE_STATUS` reads `0xc` — an occupancy of twelve on a four-entry queue, which is not a state that should exist. Every dimension we submit is inside `dims_ok` (`m<=8, n<=12, k<=16`), so the error is being raised on dimensions that are not the ones we programmed.
 
-Your header is careful — "NOT cycle-accurate" — so none of this is a defect in the shim. We are recording it as a boundary: the numbers arrive through the same register at the same address on both paths, and nothing at the call site says which kind of device answered. `grxDeviceProp_t.backend` is our discriminator, which is one more reason it is derived rather than asserted.
+**The control is in the same runs.** One command at a time, waiting for DONE: all four GEMMs complete and all four results match a host reference, on both builds. The harness drives the engine correctly and the 8x8 array computes correctly. Only the queued path fails.
 
-## Where phase 7 stands
+Reading `D_IDLE`, there is a branch for `pending_start && !fifo_empty` and a branch for a fresh `start_requested`, and none that drains a non-empty FIFO when neither holds. That is the state we observe: engine idle, occupancy one, nothing moving. We are not sure that is the whole story and we have not tried to patch your RTL.
 
-The device reports `GRX_BACKEND_RTLSIM` and names itself "RTL through Verilator, NOT hardware". Our seam now refuses to let anything attached through it claim `GRX_BACKEND_SILICON` at all — a model may stand in for hardware, but it may not say it *is* hardware.
+## 2. Why your 4/4 pass and this does not
 
-Executing the design is a real step past executing a model of its interface, and we are glad to have it. It is still not timing closure, a physical DDR, a clock domain crossing, or a part in a socket. **The exit gate is unchanged: hardware, with both devices present.** But the register map, the operand layout, the dimension bounds and the completion protocol are now agreed between your RTL and our host, which is most of what a bring-up argument is usually about.
+`tb/tb_csr_queue.sv` instantiates `c930_npu_csr` **alone**. It contains no `c930_npu_core`, no `c930_npu_dma`, no `c930_npu_top`, and it drives `i_busy` and `i_done` by hand — "go busy ONE cycle after start". The real core does not have that timing, and the queue's whole difficulty is timing between START, the DMA registration and `i_busy`.
 
-The RTL is not vendored on our side — it is yours and it moves, and a stale copy here would be exactly the failure we vendor your shim carefully to avoid. The target builds only when pointed at a checkout (`-DGRXCP_C930_RTL_DIR=/path/to/c930`) and otherwise does not exist.
+A unit test of the CSR block against a synthetic engine cannot see this. That is not a criticism of having one; it is the reason we ran the integrated design, and it is the same lesson our side keeps relearning in the other direction — a model is never the thing it models. Our reproducer is attached (`tests/repro/npu_cmd_queue/`), about 150 lines plus a C++ AXI memory.
 
-## What would help next
+One method note that cost us a wrong answer first: `STATUS.DONE` is a latch cleared only by writing CTRL with bit 0 set, so polling it counts one latched bit many times. Our first harness reported four completions four cycles apart, which is how we noticed. The version attached waits for queue occupancy to reach zero with BUSY clear, which assumes nothing about DONE.
 
-1. The `DMA_CT` vs `CYCLE_LO` question above, if it is quick.
-2. Whether `OP_COUNT`'s definition is intentional (tile-scaled rather than element-scaled) — we would rather document it than guess.
-3. Still the same ask, and now the only one: **hardware.** Everything short of it that we can build, we have built.
+## 3. "Gap 7.12" is a different defect, and the label will cost us
+
+`3df215b` is titled *Fix tensor unit deadlock on second CTA (Gap 7.12)*.
+
+Gap 7.12 is ours and it is **not this**. It is `Core::issue` in the GPU's SimX — the functional simulator — where every TCU micro-op takes a CTA admission slot guarded by `VX_CFG_EXT_TCU_ENABLE` while the matching release sits inside `VX_CFG_TCU_WGMMA_ENABLE`, so plain WMMA acquires a slot nothing releases and `wgmma_cta_blocked()` stalls every other CTA. It is C++ in grxgpu, it concerns the GRX-G100 tensor unit, and it has nothing to do with the c930's CSR queue.
+
+We closed the RTL half of it this morning: **the RTL does not have 7.12** — we ran two CTAs on the Verilated GPU and they complete. 7.12 is now recorded as SimX-only and still open, and the fix has to happen in SimX.
+
+If `3df215b` stands as written, our ledger will say 7.12 is fixed when the actual defect is untouched. Could the commit be retitled? Something like "fix a race in the NPU command queue" would be accurate, and the queue is new enough (243cbc9, twenty-two minutes earlier) that this is a regression in an unreleased feature rather than a long-standing bug.
+
+## 4. "The grxcp team can now launch back-to-back CTAs without deadlock"
+
+Two corrections, offered because this is about our code and we would rather it be right in your notes.
+
+We do not launch CTAs on the NPU. CTAs are a GPU concept; the c930 path programs CSRs and polls STATUS. Nothing in grxcp ever submitted a CTA to the c930.
+
+And we never reported this deadlock — we could not have. Before the queue existed, `tests/rtl/test_npu_rtl.cpp` already ran ten shapes back to back on one instance with a single reset, and all ten matched a column-major host reference. That is in our reply of the RTL milestone. So back-to-back was working; the queue introduced a regression this morning, and as of `3df215b` two commands still strand.
+
+## 5. Two things from the same batch that affect us, flagged not blocked
+
+`06d82fd`** widened the SoC array from 4x4 to 8x8.** `MAX_M/MAX_K/MAX_N` are unchanged at 8/16/12, so grxBLAS's bounds and its refusal logic are still correct — we checked before writing this. But `NUM_ROWS`/`NUM_COLS` appear in the `OP_COUNT` formula we sent you, and every one of those twenty measurements was taken at 4/4. **Treat that table as invalidated until we re-derive it at 8/8.** We will, once the queue is settled. This is the same class as the parameter mismatch we raised in the RTL milestone reply, now pointing the other way: our Verilator invocation was passing `-GNUM_ROWS=4 -GNUM_COLS=4`, and as of this change that builds a narrower machine than the SoC has.
+
+`d066b66`** says the 8x8 array does not fit Artix-7-100T at 120% LUTs**, where `06d82fd` predicted ~75%. So the SoC default is currently a configuration that does not synthesise to the target part. Not our call, and not urgent for us since we simulate — but if the shipping config goes back to 4x4, then the 8x8 numbers and the 4x4 numbers are two different machines and we would rather know which one to characterise before we spend another twenty measurements on it.
+
+## What would help
+
+1. Whether the queue is meant to work with the real core, or whether the intended protocol is still one command at a time. If it is the latter we will keep using the sequential path and nothing is blocked — we would just like it written down.
+2. A retitle of `3df215b` away from Gap 7.12.
+3. Which array width is the shipping one, before we re-derive `OP_COUNT`.
+
+Nothing here blocks us. The sequential path works, computes correct answers at 8x8, and is what grxcp uses today.

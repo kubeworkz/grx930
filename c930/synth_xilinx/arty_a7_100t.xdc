@@ -1,7 +1,7 @@
 ## ---------------------------------------------------------------------------
 ## C930 SoC  --  Arty A7-100T XDC constraints
 ##
-## Target: Digilent Arty A7-100T  (XC7A100TCSG324-1)
+## Target: Digilent Arty A7-100T  (XC7A200TCSG324-1 — 200T for 8x8 NPU)
 ## Clock:  100 MHz on-board oscillator (E3)
 ## Reset:  Active-high directly button (N15)
 ## LEDs:   LD0-LD7 are active-high directly driven LEDs

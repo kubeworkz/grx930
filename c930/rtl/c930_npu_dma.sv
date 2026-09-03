@@ -58,12 +58,20 @@ module c930_npu_dma
   output logic        o_done,
   output logic        o_error,
   output logic [31:0] o_dma_cycle_count,  // cycles while DMA busy (phase != P_IDLE)
+  output logic [31:0] o_dma_last_count,   // latched cycle count from last completed GEMM
 
   // ---- Core data plane + control ----
   output logic                    o_wen,       // preload write enable
   output logic                    o_wsel,      // 0 = A, 1 = B
   output logic [15:0]             o_waddr,
   output logic signed [DIN_W-1:0] o_wdata,
+
+  // ---- Staging buffer load (PF2 prefetch → core a_mem/b_mem) ----
+  output logic                    o_staging_wen,    // staging write enable
+  output logic                    o_staging_wsel,   // 0 = A, 1 = B
+  output logic [15:0]             o_staging_waddr,
+  output logic signed [DIN_W-1:0] o_staging_wdata,
+
   output logic                    o_core_start,
   input  logic                    i_core_done,
   input  logic                    i_core_error,
@@ -121,6 +129,7 @@ module c930_npu_dma
   localparam [2:0] P_LAUNCH  = 3'd3;
   localparam [2:0] P_WRITE_C = 3'd4;
   localparam [2:0] P_DONE    = 3'd5;
+  localparam [2:0] P_STAGING = 3'd6;  // load PF2 staging buffer into core
 
   // ---- Read sub-states ----
   localparam [1:0] RS_AR     = 2'd0;
@@ -142,6 +151,12 @@ module c930_npu_dma
   logic [15:0] dm, dn, dk;
   logic [31:0] a_base_r, b_base_r, c_base_r;
 
+  // ---- Staging load state ----
+  logic        staging_load_a;   // 1 = loading A from staging, 0 = loading B
+  int  staging_cnt;              // elements loaded so far
+  int  staging_total;            // total elements to load (dk for A, dk*dn for B)
+  logic staging_ready;           // 1 when staging buffers have valid data (from PF2)
+
   int  elem_cnt;      // bytes (A/B read) or words (C write) this phase
   int  total_elems;   // total A/B elements (M*K or K*N) for bounds check
   int  rd_beats;      // ceil(elem_cnt / BYTES_PER_BEAT) for reads
@@ -156,6 +171,20 @@ module c930_npu_dma
   logic [AXI_DATA_W-1:0] wdata_reg;
   logic wsel_reg;     // 0 = reading A, 1 = reading B
   logic launched;
+
+  // ---- Core timeout watchdog ----
+  // If i_core_done does not fire within dm*dn*dk*2 cycles of o_core_start,
+  // the core is hung.  Raise o_error and abort to prevent infinite stalls.
+  int  watchdog_cnt;       // countdown, armed when core starts
+  int  watchdog_limit;     // dm * dn * dk * 2 (loaded in P_IDLE)
+  logic watchdog_active;   // 1 while counting down in P_LAUNCH
+
+  // ---- DDR read timeout watchdog ----
+  // If m_axi_rvalid does not fire within DDR_TIMEOUT_CYCLES of an accepted
+  // AR (m_axi_arvalid && m_axi_arready), the DDR/memory subsystem is hung.
+  localparam int DDR_TIMEOUT_CYCLES = 1024;
+  int  ddr_timeout_cnt;    // countdown after AR accepted
+  logic ddr_timeout_active; // 1 while waiting for first rvalid after AR
 
   // ---- Prefetch sub-state machine (double-buffered A reads) ----
   // While the core computes row 0, the DMA prefetches rows 1..M-1 of A
@@ -188,6 +217,7 @@ module c930_npu_dma
   logic        next_a_ready;   // 1 when staging buffer has valid A data
   logic        next_b_ready;   // 1 when staging buffer has valid B data
   logic        staging_load;   // pulse to load staging buffer into core
+  logic        next_captured;  // 1-cycle deferred capture of i_next_* params
 
   // ---- Cross-GEMM prefetch sub-states ----
   localparam [1:0] PF2_IDLE = 2'd0;
@@ -218,9 +248,16 @@ module c930_npu_dma
       o_done        <= 1'b0;
       o_error       <= 1'b0;
       o_dma_cycle_count <= 32'd0;
+      o_dma_last_count  <= 32'd0;
       o_wen         <= 1'b0;
+      o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
       launched      <= 1'b0;
+      watchdog_cnt    <= 0;
+      watchdog_limit  <= 0;
+      watchdog_active <= 1'b0;
+      ddr_timeout_cnt    <= 0;
+      ddr_timeout_active <= 1'b0;
       pf_state      <= PF_IDLE;
       pf_row        <= 1;
       pf2_state     <= PF2_IDLE;
@@ -228,6 +265,11 @@ module c930_npu_dma
       next_valid    <= 1'b0;
       next_a_ready  <= 1'b0;
       next_b_ready  <= 1'b0;
+      staging_load_a <= 1'b0;
+      staging_cnt    <= 0;
+      staging_total  <= 0;
+      staging_ready  <= 1'b0;
+      next_captured  <= 1'b1;  // no deferred capture at reset
       c_beat        <= 0;
       c_odd         <= 1'b0;
       m_axi_arvalid <= 1'b0;
@@ -250,6 +292,7 @@ module c930_npu_dma
       else if (phase != P_IDLE)
         o_dma_cycle_count <= o_dma_cycle_count + 32'd1;
       o_wen         <= 1'b0;
+      o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
@@ -257,10 +300,41 @@ module c930_npu_dma
       m_axi_wvalid  <= 1'b0;
       m_axi_bready  <= 1'b0;
 
+      // ---- DDR read timeout watchdog ----
+      // Arm when AR is accepted; count until first rvalid or timeout.
+      if (m_axi_arvalid && m_axi_arready) begin
+        ddr_timeout_cnt    <= DDR_TIMEOUT_CYCLES;
+        ddr_timeout_active <= 1'b1;
+      end else if (ddr_timeout_active) begin
+        if (m_axi_rvalid) begin
+          // DDR responded — disable timeout
+          ddr_timeout_active <= 1'b0;
+        end else if (ddr_timeout_cnt <= 0) begin
+          // Timeout! DDR never responded.  Abort immediately to P_IDLE.
+          // The DDR model should have its own safety timeout to release
+          // r_busy after the DMA gives up.
+          ddr_timeout_active <= 1'b0;
+          o_done  <= 1'b1;
+          o_error <= 1'b1;
+          o_dma_last_count <= o_dma_cycle_count;
+          m_axi_arvalid <= 1'b0;
+          m_axi_rready  <= 1'b0;
+          pf_state      <= PF_IDLE;
+          pf2_state     <= PF2_IDLE;
+          phase         <= P_IDLE;
+        end else begin
+          ddr_timeout_cnt <= ddr_timeout_cnt - 1;
+        end
+      end
+
       case (phase)
 
         // ---------------------------------------------------------------------
         P_IDLE: begin
+          // Update staging_ready from PF2 completion (persists until consumed)
+          if (next_a_ready && next_b_ready)
+            staging_ready <= 1'b1;
+
           if (i_start) begin
             if (!dims_ok) begin
               o_error <= 1'b1;
@@ -273,6 +347,11 @@ module c930_npu_dma
               b_base_r <= i_b_base;
               c_base_r <= i_c_base;
               is_int4     <= (i_precision == 3'd4);
+              // Arm watchdog limit: core compute is O(M * ceil(N/8) * ceil(K/8) * 20).
+              // Use M*N*K*2 + M*N*16 + 256 as a safe upper bound that covers
+              // K-dependent compute, M×N tiling overhead, and DMA round-trips.
+              watchdog_limit <= i_dim_m * i_dim_n * i_dim_k * 2 +
+                                i_dim_m * i_dim_n * 16 + 256;
               // INT4: nibble-packing means rows share bytes, read all A upfront.
               // INT8/16/FP16/BF16: read first row only, prefetch rest during compute.
               if (i_precision == 3'd4) begin
@@ -305,25 +384,25 @@ module c930_npu_dma
               unpack_idx <= 0;
               wsel_reg   <= 1'b0;                           // A first
               rd_sub     <= RS_AR;
-              phase      <= P_READ_A;
-              // Capture next GEMM params from FIFO head for cross-GEMM prefetch
-              if (i_next_valid) begin
-                next_valid    <= 1'b1;
-                next_dm       <= i_next_dim_m;
-                next_dn       <= i_next_dim_n;
-                next_dk       <= i_next_dim_k;
-                next_a_base   <= i_next_a_base;
-                next_b_base   <= i_next_b_base;
-                next_c_base   <= i_next_c_base;
-                next_precision <= i_next_precision;
+              // If PF2 staging buffers are ready, load them into core first
+              if (staging_ready) begin
+                staging_load_a <= 1'b1;
+                staging_cnt    <= 0;
+                staging_total  <= i_dim_k;  // dk elements for A (INT4/INT8/INT16: same element count)
+                staging_ready  <= 1'b0;  // consumed
+                phase          <= P_STAGING;
+    
               end else begin
-                next_valid    <= 1'b0;
+                phase <= P_READ_A;
               end
               // Reset cross-GEMM prefetch state
               pf2_state    <= PF2_IDLE;
               pf2_row      <= 0;
               next_a_ready <= 1'b0;
               next_b_ready <= 1'b0;
+              next_captured <= 1'b0;  // will capture i_next_* on next cycle
+              // staging_ready is set below (outside i_start) when PF2 completes
+              // and consumed here when we dispatch to P_STAGING
             end
           end
         end
@@ -332,6 +411,23 @@ module c930_npu_dma
         // Shared A/B burst read: one INCR burst, unpack 4 bytes per beat.
         // ---------------------------------------------------------------------
         P_READ_A, P_READ_B: begin
+          // Deferred capture: one cycle after dispatch, the FIFO pop has
+          // taken effect and the head points to the NEXT queued GEMM.
+          if (!next_captured) begin
+            next_captured <= 1'b1;
+            if (i_next_valid) begin
+              next_valid    <= 1'b1;
+              next_dm       <= i_next_dim_m;
+              next_dn       <= i_next_dim_n;
+              next_dk       <= i_next_dim_k;
+              next_a_base   <= i_next_a_base;
+              next_b_base   <= i_next_b_base;
+              next_c_base   <= i_next_c_base;
+              next_precision <= i_next_precision;
+            end else begin
+              next_valid    <= 1'b0;
+            end
+          end
           case (rd_sub)
             RS_AR: begin
               if (m_axi_arvalid && m_axi_arready) begin
@@ -476,12 +572,18 @@ module c930_npu_dma
             end
           endcase
 
-          // --- Core start / completion (original logic) ---
+          // --- Core start / completion + watchdog ---
           if (!launched) begin
-            o_core_start <= 1'b1;
-            launched     <= 1'b1;
+            o_core_start  <= 1'b1;
+            launched      <= 1'b1;
+            // Arm watchdog: countdown from dm*dn*dk*2
+            watchdog_cnt    <= watchdog_limit;
+            watchdog_active <= 1'b1;
+
           end else if (i_core_done) begin
-            launched <= 1'b0;
+            launched       <= 1'b0;
+            watchdog_active <= 1'b0;  // disarm watchdog
+
             // Do NOT stop prefetch here -- let it continue during
             // P_WRITE_C so A prefetch overlaps with C write-back
             // (AXI read and write channels are independent).
@@ -494,6 +596,21 @@ module c930_npu_dma
               c_beat <= 0;
               wr_sub <= WS_AW;
               phase  <= P_WRITE_C;
+            end
+
+          end else if (watchdog_active) begin
+            // Watchdog countdown
+            if (watchdog_cnt <= 1) begin
+              // TIMEOUT: core did not respond in time
+              $display("  [DMA] WATCHDOG TIMEOUT: core did not respond within %0d cycles",
+                       watchdog_limit);
+              launched       <= 1'b0;
+              watchdog_active <= 1'b0;
+              pf_state       <= PF_IDLE;  // stop prefetch
+              o_error        <= 1'b1;
+              phase          <= P_DONE;
+            end else begin
+              watchdog_cnt <= watchdog_cnt - 1;
             end
           end
         end
@@ -573,7 +690,15 @@ module c930_npu_dma
                 pf2_rd_beat    <= 0;
                 pf2_unpack_idx <= 0;
                 pf2_reading_a  <= 1'b1;
-                pf2_rd_beats   <= (next_dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                // INT4: 16 elements per beat, read ceil(dk/16) beats
+                // INT8: 8 elements per beat, read ceil(dk/8) beats
+                // INT16/FP16: 4 elements per beat, read ceil(dk/4) beats
+                if (next_precision == 3'd4)  // INT4
+                  pf2_rd_beats <= (next_dk + 15) / 16;
+                else if (next_precision == 3'd0)  // INT8
+                  pf2_rd_beats <= (next_dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                else  // INT16/FP16/BF16
+                  pf2_rd_beats <= (next_dk * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 pf2_state      <= PF2_AR;
               end
               PF2_AR: begin
@@ -600,16 +725,21 @@ module c930_npu_dma
               end
               PF2_UNPK: begin
                 // Unpack into staging buffer
+                // INT4: 16 elements/beat (4-bit nibbles), INT8: 8, INT16: 4
                 if (pf2_reading_a) begin
                   if (pf2_flat_idx < next_dk) begin
-                    if (next_precision == 3'd0)  // INT8
+                    if (next_precision == 3'd4)  // INT4: nibble unpack
+                      next_a_buf[pf2_flat_idx] <= {{12{pf2_rword[pf2_unpack_idx*4+3]}}, pf2_rword[pf2_unpack_idx*4 +: 4]};
+                    else if (next_precision == 3'd0)  // INT8
                       next_a_buf[pf2_flat_idx] <= {{8{pf2_rword[pf2_unpack_idx*8+7]}}, pf2_rword[pf2_unpack_idx*8 +: 8]};
                     else  // INT16/FP16/BF16
                       next_a_buf[pf2_flat_idx] <= pf2_rword[pf2_unpack_idx*16 +: 16];
                   end
                 end else begin
                   if (pf2_flat_idx < next_dk * next_dn) begin
-                    if (next_precision == 3'd0)
+                    if (next_precision == 3'd4)
+                      next_b_buf[pf2_flat_idx] <= {{12{pf2_rword[pf2_unpack_idx*4+3]}}, pf2_rword[pf2_unpack_idx*4 +: 4]};
+                    else if (next_precision == 3'd0)
                       next_b_buf[pf2_flat_idx] <= {{8{pf2_rword[pf2_unpack_idx*8+7]}}, pf2_rword[pf2_unpack_idx*8 +: 8]};
                     else
                       next_b_buf[pf2_flat_idx] <= pf2_rword[pf2_unpack_idx*16 +: 16];
@@ -617,7 +747,9 @@ module c930_npu_dma
                 end
                 pf2_flat_idx   <= pf2_flat_idx + 1;
                 pf2_unpack_idx <= pf2_unpack_idx + 1;
-                if (pf2_unpack_idx == ((pf2_reading_a && next_precision == 3'd0) ? 7 : 3)) begin
+                // Beat boundary: INT4=16 elements, INT8=8, INT16=4
+                if (pf2_unpack_idx == (next_precision == 3'd4 ? 15 :
+                                      next_precision == 3'd0 ? 7 : 3)) begin
                   if (pf2_rd_beat == pf2_rd_beats) begin
                     if (pf2_reading_a) begin
                       // A row done, start B
@@ -625,7 +757,13 @@ module c930_npu_dma
                       pf2_reading_a <= 1'b0;
                       pf2_flat_idx  <= 0;
                       pf2_rd_beat   <= 0;
-                      pf2_rd_beats  <= (next_dk * next_dn + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                      // B beat count: INT4 packs 2 elements/byte, INT8 packs 4/byte, INT16 packs 2/byte
+                      if (next_precision == 3'd4)  // INT4: dk*dn elements, 16 per beat
+                        pf2_rd_beats <= (next_dk * next_dn + 15) / 16;
+                      else if (next_precision == 3'd0)  // INT8: dk*dn elements, 8 per beat
+                        pf2_rd_beats <= (next_dk * next_dn + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                      else  // INT16/FP16/BF16: dk*dn elements, 4 per beat (2 bytes each)
+                        pf2_rd_beats <= (next_dk * next_dn * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                       pf2_state     <= PF2_AR;
                     end else begin
                       // B done
@@ -719,10 +857,90 @@ module c930_npu_dma
         end
 
         // ---------------------------------------------------------------------
+        // P_STAGING: load PF2 prefetched A/B from staging buffers into core.
+        // Runs while the core is idle (before i_start).  Writes one element
+        // per cycle to a_mem or b_mem via the staging write port.
+        // A: dk elements (INT8: dk, INT16/FP16: dk*2 bytes = dk*2 elements)
+        // B: dk*dn elements (same packing)
+        // After A is loaded, switches to B, then transitions to P_LAUNCH.
+        // ---------------------------------------------------------------------
+        P_STAGING: begin
+          // Deferred capture for staging path too
+          if (!next_captured) begin
+            next_captured <= 1'b1;
+            if (i_next_valid) begin
+              next_valid    <= 1'b1;
+              next_dm       <= i_next_dim_m;
+              next_dn       <= i_next_dim_n;
+              next_dk       <= i_next_dim_k;
+              next_a_base   <= i_next_a_base;
+              next_b_base   <= i_next_b_base;
+              next_c_base   <= i_next_c_base;
+              next_precision <= i_next_precision;
+            end else begin
+              next_valid    <= 1'b0;
+            end
+          end
+          o_staging_wen  <= 1'b1;
+          o_staging_wsel <= staging_load_a ? 1'b0 : 1'b1;  // 0 = A, 1 = B
+          o_staging_waddr <= staging_cnt[15:0];
+          if (staging_load_a) begin
+            // Load A from next_a_buf
+            if (next_precision == 3'd4)  // INT4: already sign-extended by PF2
+              o_staging_wdata <= next_a_buf[staging_cnt];
+            else if (next_precision == 3'd0)  // INT8
+              o_staging_wdata <= {{8{next_a_buf[staging_cnt][7]}}, next_a_buf[staging_cnt][7:0]};
+            else  // INT16/FP16/BF16
+              o_staging_wdata <= next_a_buf[staging_cnt];
+          end else begin
+            // Load B from next_b_buf
+            if (next_precision == 3'd4)
+              o_staging_wdata <= next_b_buf[staging_cnt];
+            else if (next_precision == 3'd0)  // INT8
+              o_staging_wdata <= {{8{next_b_buf[staging_cnt][7]}}, next_b_buf[staging_cnt][7:0]};
+            else  // INT16/FP16/BF16
+              o_staging_wdata <= next_b_buf[staging_cnt];
+          end
+          staging_cnt <= staging_cnt + 1;
+          if (staging_cnt + 1 >= staging_total) begin
+            if (staging_load_a) begin
+              // A done, switch to B
+              staging_load_a <= 1'b0;
+              staging_cnt    <= 0;
+              staging_total  <= next_dk * next_dn;  // dk*dn elements for B (all precisions)
+            end else begin
+              // B done, proceed to P_LAUNCH
+              staging_load_a <= 1'b0;
+              launched       <= 1'b0;
+              phase          <= P_LAUNCH;
+  
+            end
+          end
+        end
+
+        // ---------------------------------------------------------------------
+        // P_DONE: drain any pending AXI read, then return to P_IDLE.
+        // A PF1 prefetch may have issued a burst that the DDR model is
+        // still processing (r_busy=1).  If we jump straight to P_IDLE,
+        // the next P_READ_A stalls forever on arready=0 because the DDR
+        // model waits for rready to finish the old burst.
         P_DONE: begin
-          pf_state <= PF_IDLE;  // ensure prefetch stopped
           o_done <= 1'b1;
-          phase  <= P_IDLE;
+          o_dma_last_count <= o_dma_cycle_count;
+          // Stop PF state machine from issuing new reads
+          pf_state <= PF_IDLE;
+          if (m_axi_rvalid) begin
+            // Drain pending read data so the DDR model can release r_busy
+            m_axi_rready <= 1'b1;
+            if (m_axi_rlast) begin
+              phase <= P_IDLE;
+    
+            end
+          end else begin
+            // No pending read — safe to return to P_IDLE immediately
+            phase <= P_IDLE;
+
+          end
         end
 
         default: phase <= P_IDLE;

@@ -16,7 +16,8 @@
 //   0x24 CYCLE_LO   (R)  free-running cycle counter
 //   0x2C OP_COUNT   (R)  MAC operations completed
 //   0x30 STALL_CT   (R)  stall cycles
-//   0x34 DMA_CT     (R)  DMA busy cycles
+//   0x34 DMA_CT     (R)  DMA busy cycles (live counter)
+//   0x28 DMA_LAST   (R)  latched cycle count from last completed GEMM
 //   0x38 QUEUE_STAT (R)  bit[3:0] occupancy, bit[4] full
 //   0x3C QUEUE_MAX  (R)  max depth (compile-time)
 //
@@ -72,6 +73,7 @@ module c930_npu_csr
   input  logic [31:0] i_op_count,
   input  logic [31:0] i_stall_count,
   input  logic [31:0] i_dma_cycle_count,
+  input  logic [31:0] i_dma_last_count,
 
   // ---- FIFO head (next GEMM params for cross-GEMM prefetch) ----
   output logic        o_fifo_valid,    // 1 when FIFO has a queued command
@@ -97,6 +99,7 @@ module c930_npu_csr
   localparam logic [3:0] ADDR_OP_COUNT  = 4'hB;
   localparam logic [3:0] ADDR_STALL_CT  = 4'hC;
   localparam logic [3:0] ADDR_DMA_CT    = 4'hD;
+  localparam logic [3:0] ADDR_DMA_LAST  = 4'hA;  // 0x28: latched DMA cycle count from last completed GEMM
   localparam logic [3:0] ADDR_QUEUE_STAT = 4'hE;
   localparam logic [3:0] ADDR_QUEUE_MAX  = 4'hF;
 
@@ -155,9 +158,9 @@ module c930_npu_csr
   wire   fifo_full  = (fifo_count == CMD_QUEUE_DEPTH);
 
   wire [CMD_W-1:0] cmd_snapshot = {
+    precision,
     c_base, b_base, a_base,
-    dim_k, dim_n, dim_m,
-    precision
+    dim_k, dim_n, dim_m
   };
 
   // Initialize
@@ -210,6 +213,8 @@ module c930_npu_csr
 
   disp_state_t disp_state;
   logic        pending_start;  // START captured while dispatcher is in D_WAIT
+  logic        pending_pushed; // one-shot: set once do_push fires for pending_start
+  logic        was_busy;       // DMA was busy — prevents spurious double DRAIN
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -217,6 +222,8 @@ module c930_npu_csr
       start_pulse   <= 1'b0;
       fifo_pop      <= 1'b0;
       pending_start <= 1'b0;
+      pending_pushed <= 1'b0;
+      was_busy      <= 1'b0;
       cur_dim_m     <= 16'd0;
       cur_dim_n     <= 16'd0;
       cur_dim_k     <= 16'd0;
@@ -241,14 +248,13 @@ module c930_npu_csr
             cur_c_base    <= fifo_head[143:112];
             cur_precision <= fifo_head[146:144];
             fifo_pop      <= 1'b1;
-            pending_start <= 1'b0;
-            start_pulse   <= 1'b1;
-            disp_state    <= D_WAIT;
+            pending_start  <= 1'b0;
+            pending_pushed <= 1'b0;
+            start_pulse    <= 1'b1;
+            disp_state     <= D_WAIT;
           end else if (pending_start && fifo_empty) begin
             // Pending start but FIFO push hasn't registered yet.
             // Wait one cycle for do_push to update fifo_count.
-            // (do_push fires combinationally when pending_start && i_busy,
-            //  so the FIFO entry is being written this cycle.)
           end else if (start_requested) begin
             if (!fifo_empty) begin
               // FIFO has queued commands — dispatch from head
@@ -272,16 +278,56 @@ module c930_npu_csr
             end
             start_pulse <= 1'b1;
             disp_state  <= D_WAIT;
+          end else if (!fifo_empty) begin
+            // FIFO drain: engine idle, no new START, but commands queued.
+            // Without this branch, queued commands strand forever —
+            // the grxcp team's back-to-back regression (occupancy stuck
+            // at 1, STATUS=0x2, queue count corrupted on 3+ commands).
+            cur_dim_m     <= fifo_head[15:0];
+            cur_dim_n     <= fifo_head[31:16];
+            cur_dim_k     <= fifo_head[47:32];
+            cur_a_base    <= fifo_head[79:48];
+            cur_b_base    <= fifo_head[111:80];
+            cur_c_base    <= fifo_head[143:112];
+            cur_precision <= fifo_head[146:144];
+            fifo_pop      <= 1'b1;
+            start_pulse   <= 1'b1;
+            disp_state    <= D_WAIT;
           end
         end
 
         D_WAIT: begin
           if (start_requested) begin
-            // START arrived while engine busy — latch it for later dispatch
-            pending_start <= 1'b1;
+            if (do_push) begin
+              // First clause already pushed this cycle — no need for pending
+              pending_start  <= 1'b0;
+              pending_pushed <= 1'b1;  // mark consumed
+            end else begin
+              // Push couldn't fire yet (i_busy=0 edge case) — defer push
+              pending_start  <= 1'b1;
+              pending_pushed <= 1'b0;
+            end
           end
-          if (!i_busy)
-            disp_state <= D_IDLE;
+          // Mark pending as consumed once do_push fires for it
+          if (pending_start && do_push && !pending_pushed)
+            pending_pushed <= 1'b1;
+          // Track that DMA was actually busy — don't return to D_IDLE until
+          // the DMA has consumed start_pulse and entered a non-IDLE phase.
+          // Without this, the dispatcher returns to D_IDLE one cycle too
+          // early (before the DMA's phase change takes effect), causing a
+          // spurious second DRAIN that pops the next FIFO entry.
+          // Return to D_IDLE only after DMA was busy then became idle.
+          // This prevents a spurious second DRAIN before start_pulse is
+          // consumed (the DMA's phase change is an NBA, so i_busy lags
+          // start_pulse by one cycle).
+          if (i_busy)
+            was_busy <= 1'b1;
+          if (!i_busy && was_busy) begin
+            disp_state     <= D_IDLE;
+            pending_start  <= 1'b0;
+            pending_pushed <= 1'b0;
+            was_busy       <= 1'b0;
+          end
         end
 
         default: disp_state <= D_IDLE;
@@ -297,7 +343,7 @@ module c930_npu_csr
   //  (b) pending_start latched while engine is still busy (the START arrived
   //      in D_WAIT before i_busy went high, so we need to push retroactively)
   wire do_push = (start_requested && !fifo_full && (i_busy || !fifo_empty)) ||
-                (pending_start && !fifo_full && i_busy);
+                (pending_start && !pending_pushed && !fifo_full && i_busy);
   wire do_pop  = fifo_pop && !fifo_empty;
 
   // ---------------------------------------------------------------------------
@@ -312,6 +358,8 @@ module c930_npu_csr
       // Push: START writes snapshot to FIFO when the command cannot be
       // dispatched immediately (engine busy or FIFO non-empty), or when a
       // pending_start is waiting for the engine to go busy.
+      // After the push, clear pending_start so do_push doesn't re-fire
+      // every cycle (the root cause of the grxcp team's corrupted queue).
       if (do_push) begin
         fifo_mem[fifo_wr_idx] <= cmd_snapshot;
         fifo_wr_ptr <= fifo_wr_ptr + 1;
@@ -415,6 +463,7 @@ module c930_npu_csr
           ADDR_OP_COUNT:   s_axi_rdata <= i_op_count;
           ADDR_STALL_CT:   s_axi_rdata <= i_stall_count;
           ADDR_DMA_CT:     s_axi_rdata <= i_dma_cycle_count;
+          ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
           ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
           ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
           default:         s_axi_rdata <= 32'd0;

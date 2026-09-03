@@ -35,6 +35,14 @@ module c930_npu_core
   input  logic [15:0]                 i_waddr,
   input  logic signed [DIN_W-1:0]     i_wdata,
 
+  // ---- Staging buffer load (from DMA PF2 prefetch) ----
+  // Active during P_STAGING: loads prefetched A/B data into a_mem/b_mem
+  // before the core starts.  Must be deasserted before i_start.
+  input  logic                        i_staging_wen,    // staging write enable
+  input  logic                        i_staging_wsel,   // 0 = A, 1 = B
+  input  logic [15:0]                 i_staging_waddr,
+  input  logic signed [DIN_W-1:0]     i_staging_wdata,
+
   // ---- Control ----
   input  logic                        i_start,  // 1-cycle pulse, sampled in IDLE
   input  logic [15:0]                 i_dim_m,
@@ -60,13 +68,25 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   logic signed [DIN_W-1:0] a_mem [0:MAX_M*MAX_K-1];   // A stored row-major, stride K
   logic signed [DIN_W-1:0] b_mem [0:MAX_K*MAX_N-1];   // B stored row-major, stride N
-  logic signed [31:0]      c_mem [0:MAX_M*MAX_N-1];   // C stored row-major, stride N (32-bit)
+
+  // C matrix: inferred as Block RAM when synthesis tool supports it.
+  // For MAX_M=8/MAX_N=12 (SoC defaults): 384 bytes, fits in LUTRAM.
+  // For MAX_M=64/MAX_N=8 (200T): 16 KB, maps to RAMB18K blocks.
+  // Combinational read (OPREG disabled on Xilinx BRAMs) preserves the
+  // existing DMA timing — no extra wait states needed.
+  (* ram_style = "block" *) logic signed [31:0] c_mem [0:MAX_M*MAX_N-1];
 
   assign o_c_rdata = c_mem[i_c_raddr];
 
-  // Preload A/B (allow DMA writes during compute for double-buffered reads)
+  // Preload A/B: mux between DMA normal writes and staging buffer loads.
+  // staging_wen has priority - it fires during P_STAGING when the core is
+  // idle and the write port is free.  i_wen fires during P_READ_A/P_READ_B
+  // and P_WRITE_C (via PF prefetch).
   always_ff @(posedge i_clk) begin
-    if (i_wen) begin
+    if (i_staging_wen) begin
+      if (i_staging_wsel) b_mem[i_staging_waddr] <= i_staging_wdata;
+      else                a_mem[i_staging_waddr] <= i_staging_wdata;
+    end else if (i_wen) begin
       if (i_wsel) b_mem[i_waddr] <= i_wdata;
       else        a_mem[i_waddr] <= i_wdata;
     end

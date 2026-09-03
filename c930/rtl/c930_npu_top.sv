@@ -87,10 +87,15 @@ module c930_npu_top
   logic                    dma_wen, dma_wsel, core_start;
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
+
+  // Staging buffer load signals (DMA → core)
+  logic                    staging_wen, staging_wsel;
+  logic [15:0]             staging_waddr;
+  logic signed [DIN_W-1:0] staging_wdata;
   logic [15:0]             c_raddr;
   logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
   logic                    core_done, core_error;
-  logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count;
+  logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count, dma_last_count;
 
   // FIFO head (next GEMM params for cross-GEMM prefetch)
   logic        fifo_valid;
@@ -133,6 +138,7 @@ module c930_npu_top
     .i_op_count    (op_count),
     .i_stall_count (stall_count),
     .i_dma_cycle_count (dma_cycle_count),
+    .i_dma_last_count  (dma_last_count),
     .o_fifo_valid    (fifo_valid),
     .o_fifo_dim_m    (fifo_dim_m),
     .o_fifo_dim_n    (fifo_dim_n),
@@ -170,10 +176,15 @@ module c930_npu_top
     .o_done        (done),
     .o_error       (error),
     .o_dma_cycle_count (dma_cycle_count),
+    .o_dma_last_count  (dma_last_count),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
     .o_waddr       (dma_waddr),
     .o_wdata       (dma_wdata),
+    .o_staging_wen   (staging_wen),
+    .o_staging_wsel  (staging_wsel),
+    .o_staging_waddr (staging_waddr),
+    .o_staging_wdata (staging_wdata),
     .o_core_start  (core_start),
     .i_core_done   (core_done),
     .i_core_error  (core_error),
@@ -221,6 +232,10 @@ module c930_npu_top
     .i_wsel     (dma_wsel),
     .i_waddr    (dma_waddr),
     .i_wdata    (dma_wdata),
+    .i_staging_wen   (staging_wen),
+    .i_staging_wsel  (staging_wsel),
+    .i_staging_waddr (staging_waddr),
+    .i_staging_wdata (staging_wdata),
     .i_start    (core_start),
     .i_dim_m    (dim_m),
     .i_dim_n    (dim_n),

@@ -171,7 +171,18 @@ module tb_c930_npu;
   assign m_axi_arready = ~r_busy;
   assign m_axi_rvalid  = r_busy;
   assign m_axi_rlast   = (r_beat == r_len);
-  assign m_axi_rdata   = {mem[(r_addr >> 2) + r_beat*2 + 1], mem[(r_addr >> 2) + r_beat*2]};
+  // Byte-aligned AXI read: use a 16-byte window (4 consecutive words)
+  // and shift by the byte offset within the window.  Without this,
+  // non-word-aligned PF prefetch addresses (e.g. K=1 INT8 where the
+  // second row starts at byte offset 1) return the wrong byte.
+  logic [127:0] rd_window;
+  logic [1:0]   rd_byte_off;
+  assign rd_byte_off = r_addr[1:0];
+  assign rd_window = { mem[(r_addr >> 2) + r_beat*2 + 3],
+                       mem[(r_addr >> 2) + r_beat*2 + 2],
+                       mem[(r_addr >> 2) + r_beat*2 + 1],
+                       mem[(r_addr >> 2) + r_beat*2] };
+  assign m_axi_rdata = rd_window >> {rd_byte_off, 3'b000};
   assign m_axi_rresp   = 2'b00;
 
   always_ff @(posedge clk or negedge rst_n) begin
