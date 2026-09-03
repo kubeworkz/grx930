@@ -182,6 +182,12 @@ module tb_npu_formal_assertions;
   wire [15:0] dma_i_dim_k         = dut.u_dma.i_dim_k;
   wire        dma_ddr_timeout_active = dut.u_dma.ddr_timeout_active;
   wire        dma_start_input       = dut.start;
+  wire        dma_staging_load_a    = dut.u_dma.staging_load_a;
+  wire        dma_staging_ready     = dut.u_dma.staging_ready;
+  wire [31:0] dma_dk                = dut.u_dma.dk;
+  wire [31:0] dma_dn                = dut.u_dma.dn;
+  wire [31:0] dma_staging_total     = dut.u_dma.staging_total;
+  wire [15:0] dma_staging_cnt       = dut.u_dma.staging_cnt;
 
   localparam [2:0] P_IDLE   = 3'd0;
   localparam [2:0] P_READ_A = 3'd1;
@@ -205,6 +211,7 @@ module tb_npu_formal_assertions;
   reg  [31:0] prev_watchdog_cnt;     // previous watchdog_cnt for monotonic check
   reg         prev_ddr_timeout_active; // previous ddr_timeout_active
   reg         prev_watchdog_active;   // previous watchdog_active for monotonic gating
+  reg         prev_staging_load_a;    // previous staging_load_a for edge detect
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -212,11 +219,13 @@ module tb_npu_formal_assertions;
       core_start_seen <= 0; error_seen <= 0;
       o_error_prev <= 0; watchdog_fired <= 0; ddr_timeout_fired <= 0;
       prev_watchdog_cnt <= 0; prev_ddr_timeout_active <= 0; prev_watchdog_active <= 0;
+      prev_staging_load_a <= 1;
     end else begin
       o_error_prev <= o_error;
       prev_watchdog_cnt <= dma_watchdog_cnt;
       prev_ddr_timeout_active <= dma_ddr_timeout_active;
       prev_watchdog_active <= dma_watchdog_active;
+      prev_staging_load_a <= dma_staging_load_a;
 
       // Track core start events
       if (dma_o_core_start && dma_launched && dma_watchdog_active) begin
@@ -311,6 +320,41 @@ module tb_npu_formal_assertions;
                prev_watchdog_cnt, dma_watchdog_cnt);
         assertions_failed = assertions_failed + 1;
       end
+    end
+  end
+
+  // ---- ASSERTION F: staging_total == dk*dn throughout B staging ----
+  // Continuous check: while in P_STAGING with staging_load_a=0 (B phase),
+  // staging_total must equal dk*dn.  The previous bug set it to
+  // next_dk * next_dn (the NEXT queued GEMM's dimensions) instead.
+  // We check on the cycle AFTER the A→B transition to allow the NBA
+  // (staging_total <= dk*dn) to settle.
+  reg staging_b_check;   // 1 cycle after A→B transition, gate the check
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+      staging_b_check <= 0;
+    else if (dma_phase == P_STAGING && prev_staging_load_a && !dma_staging_load_a)
+      staging_b_check <= 1;   // A→B just happened, check next cycle
+    else if (dma_phase != P_STAGING || dma_staging_load_a)
+      staging_b_check <= 0;   // exit B staging or leave P_STAGING
+  end
+
+  always @(posedge clk) begin
+    if (rst_n && staging_b_check && dma_phase == P_STAGING && !dma_staging_load_a) begin
+      if (dma_staging_total !== dma_dk * dma_dn) begin
+        $error("[ASSERTION F FAIL] staging_total=%0d, expected dk*dn=%0d*%0d=%0d",
+               dma_staging_total, dma_dk, dma_dn, dma_dk * dma_dn);
+        assertions_failed = assertions_failed + 1;
+      end
+    end
+  end
+
+  // ---- ASSERTION G: staging_cnt never exceeds staging_total in P_STAGING ----
+  always @(posedge clk) begin
+    if (rst_n && dma_phase == P_STAGING && dma_staging_cnt > dma_staging_total) begin
+      $error("[ASSERTION G FAIL] staging_cnt=%0d > staging_total=%0d",
+             dma_staging_cnt, dma_staging_total);
+      assertions_failed = assertions_failed + 1;
     end
   end
 
@@ -511,6 +555,62 @@ module tb_npu_formal_assertions;
         assertions_failed = assertions_failed + 1;
       end else begin
         $display("  [PASS] DMA returned to P_IDLE after DDR timeout");
+        assertions_passed = assertions_passed + 1;
+      end
+    end
+
+    // -----------------------------------------------------------------
+    // TEST 6: Multi-GEMM back-to-back — exercises P_STAGING path
+    // Verifies staging_total == dk*dn (Assertion F) across queued GEMMs.
+    // Uses M=8 to give PF2 enough P_WRITE_C time to complete.
+    // -----------------------------------------------------------------
+    $display("\n[TEST 6] Multi-GEMM back-to-back: staging_total invariant");
+    begin : test6
+      int dma_cycles;
+      // M=8 gives ~32-beat P_WRITE_C, enough for PF2 to prefetch
+      // the next GEMM's A+B (typically <16 beats).
+      fill_gemm(8, 8, 8, 0, 600);
+      fill_gemm(4, 4, 16, 1, 700);
+      fill_gemm(2, 6, 8, 2, 800);
+      submit_gemm(8, 8, 8, 0);
+      submit_gemm(4, 4, 16, 1);
+      submit_gemm(2, 6, 8, 2);
+      dma_cycles = 0;
+      while (o_busy && dma_cycles < 200000) begin
+        @(posedge clk); dma_cycles = dma_cycles + 1;
+      end
+      if (o_error) begin
+        $display("  [FAIL] o_error during multi-GEMM staging");
+        assertions_failed = assertions_failed + 1;
+      end else begin
+        $display("  [PASS] Multi-GEMM completed in %0d cycles, staging invariant held", dma_cycles);
+        assertions_passed = assertions_passed + 1;
+      end
+    end
+
+    // -----------------------------------------------------------------
+    // TEST 7: Large→small shape sequence — the original bug scenario
+    // GEMM0 (large M for long P_WRITE_C) → GEMM1 (tiny) → GEMM2
+    // The original bug: staging_total = next_dk*next_dn instead of dk*dn
+    // -----------------------------------------------------------------
+    $display("\n[TEST 7] Large→small shape: staging_total with shrinking GEMMs");
+    begin : test7
+      int dma_cycles;
+      fill_gemm(8, 8, 8, 0, 900);
+      fill_gemm(2, 3, 16, 1, 1000);
+      fill_gemm(4, 4, 8, 2, 1100);
+      submit_gemm(8, 8, 8, 0);
+      submit_gemm(2, 3, 16, 1);
+      submit_gemm(4, 4, 8, 2);
+      dma_cycles = 0;
+      while (o_busy && dma_cycles < 200000) begin
+        @(posedge clk); dma_cycles = dma_cycles + 1;
+      end
+      if (o_error) begin
+        $display("  [FAIL] o_error during large→small staging");
+        assertions_failed = assertions_failed + 1;
+      end else begin
+        $display("  [PASS] Large→small completed in %0d cycles, staging invariant held", dma_cycles);
         assertions_passed = assertions_passed + 1;
       end
     end

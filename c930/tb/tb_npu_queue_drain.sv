@@ -205,12 +205,49 @@ module tb_npu_queue_drain;
   int total_cycles;
   logic [31:0] qstat;
 
+  // ---- Formal-style bounded assertions ----
+  // Assertion F: staging_total == dk*dn when B staging starts.
+  // Catches the bug where staging_total was set to next_dk*next_dn.
+  wire [2:0]  dma_phase_f       = dut.u_dma.phase;
+  wire        dma_staging_load_a_f = dut.u_dma.staging_load_a;
+  wire [31:0] dma_dk_f           = dut.u_dma.dk;
+  wire [31:0] dma_dn_f           = dut.u_dma.dn;
+  wire [31:0] dma_staging_total_f = dut.u_dma.staging_total;
+  reg  [31:0] staging_b_assertion_fails;
+
+  reg prev_sla_f;  // previous staging_load_a for edge detect
+  reg staging_b_check_f;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      prev_sla_f <= 1;
+      staging_b_check_f <= 0;
+    end else begin
+      prev_sla_f <= dma_staging_load_a_f;
+      // Set check flag on A->B transition in P_STAGING
+      if (dma_phase_f == 3'd6 && prev_sla_f && !dma_staging_load_a_f)
+        staging_b_check_f <= 1;
+      else if (dma_phase_f != 3'd6 || dma_staging_load_a_f)
+        staging_b_check_f <= 0;
+    end
+  end
+
+  always @(posedge clk) begin
+    if (rst_n && staging_b_check_f && dma_phase_f == 3'd6 && !dma_staging_load_a_f) begin
+      if (dma_staging_total_f !== dma_dk_f * dma_dn_f) begin
+        $error("[ASSERTION F FAIL] staging_total=%0d, expected dk*dn=%0d*%0d=%0d",
+               dma_staging_total_f, dma_dk_f, dma_dn_f, dma_dk_f * dma_dn_f);
+        staging_b_assertion_fails = staging_b_assertion_fails + 1;
+      end
+    end
+  end
+
   initial begin
     $dumpfile("build/vcd/tb_npu_queue_drain.vcd");
     $dumpvars(0, tb_npu_queue_drain);
     for (int i = 0; i < MEM_DEPTH; i++) mem8[i] = 0;
     rst_n = 0; repeat(4) @(posedge clk); rst_n = 1; repeat(2) @(posedge clk);
     errors_total = 0;
+    staging_b_assertion_fails = 0;
 
     $display("=================================================================");
     $display("  NPU Command Queue Drain Test");
@@ -399,8 +436,12 @@ module tb_npu_queue_drain;
     end
 
     $display("\n=================================================================");
-    if (errors_total == 0) $display("  ALL QUEUE DRAIN TESTS PASSED");
-    else $display("  %0d ERRORS", errors_total);
+    if (errors_total == 0 && staging_b_assertion_fails == 0)
+      $display("  ALL QUEUE DRAIN TESTS PASSED");
+    else begin
+      if (errors_total > 0) $display("  %0d RESULT ERRORS", errors_total);
+      if (staging_b_assertion_fails > 0) $display("  %0d STAGING ASSERTION FAILURES (staging_total != dk*dn)", staging_b_assertion_fails);
+    end
     $display("=================================================================");
     $finish;
   end
