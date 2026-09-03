@@ -328,9 +328,10 @@ module tb_npu_queue_drain;
     // Each GEMM gets unique DDR addresses; shapes drawn from a pool that
     // covers edge cases (N not multiple of NUM_COLS, max queue, etc.).
     begin : stress_test
-      localparam int NUM_SHAPES = 8;
+      localparam int NUM_SHAPES = 10;
       localparam int NUM_ITERS  = 8;
-      // Shape pool: {M, N, K}  -- covers small, large, non-aligned N
+      // Shape pool: {M, N, K}  -- covers small, large, non-aligned N,
+      //   and N=1/N=2 edge cases that exercise staging with minimal B counts.
       // Flat array indexed as shapes[shape_idx*3 + 0/1/2]
       int shapes [0:NUM_SHAPES*3-1];
       int gemm_m, gemm_n, gemm_k, gemm_count, shape_idx, seed_val;
@@ -352,6 +353,8 @@ module tb_npu_queue_drain;
       shapes[15]=2; shapes[16]=8; shapes[17]=16;  // small M, full N
       shapes[18]=8; shapes[19]=8; shapes[20]=4;   // tall K=4
       shapes[21]=6; shapes[22]=12; shapes[23]=14; // odd everything
+      shapes[24]=4; shapes[25]=1;  shapes[26]=8;   // N=1: minimal B (dk*1 elements)
+      shapes[27]=2; shapes[28]=2;  shapes[29]=16;  // N=2: small B (dk*2 elements)
 
       for (int iter = 0; iter < NUM_ITERS; iter++) begin
         gemm_count = 2 + (iter % 3);  // 2, 3, or 4 GEMMs
