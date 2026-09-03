@@ -71,7 +71,17 @@ module c930_npu_csr
   input  logic [31:0] i_cycle_count,
   input  logic [31:0] i_op_count,
   input  logic [31:0] i_stall_count,
-  input  logic [31:0] i_dma_cycle_count
+  input  logic [31:0] i_dma_cycle_count,
+
+  // ---- FIFO head (next GEMM params for cross-GEMM prefetch) ----
+  output logic        o_fifo_valid,    // 1 when FIFO has a queued command
+  output logic [15:0] o_fifo_dim_m,
+  output logic [15:0] o_fifo_dim_n,
+  output logic [15:0] o_fifo_dim_k,
+  output logic [31:0] o_fifo_a_base,
+  output logic [31:0] o_fifo_b_base,
+  output logic [31:0] o_fifo_c_base,
+  output logic [2:0]  o_fifo_precision
 );
 
   localparam logic [3:0] ADDR_CTRL      = 4'h0;
@@ -115,6 +125,16 @@ module c930_npu_csr
   assign o_c_base    = cur_c_base;
   assign o_precision = cur_precision;
   assign o_start     = start_pulse;
+
+  // FIFO head outputs for cross-GEMM prefetch
+  assign o_fifo_valid    = !fifo_empty;
+  assign o_fifo_dim_m    = fifo_head[15:0];
+  assign o_fifo_dim_n    = fifo_head[31:16];
+  assign o_fifo_dim_k    = fifo_head[47:32];
+  assign o_fifo_a_base   = fifo_head[79:48];
+  assign o_fifo_b_base   = fifo_head[111:80];
+  assign o_fifo_c_base   = fifo_head[143:112];
+  assign o_fifo_precision = fifo_head[146:144];
 
   // ---------------------------------------------------------------------------
   // Command FIFO (147 bits per entry)

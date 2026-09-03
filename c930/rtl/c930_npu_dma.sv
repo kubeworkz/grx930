@@ -43,6 +43,16 @@ module c930_npu_dma
   input  logic [31:0] i_c_base,
   input  logic [2:0]  i_precision,   // 0=INT8, 1=INT16, 4=INT4
 
+  // ---- Next GEMM params (from CSR FIFO head, for cross-GEMM prefetch) ----
+  input  logic        i_next_valid,
+  input  logic [15:0] i_next_dim_m,
+  input  logic [15:0] i_next_dim_n,
+  input  logic [15:0] i_next_dim_k,
+  input  logic [31:0] i_next_a_base,
+  input  logic [31:0] i_next_b_base,
+  input  logic [31:0] i_next_c_base,
+  input  logic [2:0]  i_next_precision,
+
   // ---- Status (to the CSR / top) ----
   output logic        o_busy,
   output logic        o_done,
@@ -162,6 +172,37 @@ module c930_npu_dma
   int  pf_rd_beats;      // total beats per row (computed in P_IDLE)
   logic [AXI_DATA_W-1:0] pf_rword;  // latched read word for prefetch
 
+  // ---- Next-GEMM registers (captured from CSR FIFO head) ----
+  // Loaded when the DMA is idle and a new GEMM is dispatched.
+  // Used during P_WRITE_C to prefetch the next GEMM's A/B via AXI read.
+  logic        next_valid;
+  logic [15:0] next_dm, next_dn, next_dk;
+  logic [31:0] next_a_base, next_b_base, next_c_base;
+  logic [2:0]  next_precision;
+
+  // ---- Staging buffer for next GEMM's first row of A and B ----
+  // A staging: MAX_K elements (enough for one row of A)
+  // B staging: MAX_K * MAX_N elements (enough for one row-block of B)
+  logic signed [DIN_W-1:0] next_a_buf [0:MAX_K-1];
+  logic signed [DIN_W-1:0] next_b_buf [0:MAX_K*MAX_N-1];
+  logic        next_a_ready;   // 1 when staging buffer has valid A data
+  logic        next_b_ready;   // 1 when staging buffer has valid B data
+  logic        staging_load;   // pulse to load staging buffer into core
+
+  // ---- Cross-GEMM prefetch sub-states ----
+  localparam [1:0] PF2_IDLE = 2'd0;
+  localparam [1:0] PF2_AR   = 2'd1;
+  localparam [1:0] PF2_R    = 2'd2;
+  localparam [1:0] PF2_UNPK = 2'd3;
+  logic [1:0] pf2_state;
+  int  pf2_row;           // 0 = reading A row 0, 1 = reading B row 0
+  int  pf2_flat_idx;
+  int  pf2_rd_beat;
+  int  pf2_unpack_idx;
+  int  pf2_rd_beats;
+  logic [AXI_DATA_W-1:0] pf2_rword;
+  logic pf2_reading_a;    // 1 = reading A, 0 = reading B
+
   logic dims_ok;
   assign dims_ok = (i_dim_m >= 1) && (i_dim_m <= MAX_M) &&
                    (i_dim_n >= 1) && (i_dim_n <= MAX_N) &&
@@ -182,6 +223,11 @@ module c930_npu_dma
       launched      <= 1'b0;
       pf_state      <= PF_IDLE;
       pf_row        <= 1;
+      pf2_state     <= PF2_IDLE;
+      pf2_row       <= 0;
+      next_valid    <= 1'b0;
+      next_a_ready  <= 1'b0;
+      next_b_ready  <= 1'b0;
       c_beat        <= 0;
       c_odd         <= 1'b0;
       m_axi_arvalid <= 1'b0;
@@ -260,6 +306,24 @@ module c930_npu_dma
               wsel_reg   <= 1'b0;                           // A first
               rd_sub     <= RS_AR;
               phase      <= P_READ_A;
+              // Capture next GEMM params from FIFO head for cross-GEMM prefetch
+              if (i_next_valid) begin
+                next_valid    <= 1'b1;
+                next_dm       <= i_next_dim_m;
+                next_dn       <= i_next_dim_n;
+                next_dk       <= i_next_dim_k;
+                next_a_base   <= i_next_a_base;
+                next_b_base   <= i_next_b_base;
+                next_c_base   <= i_next_c_base;
+                next_precision <= i_next_precision;
+              end else begin
+                next_valid    <= 1'b0;
+              end
+              // Reset cross-GEMM prefetch state
+              pf2_state    <= PF2_IDLE;
+              pf2_row      <= 0;
+              next_a_ready <= 1'b0;
+              next_b_ready <= 1'b0;
             end
           end
         end
@@ -497,6 +561,88 @@ module c930_npu_dma
               end
             end
           endcase
+
+          // --- Cross-GEMM prefetch (PF2): read next GEMM's A row 0 + B row 0 ---
+          // Uses the AXI read channel when the existing A-row prefetch is idle.
+          // Stores into staging buffers for the next GEMM.
+          if (next_valid && pf_state == PF_IDLE) begin
+            case (pf2_state)
+              PF2_IDLE: begin
+                // Start prefetching next GEMM's A row 0
+                pf2_flat_idx   <= 0;
+                pf2_rd_beat    <= 0;
+                pf2_unpack_idx <= 0;
+                pf2_reading_a  <= 1'b1;
+                pf2_rd_beats   <= (next_dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf2_state      <= PF2_AR;
+              end
+              PF2_AR: begin
+                if (m_axi_arvalid && m_axi_arready) begin
+                  pf2_state    <= PF2_R;
+                  m_axi_rready <= 1'b1;
+                end else begin
+                  m_axi_arvalid <= 1'b1;
+                  m_axi_arlen   <= pf2_rd_beats - 1;
+                  m_axi_arsize  <= BEAT_SIZE;
+                  m_axi_arburst <= 2'b01;
+                  m_axi_araddr  <= pf2_reading_a ? next_a_base : next_b_base;
+                end
+              end
+              PF2_R: begin
+                if (m_axi_rvalid && m_axi_rready) begin
+                  pf2_rword     <= m_axi_rdata;
+                  pf2_rd_beat   <= pf2_rd_beat + 1;
+                  pf2_unpack_idx <= 0;
+                  pf2_state     <= PF2_UNPK;
+                end else begin
+                  m_axi_rready <= 1'b1;
+                end
+              end
+              PF2_UNPK: begin
+                // Unpack into staging buffer
+                if (pf2_reading_a) begin
+                  if (pf2_flat_idx < next_dk) begin
+                    if (next_precision == 3'd0)  // INT8
+                      next_a_buf[pf2_flat_idx] <= {{8{pf2_rword[pf2_unpack_idx*8+7]}}, pf2_rword[pf2_unpack_idx*8 +: 8]};
+                    else  // INT16/FP16/BF16
+                      next_a_buf[pf2_flat_idx] <= pf2_rword[pf2_unpack_idx*16 +: 16];
+                  end
+                end else begin
+                  if (pf2_flat_idx < next_dk * next_dn) begin
+                    if (next_precision == 3'd0)
+                      next_b_buf[pf2_flat_idx] <= {{8{pf2_rword[pf2_unpack_idx*8+7]}}, pf2_rword[pf2_unpack_idx*8 +: 8]};
+                    else
+                      next_b_buf[pf2_flat_idx] <= pf2_rword[pf2_unpack_idx*16 +: 16];
+                  end
+                end
+                pf2_flat_idx   <= pf2_flat_idx + 1;
+                pf2_unpack_idx <= pf2_unpack_idx + 1;
+                if (pf2_unpack_idx == ((pf2_reading_a && next_precision == 3'd0) ? 7 : 3)) begin
+                  if (pf2_rd_beat == pf2_rd_beats) begin
+                    if (pf2_reading_a) begin
+                      // A row done, start B
+                      next_a_ready  <= 1'b1;
+                      pf2_reading_a <= 1'b0;
+                      pf2_flat_idx  <= 0;
+                      pf2_rd_beat   <= 0;
+                      pf2_rd_beats  <= (next_dk * next_dn + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                      pf2_state     <= PF2_AR;
+                    end else begin
+                      // B done
+                      next_b_ready <= 1'b1;
+                      pf2_state    <= PF2_IDLE;
+                    end
+                  end else begin
+                    pf2_state     <= PF2_R;
+                    m_axi_rready <= 1'b1;
+                  end
+                end
+              end
+            endcase
+          end else if (pf2_state != PF2_IDLE && pf_state != PF_IDLE) begin
+            // Existing A-row prefetch is active — defer PF2
+            pf2_state <= PF2_IDLE;
+          end
 
           // --- C write-back (original logic) ---
           case (wr_sub)

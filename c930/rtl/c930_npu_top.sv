@@ -92,6 +92,12 @@ module c930_npu_top
   logic                    core_done, core_error;
   logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count;
 
+  // FIFO head (next GEMM params for cross-GEMM prefetch)
+  logic        fifo_valid;
+  logic [15:0] fifo_dim_m, fifo_dim_n, fifo_dim_k;
+  logic [31:0] fifo_a_base, fifo_b_base, fifo_c_base;
+  logic [2:0]  fifo_precision;
+
   c930_npu_csr u_csr (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
@@ -126,7 +132,15 @@ module c930_npu_top
     .i_cycle_count (cycle_count),
     .i_op_count    (op_count),
     .i_stall_count (stall_count),
-    .i_dma_cycle_count (dma_cycle_count)
+    .i_dma_cycle_count (dma_cycle_count),
+    .o_fifo_valid    (fifo_valid),
+    .o_fifo_dim_m    (fifo_dim_m),
+    .o_fifo_dim_n    (fifo_dim_n),
+    .o_fifo_dim_k    (fifo_dim_k),
+    .o_fifo_a_base   (fifo_a_base),
+    .o_fifo_b_base   (fifo_b_base),
+    .o_fifo_c_base   (fifo_c_base),
+    .o_fifo_precision (fifo_precision)
   );
 
   c930_npu_dma #(
@@ -144,6 +158,14 @@ module c930_npu_top
     .i_b_base      (b_base),
     .i_c_base      (c_base),
     .i_precision   (precision),
+    .i_next_valid  (fifo_valid),
+    .i_next_dim_m  (fifo_dim_m),
+    .i_next_dim_n  (fifo_dim_n),
+    .i_next_dim_k  (fifo_dim_k),
+    .i_next_a_base (fifo_a_base),
+    .i_next_b_base (fifo_b_base),
+    .i_next_c_base (fifo_c_base),
+    .i_next_precision (fifo_precision),
     .o_busy        (busy),
     .o_done        (done),
     .o_error       (error),
