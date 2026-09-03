@@ -140,6 +140,14 @@ module c930_npu_core
   int  preload_w_r, preload_w_n;  // preload address counters
   int  preload_kr;                // kr for the next K tile being preloaded
 
+  // Snapshot of i_bank_sel captured at GEMM start.  Used for all B memory
+  // reads (weight loading + preload) so the read bank is stable even if
+  // the DMA's bank_sel toggles mid-GEMM (e.g. bank_sel_pending from a
+  // earlier P_STAGING).  Also decouples the B read path from the live
+  // i_bank_sel, eliminating a potential combinational timing hazard
+  // through the b_mem mux into the PE datapath.
+  logic        b_bank_sel;
+
   logic signed [ACC_W-1:0] acc [0:NUM_COLS-1];   // running accumulator per column
 
   // Combinational helpers
@@ -277,12 +285,13 @@ module c930_npu_core
   assign w_load_bank   = preload_en ? ~bank_sel : bank_sel;
   assign w_load_row    = preload_en ? preload_w_r[$clog2(NUM_ROWS)-1:0] : w_r[$clog2(NUM_ROWS)-1:0];
   assign w_load_col    = preload_en ? preload_w_n[$clog2(NUM_COLS)-1:0] : w_n[$clog2(NUM_COLS)-1:0];
-  // Double-buffered B read: select bank via i_bank_sel
+  // Double-buffered B read: select bank via b_bank_sel (snapshot of
+  // i_bank_sel captured at GEMM start, see comment above).
   logic signed [DIN_W-1:0] b_read_data;
   wire [15:0] b_read_addr = preload_en ?
     ((kt_reg+1)*NUM_ROWS + preload_w_r)*i_dim_n + n_base + preload_w_n :
     (k_base_reg + w_r)*i_dim_n + n_base + w_n;
-  assign b_read_data = i_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
+  assign b_read_data = b_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
   assign w_load_data = b_read_data;
 
   c930_systolic_array #(
@@ -323,6 +332,7 @@ module c930_npu_core
       k_base_reg  <= 0;
       kr_reg      <= 0;
       bank_sel    <= 1'b0;
+      b_bank_sel  <= 1'b0;
       preload_en  <= 1'b0;
       preload_done <= 1'b0;
       preload_w_r <= 0;
@@ -349,6 +359,7 @@ module c930_npu_core
               w_n        <= 0;
               n_cnt      <= 0;
               bank_sel    <= i_bank_sel;  // match DMA's active bank for weight loading
+              b_bank_sel  <= i_bank_sel;  // snapshot for stable B reads throughout GEMM
               preload_en  <= 1'b0;
               preload_done <= 1'b0;
               // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)
