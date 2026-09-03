@@ -1,0 +1,22 @@
+[options]
+mode prove
+top formally_npu_dma_properties
+depth 2000
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal rtl/c930_npu_dma.sv
+read -formal rtl/c930_npu_core.sv
+read -formal rtl/c930_npu_csr.sv
+read -formal rtl/c930_npu_top.sv
+read -formal formal/formally_npu_dma_assertions.sv
+prep -top formally_npu_dma_properties
+
+[files]
+rtl/c930_npu_dma.sv
+rtl/c930_npu_core.sv
+rtl/c930_npu_csr.sv
+rtl/c930_npu_top.sv
+formal/formally_npu_dma_assertions.sv
