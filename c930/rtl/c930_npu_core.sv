@@ -92,20 +92,23 @@ module c930_npu_core
   // idle.  i_wen fires during P_READ_A/P_READ_B and P_WRITE_C (via PF prefetch).
   // i_bank_sel: core reads from this bank during compute.
   // i_wbank: DMA writes to this bank (set by DMA per-phase:
-  //   P_READ_A/B -> bank_sel, PF2 -> ~bank_sel, staging -> bank_sel)
+  //   P_READ_A/B -> bank_sel, PF2 -> ~bank_sel).
+  //   Staging writes always target the INACTIVE bank (~i_bank_sel) because
+  //   the bank flip at end of P_STAGING makes ~bank_sel active for the next GEMM.
   wire write_a = i_staging_wen ? ~i_staging_wsel : (i_wen ? ~i_wsel : 1'b0);
   wire write_b = i_staging_wen ? i_staging_wsel : (i_wen ? i_wsel : 1'b0);
   wire [15:0] write_addr = i_staging_wen ? i_staging_waddr : i_waddr;
   wire signed [DIN_W-1:0] write_data = i_staging_wen ? i_staging_wdata : i_wdata;
+  wire write_bank = i_staging_wen ? ~i_bank_sel : i_wbank;
 
   always_ff @(posedge i_clk) begin
     if (write_a) begin
-      if (i_wbank) a_mem_1[write_addr] <= write_data;
-      else         a_mem_0[write_addr] <= write_data;
+      if (write_bank) a_mem_1[write_addr] <= write_data;
+      else            a_mem_0[write_addr] <= write_data;
     end
     if (write_b) begin
-      if (i_wbank) b_mem_1[write_addr] <= write_data;
-      else         b_mem_0[write_addr] <= write_data;
+      if (write_bank) b_mem_1[write_addr] <= write_data;
+      else            b_mem_0[write_addr] <= write_data;
     end
   end
 
@@ -407,8 +410,9 @@ module c930_npu_core
         // The FP16 accumulator is combinational to preserve cascade timing.
         S_RUN: begin
           // Staggered capture: column (t - NUM_ROWS - 2) finishes at cycle t.
-          if (t >= NUM_ROWS + 2)
+          if (t >= NUM_ROWS + 2) begin
             acc[t - NUM_ROWS - 2] <= ps_out[(t - NUM_ROWS - 2)*ACC_W +: ACC_W];
+          end
 
           if (t == NUM_ROWS + NUM_COLS + 1) begin
             t <= 0;

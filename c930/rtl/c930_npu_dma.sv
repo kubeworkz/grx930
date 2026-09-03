@@ -222,6 +222,7 @@ module c930_npu_dma
   logic        next_b_ready;   // 1 when staging buffer has valid B data
   logic        staging_load;   // pulse to load staging buffer into core
   logic        next_captured;  // 1-cycle deferred capture of i_next_* params
+  logic        bank_sel_pending;  // deferred bank_sel toggle (1-cycle delay)
 
   // ---- Cross-GEMM prefetch sub-states ----
   localparam [1:0] PF2_IDLE = 2'd0;
@@ -276,6 +277,7 @@ module c930_npu_dma
       staging_total  <= 0;
       staging_ready  <= 1'b0;
       next_captured  <= 1'b1;  // no deferred capture at reset
+      bank_sel_pending <= 1'b0;
       c_beat        <= 0;
       c_odd         <= 1'b0;
       m_axi_arvalid <= 1'b0;
@@ -300,6 +302,12 @@ module c930_npu_dma
       o_wen         <= 1'b0;
       o_wbank       <= bank_sel;  // default: write to active bank (for P_READ_A/B)
       o_staging_wen <= 1'b0;
+      // Deferred bank_sel toggle: apply one cycle after staging completes
+      // so the last staging write uses the OLD bank_sel (inactive bank).
+      if (bank_sel_pending) begin
+        bank_sel <= ~bank_sel;
+        bank_sel_pending <= 1'b0;
+      end
       o_core_start  <= 1'b0;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
@@ -922,7 +930,8 @@ module c930_npu_dma
               phase          <= P_LAUNCH;
               // Flip bank: staging loaded data into the inactive bank.
               // Now make it active so the core reads from it during compute.
-              bank_sel       <= ~bank_sel;
+              // Defer by one cycle so the last staging write uses the OLD bank_sel.
+              bank_sel_pending <= 1'b1;
             end
           end
         end

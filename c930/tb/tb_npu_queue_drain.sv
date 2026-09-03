@@ -286,6 +286,34 @@ module tb_npu_queue_drain;
       $display("  Pipelined max: errors=%0d", errors_total);
     end
 
+    // --- Debug: dump c_mem vs DDR for last GEMM's second N-tile ---
+    // GEMM3 c_mem values for column 11 (last N-tile, n_cnt=3)
+    begin : dbg_blk
+      int dbg_addr, dbg_val;
+      $display("");
+      $display("=== DEBUG: GEMM3 c_mem column 11 ===");
+      for (int mi = 0; mi < 8; mi++)
+        $display("  c_mem[%2d] = %0d", mi*12+11, $signed(dut.u_core.c_mem[mi*12+11]));
+      $display("");
+      $display("=== DEBUG: DDR mem8 for GEMM3 column 11 ===");
+      for (int mi = 0; mi < 8; mi++) begin
+        dbg_addr = get_c_base(3) + (mi*12+11)*4;
+        dbg_val = $signed({mem8[dbg_addr+3], mem8[dbg_addr+2], mem8[dbg_addr+1], mem8[dbg_addr]});
+        $display("  mem8[0x%0h..0x%0h] = %0d", dbg_addr, dbg_addr+3, dbg_val);
+      end
+      $display("");
+      $display("=== DEBUG: GEMM3 c_mem all columns for row 0 ===");
+      for (int ni = 0; ni < 12; ni++)
+        $display("  c_mem[%2d] = %0d", ni, $signed(dut.u_core.c_mem[ni]));
+      $display("");
+      $display("=== DEBUG: DDR mem8 all columns for GEMM3 row 0 ===");
+      for (int ni = 0; ni < 12; ni++) begin
+        dbg_addr = get_c_base(3) + ni*4;
+        dbg_val = $signed({mem8[dbg_addr+3], mem8[dbg_addr+2], mem8[dbg_addr+1], mem8[dbg_addr]});
+        $display("  mem8[0x%0h] = %0d", dbg_addr, dbg_val);
+      end
+    end
+
     $display("\n=================================================================");
     if (errors_total == 0) $display("  ALL QUEUE DRAIN TESTS PASSED");
     else $display("  %0d ERRORS", errors_total);
