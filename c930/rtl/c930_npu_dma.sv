@@ -922,7 +922,7 @@ module c930_npu_dma
               // A done, switch to B
               staging_load_a <= 1'b0;
               staging_cnt    <= 0;
-              staging_total  <= next_dk * next_dn;  // dk*dn elements for B (all precisions)
+              staging_total  <= dk * dn;  // dk*dn elements for B (all precisions)
             end else begin
               // B done, proceed to P_LAUNCH
               staging_load_a <= 1'b0;
