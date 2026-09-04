@@ -429,15 +429,18 @@ module tb_c930_soc_full;
     end
 
     // =========================================================================
-    // Test 4: Mixed-precision varying-shape queue drain
+    // Test 4: Mixed-precision varying-shape queue drain + full C verification
     //
-    // Queues 3 GEMMs with different precisions AND asymmetric shapes:
-    //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32 0x00000008)
-    //   GEMM1: FP16  7x3x8,  all 1.0 -> C[0][0] = 8.0 (FP32 0x41000000)
+    // Phase 1: CPU boots GEMM firmware -> queues 3 GEMMs -> polls completion
+    // Phase 2: CPU boots verification firmware -> reads all 21 C elements of
+    //          GEMM1 via D-cache LW -> compares with expected FP32 8.0
+    //
+    //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32)
+    //   GEMM1: FP16  7x3x8,  all 1.0 -> C[m][n] = 8.0 (FP32 0x41000000) ALL 21
     //   GEMM2: BF16  2x12x8, all 1.0 -> C[0][0] = 8.0 (FP32 0x41000000)
     // =========================================================================
     $display("\n========================================");
-    $display("  TEST 4: Mixed-precision varying-shape (INT8+FP16+BF16)");
+    $display("  TEST 4: Mixed-precision + full C verification");
     $display("========================================");
     begin
       int mg_errs;
@@ -462,97 +465,91 @@ module tb_c930_soc_full;
         end
       end
 
-      // Mixed-precision varying-shape firmware
+      // ---- Phase 1: GEMM firmware ----
       begin
         logic [31:0] fw [0:86];
-        // --- Setup ---
-        fw[0]  = 32'h40000537;  // lui  x10, 0x40000 (MMIO_BASE)
-        fw[1]  = 32'h00050513;  // addi x10, x10, 0
-        // --- GEMM 0: INT8 3x5x8 A@0x8000 B@0x8200 C@0x8400 PREC=0 ---
-        fw[2]  = 32'h000005B7;  // lui  x11, 0
-        fw[3]  = 32'h00358593;  // addi x11, x11, 3    DIM_M=3
-        fw[4]  = 32'h00B52423;  // sw   x11, 0x08(x10)
-        fw[5]  = 32'h000005B7;  // lui  x11, 0
-        fw[6]  = 32'h00558593;  // addi x11, x11, 5    DIM_N=5
-        fw[7]  = 32'h00B52623;  // sw   x11, 0x0C(x10)
-        fw[8]  = 32'h000005B7;  // lui  x11, 0
-        fw[9]  = 32'h00858593;  // addi x11, x11, 8    DIM_K=8
-        fw[10] = 32'h00B52823; // sw   x11, 0x10(x10)
-        fw[11] = 32'h000085B7; // lui  x11, 0x8
-        fw[12] = 32'h00058593; // addi x11, x11, 0    A=0x8000 (3*8=24B)
-        fw[13] = 32'h00B52A23; // sw   x11, 0x14(x10)
-        fw[14] = 32'h000085B7; // lui  x11, 0x8
-        fw[15] = 32'h20058593; // addi x11, x11, 0x200 B=0x8200 (8*5=40B)
-        fw[16] = 32'h00B52C23; // sw   x11, 0x18(x10)
-        fw[17] = 32'h000085B7; // lui  x11, 0x8
-        fw[18] = 32'h40058593; // addi x11, x11, 0x400 C=0x8400
-        fw[19] = 32'h00B52E23; // sw   x11, 0x1C(x10)
-        fw[20] = 32'h000005B7; // lui  x11, 0
-        fw[21] = 32'h00058593; // addi x11, x11, 0    PREC=0 (INT8)
-        fw[22] = 32'h02B52023; // sw   x11, 0x20(x10)
-        fw[23] = 32'h02052583; // lw   x11, 0x20(x10) barrier
-        fw[24] = 32'h00100593; // addi x11, x0, 1
-        fw[25] = 32'h00B52023; // sw   x11, 0x00(x10) START
-        // --- GEMM 1: FP16 7x3x8 A@0x8800 B@0x8A00 C@0x8C00 PREC=2 ---
-        fw[26] = 32'h000005B7; // lui  x11, 0
-        fw[27] = 32'h00758593; // addi x11, x11, 7    DIM_M=7
-        fw[28] = 32'h00B52423; // sw   x11, 0x08(x10)
-        fw[29] = 32'h000005B7; // lui  x11, 0
-        fw[30] = 32'h00358593; // addi x11, x11, 3    DIM_N=3
-        fw[31] = 32'h00B52623; // sw   x11, 0x0C(x10)
-        fw[32] = 32'h000005B7; // lui  x11, 0
-        fw[33] = 32'h00858593; // addi x11, x11, 8    DIM_K=8
-        fw[34] = 32'h00B52823; // sw   x11, 0x10(x10)
-        fw[35] = 32'h000095B7; // lui  x11, 0x9
-        fw[36] = 32'h80058593; // addi x11, x11, 0x800 A=0x8800 (7*8*2=112B)
-        fw[37] = 32'h00B52A23; // sw   x11, 0x14(x10)
-        fw[38] = 32'h000095B7; // lui  x11, 0x9
-        fw[39] = 32'hA0058593; // addi x11, x11, 0xA00 B=0x8A00 (8*3*2=48B)
-        fw[40] = 32'h00B52C23; // sw   x11, 0x18(x10)
-        fw[41] = 32'h000095B7; // lui  x11, 0x9
-        fw[42] = 32'hC0058593; // addi x11, x11, 0xC00 C=0x8C00
-        fw[43] = 32'h00B52E23; // sw   x11, 0x1C(x10)
-        fw[44] = 32'h000005B7; // lui  x11, 0
-        fw[45] = 32'h00258593; // addi x11, x11, 2    PREC=2 (FP16)
-        fw[46] = 32'h02B52023; // sw   x11, 0x20(x10)
-        fw[47] = 32'h02052583; // lw   x11, 0x20(x10) barrier
-        fw[48] = 32'h00100593; // addi x11, x0, 1
-        fw[49] = 32'h00B52023; // sw   x11, 0x00(x10) START
-        // --- GEMM 2: BF16 2x12x8 A@0x9000 B@0x9200 C@0x9400 PREC=3 ---
-        fw[50] = 32'h000005B7; // lui  x11, 0
-        fw[51] = 32'h00258593; // addi x11, x11, 2    DIM_M=2
-        fw[52] = 32'h00B52423; // sw   x11, 0x08(x10)
-        fw[53] = 32'h000005B7; // lui  x11, 0
-        fw[54] = 32'h00C58593; // addi x11, x11, 12   DIM_N=12
-        fw[55] = 32'h00B52623; // sw   x11, 0x0C(x10)
-        fw[56] = 32'h000005B7; // lui  x11, 0
-        fw[57] = 32'h00858593; // addi x11, x11, 8    DIM_K=8
-        fw[58] = 32'h00B52823; // sw   x11, 0x10(x10)
-        fw[59] = 32'h000095B7; // lui  x11, 0x9
-        fw[60] = 32'h00058593; // addi x11, x11, 0    A=0x9000 (2*8*2=32B)
-        fw[61] = 32'h00B52A23; // sw   x11, 0x14(x10)
-        fw[62] = 32'h000095B7; // lui  x11, 0x9
-        fw[63] = 32'h20058593; // addi x11, x11, 0x200 B=0x9200 (8*12*2=192B)
-        fw[64] = 32'h00B52C23; // sw   x11, 0x18(x10)
-        fw[65] = 32'h000095B7; // lui  x11, 0x9
-        fw[66] = 32'h40058593; // addi x11, x11, 0x400 C=0x9400
-        fw[67] = 32'h00B52E23; // sw   x11, 0x1C(x10)
-        fw[68] = 32'h000005B7; // lui  x11, 0
-        fw[69] = 32'h00358593; // addi x11, x11, 3    PREC=3 (BF16)
-        fw[70] = 32'h02B52023; // sw   x11, 0x20(x10)
-        fw[71] = 32'h02052583; // lw   x11, 0x20(x10) barrier
-        fw[72] = 32'h00100593; // addi x11, x0, 1
-        fw[73] = 32'h00B52023; // sw   x11, 0x00(x10) START
-        // --- Two-phase poll: wait done_latch, then wait DMA idle ---
-        fw[74]   = 32'h02052583;  // lw   x11, 0x20(x10) barrier read
+        fw[ 0] = 32'h40000537;  // lui  x10, 0x40000 (MMIO_BASE)
+        fw[ 1] = 32'h00050513;  // addi x10, x10, 0
+        fw[ 2] = 32'h000005B7;  // lui  x11, 0
+        fw[ 3] = 32'h00358593;  // addi x11, x11, 3    DIM_M=3
+        fw[ 4] = 32'h00B52423;  // sw   x11, 0x08(x10)
+        fw[ 5] = 32'h000005B7;  // lui  x11, 0
+        fw[ 6] = 32'h00558593;  // addi x11, x11, 5    DIM_N=5
+        fw[ 7] = 32'h00B52623;  // sw   x11, 0x0C(x10)
+        fw[ 8] = 32'h000005B7;  // lui  x11, 0
+        fw[ 9] = 32'h00858593;  // addi x11, x11, 8    DIM_K=8
+        fw[10] = 32'h00B52823;  // sw   x11, 0x10(x10)
+        fw[11] = 32'h000085B7;  // lui  x11, 0x8
+        fw[12] = 32'h00058593;  // addi x11, x11, 0    A=0x8000
+        fw[13] = 32'h00B52A23;  // sw   x11, 0x14(x10)
+        fw[14] = 32'h000085B7;  // lui  x11, 0x8
+        fw[15] = 32'h20058593;  // addi x11, x11, 0x200 B=0x8200
+        fw[16] = 32'h00B52C23;  // sw   x11, 0x18(x10)
+        fw[17] = 32'h000085B7;  // lui  x11, 0x8
+        fw[18] = 32'h40058593;  // addi x11, x11, 0x400 C=0x8400
+        fw[19] = 32'h00B52E23;  // sw   x11, 0x1C(x10)
+        fw[20] = 32'h000005B7;  // lui  x11, 0
+        fw[21] = 32'h00058593;  // addi x11, x11, 0    PREC=0 (INT8)
+        fw[22] = 32'h02B52023;  // sw   x11, 0x20(x10)
+        fw[23] = 32'h02052583;  // lw   x11, 0x20(x10) barrier
+        fw[24] = 32'h00100593;  // addi x11, x0, 1
+        fw[25] = 32'h00B52023;  // sw   x11, 0x00(x10) START
+        fw[26] = 32'h000005B7;  // lui  x11, 0
+        fw[27] = 32'h00758593;  // addi x11, x11, 7    DIM_M=7
+        fw[28] = 32'h00B52423;  // sw   x11, 0x08(x10)
+        fw[29] = 32'h000005B7;  // lui  x11, 0
+        fw[30] = 32'h00358593;  // addi x11, x11, 3    DIM_N=3
+        fw[31] = 32'h00B52623;  // sw   x11, 0x0C(x10)
+        fw[32] = 32'h000005B7;  // lui  x11, 0
+        fw[33] = 32'h00858593;  // addi x11, x11, 8    DIM_K=8
+        fw[34] = 32'h00B52823;  // sw   x11, 0x10(x10)
+        fw[35] = 32'h000095B7;  // lui  x11, 0x9
+        fw[36] = 32'h80058593;  // addi x11, x11, 0x800 A=0x8800 (7*8*2=112B)
+        fw[37] = 32'h00B52A23;  // sw   x11, 0x14(x10)
+        fw[38] = 32'h000095B7;  // lui  x11, 0x9
+        fw[39] = 32'hA0058593;  // addi x11, x11, 0xA00 B=0x8A00 (8*3*2=48B)
+        fw[40] = 32'h00B52C23;  // sw   x11, 0x18(x10)
+        fw[41] = 32'h000095B7;  // lui  x11, 0x9
+        fw[42] = 32'hC0058593;  // addi x11, x11, 0xC00 C=0x8C00
+        fw[43] = 32'h00B52E23;  // sw   x11, 0x1C(x10)
+        fw[44] = 32'h000005B7;  // lui  x11, 0
+        fw[45] = 32'h00258593;  // addi x11, x11, 2    PREC=2 (FP16)
+        fw[46] = 32'h02B52023;  // sw   x11, 0x20(x10)
+        fw[47] = 32'h02052583;  // lw   x11, 0x20(x10) barrier
+        fw[48] = 32'h00100593;  // addi x11, x0, 1
+        fw[49] = 32'h00B52023;  // sw   x11, 0x00(x10) START
+        fw[50] = 32'h000005B7;  // lui  x11, 0
+        fw[51] = 32'h00258593;  // addi x11, x11, 2    DIM_M=2
+        fw[52] = 32'h00B52423;  // sw   x11, 0x08(x10)
+        fw[53] = 32'h000005B7;  // lui  x11, 0
+        fw[54] = 32'h00C58593;  // addi x11, x11, 12   DIM_N=12
+        fw[55] = 32'h00B52623;  // sw   x11, 0x0C(x10)
+        fw[56] = 32'h000005B7;  // lui  x11, 0
+        fw[57] = 32'h00858593;  // addi x11, x11, 8    DIM_K=8
+        fw[58] = 32'h00B52823;  // sw   x11, 0x10(x10)
+        fw[59] = 32'h000095B7;  // lui  x11, 0x9
+        fw[60] = 32'h00058593;  // addi x11, x11, 0    A=0x9000 (2*8*2=32B)
+        fw[61] = 32'h00B52A23;  // sw   x11, 0x14(x10)
+        fw[62] = 32'h000095B7;  // lui  x11, 0x9
+        fw[63] = 32'h20058593;  // addi x11, x11, 0x200 B=0x9200 (8*12*2=192B)
+        fw[64] = 32'h00B52C23;  // sw   x11, 0x18(x10)
+        fw[65] = 32'h000095B7;  // lui  x11, 0x9
+        fw[66] = 32'h40058593;  // addi x11, x11, 0x400 C=0x9400
+        fw[67] = 32'h00B52E23;  // sw   x11, 0x1C(x10)
+        fw[68] = 32'h000005B7;  // lui  x11, 0
+        fw[69] = 32'h00358593;  // addi x11, x11, 3    PREC=3 (BF16)
+        fw[70] = 32'h02B52023;  // sw   x11, 0x20(x10)
+        fw[71] = 32'h02052583;  // lw   x11, 0x20(x10) barrier
+        fw[72] = 32'h00100593;  // addi x11, x0, 1
+        fw[73] = 32'h00B52023;  // sw   x11, 0x00(x10) START
+        fw[74] = 32'h02052583;  // lw   x11, 0x20(x10) barrier read
         fw[75] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
         fw[76] = 32'h0025F593;  // andi x11, x11, 2    DONE bit
         fw[77] = 32'hFE058CE3;  // beq  x11, x0, -8   poll done
         fw[78] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
         fw[79] = 32'h0015F593;  // andi x11, x11, 1    BUSY bit
         fw[80] = 32'hFE059CE3;  // bne  x11, x0, -8   poll busy
-        // --- Write DONE_MAGIC ---
-        fw[81]   = 32'h000097B7;  // lui  x15, 0x9
+        fw[81] = 32'h000097B7;  // lui  x15, 0x9
         fw[82] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
         fw[83] = 32'hDEADC837;  // lui  x16, 0xDEADC
         fw[84] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC=0xDEADBEEF
@@ -564,12 +561,11 @@ module tb_c930_soc_full;
           ddr_write_byte(i*4 + 2, fw[i][23:16]);
           ddr_write_byte(i*4 + 3, fw[i][31:24]);
         end
-        $display("  [TB] Mixed-precision firmware loaded (%0d bytes)", 87*4);
+        $display("  [TB] Phase 1 GEMM firmware loaded (%0d bytes)", 87*4);
       end
 
       // --- Preload A/B operands ---
-      // GEMM 0: INT8 3x5x8 all 1s
-      //   A=24B @0x8000, B=40B @0x8200
+      // GEMM 0: INT8 3x5x8 all 1s - A=24B @0x8000, B=40B @0x8200
       begin
         for (int i = 0; i < 24; i++)
           ddr_write_byte(32'h8000 + i, 8'd1);
@@ -577,13 +573,11 @@ module tb_c930_soc_full;
           ddr_write_byte(32'h8200 + i, 8'd1);
         $display("  [TB] GEMM0: INT8 3x5x8 all 1s (C[0][0] expect 0x00000008)");
       end
-      // GEMM 1: FP16 7x3x8 all 1.0
-      //   A=112B @0x8800, B=48B @0x8A00
-      //   FP16 1.0 = 0x3C00 (little-endian: byte 0=0x00, byte 1=0x3C)
+      // GEMM 1: FP16 7x3x8 all 1.0 - A=112B @0x8800, B=48B @0x8A00
       begin
         for (int i = 0; i < 56; i++) begin
-          ddr_write_byte(32'h8800 + i*2 + 0, 8'h00);  // FP16 1.0 LSB
-          ddr_write_byte(32'h8800 + i*2 + 1, 8'h3C);  // FP16 1.0 MSB
+          ddr_write_byte(32'h8800 + i*2 + 0, 8'h00);
+          ddr_write_byte(32'h8800 + i*2 + 1, 8'h3C);
         end
         for (int i = 0; i < 24; i++) begin
           ddr_write_byte(32'h8A00 + i*2 + 0, 8'h00);
@@ -591,13 +585,11 @@ module tb_c930_soc_full;
         end
         $display("  [TB] GEMM1: FP16 7x3x8 all 1.0 (C[0][0] expect 0x41000000)");
       end
-      // GEMM 2: BF16 2x12x8 all 1.0
-      //   A=32B @0x9000, B=192B @0x9200
-      //   BF16 1.0 = 0x3F80 (little-endian: byte 0=0x80, byte 1=0x3F)
+      // GEMM 2: BF16 2x12x8 all 1.0 - A=32B @0x9000, B=192B @0x9200
       begin
         for (int i = 0; i < 16; i++) begin
-          ddr_write_byte(32'h9000 + i*2 + 0, 8'h80);  // BF16 1.0 LSB
-          ddr_write_byte(32'h9000 + i*2 + 1, 8'h3F);  // BF16 1.0 MSB
+          ddr_write_byte(32'h9000 + i*2 + 0, 8'h80);
+          ddr_write_byte(32'h9000 + i*2 + 1, 8'h3F);
         end
         for (int i = 0; i < 96; i++) begin
           ddr_write_byte(32'h9200 + i*2 + 0, 8'h80);
@@ -612,22 +604,22 @@ module tb_c930_soc_full;
       ddr_write_byte(32'h9412, 8'h00);
       ddr_write_byte(32'h9413, 8'h00);
 
-      // Reset CPU and boot
+      // Reset CPU and boot Phase 1
       rst_n = 1'b0;
       repeat(10) @(posedge clk);
       rst_n = 1'b1;
 
-      // Wait for DONE_MAGIC at DDR[0x9410]
-      begin : wait_varying
+      // Wait for DONE_MAGIC from Phase 1
+      begin : wait_phase1
         int mg_cnt;
         mg_cnt = 0;
         forever begin
           @(posedge clk);
           mg_cnt = mg_cnt + 1;
           if (mg_cnt > 500_000) begin
-            $error("  [FAIL] Mixed-precision TIMEOUT after %0d cycles", mg_cnt);
+            $error("  [FAIL] Phase 1 TIMEOUT after %0d cycles", mg_cnt);
             mg_errs = mg_errs + 1;
-            disable wait_varying;
+            disable wait_phase1;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
@@ -636,47 +628,158 @@ module tb_c930_soc_full;
             b2 = dut.u_ddr.mem[32'h9412];
             b3 = dut.u_ddr.mem[32'h9413];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
-              $display("  [PASS] Mixed-precision: all 3 GEMMs completed in %0d cycles", mg_cnt);
-              disable wait_varying;
+              $display("  [PASS] Phase 1: all 3 GEMMs completed in %0d cycles", mg_cnt);
+              disable wait_phase1;
             end
           end
         end
       end
 
-      // Verify C results
+      // Quick C[0][0] check for GEMM0 and GEMM2 (Phase 1 readback)
       begin
         logic [7:0] c0, c1, c2, c3;
-        // GEMM 0: INT8 3x5x8 all-1s -> C[0][0] = K = 8 (INT32)
-        c0 = dut.u_ddr.mem[32'h8400];
-        c1 = dut.u_ddr.mem[32'h8401];
-        c2 = dut.u_ddr.mem[32'h8402];
-        c3 = dut.u_ddr.mem[32'h8403];
+        c0 = dut.u_ddr.mem[32'h8400]; c1 = dut.u_ddr.mem[32'h8401];
+        c2 = dut.u_ddr.mem[32'h8402]; c3 = dut.u_ddr.mem[32'h8403];
         $display("  [TB] GEMM0 INT8 (3x5x8)  C[0][0] = 0x%08h (expect 0x00000008)", {c3, c2, c1, c0});
         if ({c3, c2, c1, c0} != 32'd8) begin
-          $error("  [FAIL] GEMM0 INT8 C[0][0] wrong");
-          mg_errs = mg_errs + 1;
+          $error("  [FAIL] GEMM0 INT8 C[0][0] wrong"); mg_errs = mg_errs + 1;
         end
-        // GEMM 1: FP16 7x3x8 all-1.0 -> C[0][0] = 8.0 (FP32 = 0x41000000)
-        c0 = dut.u_ddr.mem[32'h8C00];
-        c1 = dut.u_ddr.mem[32'h8C01];
-        c2 = dut.u_ddr.mem[32'h8C02];
-        c3 = dut.u_ddr.mem[32'h8C03];
-        $display("  [TB] GEMM1 FP16 (7x3x8)  C[0][0] = 0x%08h (expect 0x41000000)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'h41000000) begin
-          $error("  [FAIL] GEMM1 FP16 C[0][0] wrong");
-          mg_errs = mg_errs + 1;
-        end
-        // GEMM 2: BF16 2x12x8 all-1.0 -> C[0][0] = 8.0 (FP32 = 0x41000000)
-        c0 = dut.u_ddr.mem[32'h9400];
-        c1 = dut.u_ddr.mem[32'h9401];
-        c2 = dut.u_ddr.mem[32'h9402];
-        c3 = dut.u_ddr.mem[32'h9403];
+        c0 = dut.u_ddr.mem[32'h9400]; c1 = dut.u_ddr.mem[32'h9401];
+        c2 = dut.u_ddr.mem[32'h9402]; c3 = dut.u_ddr.mem[32'h9403];
         $display("  [TB] GEMM2 BF16 (2x12x8) C[0][0] = 0x%08h (expect 0x41000000)", {c3, c2, c1, c0});
         if ({c3, c2, c1, c0} != 32'h41000000) begin
-          $error("  [FAIL] GEMM2 BF16 C[0][0] wrong");
+          $error("  [FAIL] GEMM2 BF16 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+      end
+
+      // ---- Phase 2: Verification firmware (reads all 21 C elements via D-cache) ----
+      // Reload NPU firmware (CPU needs I-cache to boot, but DDR contents preserved)
+      begin
+        int fw_fd;
+        logic [7:0] fw_byte;
+        int fw_addr;
+        fw_fd = $fopen("sw/npu_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+        end
+      end
+
+      // Load Phase 2 verification firmware into DDR[0x000]
+      begin
+        logic [31:0] vfw [0:29];
+        vfw[ 0] = 32'h00009537;  // lui  x10, 0x9
+        vfw[ 1] = 32'hC0050513;  // addi x10, x10, 0xC00   x10 = 0x8C00 (GEMM1 C base)
+        vfw[ 2] = 32'h41000737;  // lui  x14, 0x41000  x14 = 0x41000000 (FP32 8.0)
+        vfw[ 3] = 32'h00000793;  // addi x15, x0, 0    error mask = 0
+        vfw[ 4] = 32'h00000813;  // addi x16, x0, 0    element index = 0
+        vfw[ 5] = 32'h00000693;  // addi x13, x0, 0    row counter = 0
+        vfw[ 6] = 32'h00700A13;  // addi x20, x0, 7    NUM_ROWS
+        vfw[ 7] = 32'h00300A93;  // addi x21, x0, 3    NUM_COLS
+        vfw[ 8] = 32'h00000613;  // addi x12, x0, 0    row_loop: col counter = 0
+        vfw[ 9] = 32'h00052903;  // lw   x18, 0(x10)   col_loop: load C[row][col]
+        vfw[10] = 32'h00E90863;  // beq  x18, x14, +16 if match, skip mismatch
+        vfw[11] = 32'h00100993;  // addi x19, x0, 1    mismatch: bit = 1
+        vfw[12] = 32'h010999B3;  // sll  x19, x19, x16 shift by element index
+        vfw[13] = 32'h0137E7B3;  // or   x15, x15, x19 set bit in error mask
+        vfw[14] = 32'h00450513;  // addi x10, x10, 4   next: advance address
+        vfw[15] = 32'h00180813;  // addi x16, x16, 1   advance element index
+        vfw[16] = 32'h00160613;  // addi x12, x12, 1   advance col counter
+        vfw[17] = 32'hFF5640E3;  // blt  x12, x21, col_loop if col < 3, loop
+        vfw[18] = 32'h00168693;  // addi x13, x13, 1   advance row counter
+        vfw[19] = 32'hFD46CAE3;  // blt  x13, x20, row_loop if row < 7, loop
+        vfw[20] = 32'h00000537;  // lui  x10, 0
+        vfw[21] = 32'h10050513;  // addi x10, x10, 0x100  verify buffer address
+        vfw[22] = 32'h00F52023;  // sw   x15, 0(x10)   store error mask
+        vfw[23] = 32'h01052223;  // sw   x16, 4(x10)   store element count
+        vfw[24] = 32'h000097B7;  // lui  x15, 0x9
+        vfw[25] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        vfw[26] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        vfw[27] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
+        vfw[28] = 32'h0107A023;  // sw   x16, 0(x15)
+        vfw[29] = 32'h0000006F;  // jal  x0, 0  self-loop
+        for (int i = 0; i < 30; i++) begin
+          ddr_write_byte(i*4 + 0, vfw[i][7:0]);
+          ddr_write_byte(i*4 + 1, vfw[i][15:8]);
+          ddr_write_byte(i*4 + 2, vfw[i][23:16]);
+          ddr_write_byte(i*4 + 3, vfw[i][31:24]);
+        end
+        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 30*4);
+      end
+
+      // Clear DONE_MAGIC so Phase 2 can detect its own completion
+      ddr_write_byte(32'h9410, 8'h00);
+      ddr_write_byte(32'h9411, 8'h00);
+      ddr_write_byte(32'h9412, 8'h00);
+      ddr_write_byte(32'h9413, 8'h00);
+
+      // Clear verification buffer
+      ddr_write_byte(32'h0100, 8'h00);
+      ddr_write_byte(32'h0101, 8'h00);
+      ddr_write_byte(32'h0102, 8'h00);
+      ddr_write_byte(32'h0103, 8'h00);
+
+      // Reset CPU and boot Phase 2
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for DONE_MAGIC from Phase 2
+      begin : wait_phase2
+        int mg_cnt;
+        mg_cnt = 0;
+        forever begin
+          @(posedge clk);
+          mg_cnt = mg_cnt + 1;
+          if (mg_cnt > 500_000) begin
+            $error("  [FAIL] Phase 2 TIMEOUT after %0d cycles", mg_cnt);
+            mg_errs = mg_errs + 1;
+            disable wait_phase2;
+          end
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9410];
+            b1 = dut.u_ddr.mem[32'h9411];
+            b2 = dut.u_ddr.mem[32'h9412];
+            b3 = dut.u_ddr.mem[32'h9413];
+            if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
+              $display("  [PASS] Phase 2: verification complete in %0d cycles", mg_cnt);
+              disable wait_phase2;
+            end
+          end
+        end
+      end
+
+      // Read verification buffer at DDR[0x100] and check all 21 elements
+      begin
+        logic [7:0] v0, v1, v2, v3;
+        logic [31:0] err_mask;
+        v0 = dut.u_ddr.mem[32'h0100];
+        v1 = dut.u_ddr.mem[32'h0101];
+        v2 = dut.u_ddr.mem[32'h0102];
+        v3 = dut.u_ddr.mem[32'h0103];
+        err_mask = {v3, v2, v1, v0};
+        $display("  [TB] GEMM1 C verification: error mask = 0x%08h (%0d failures)",
+                 err_mask, $countones(err_mask));
+        if (err_mask == 32'h0000000) begin
+          $display("  [PASS] GEMM1: all 21 C elements verified correct (FP32 8.0)");
+        end else begin
+          // Decode which elements failed
+          for (int idx = 0; idx < 21; idx++) begin
+            if (err_mask[idx]) begin
+              $error("  [FAIL] GEMM1 C[%0d][%0d] wrong (elem %0d)", idx/3, idx%3, idx);
+            end
+          end
           mg_errs = mg_errs + 1;
         end
       end
+
       total_errs = total_errs + mg_errs;
     end
 
