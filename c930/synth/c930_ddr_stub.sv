@@ -42,11 +42,17 @@ module c930_ddr
 #(
   parameter int MEM_BYTES        = 65536,
   parameter int ADDR_WIDTH       = 64,
-  parameter int CACHE_LINE_WIDTH = 256
+  parameter int CACHE_LINE_WIDTH = 256,
+  parameter     INIT_FILE        = ""  // ignored in synth stub
 )
 (
   input  logic i_clk,
   input  logic i_rst_n,
+
+  // ---- Testbench preload port (tied off in synthesis) ----
+  input  logic        i_tb_wr_en,
+  input  logic [31:0] i_tb_wr_addr,
+  input  logic [7:0]  i_tb_wr_data,
 
   // ---- CPU instruction-cache read port ----
   input  logic [ADDR_WIDTH-1:0]       i_icache_rd_addr,
