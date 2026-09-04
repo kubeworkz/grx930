@@ -783,6 +783,315 @@ module tb_c930_soc_full;
       total_errs = total_errs + mg_errs;
     end
 
+    // =========================================================================
+    // Test 5: 6-GEMM queue stress test (fill queue to capacity, drain twice)
+    //
+    // CMD_QUEUE_DEPTH = 4. Queue 4 GEMMs (fill queue), poll to drain,
+    // then queue 2 more (second drain cycle). Exercises:
+    //   - Queue fill-to-capacity and backpressure
+    //   - DMA dispatch ordering across different shapes
+    //   - Bank switching with increasing operand sizes
+    //   - Two complete fill/drain cycles
+    //
+    // GEMMs (all INT8, all 1s, K=4):
+    //   GEMM0: 2x2x4  GEMM1: 3x3x4  GEMM2: 4x4x4
+    //   GEMM3: 5x3x4  GEMM4: 3x6x4  GEMM5: 6x6x4
+    //   All C[0][0] = K = 4
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 5: 6-GEMM queue stress (fill+drain x2)");
+    $display("========================================");
+    begin
+      int mg_errs;
+      mg_errs = 0;
+
+      // Reload NPU firmware from hex file
+      begin
+        int fw_fd;
+        logic [7:0] fw_byte;
+        int fw_addr;
+        fw_fd = $fopen("sw/npu_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+          $display("  [TB] Reloaded %0d firmware bytes into DDR", fw_addr);
+        end
+      end
+
+      // Load queue-stress firmware
+      begin
+        logic [31:0] fw [0:124];
+        fw[  0] = 32'h40000537;
+        fw[  1] = 32'h00050513;
+        fw[  2] = 32'h00000593;
+        fw[  3] = 32'h02B52023;
+        fw[  4] = 32'h02052583;
+        fw[  5] = 32'h00200593;
+        fw[  6] = 32'h00B52423;
+        fw[  7] = 32'h00200593;
+        fw[  8] = 32'h00B52623;
+        fw[  9] = 32'h00400593;
+        fw[ 10] = 32'h00B52823;
+        fw[ 11] = 32'h000085B7;
+        fw[ 12] = 32'h00058593;
+        fw[ 13] = 32'h00B52A23;
+        fw[ 14] = 32'h000085B7;
+        fw[ 15] = 32'h04058593;
+        fw[ 16] = 32'h00B52C23;
+        fw[ 17] = 32'h000085B7;
+        fw[ 18] = 32'h08058593;
+        fw[ 19] = 32'h00B52E23;
+        fw[ 20] = 32'h00100593;
+        fw[ 21] = 32'h00B52023;
+        fw[ 22] = 32'h00300593;
+        fw[ 23] = 32'h00B52423;
+        fw[ 24] = 32'h00300593;
+        fw[ 25] = 32'h00B52623;
+        fw[ 26] = 32'h00400593;
+        fw[ 27] = 32'h00B52823;
+        fw[ 28] = 32'h000085B7;
+        fw[ 29] = 32'h10058593;
+        fw[ 30] = 32'h00B52A23;
+        fw[ 31] = 32'h000085B7;
+        fw[ 32] = 32'h14058593;
+        fw[ 33] = 32'h00B52C23;
+        fw[ 34] = 32'h000085B7;
+        fw[ 35] = 32'h18058593;
+        fw[ 36] = 32'h00B52E23;
+        fw[ 37] = 32'h00100593;
+        fw[ 38] = 32'h00B52023;
+        fw[ 39] = 32'h00400593;
+        fw[ 40] = 32'h00B52423;
+        fw[ 41] = 32'h00400593;
+        fw[ 42] = 32'h00B52623;
+        fw[ 43] = 32'h00400593;
+        fw[ 44] = 32'h00B52823;
+        fw[ 45] = 32'h000085B7;
+        fw[ 46] = 32'h20058593;
+        fw[ 47] = 32'h00B52A23;
+        fw[ 48] = 32'h000085B7;
+        fw[ 49] = 32'h24058593;
+        fw[ 50] = 32'h00B52C23;
+        fw[ 51] = 32'h000085B7;
+        fw[ 52] = 32'h28058593;
+        fw[ 53] = 32'h00B52E23;
+        fw[ 54] = 32'h00100593;
+        fw[ 55] = 32'h00B52023;
+        fw[ 56] = 32'h00500593;
+        fw[ 57] = 32'h00B52423;
+        fw[ 58] = 32'h00300593;
+        fw[ 59] = 32'h00B52623;
+        fw[ 60] = 32'h00400593;
+        fw[ 61] = 32'h00B52823;
+        fw[ 62] = 32'h000085B7;
+        fw[ 63] = 32'h30058593;
+        fw[ 64] = 32'h00B52A23;
+        fw[ 65] = 32'h000085B7;
+        fw[ 66] = 32'h34058593;
+        fw[ 67] = 32'h00B52C23;
+        fw[ 68] = 32'h000085B7;
+        fw[ 69] = 32'h38058593;
+        fw[ 70] = 32'h00B52E23;
+        fw[ 71] = 32'h00100593;
+        fw[ 72] = 32'h00B52023;
+        fw[ 73] = 32'h00452583;
+        fw[ 74] = 32'h0025F593;
+        fw[ 75] = 32'hFE058CE3;
+        fw[ 76] = 32'h00452583;
+        fw[ 77] = 32'h0015F593;
+        fw[ 78] = 32'hFE059CE3;
+        fw[ 79] = 32'h00300593;
+        fw[ 80] = 32'h00B52423;
+        fw[ 81] = 32'h00600593;
+        fw[ 82] = 32'h00B52623;
+        fw[ 83] = 32'h00400593;
+        fw[ 84] = 32'h00B52823;
+        fw[ 85] = 32'h000085B7;
+        fw[ 86] = 32'h40058593;
+        fw[ 87] = 32'h00B52A23;
+        fw[ 88] = 32'h000085B7;
+        fw[ 89] = 32'h44058593;
+        fw[ 90] = 32'h00B52C23;
+        fw[ 91] = 32'h000085B7;
+        fw[ 92] = 32'h48058593;
+        fw[ 93] = 32'h00B52E23;
+        fw[ 94] = 32'h00100593;
+        fw[ 95] = 32'h00B52023;
+        fw[ 96] = 32'h00600593;
+        fw[ 97] = 32'h00B52423;
+        fw[ 98] = 32'h00600593;
+        fw[ 99] = 32'h00B52623;
+        fw[100] = 32'h00400593;
+        fw[101] = 32'h00B52823;
+        fw[102] = 32'h000085B7;
+        fw[103] = 32'h50058593;
+        fw[104] = 32'h00B52A23;
+        fw[105] = 32'h000085B7;
+        fw[106] = 32'h54058593;
+        fw[107] = 32'h00B52C23;
+        fw[108] = 32'h000085B7;
+        fw[109] = 32'h58058593;
+        fw[110] = 32'h00B52E23;
+        fw[111] = 32'h00100593;
+        fw[112] = 32'h00B52023;
+        fw[113] = 32'h00452583;
+        fw[114] = 32'h0025F593;
+        fw[115] = 32'hFE058CE3;
+        fw[116] = 32'h00452583;
+        fw[117] = 32'h0015F593;
+        fw[118] = 32'hFE059CE3;
+        fw[119] = 32'h000097B7;
+        fw[120] = 32'h41078793;
+        fw[121] = 32'hDEADC837;
+        fw[122] = 32'hEEF80813;
+        fw[123] = 32'h0107A023;
+        fw[124] = 32'h0000006F;
+        for (int i = 0; i < 125; i++) begin
+          ddr_write_byte(i*4 + 0, fw[i][7:0]);
+          ddr_write_byte(i*4 + 1, fw[i][15:8]);
+          ddr_write_byte(i*4 + 2, fw[i][23:16]);
+          ddr_write_byte(i*4 + 3, fw[i][31:24]);
+        end
+        $display("  [TB] Queue-stress firmware loaded (%0d bytes)", 125*4);
+      end
+
+      // Preload A/B operands
+      // GEMM0: 2x2x4 all 1s -- A=8B @0x8000, B=8B @0x8040
+      begin
+        for (int i = 0; i < 8; i++)
+          ddr_write_byte(32'h8000 + i, 8'd1);
+        for (int i = 0; i < 8; i++)
+          ddr_write_byte(32'h8040 + i, 8'd1);
+      end
+      // GEMM1: 3x3x4 all 1s -- A=12B @0x8100, B=12B @0x8140
+      begin
+        for (int i = 0; i < 12; i++)
+          ddr_write_byte(32'h8100 + i, 8'd1);
+        for (int i = 0; i < 12; i++)
+          ddr_write_byte(32'h8140 + i, 8'd1);
+      end
+      // GEMM2: 4x4x4 all 1s -- A=16B @0x8200, B=16B @0x8240
+      begin
+        for (int i = 0; i < 16; i++)
+          ddr_write_byte(32'h8200 + i, 8'd1);
+        for (int i = 0; i < 16; i++)
+          ddr_write_byte(32'h8240 + i, 8'd1);
+      end
+      // GEMM3: 5x3x4 all 1s -- A=20B @0x8300, B=12B @0x8340
+      begin
+        for (int i = 0; i < 20; i++)
+          ddr_write_byte(32'h8300 + i, 8'd1);
+        for (int i = 0; i < 12; i++)
+          ddr_write_byte(32'h8340 + i, 8'd1);
+      end
+      // GEMM4: 3x6x4 all 1s -- A=12B @0x8400, B=24B @0x8440
+      begin
+        for (int i = 0; i < 12; i++)
+          ddr_write_byte(32'h8400 + i, 8'd1);
+        for (int i = 0; i < 24; i++)
+          ddr_write_byte(32'h8440 + i, 8'd1);
+      end
+      // GEMM5: 6x6x4 all 1s -- A=24B @0x8500, B=24B @0x8540
+      begin
+        for (int i = 0; i < 24; i++)
+          ddr_write_byte(32'h8500 + i, 8'd1);
+        for (int i = 0; i < 24; i++)
+          ddr_write_byte(32'h8540 + i, 8'd1);
+      end
+
+      // Initialize DONE_ADDR to 0
+      ddr_write_byte(32'h9410, 8'h00);
+      ddr_write_byte(32'h9411, 8'h00);
+      ddr_write_byte(32'h9412, 8'h00);
+      ddr_write_byte(32'h9413, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for DONE_MAGIC
+      begin : wait_stress
+        int mg_cnt;
+        mg_cnt = 0;
+        forever begin
+          @(posedge clk);
+          mg_cnt = mg_cnt + 1;
+          if (mg_cnt > 1_000_000) begin
+            $error("  [FAIL] Queue-stress TIMEOUT after %0d cycles", mg_cnt);
+            mg_errs = mg_errs + 1;
+            disable wait_stress;
+          end
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9410];
+            b1 = dut.u_ddr.mem[32'h9411];
+            b2 = dut.u_ddr.mem[32'h9412];
+            b3 = dut.u_ddr.mem[32'h9413];
+            if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
+              $display("  [PASS] Queue-stress: all 6 GEMMs completed in %0d cycles", mg_cnt);
+              disable wait_stress;
+            end
+          end
+        end
+      end
+
+      // Verify C[0][0] for all 6 GEMMs
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        // GEMM0: 2x2x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8080]; c1 = dut.u_ddr.mem[32'h8081];
+        c2 = dut.u_ddr.mem[32'h8082]; c3 = dut.u_ddr.mem[32'h8083];
+        $display("  [TB] GEMM0 (2x2x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM0 (2x2x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM1: 3x3x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8180]; c1 = dut.u_ddr.mem[32'h8181];
+        c2 = dut.u_ddr.mem[32'h8182]; c3 = dut.u_ddr.mem[32'h8183];
+        $display("  [TB] GEMM1 (3x3x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM1 (3x3x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM2: 4x4x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8280]; c1 = dut.u_ddr.mem[32'h8281];
+        c2 = dut.u_ddr.mem[32'h8282]; c3 = dut.u_ddr.mem[32'h8283];
+        $display("  [TB] GEMM2 (4x4x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM2 (4x4x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM3: 5x3x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8380]; c1 = dut.u_ddr.mem[32'h8381];
+        c2 = dut.u_ddr.mem[32'h8382]; c3 = dut.u_ddr.mem[32'h8383];
+        $display("  [TB] GEMM3 (5x3x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM3 (5x3x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM4: 3x6x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8480]; c1 = dut.u_ddr.mem[32'h8481];
+        c2 = dut.u_ddr.mem[32'h8482]; c3 = dut.u_ddr.mem[32'h8483];
+        $display("  [TB] GEMM4 (3x6x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM4 (3x6x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM5: 6x6x4 -> C[0][0] = 4
+        c0 = dut.u_ddr.mem[32'h8580]; c1 = dut.u_ddr.mem[32'h8581];
+        c2 = dut.u_ddr.mem[32'h8582]; c3 = dut.u_ddr.mem[32'h8583];
+        $display("  [TB] GEMM5 (6x6x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM5 (6x6x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+      end
+      total_errs = total_errs + mg_errs;
+    end
+
+
     // Summary
     $display("\n========================================");
     if (total_errs == 0)
