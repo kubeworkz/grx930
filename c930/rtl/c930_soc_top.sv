@@ -34,7 +34,9 @@ module c930_soc_top
   parameter int MAX_K    = 16,
   parameter int MAX_N    = 12,
   parameter int MEM_BYTES = 65536,
-  parameter int CLK_DIV  = 1
+  parameter int CLK_DIV  = 1,
+  parameter     DDR_INIT_FILE = "",  // optional hex preload for DDR (testbench use)
+  parameter     BOOT_INIT_FILE = "sw/boot.hex"  // boot ROM firmware hex
 )
 (
   input  logic i_clk,
@@ -603,7 +605,7 @@ module c930_soc_top
     .DATA_WIDTH (64),
     .ADDR_WIDTH (64),
     .ID_WIDTH   (4),
-    .HEX_FILE   ("")
+    .HEX_FILE   (BOOT_INIT_FILE)
   ) u_bootrom (
     .i_clk           (core_clk),
     .i_rst_n         (core_rst_n),
@@ -641,7 +643,8 @@ module c930_soc_top
   c930_ddr #(
     .MEM_BYTES         (MEM_BYTES),
     .ADDR_WIDTH        (64),
-    .CACHE_LINE_WIDTH  (256)
+    .CACHE_LINE_WIDTH  (256),
+    .INIT_FILE         (DDR_INIT_FILE)
   ) u_ddr (
     .i_clk             (core_clk),
     .i_rst_n           (core_rst_n),
@@ -662,6 +665,11 @@ module c930_soc_top
     .i_dcache_wr_strobe('0),
     .i_dcache_wr_valid (1'b0),
     .o_dcache_wr_done  (),
+
+    // Testbench preload port (tied off in synthesis)
+    .i_tb_wr_en   (1'b0),
+    .i_tb_wr_addr  (32'd0),
+    .i_tb_wr_data  (8'd0),
 
     // AXI4 slave (from crossbar S1)
     .s_axi_araddr      (ddr_araddr),

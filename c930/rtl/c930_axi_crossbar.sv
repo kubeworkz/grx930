@@ -341,9 +341,11 @@ module c930_axi_crossbar
           end
         end
         R_GRANTED: begin
-          // Wait for slave to accept address, then wait for last data beat
-          if (r_active && /* address accepted and last beat received */ 1'b0)
-            r_state <= R_IDLE;
+          // Wait for last data beat on the shared read bus
+          if (r_shared_rvalid && r_shared_rready && r_shared_rlast) begin
+            r_active <= 1'b0;
+            r_state  <= R_IDLE;
+          end
         end
         default: r_state <= R_IDLE;
       endcase
@@ -400,8 +402,11 @@ module c930_axi_crossbar
           end
         end
         W_GRANTED: begin
-          if (w_active && /* write response received */ 1'b0)
-            w_state <= W_IDLE;
+          // Wait for write response on the shared write bus
+          if (w_shared_bvalid && w_shared_bready) begin
+            w_active <= 1'b0;
+            w_state  <= W_IDLE;
+          end
         end
         default: w_state <= W_IDLE;
       endcase
@@ -546,11 +551,23 @@ module c930_axi_crossbar
   // Shared bus → Slave demultiplexing (read)
   // =========================================================================
   slave_idx_t r_active_slave;
+  logic       r_slave_set;  // flag: slave index already set for current transaction
   always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n)
+    if (!i_rst_n) begin
       r_active_slave <= SLAVE_UART;
-    else if (r_shared_arvalid && r_shared_arready)
-      r_active_slave <= decode_addr(r_shared_araddr);
+      r_slave_set    <= 1'b0;
+    end else if (r_state == R_IDLE) begin
+      r_slave_set <= 1'b0;
+    end else if (r_state == R_GRANTED && r_active && !r_slave_set) begin
+      // Set slave index on first cycle of R_GRANTED based on winning master's address
+      r_slave_set <= 1'b1;
+      case (r_grant)
+        2'd0: r_active_slave <= decode_addr(m0_araddr);
+        2'd1: r_active_slave <= decode_addr(m1_araddr);
+        2'd2: r_active_slave <= decode_addr(m2_araddr);
+        default: r_active_slave <= SLAVE_UART;
+      endcase
+    end
   end
 
   // Demux read address to selected slave
@@ -598,11 +615,22 @@ module c930_axi_crossbar
   // Shared bus → Slave demultiplexing (write)
   // =========================================================================
   slave_idx_t w_active_slave;
+  logic       w_slave_set;
   always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n)
+    if (!i_rst_n) begin
       w_active_slave <= SLAVE_UART;
-    else if (w_shared_awvalid && w_shared_awready)
-      w_active_slave <= decode_addr(w_shared_awaddr);
+      w_slave_set    <= 1'b0;
+    end else if (w_state == W_IDLE) begin
+      w_slave_set <= 1'b0;
+    end else if (w_state == W_GRANTED && w_active && !w_slave_set) begin
+      w_slave_set <= 1'b1;
+      case (w_grant)
+        2'd0: w_active_slave <= decode_addr(m0_awaddr);
+        2'd1: w_active_slave <= decode_addr(m1_awaddr);
+        2'd2: w_active_slave <= decode_addr(m2_awaddr);
+        default: w_active_slave <= SLAVE_UART;
+      endcase
+    end
   end
 
   // Demux write address to selected slave

@@ -14,10 +14,10 @@
 // from tb_c930_npu so the NPU DMA runs against it unchanged.
 // -----------------------------------------------------------------------------
 module c930_ddr
-#(
-  parameter int MEM_BYTES        = 65536,   // 64 KB byte-addressable
+#(  parameter int MEM_BYTES        = 65536,   // 64 KB byte-addressable
   parameter int ADDR_WIDTH       = 64,
-  parameter int CACHE_LINE_WIDTH = 256
+  parameter int CACHE_LINE_WIDTH  = 256,
+  parameter     INIT_FILE         = ""        // optional $readmemh hex file for preload
 )
 (
   input  logic i_clk,
@@ -41,6 +41,11 @@ module c930_ddr
   input  logic [7:0]                  i_dcache_wr_strobe,
   input  logic                        i_dcache_wr_valid,
   output logic                        o_dcache_wr_done,
+
+  // ---- Testbench preload port (direct byte write, no AXI) ----
+  input  logic        i_tb_wr_en,
+  input  logic [31:0] i_tb_wr_addr,
+  input  logic [7:0]  i_tb_wr_data,
 
   // ---- AXI4 full slave (NPU DMA) ----
   input  logic [31:0] s_axi_araddr,
@@ -71,6 +76,14 @@ module c930_ddr
   // ---------------------------------------------------------------------------
   logic [7:0] mem [0:MEM_BYTES-1];
 
+  // Optional hex preload (for testbenches that need operand data at time 0)
+  initial begin
+    for (int i = 0; i < MEM_BYTES; i++)
+      mem[i] = 8'h00;
+    if (INIT_FILE != "")
+      $readmemh(INIT_FILE, mem);
+  end
+
   // ---------------------------------------------------------------------------
   // Helpers: lowest asserted strobe lane, and byte extraction
   // ---------------------------------------------------------------------------
@@ -92,6 +105,14 @@ module c930_ddr
     for (int i = 0; i < CACHE_LINE_WIDTH/8; i++)
       line_at[i*8 +: 8] = mem[base + i];
   endfunction
+
+  // ---------------------------------------------------------------------------
+  // Testbench preload: direct byte write (combinational, no clock needed)
+  // ---------------------------------------------------------------------------
+  always_ff @(posedge i_clk) begin
+    if (i_tb_wr_en)
+      mem[i_tb_wr_addr[31:0]] <= i_tb_wr_data;
+  end
 
   // ---------------------------------------------------------------------------
   // CPU instruction-cache read (registered, mirrors main_mem)

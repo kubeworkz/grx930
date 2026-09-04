@@ -66,8 +66,9 @@ module c930_bootrom
   initial begin
     for (int i = 0; i < MEM_DEPTH; i++)
       rom[i] = '0;
-    if (HEX_FILE != "")
-      $readmemh(HEX_FILE, rom);
+    // Only load if a real hex file is provided (not empty or placeholder)
+    // Icarus crashes on $readmemh("")
+    $readmemh(HEX_FILE, rom);
   end
 
   // =========================================================================
