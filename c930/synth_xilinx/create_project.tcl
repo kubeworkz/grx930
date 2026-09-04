@@ -30,6 +30,11 @@ foreach f [glob -nocomplain "$npu_rtl_dir/*.sv"] {
 # Synth-only DDR stub (tiny BRAM; same module name c930_ddr, replaces behavioral model)
 add_files -norecurse "[file dirname [info script]]/../synth/c930_ddr_stub.sv"
 
+# Boot ROM (synth-only: uses $readmemh for simulation, init for synthesis)
+add_files -norecurse "[file dirname [info script]]/../rtl/c930_bootrom.sv"
+
+# AXI crossbar + cache adapter + UART (already included via glob above)
+
 # ---- Constraints ----
 add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/xc7a200t_clock.xdc"
 

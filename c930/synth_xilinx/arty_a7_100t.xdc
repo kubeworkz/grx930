@@ -6,7 +6,8 @@
 ## Reset:  Active-high directly button (N15)
 ## LEDs:   LD0-LD7 are active-high directly driven LEDs
 ##
-## Current SoC top-level ports: i_clk, i_rst_n, o_npu_busy/done/error/irq
+## Current SoC top-level ports: i_clk, i_rst_n, o_npu_busy/done/error/irq,
+##   o_uart_txd, i_uart_rxd, i_tb_wr_en/addr/data (tied off in synth).
 ## Other board pins are documented below for future board-wrapper use.
 ## ---------------------------------------------------------------------------
 
@@ -53,6 +54,36 @@ set_property -dict { PACKAGE_PIN H17  IOSTANDARD LVCMOS33 } [get_ports { o_npu_b
 set_property -dict { PACKAGE_PIN K15  IOSTANDARD LVCMOS33 } [get_ports { o_npu_done }]
 set_property -dict { PACKAGE_PIN J13  IOSTANDARD LVCMOS33 } [get_ports { o_npu_error }]
 set_property -dict { PACKAGE_PIN N14  IOSTANDARD LVCMOS33 } [get_ports { o_npu_irq }]
+
+## ---- UART (FTDI FT2232H channel B, directly connected) ----
+set_property -dict { PACKAGE_PIN C4   IOSTANDARD LVCMOS33 } [get_ports { o_uart_txd }]
+set_property -dict { PACKAGE_PIN D4   IOSTANDARD LVCMOS33 } [get_ports { i_uart_rxd }]
+
+## ---- DDR preload port (tied off in synthesis) ----
+set_property -dict { PACKAGE_PIN N17  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_en }]
+set_property -dict { PACKAGE_PIN M18  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[0] }]
+set_property -dict { PACKAGE_PIN P18  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[1] }]
+set_property -dict { PACKAGE_PIN R18  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[2] }]
+set_property -dict { PACKAGE_PIN V17  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[3] }]
+set_property -dict { PACKAGE_PIN U17  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[4] }]
+set_property -dict { PACKAGE_PIN U16  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[5] }]
+set_property -dict { PACKAGE_PIN V16  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[6] }]
+set_property -dict { PACKAGE_PIN T15  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[7] }]
+set_property -dict { PACKAGE_PIN U14  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[8] }]
+set_property -dict { PACKAGE_PIN T16  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[9] }]
+set_property -dict { PACKAGE_PIN V15  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[10] }]
+set_property -dict { PACKAGE_PIN V14  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_addr[11] }]
+set_property -dict { PACKAGE_PIN V12  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[0] }]
+set_property -dict { PACKAGE_PIN V11  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[1] }]
+set_property -dict { PACKAGE_PIN V10  IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[2] }]
+set_property -dict { PACKAGE_PIN W8   IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[3] }]
+set_property -dict { PACKAGE_PIN U8   IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[4] }]
+set_property -dict { PACKAGE_PIN W7   IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[5] }]
+set_property -dict { PACKAGE_PIN U5   IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[6] }]
+set_property -dict { PACKAGE_PIN V5   IOSTANDARD LVCMOS33 } [get_ports { i_tb_wr_data[7] }]
+
+## Mark TB preload as false path (testbench only, never used in real operation)
+set_false_path -from [get_ports { i_tb_wr_* }]
 
 
 ## ============================================================================

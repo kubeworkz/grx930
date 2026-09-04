@@ -151,6 +151,13 @@ wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
 
 # ---------------------------------------------------------------------------
+# Vivado synthesis + implementation (Xilinx Artix-7 / Arty A7-200T)
+# ---------------------------------------------------------------------------
+vivado_synth:
+	@mkdir -p build/vivado
+	@bash synth_xilinx/create_and_synth.sh
+
+# ---------------------------------------------------------------------------
 # ECP5 synthesis resource/latch report for the REAL design (vendored
 # oss-cad-suite). The full netlist is ~424K LUTs (dcache byte-strobe write
 # muxes demote to fabric), far over the ECP5-85F fabric, so this target is
