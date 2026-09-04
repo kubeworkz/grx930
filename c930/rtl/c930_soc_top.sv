@@ -50,7 +50,12 @@ module c930_soc_top
 
   // ---- UART ----
   output logic o_uart_txd,
-  input  logic i_uart_rxd
+  input  logic i_uart_rxd,
+
+  // ---- DDR testbench preload port (active only when USE_TB_PRELOAD=1) ----
+  input  logic        i_tb_wr_en,
+  input  logic [31:0] i_tb_wr_addr,
+  input  logic [7:0]  i_tb_wr_data
 );
 
   localparam logic [63:0] MMIO_BASE = 64'h4000_0000;
@@ -666,10 +671,10 @@ module c930_soc_top
     .i_dcache_wr_valid (1'b0),
     .o_dcache_wr_done  (),
 
-    // Testbench preload port (tied off in synthesis)
-    .i_tb_wr_en   (1'b0),
-    .i_tb_wr_addr  (32'd0),
-    .i_tb_wr_data  (8'd0),
+    // Testbench preload port (active when driven by testbench)
+    .i_tb_wr_en   (i_tb_wr_en),
+    .i_tb_wr_addr  (i_tb_wr_addr),
+    .i_tb_wr_data  (i_tb_wr_data),
 
     // AXI4 slave (from crossbar S1)
     .s_axi_araddr      (ddr_araddr),

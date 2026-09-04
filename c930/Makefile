@@ -53,10 +53,17 @@ SOC_RTL := $(NPU_RTL) \
   rtl/c930_mmio_bridge.sv \
   rtl/c930_soc_top.sv
 
-OUT_NPU := $(BUILD_DIR)/tb_c930_npu.vvp
-OUT_SOC := $(BUILD_DIR)/tb_c930_soc.vvp
+SOC_FULL_RTL := $(SOC_RTL) \
+  rtl/c930_axi_crossbar.sv \
+  rtl/c930_axi_cache_adapter.sv \
+  rtl/c930_bootrom.sv \
+  rtl/c930_uart.sv
 
-.PHONY: all sw soc npu hazard synth synth-fit wave clean bringup
+OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
+OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
+OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
+
+.PHONY: all sw soc soc_full npu hazard synth synth-fit wave clean bringup
 
 all: sw soc
 
@@ -133,6 +140,12 @@ $(OUT_SOC): $(SOC_RTL) $(CORE_RTL) tb/tb_c930_soc.sv $(SW_HEX)
 
 soc: $(OUT_SOC)
 	$(VVP) $(OUT_SOC)
+
+$(OUT_SOC_FULL): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_c930_soc_full.sv
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_c930_soc_full.sv
+
+soc_full: $(OUT_SOC_FULL)
+	$(VVP) $(OUT_SOC_FULL)
 
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
