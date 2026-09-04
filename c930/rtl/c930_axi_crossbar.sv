@@ -255,10 +255,10 @@ module c930_axi_crossbar
   // Address decode
   // =========================================================================
   // Returns slave index for a given byte address.
-  localparam logic [63:0] BOOT_ROM_BASE = 64'h0000_0000;
-  localparam logic [63:0] BOOT_ROM_END  = 64'h0000_03FF;
-  localparam logic [63:0] DDR_BASE      = 64'h0000_1000;
+  localparam logic [63:0] DDR_BASE      = 64'h0000_0000;
   localparam logic [63:0] DDR_END       = 64'h0000_FFFF;
+  localparam logic [63:0] BOOT_ROM_BASE = 64'h0001_0000;
+  localparam logic [63:0] BOOT_ROM_END  = 64'h0001_03FF;
   localparam logic [63:0] MMIO_BASE     = 64'h4000_0000;
   localparam logic [63:0] MMIO_END      = 64'h4000_FFFF;
   localparam logic [63:0] UART_BASE     = 64'h4000_1000;
@@ -275,10 +275,10 @@ module c930_axi_crossbar
   localparam logic [1:0] SLAVE_UNMAP = 2'b11;  // same encoding as UART, will SLVERR
 
   function automatic slave_idx_t decode_addr(input logic [63:0] addr);
-    if (addr >= BOOT_ROM_BASE && addr <= BOOT_ROM_END)
-      return SLAVE_BOOT_ROM;
-    else if (addr >= DDR_BASE && addr <= DDR_END)
+    if (addr >= DDR_BASE && addr <= DDR_END)
       return SLAVE_DDR;
+    else if (addr >= BOOT_ROM_BASE && addr <= BOOT_ROM_END)
+      return SLAVE_BOOT_ROM;
     else if (addr >= UART_BASE && addr <= UART_END)
       return SLAVE_UART;
     else if (addr >= MMIO_BASE && addr <= MMIO_END)
@@ -304,6 +304,24 @@ module c930_axi_crossbar
   // Read request per master
   logic [2:0] r_req;
   assign r_req = {m2_arvalid, m1_arvalid, m0_arvalid};
+
+  // Combinational next-grant: what r_grant will be on the next cycle
+  logic [1:0] r_grant_next;
+  logic       r_grant_valid;
+  always_comb begin
+    r_grant_next  = '0;
+    r_grant_valid = 1'b0;
+    if (r_req[r_rr_ptr]) begin
+      r_grant_next  = r_rr_ptr;
+      r_grant_valid = 1'b1;
+    end else if (r_req[(r_rr_ptr + 1) % 3]) begin
+      r_grant_next  = (r_rr_ptr + 1) % 3;
+      r_grant_valid = 1'b1;
+    end else if (r_req[(r_rr_ptr + 2) % 3]) begin
+      r_grant_next  = (r_rr_ptr + 2) % 3;
+      r_grant_valid = 1'b1;
+    end
+  end
 
   // Read address decode per master
   slave_idx_t r_slave [2:0];
@@ -368,6 +386,24 @@ module c930_axi_crossbar
 
   logic [2:0] w_req;
   assign w_req = {m2_awvalid, m1_awvalid, m0_awvalid};
+
+  // Combinational next-grant for write channel
+  logic [1:0] w_grant_next;
+  logic       w_grant_valid;
+  always_comb begin
+    w_grant_next  = '0;
+    w_grant_valid = 1'b0;
+    if (w_req[w_rr_ptr]) begin
+      w_grant_next  = w_rr_ptr;
+      w_grant_valid = 1'b1;
+    end else if (w_req[(w_rr_ptr + 1) % 3]) begin
+      w_grant_next  = (w_rr_ptr + 1) % 3;
+      w_grant_valid = 1'b1;
+    end else if (w_req[(w_rr_ptr + 2) % 3]) begin
+      w_grant_next  = (w_rr_ptr + 2) % 3;
+      w_grant_valid = 1'b1;
+    end
+  end
 
   slave_idx_t w_slave [2:0];
   assign w_slave[0] = decode_addr(m0_awaddr);
@@ -551,23 +587,25 @@ module c930_axi_crossbar
   // Shared bus → Slave demultiplexing (read)
   // =========================================================================
   slave_idx_t r_active_slave;
-  logic       r_slave_set;  // flag: slave index already set for current transaction
-  always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n) begin
-      r_active_slave <= SLAVE_UART;
-      r_slave_set    <= 1'b0;
-    end else if (r_state == R_IDLE) begin
-      r_slave_set <= 1'b0;
-    end else if (r_state == R_GRANTED && r_active && !r_slave_set) begin
-      // Set slave index on first cycle of R_GRANTED based on winning master's address
-      r_slave_set <= 1'b1;
+  // Combinational: select slave based on current or next grant
+  always_comb begin
+    if (r_state == R_GRANTED && r_active) begin
       case (r_grant)
-        2'd0: r_active_slave <= decode_addr(m0_araddr);
-        2'd1: r_active_slave <= decode_addr(m1_araddr);
-        2'd2: r_active_slave <= decode_addr(m2_araddr);
-        default: r_active_slave <= SLAVE_UART;
+        2'd0: r_active_slave = decode_addr(m0_araddr);
+        2'd1: r_active_slave = decode_addr(m1_araddr);
+        2'd2: r_active_slave = decode_addr(m2_araddr);
+        default: r_active_slave = SLAVE_UART;
       endcase
-    end
+    end else if (r_state == R_IDLE && r_grant_valid) begin
+      // About to grant: use next-grant so slave demux is ready one cycle early
+      case (r_grant_next)
+        2'd0: r_active_slave = decode_addr(m0_araddr);
+        2'd1: r_active_slave = decode_addr(m1_araddr);
+        2'd2: r_active_slave = decode_addr(m2_araddr);
+        default: r_active_slave = SLAVE_UART;
+      endcase
+    end else
+      r_active_slave = SLAVE_UART;
   end
 
   // Demux read address to selected slave
@@ -615,22 +653,23 @@ module c930_axi_crossbar
   // Shared bus → Slave demultiplexing (write)
   // =========================================================================
   slave_idx_t w_active_slave;
-  logic       w_slave_set;
-  always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n) begin
-      w_active_slave <= SLAVE_UART;
-      w_slave_set    <= 1'b0;
-    end else if (w_state == W_IDLE) begin
-      w_slave_set <= 1'b0;
-    end else if (w_state == W_GRANTED && w_active && !w_slave_set) begin
-      w_slave_set <= 1'b1;
+  always_comb begin
+    if (w_state == W_GRANTED && w_active) begin
       case (w_grant)
-        2'd0: w_active_slave <= decode_addr(m0_awaddr);
-        2'd1: w_active_slave <= decode_addr(m1_awaddr);
-        2'd2: w_active_slave <= decode_addr(m2_awaddr);
-        default: w_active_slave <= SLAVE_UART;
+        2'd0: w_active_slave = decode_addr(m0_awaddr);
+        2'd1: w_active_slave = decode_addr(m1_awaddr);
+        2'd2: w_active_slave = decode_addr(m2_awaddr);
+        default: w_active_slave = SLAVE_UART;
       endcase
-    end
+    end else if (w_state == W_IDLE && w_grant_valid) begin
+      case (w_grant_next)
+        2'd0: w_active_slave = decode_addr(m0_awaddr);
+        2'd1: w_active_slave = decode_addr(m1_awaddr);
+        2'd2: w_active_slave = decode_addr(m2_awaddr);
+        default: w_active_slave = SLAVE_UART;
+      endcase
+    end else
+      w_active_slave = SLAVE_UART;
   end
 
   // Demux write address to selected slave

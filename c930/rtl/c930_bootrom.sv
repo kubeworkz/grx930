@@ -136,10 +136,10 @@ module c930_bootrom
 
           if (s_axi_rvalid && s_axi_rready) begin
             if (r_beat == r_len) begin
-              // Transaction complete
-              s_axi_rvalid <= 1'b0;
-              s_axi_rlast  <= 1'b0;
-              r_state      <= R_IDLE;
+              // Transaction complete — rvalid/rlast stay high this cycle
+              // (set by default assignments above), deassert NEXT cycle
+              // when R_IDLE block fires.
+              r_state <= R_IDLE;
             end else begin
               r_beat <= r_beat + 1;
               r_idx  <= r_idx + 1;

@@ -74,7 +74,12 @@ $(SW_BIN): $(SW_ELF)
 $(SW_HEX): $(SW_BIN) sw/bin2hex.py
 	$(PYTHON) sw/bin2hex.py $(SW_BIN) $(SW_HEX)
 
-sw: $(SW_HEX)
+# Byte-addressed hex for DDR $readmemh (converts word hex to little-endian bytes)
+DDR_BYTES_HEX := sw/npu_ddr_bytes.hex
+$(DDR_BYTES_HEX): $(SW_HEX)
+	$(PYTHON) -c "words=[l.strip() for l in open('$<') if l.strip()]; f=open('$@','w'); [f.write(f'{(int(w,16)>>(i*8))&0xff:02x}\n') for w in words for i in range(4)]; f.close(); print(f'Converted {len(words)} words to {len(words)*4} bytes')"
+
+sw: $(SW_HEX) $(DDR_BYTES_HEX)
 
 # ---------------------------------------------------------------------------
 # Board bring-up firmware (Arty A7-100T + DDR3L)
