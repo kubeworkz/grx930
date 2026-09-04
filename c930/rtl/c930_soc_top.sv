@@ -582,19 +582,19 @@ module c930_soc_top
     .s2_rid     (mmio_sl_rid),   .s2_rdata   (mmio_sl_rdata),  .s2_rresp  (mmio_sl_rresp),
     .s2_rlast   (mmio_sl_rlast), .s2_rvalid  (mmio_sl_rvalid), .s2_rready (mmio_sl_rready),
 
-    // ---- S3: UART ----
-    .s3_awid    (uart_awid),     .s3_awaddr  (uart_awaddr),    .s3_awlen  (uart_awlen),
-    .s3_awsize  (uart_awsize),   .s3_awburst (uart_awburst),   .s3_awvalid(uart_awvalid),
-    .s3_awready (uart_awready),
-    .s3_wdata   (uart_wdata),    .s3_wstrb   (uart_wstrb),     .s3_wlast  (uart_wlast),
-    .s3_wvalid  (uart_wvalid),   .s3_wready  (uart_wready),
-    .s3_bid     (uart_bid),      .s3_bresp   (uart_bresp),     .s3_bvalid (uart_bvalid),
-    .s3_bready  (uart_bready),
-    .s3_arid    (uart_arid),     .s3_araddr  (uart_araddr),    .s3_arlen  (uart_arlen),
-    .s3_arsize  (uart_arsize),   .s3_arburst (uart_arburst),   .s3_arvalid(uart_arvalid),
-    .s3_arready (uart_arready),
-    .s3_rid     (uart_rid),      .s3_rdata   (uart_rdata),     .s3_rresp  (uart_rresp),
-    .s3_rlast   (uart_rlast),    .s3_rvalid  (uart_rvalid),    .s3_rready (uart_rready)
+    // ---- S3: UART (unused — UART is driven by MMIO bridge mux, not crossbar) ----
+    .s3_awid    (),              .s3_awaddr  (),               .s3_awlen  (),
+    .s3_awsize  (),              .s3_awburst (),               .s3_awvalid(),
+    .s3_awready (1'b1),
+    .s3_wdata   (),              .s3_wstrb   (),               .s3_wlast  (),
+    .s3_wvalid  (),              .s3_wready  (1'b1),
+    .s3_bid     (),              .s3_bresp   (2'b00),          .s3_bvalid (1'b0),
+    .s3_bready  (),
+    .s3_arid    (),              .s3_araddr  (),               .s3_arlen  (),
+    .s3_arsize  (),              .s3_arburst (),               .s3_arvalid(),
+    .s3_arready (1'b1),
+    .s3_rid     (),              .s3_rdata   (64'd0),          .s3_rresp  (2'b00),
+    .s3_rlast   (1'b1),          .s3_rvalid  (1'b0),           .s3_rready ()
   );
 
   // =========================================================================
@@ -727,7 +727,7 @@ module c930_soc_top
     .i_uart_rxd  (i_uart_rxd),
     .o_irq       (),  // TODO: connect to APLIC when built
 
-    // AXI4-Lite slave (from crossbar S3)
+    // AXI4-Lite slave (from MMIO bridge address-decode mux)
     .s_axi_awaddr (uart_awaddr[31:0]),
     .s_axi_awvalid(uart_awvalid),
     .s_axi_awready(uart_awready),
@@ -751,6 +751,8 @@ module c930_soc_top
   assign uart_bid    = '0;
   assign uart_rid    = '0;
   assign uart_rlast  = 1'b1;  // single-beat, always last
+
+
 
   // =========================================================================
   // CPU
@@ -859,8 +861,31 @@ module c930_soc_top
   );
 
   // =========================================================================
-  // CPU MMIO bridge (backward compat: CPU uncached MMIO → NPU AXI4-Lite CSR)
+  // CPU MMIO bridge (CPU uncached MMIO → AXI4-Lite peripherals)
+  //
+  // The bridge converts the CPU's simple req/done MMIO protocol to AXI4-Lite.
+  // An address-decode mux downstream routes:
+  //   0x4000_0000-0x4000_003F  → NPU CSR (backward compat)
+  //   0x4000_1000-0x4000_100F  → UART TX/RX/status
   // =========================================================================
+  logic [31:0]  mmio_awaddr_raw;
+  logic         mmio_awvalid_raw;
+  logic         mmio_awready_raw;
+  logic [31:0]  mmio_wdata_raw;
+  logic [3:0]   mmio_wstrb_raw;
+  logic         mmio_wvalid_raw;
+  logic         mmio_wready_raw;
+  logic [1:0]   mmio_bresp_raw;
+  logic         mmio_bvalid_raw;
+  logic         mmio_bready_raw;
+  logic [31:0]  mmio_araddr_raw;
+  logic         mmio_arvalid_raw;
+  logic         mmio_arready_raw;
+  logic [31:0]  mmio_rdata_raw;
+  logic [1:0]   mmio_rresp_raw;
+  logic         mmio_rvalid_raw;
+  logic         mmio_rready_raw;
+
   c930_mmio_bridge u_mmio_bridge (
     .i_clk              (core_clk),
     .i_rst_n            (core_rst_n),
@@ -876,23 +901,80 @@ module c930_soc_top
     .i_mmio_write_valid (mmio_wr_valid),
     .o_mmio_write_done  (mmio_wr_done),
 
-    .m_axi_awaddr       (csr_awaddr),
-    .m_axi_awvalid      (csr_awvalid),
-    .m_axi_awready      (csr_awready),
-    .m_axi_wdata        (csr_wdata),
-    .m_axi_wstrb        (csr_wstrb),
-    .m_axi_wvalid       (csr_wvalid),
-    .m_axi_wready       (csr_wready),
-    .m_axi_bresp        (csr_bresp),
-    .m_axi_bvalid       (csr_bvalid),
-    .m_axi_bready       (csr_bready),
-    .m_axi_araddr       (csr_araddr),
-    .m_axi_arvalid      (csr_arvalid),
-    .m_axi_arready      (csr_arready),
-    .m_axi_rdata        (csr_rdata),
-    .m_axi_rresp        (csr_rresp),
-    .m_axi_rvalid       (csr_rvalid),
-    .m_axi_rready       (csr_rready)
+    // Raw AXI4-Lite output (before address decode mux)
+    .m_axi_awaddr       (mmio_awaddr_raw),
+    .m_axi_awvalid      (mmio_awvalid_raw),
+    .m_axi_awready      (mmio_awready_raw),
+    .m_axi_wdata        (mmio_wdata_raw),
+    .m_axi_wstrb        (mmio_wstrb_raw),
+    .m_axi_wvalid       (mmio_wvalid_raw),
+    .m_axi_wready       (mmio_wready_raw),
+    .m_axi_bresp        (mmio_bresp_raw),
+    .m_axi_bvalid       (mmio_bvalid_raw),
+    .m_axi_bready       (mmio_bready_raw),
+    .m_axi_araddr       (mmio_araddr_raw),
+    .m_axi_arvalid      (mmio_arvalid_raw),
+    .m_axi_arready      (mmio_arready_raw),
+    .m_axi_rdata        (mmio_rdata_raw),
+    .m_axi_rresp        (mmio_rresp_raw),
+    .m_axi_rvalid       (mmio_rvalid_raw),
+    .m_axi_rready       (mmio_rready_raw)
   );
+
+  // ---- Address decode mux ----
+  // Route MMIO bridge output to NPU CSR or UART based on address.
+  logic mmio_to_uart;
+  assign mmio_to_uart = (mmio_awaddr_raw[31:12] == 20'h40001);  // 0x4000_1000-0x4000_1FFF
+
+  // Write channel: select NPU CSR or UART
+  assign csr_awaddr  = mmio_awaddr_raw;
+  assign csr_awvalid = mmio_awvalid_raw & ~mmio_to_uart;
+  assign csr_wdata   = mmio_wdata_raw;
+  assign csr_wstrb   = mmio_wstrb_raw;
+  assign csr_wvalid  = mmio_wvalid_raw & ~mmio_to_uart;
+  assign csr_bready  = mmio_bready_raw & ~mmio_to_uart;
+
+  // Read channel: select NPU CSR or UART
+  assign csr_araddr  = mmio_araddr_raw;
+  assign csr_arvalid = mmio_arvalid_raw & ~mmio_to_uart;
+  assign csr_rready  = mmio_rready_raw & ~mmio_to_uart;
+
+  // UART AXI4-Lite signals (active when mmio_to_uart)
+  assign uart_awaddr  = mmio_awaddr_raw;
+  assign uart_awvalid = mmio_awvalid_raw & mmio_to_uart;
+  assign uart_awlen   = '0;
+  assign uart_awsize  = 3'd2;
+  assign uart_awburst = 2'b00;
+  assign uart_wdata   = {32'd0, mmio_wdata_raw};
+  assign uart_wstrb   = {{4{mmio_wstrb_raw[3]}}, {4{mmio_wstrb_raw[2]}},
+                         {4{mmio_wstrb_raw[1]}}, {4{mmio_wstrb_raw[0]}}};
+  assign uart_wlast   = 1'b1;
+  assign uart_wvalid  = mmio_wvalid_raw & mmio_to_uart;
+  assign uart_bready  = mmio_bready_raw & mmio_to_uart;
+
+  assign uart_araddr  = mmio_araddr_raw;
+  assign uart_arvalid = mmio_arvalid_raw & mmio_to_uart;
+  assign uart_arlen   = '0;
+  assign uart_arsize  = 3'd2;
+  assign uart_arburst = 2'b00;
+  assign uart_rready  = mmio_rready_raw & mmio_to_uart;
+
+  // Mux responses back to bridge
+  logic sel_uart_r;
+  always_ff @(posedge core_clk or negedge core_rst_n) begin
+    if (!core_rst_n)
+      sel_uart_r <= 1'b0;
+    else if (mmio_arvalid_raw && mmio_arready_raw)
+      sel_uart_r <= mmio_to_uart;
+  end
+
+  assign mmio_awready_raw = mmio_to_uart ? uart_awready : csr_awready;
+  assign mmio_wready_raw  = mmio_to_uart ? uart_wready  : csr_wready;
+  assign mmio_bresp_raw   = mmio_to_uart ? uart_bresp   : csr_bresp;
+  assign mmio_bvalid_raw  = mmio_to_uart ? uart_bvalid  : csr_bvalid;
+  assign mmio_arready_raw = mmio_to_uart ? uart_arready : csr_arready;
+  assign mmio_rdata_raw   = sel_uart_r   ? uart_rdata[31:0] : csr_rdata;
+  assign mmio_rresp_raw   = sel_uart_r   ? uart_rresp  : csr_rresp;
+  assign mmio_rvalid_raw  = sel_uart_r   ? uart_rvalid : csr_rvalid;
 
 endmodule

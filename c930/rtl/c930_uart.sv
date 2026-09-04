@@ -326,7 +326,7 @@ module c930_uart
   assign s_axi_awready = (axi_state == AXI_IDLE);
   assign s_axi_arready = (axi_state == AXI_IDLE) && !s_axi_awvalid;
   assign s_axi_wready  = (axi_state == AXI_WR);
-  assign s_axi_rready  = (axi_state == AXI_RD);
+  // s_axi_rready is driven by the AXI master (MMIO bridge) — not assigned here.
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
