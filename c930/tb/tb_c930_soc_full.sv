@@ -428,6 +428,267 @@ module tb_c930_soc_full;
       total_errs = total_errs + uart_errs;
     end
 
+    // =========================================================================
+    // Test 4: Multi-GEMM queue drain (3 back-to-back GEMMs via CPU firmware)
+    //
+    // Tests: command queue depth, DMA crossbar arbitration, DDR multi-client
+    // The firmware queues 3 GEMMs of increasing size (2x2x2, 4x4x4, 8x8x8)
+    // back-to-back through the NPU CSR MMIO path, then polls for completion.
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 4: Multi-GEMM queue drain (3 back-to-back GEMMs)");
+    $display("========================================");
+    begin
+      int mg_errs;
+      mg_errs = 0;
+
+      // Reload NPU firmware from hex file
+      begin
+        int fw_fd;
+        logic [7:0] fw_byte;
+        int fw_addr;
+        fw_fd = $fopen("sw/npu_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+          $display("  [TB] Reloaded %0d firmware bytes into DDR", fw_addr);
+        end
+      end
+
+      // Overwrite DDR[0x000-0x154] with multi-GEMM firmware (86 instructions)
+      begin
+        logic [31:0] fw [0:83];
+        // --- Setup ---
+        fw[0]  = 32'h40000537;  // lui  x10, 0x40000 (MMIO_BASE)
+        fw[1]  = 32'h00050513;  // addi x10, x10, 0
+        // --- GEMM 0: 2x2x2 ---
+        fw[2]  = 32'h000005B7;  // lui  x11, 0
+        fw[3]  = 32'h00258593;  // addi x11, x11, 2
+        fw[4]  = 32'h00B52423;  // sw   x11, 0x08(x10)  DIM_M
+        fw[5]  = 32'h000005B7;  // lui  x11, 0
+        fw[6]  = 32'h00258593;  // addi x11, x11, 2
+        fw[7]  = 32'h00B52623;  // sw   x11, 0x0C(x10)  DIM_N
+        fw[8]  = 32'h000005B7;  // lui  x11, 0
+        fw[9]  = 32'h00258593;  // addi x11, x11, 2
+        fw[10] = 32'h00B52823;  // sw   x11, 0x10(x10)  DIM_K
+        fw[11] = 32'h000085B7;  // lui  x11, 0x8
+        fw[12] = 32'h00058593;  // addi x11, x11, 0     A=0x8000
+        fw[13] = 32'h00B52A23;  // sw   x11, 0x14(x10)  A_BASE
+        fw[14] = 32'h000085B7;  // lui  x11, 0x8
+        fw[15] = 32'h40058593;  // addi x11, x11, 0x400 B=0x8400
+        fw[16] = 32'h00B52C23;  // sw   x11, 0x18(x10)  B_BASE
+        fw[17] = 32'h000095B7;  // lui  x11, 0x9
+        fw[18] = 32'h80058593;  // addi x11, x11, -2048 C=0x8800
+        fw[19] = 32'h00B52E23;  // sw   x11, 0x1C(x10)  C_BASE
+        fw[20] = 32'h00000593;  // addi x11, x0, 0     PREC=INT8
+        fw[21] = 32'h02B52023;  // sw   x11, 0x20(x10)  PREC
+        fw[22] = 32'h02052583;  // lw   x11, 0x20(x10)  barrier
+        fw[23] = 32'h00100593;  // addi x11, x0, 1
+        fw[24] = 32'h00B52023;  // sw   x11, 0x00(x10)  START
+        // --- GEMM 1: 4x4x4 (queued immediately) ---
+        fw[25] = 32'h000005B7;  // lui  x11, 0
+        fw[26] = 32'h00458593;  // addi x11, x11, 4
+        fw[27] = 32'h00B52423;  // sw   x11, 0x08(x10)  DIM_M
+        fw[28] = 32'h000005B7;  // lui  x11, 0
+        fw[29] = 32'h00458593;  // addi x11, x11, 4
+        fw[30] = 32'h00B52623;  // sw   x11, 0x0C(x10)  DIM_N
+        fw[31] = 32'h000005B7;  // lui  x11, 0
+        fw[32] = 32'h00458593;  // addi x11, x11, 4
+        fw[33] = 32'h00B52823;  // sw   x11, 0x10(x10)  DIM_K
+        fw[34] = 32'h000095B7;  // lui  x11, 0x9
+        fw[35] = 32'h00058593;  // addi x11, x11, 0     A=0x9000
+        fw[36] = 32'h00B52A23;  // sw   x11, 0x14(x10)  A_BASE
+        fw[37] = 32'h000095B7;  // lui  x11, 0x9
+        fw[38] = 32'h40058593;  // addi x11, x11, 0x400 B=0x9400
+        fw[39] = 32'h00B52C23;  // sw   x11, 0x18(x10)  B_BASE
+        fw[40] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[41] = 32'h80058593;  // addi x11, x11, -2048 C=0x9800
+        fw[42] = 32'h00B52E23;  // sw   x11, 0x1C(x10)  C_BASE
+        fw[43] = 32'h00000593;  // addi x11, x0, 0
+        fw[44] = 32'h02B52023;  // sw   x11, 0x20(x10)  PREC
+        fw[45] = 32'h02052583;  // lw   x11, 0x20(x10)  barrier
+        fw[46] = 32'h00100593;  // addi x11, x0, 1
+        fw[47] = 32'h00B52023;  // sw   x11, 0x00(x10)  START
+        // --- GEMM 2: 8x8x8 (queued immediately) ---
+        fw[48] = 32'h000005B7;  // lui  x11, 0
+        fw[49] = 32'h00858593;  // addi x11, x11, 8
+        fw[50] = 32'h00B52423;  // sw   x11, 0x08(x10)  DIM_M
+        fw[51] = 32'h000005B7;  // lui  x11, 0
+        fw[52] = 32'h00858593;  // addi x11, x11, 8
+        fw[53] = 32'h00B52623;  // sw   x11, 0x0C(x10)  DIM_N
+        fw[54] = 32'h000005B7;  // lui  x11, 0
+        fw[55] = 32'h00858593;  // addi x11, x11, 8
+        fw[56] = 32'h00B52823;  // sw   x11, 0x10(x10)  DIM_K
+        fw[57] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[58] = 32'h00058593;  // addi x11, x11, 0     A=0xA000
+        fw[59] = 32'h00B52A23;  // sw   x11, 0x14(x10)  A_BASE
+        fw[60] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[61] = 32'h40058593;  // addi x11, x11, 0x400 B=0xA400
+        fw[62] = 32'h00B52C23;  // sw   x11, 0x18(x10)  B_BASE
+        fw[63] = 32'h0000B5B7;  // lui  x11, 0xB
+        fw[64] = 32'h80058593;  // addi x11, x11, -2048 C=0xA800
+        fw[65] = 32'h00B52E23;  // sw   x11, 0x1C(x10)  C_BASE
+        fw[66] = 32'h00000593;  // addi x11, x0, 0
+        fw[67] = 32'h02B52023;  // sw   x11, 0x20(x10)  PREC
+        fw[68] = 32'h02052583;  // lw   x11, 0x20(x10)  barrier
+        fw[69] = 32'h00100593;  // addi x11, x0, 1
+        fw[70] = 32'h00B52023;  // sw   x11, 0x00(x10)  START
+        // --- Wait loop: two-phase poll ---
+        // Phase 1: wait for done_latch=1 (first GEMM completed)
+        // Phase 2: wait for i_busy=0 (all queued GEMMs drained)
+        fw[71] = 32'h02052583;  // lw   x11, 0x20(x10) barrier read (PREC)
+        fw[72] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
+        fw[73] = 32'h0025F593;  // andi x11, x11, 2    isolate DONE bit
+        fw[74] = 32'hFE058CE3;  // beq  x11, x0, -8   if done=0, keep polling
+        // Phase 2: DMA idle check
+        fw[75] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
+        fw[76] = 32'h0015F593;  // andi x11, x11, 1    isolate BUSY bit
+        fw[77] = 32'hFE059CE3;  // bne  x11, x0, -8   if busy=1, keep waiting
+        // --- Write DONE_MAGIC ---
+        fw[78] = 32'h000097B7;  // lui  x15, 0x9
+        fw[79] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        fw[80] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        fw[81] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC=0xDEADBEEF
+        fw[82] = 32'h0107A023;  // sw   x16, 0(x15)
+        // Self-loop
+        fw[83] = 32'h0000006F;  // jal  x0, 0
+
+        for (int i = 0; i < 84; i++) begin
+          ddr_write_byte(i*4 + 0, fw[i][7:0]);
+          ddr_write_byte(i*4 + 1, fw[i][15:8]);
+          ddr_write_byte(i*4 + 2, fw[i][23:16]);
+          ddr_write_byte(i*4 + 3, fw[i][31:24]);
+        end
+        $display("  [TB] Multi-GEMM firmware loaded (%0d bytes)", 84*4);
+      end
+
+      // Preload A/B operands for 3 GEMMs (INT8: 4 elements per 32-bit word)
+      // GEMM 0: 2x2x2 A@0x8000 B@0x8400 — all INT8 elements = 1
+      begin
+        // A: M*K = 4 elements → 1 word. All 4 bytes = 1
+        ddr_write_byte(32'h8000, 8'd1); ddr_write_byte(32'h8001, 8'd1);
+        ddr_write_byte(32'h8002, 8'd1); ddr_write_byte(32'h8003, 8'd1);
+        // B: K*N = 4 elements → 1 word. All 4 bytes = 1
+        ddr_write_byte(32'h8400, 8'd1); ddr_write_byte(32'h8401, 8'd1);
+        ddr_write_byte(32'h8402, 8'd1); ddr_write_byte(32'h8403, 8'd1);
+        $display("  [TB] Preloaded GEMM0 A/B (2x2x2, all 1s)");
+      end
+
+      // GEMM 1: 4x4x4 A@0x9000 B@0x9400 — all INT8 elements = 1
+      begin
+        // A: M*K = 16 elements → 4 words. All bytes = 1
+        for (int i = 0; i < 16; i++) begin
+          ddr_write_byte(32'h9000 + i, 8'd1);  // byte-packed INT8
+        end
+        // B: K*N = 16 elements → 4 words. All bytes = 1
+        for (int i = 0; i < 16; i++) begin
+          ddr_write_byte(32'h9400 + i, 8'd1);
+        end
+        $display("  [TB] Preloaded GEMM1 A/B (4x4x4, all 1s)");
+      end
+
+      // GEMM 2: 8x8x8 A@0xA000 B@0xA400 — all INT8 elements = 1
+      begin
+        // A: M*K = 64 elements → 16 words. All bytes = 1
+        for (int i = 0; i < 64; i++) begin
+          ddr_write_byte(32'hA000 + i, 8'd1);  // byte-packed INT8
+        end
+        // B: K*N = 64 elements → 16 words. All bytes = 1
+        for (int i = 0; i < 64; i++) begin
+          ddr_write_byte(32'hA400 + i, 8'd1);
+        end
+        $display("  [TB] Preloaded GEMM2 A/B (8x8x8, all 1s)");
+      end
+
+      // Initialize DONE_ADDR to 0
+      ddr_write_byte(32'h9410, 8'h00);
+      ddr_write_byte(32'h9411, 8'h00);
+      ddr_write_byte(32'h9412, 8'h00);
+      ddr_write_byte(32'h9413, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for DONE_MAGIC at DDR[0x9410]
+      begin : wait_multigemm
+        int mg_cnt;
+        mg_cnt = 0;
+        forever begin
+          @(posedge clk);
+          mg_cnt = mg_cnt + 1;
+          if (mg_cnt > 500_000) begin
+            $error("  [FAIL] Multi-GEMM TIMEOUT after %0d cycles", mg_cnt);
+            mg_errs = mg_errs + 1;
+            disable wait_multigemm;
+          end
+          if (mg_cnt % 10000 == 0) begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9410];
+            b1 = dut.u_ddr.mem[32'h9411];
+            b2 = dut.u_ddr.mem[32'h9412];
+            b3 = dut.u_ddr.mem[32'h9413];
+            $display("  [TB] cycle=%0d DONE=0x%08h", mg_cnt, {b3, b2, b1, b0});
+          end
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9410];
+            b1 = dut.u_ddr.mem[32'h9411];
+            b2 = dut.u_ddr.mem[32'h9412];
+            b3 = dut.u_ddr.mem[32'h9413];
+            if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
+              $display("  [PASS] Multi-GEMM: all 3 GEMMs completed in %0d cycles", mg_cnt);
+              disable wait_multigemm;
+            end
+          end
+        end
+      end
+
+      // Verify C results
+      // GEMM 0: 2x2x2 all-1s => C[i][j] = K = 2
+      // C is INT32, so C[0][0] at DDR[0x8800] should be 0x00000002
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8800];
+        c1 = dut.u_ddr.mem[32'h8801];
+        c2 = dut.u_ddr.mem[32'h8802];
+        c3 = dut.u_ddr.mem[32'h8803];
+        $display("  [TB] GEMM0 C[0][0] = 0x%08h (expect 0x00000002)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd2) begin
+          $error("  [FAIL] GEMM0 C[0][0] wrong");
+          mg_errs = mg_errs + 1;
+        end
+        // GEMM 1: 4x4x4 all-1s => C[0][0] = K = 4
+        c0 = dut.u_ddr.mem[32'h9800];
+        c1 = dut.u_ddr.mem[32'h9801];
+        c2 = dut.u_ddr.mem[32'h9802];
+        c3 = dut.u_ddr.mem[32'h9803];
+        $display("  [TB] GEMM1 C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd4) begin
+          $error("  [FAIL] GEMM1 C[0][0] wrong");
+          mg_errs = mg_errs + 1;
+        end
+        // GEMM 2: 8x8x8 all-1s => C[0][0] = K = 8
+        c0 = dut.u_ddr.mem[32'hA800];
+        c1 = dut.u_ddr.mem[32'hA801];
+        c2 = dut.u_ddr.mem[32'hA802];
+        c3 = dut.u_ddr.mem[32'hA803];
+        $display("  [TB] GEMM2 C[0][0] = 0x%08h (expect 0x00000008)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd8) begin
+          $error("  [FAIL] GEMM2 C[0][0] wrong");
+          mg_errs = mg_errs + 1;
+        end
+      end
+      total_errs = total_errs + mg_errs;
+    end
+
     // Summary
     $display("\n========================================");
     if (total_errs == 0)
