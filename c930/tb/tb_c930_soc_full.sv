@@ -674,6 +674,23 @@ module tb_c930_soc_full;
           ddr_write_byte(32'hB000 + i*4 + 2, ewords[i][23:16]);
           ddr_write_byte(32'hB000 + i*4 + 3, ewords[i][31:24]);
         end
+        // Guard: all 12 expected values must be unique so row/col permutation
+        // bugs fail loudly (all-equal values would silently mask them)
+        begin : gemm3_unique
+          int dup_cnt;
+          dup_cnt = 0;
+          for (int i = 0; i < 12; i++)
+            for (int j = i + 1; j < 12; j++)
+              if (ewords[i] == ewords[j]) begin
+                $error("  [FAIL] GEMM3 expected values not unique: ewords[%0d]==ewords[%0d]==0x%08h",
+                        i, j, ewords[i]);
+                dup_cnt = dup_cnt + 1;
+              end
+          if (dup_cnt == 0)
+            $display("  [PASS] GEMM3 expected table: 12 unique values");
+          else
+            mg_errs = mg_errs + dup_cnt;
+        end
       end
 
       // Initialize DONE_ADDR to 0
