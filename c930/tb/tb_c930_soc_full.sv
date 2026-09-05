@@ -718,19 +718,7 @@ module tb_c930_soc_full;
         if ({c3, c2, c1, c0} != 32'h41000000) begin
           $error("  [FAIL] GEMM2 BF16 C[0][0] wrong"); mg_errs = mg_errs + 1;
         end
-        // GEMM3 INT4: signed pattern, C[0][0] = 8, C[2][3] = -11
-        c0 = dut.u_ddr.mem[32'hA400]; c1 = dut.u_ddr.mem[32'hA401];
-        c2 = dut.u_ddr.mem[32'hA402]; c3 = dut.u_ddr.mem[32'hA403];
-        $display("  [TB] GEMM3 INT4 (3x4x5)  C[0][0] = 0x%08h (expect 0x00000008)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'd8) begin
-          $error("  [FAIL] GEMM3 INT4 C[0][0] wrong"); mg_errs = mg_errs + 1;
-        end
-        c0 = dut.u_ddr.mem[32'hA42C]; c1 = dut.u_ddr.mem[32'hA42D];
-        c2 = dut.u_ddr.mem[32'hA42E]; c3 = dut.u_ddr.mem[32'hA42F];
-        $display("  [TB] GEMM3 INT4 (3x4x5)  C[2][3] = 0x%08h (expect 0xFFFFFFF5)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'hFFFFFFF5) begin
-          $error("  [FAIL] GEMM3 INT4 C[2][3] wrong"); mg_errs = mg_errs + 1;
-        end
+        // GEMM3 (INT4): all 12 elements verified by Phase 2 firmware via D-cache
       end
 
       // ---- Phase 2: Verification firmware (reads all 21 C elements via D-cache) ----
