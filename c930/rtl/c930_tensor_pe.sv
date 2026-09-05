@@ -91,30 +91,17 @@ module c930_tensor_pe
   logic signed [ACC_W-1:0] int_ps_out;
   assign int_ps_out = i_ps_in + {{(ACC_W-2*DIN_W){int_prod_reg[2*DIN_W-1]}}, int_prod_reg};
 
-  // ---- FP16 MAC path ----
-  logic [15:0] fp16_a, fp16_w;
-  assign fp16_a = i_a_in[15:0];
-  assign fp16_w = w[15:0];
-
-  // FP16 x FP16 -> FP32 product (combinational)
-  logic [31:0] fp16_prod;
-  c930_fp16_mul u_fp16_mul (
-    .i_a      (fp16_a),
-    .i_b      (fp16_w),
-    .o_result (fp16_prod)
-  );
-
-  // ---- BF16 MAC path ----
-  logic [31:0] bf16_prod;
-  c930_bf16_mul u_bf16_mul (
-    .i_a      (fp16_a),
-    .i_b      (fp16_w),
-    .o_result (bf16_prod)
-  );
-
-  // ---- MUX the FP32 product based on precision ----
+  // ---- FP16/BF16 MAC path ----
+  // One shared multiplier: FP16 and BF16 both interpret the 16-bit operand
+  // field (BF16 keeps the same mantissa-product bit alignment via a 3-bit
+  // left shift of the 7-bit fraction).  i_mode = 1 selects BF16 decode.
   logic [31:0] fp32_prod;
-  assign fp32_prod = (i_precision == 3'd3) ? bf16_prod : fp16_prod;
+  c930_fp_mul u_fp_mul (
+    .i_a      (i_a_in[15:0]),
+    .i_b      (w[15:0]),
+    .i_mode   (i_precision == 3'd3),   // 1 = BF16
+    .o_result (fp32_prod)
+  );
 
   // Register the FP32 product (breaks multiplier -> accumulator carry chain)
   logic [31:0] fp32_prod_reg;
