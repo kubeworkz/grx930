@@ -438,7 +438,8 @@ module tb_c930_soc_full;
     //
     // Phase 1: CPU boots GEMM firmware -> queues 3 GEMMs -> polls completion
     // Phase 2: CPU boots verification firmware -> reads all 21 C elements of
-    //          GEMM1 via D-cache LW -> compares with expected FP32 8.0
+    //          GEMM1 via D-cache LW -> compares with expected FP32 8.0, then
+    //          reads all 12 C elements of GEMM3 (INT4) -> expected INT32 5
     //
     //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32)
     //   GEMM1: FP16  7x3x8,  all 1.0 -> C[m][n] = 8.0 (FP32 0x41000000) ALL 21
@@ -726,7 +727,7 @@ module tb_c930_soc_full;
 
       // Load Phase 2 verification firmware into DDR[0x000]
       begin
-        logic [31:0] vfw [0:29];
+        logic [31:0] vfw [0:53];
         vfw[ 0] = 32'h00009537;  // lui  x10, 0x9
         vfw[ 1] = 32'hC0050513;  // addi x10, x10, 0xC00   x10 = 0x8C00 (GEMM1 C base)
         vfw[ 2] = 32'h41000737;  // lui  x14, 0x41000  x14 = 0x41000000 (FP32 8.0)
@@ -751,19 +752,43 @@ module tb_c930_soc_full;
         vfw[21] = 32'h10050513;  // addi x10, x10, 0x100  verify buffer address
         vfw[22] = 32'h00F52023;  // sw   x15, 0(x10)   store error mask
         vfw[23] = 32'h01052223;  // sw   x16, 4(x10)   store element count
-        vfw[24] = 32'h000097B7;  // lui  x15, 0x9
-        vfw[25] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
-        vfw[26] = 32'hDEADC837;  // lui  x16, 0xDEADC
-        vfw[27] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
-        vfw[28] = 32'h0107A023;  // sw   x16, 0(x15)
-        vfw[29] = 32'h0000006F;  // jal  x0, 0  self-loop
-        for (int i = 0; i < 30; i++) begin
+        vfw[24] = 32'h0000A537;  // lui  x10, 0xA
+        vfw[25] = 32'h40050513;  // addi x10, x10, 0x400   x10 = 0xA400 (GEMM3 C base)
+        vfw[26] = 32'h00500713;  // addi x14, x0, 5        expected = 5 (INT32)
+        vfw[27] = 32'h00000B93;  // addi x23, x0, 0        GEMM3 error mask = 0
+        vfw[28] = 32'h00000B13;  // addi x22, x0, 0        GEMM3 element index = 0
+        vfw[29] = 32'h00000693;  // addi x13, x0, 0        row counter = 0
+        vfw[30] = 32'h00300A13;  // addi x20, x0, 3        NUM_ROWS = 3
+        vfw[31] = 32'h00400A93;  // addi x21, x0, 4        NUM_COLS = 4
+        vfw[32] = 32'h00000613;  // addi x12, x0, 0        row_loop: col counter = 0
+        vfw[33] = 32'h00052903;  // lw   x18, 0(x10)       col_loop: load C[row][col]
+        vfw[34] = 32'h00E90863;  // beq  x18, x14, +16     if match, skip mismatch
+        vfw[35] = 32'h00100993;  // addi x19, x0, 1        mismatch: bit = 1
+        vfw[36] = 32'h016999B3;  // sll  x19, x19, x22     shift by GEMM3 element index
+        vfw[37] = 32'h013BEBB3;  // or   x23, x23, x19     set bit in GEMM3 mask
+        vfw[38] = 32'h00450513;  // addi x10, x10, 4       next: advance address
+        vfw[39] = 32'h001B0B13;  // addi x22, x22, 1       advance element index
+        vfw[40] = 32'h00160613;  // addi x12, x12, 1       advance col counter
+        vfw[41] = 32'hFF5640E3;  // blt  x12, x21, col_loop if col < 4, loop
+        vfw[42] = 32'h00168693;  // addi x13, x13, 1       advance row counter
+        vfw[43] = 32'hFD46CAE3;  // blt  x13, x20, row_loop if row < 3, loop
+        vfw[44] = 32'h00000537;  // lui  x10, 0
+        vfw[45] = 32'h10850513;  // addi x10, x10, 0x108   verify buffer addr 2
+        vfw[46] = 32'h01752023;  // sw   x23, 0(x10)       store GEMM3 error mask
+        vfw[47] = 32'h01652223;  // sw   x22, 4(x10)       store GEMM3 element count
+        vfw[48] = 32'h000097B7;  // lui  x15, 0x9
+        vfw[49] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        vfw[50] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        vfw[51] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
+        vfw[52] = 32'h0107A023;  // sw   x16, 0(x15)
+        vfw[53] = 32'h0000006F;  // jal  x0, 0  self-loop
+        for (int i = 0; i < 54; i++) begin
           ddr_write_byte(i*4 + 0, vfw[i][7:0]);
           ddr_write_byte(i*4 + 1, vfw[i][15:8]);
           ddr_write_byte(i*4 + 2, vfw[i][23:16]);
           ddr_write_byte(i*4 + 3, vfw[i][31:24]);
         end
-        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 30*4);
+        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 54*4);
       end
 
       // Clear DONE_MAGIC so Phase 2 can detect its own completion
@@ -827,6 +852,30 @@ module tb_c930_soc_full;
           for (int idx = 0; idx < 21; idx++) begin
             if (err_mask[idx]) begin
               $error("  [FAIL] GEMM1 C[%0d][%0d] wrong (elem %0d)", idx/3, idx%3, idx);
+            end
+          end
+          mg_errs = mg_errs + 1;
+        end
+      end
+
+      // Read GEMM3 verification buffer at DDR[0x108] and check all 12 elements
+      begin
+        logic [7:0] v0, v1, v2, v3;
+        logic [31:0] err_mask;
+        v0 = dut.u_ddr.mem[32'h0108];
+        v1 = dut.u_ddr.mem[32'h0109];
+        v2 = dut.u_ddr.mem[32'h010A];
+        v3 = dut.u_ddr.mem[32'h010B];
+        err_mask = {v3, v2, v1, v0};
+        $display("  [TB] GEMM3 C verification: error mask = 0x%08h (%0d failures)",
+                 err_mask, $countones(err_mask));
+        if (err_mask == 32'h0000000) begin
+          $display("  [PASS] GEMM3: all 12 C elements verified correct (INT32 5)");
+        end else begin
+          // Decode which elements failed
+          for (int idx = 0; idx < 12; idx++) begin
+            if (err_mask[idx]) begin
+              $error("  [FAIL] GEMM3 C[%0d][%0d] wrong (elem %0d)", idx/4, idx%4, idx);
             end
           end
           mg_errs = mg_errs + 1;
