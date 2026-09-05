@@ -443,6 +443,7 @@ module tb_c930_soc_full;
     //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32)
     //   GEMM1: FP16  7x3x8,  all 1.0 -> C[m][n] = 8.0 (FP32 0x41000000) ALL 21
     //   GEMM2: BF16  2x12x8, all 1.0 -> C[0][0] = 8.0 (FP32 0x41000000)
+    //   GEMM3: INT4  3x4x5,  all 1s  -> C[m][n] = 5   (INT32, nibble-packed A/B)
     // =========================================================================
     $display("\n========================================");
     $display("  TEST 4: Mixed-precision + full C verification");
@@ -472,7 +473,7 @@ module tb_c930_soc_full;
 
       // ---- Phase 1: GEMM firmware ----
       begin
-        logic [31:0] fw [0:86];
+        logic [31:0] fw [0:110];
         fw[ 0] = 32'h40000537;  // lui  x10, 0x40000 (MMIO_BASE)
         fw[ 1] = 32'h00050513;  // addi x10, x10, 0
         fw[ 2] = 32'h000005B7;  // lui  x11, 0
@@ -547,26 +548,50 @@ module tb_c930_soc_full;
         fw[71] = 32'h02052583;  // lw   x11, 0x20(x10) barrier
         fw[72] = 32'h00100593;  // addi x11, x0, 1
         fw[73] = 32'h00B52023;  // sw   x11, 0x00(x10) START
-        fw[74] = 32'h02052583;  // lw   x11, 0x20(x10) barrier read
-        fw[75] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
-        fw[76] = 32'h0025F593;  // andi x11, x11, 2    DONE bit
-        fw[77] = 32'hFE058CE3;  // beq  x11, x0, -8   poll done
-        fw[78] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
-        fw[79] = 32'h0015F593;  // andi x11, x11, 1    BUSY bit
-        fw[80] = 32'hFE059CE3;  // bne  x11, x0, -8   poll busy
-        fw[81] = 32'h000097B7;  // lui  x15, 0x9
-        fw[82] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
-        fw[83] = 32'hDEADC837;  // lui  x16, 0xDEADC
-        fw[84] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC=0xDEADBEEF
-        fw[85] = 32'h0107A023;  // sw   x16, 0(x15)
-        fw[86] = 32'h0000006F;  // jal  x0, 0  self-loop
-        for (int i = 0; i < 87; i++) begin
+        fw[74] = 32'h000005B7;  // lui  x11, 0
+        fw[75] = 32'h00358593;  // addi x11, x11, 3    DIM_M=3
+        fw[76] = 32'h00B52423;  // sw   x11, 0x08(x10)
+        fw[77] = 32'h000005B7;  // lui  x11, 0
+        fw[78] = 32'h00458593;  // addi x11, x11, 4    DIM_N=4
+        fw[79] = 32'h00B52623;  // sw   x11, 0x0C(x10)
+        fw[80] = 32'h000005B7;  // lui  x11, 0
+        fw[81] = 32'h00558593;  // addi x11, x11, 5    DIM_K=5
+        fw[82] = 32'h00B52823;  // sw   x11, 0x10(x10)
+        fw[83] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[84] = 32'h00058593;  // addi x11, x11, 0    A=0xA000 (3*5=15 nibbles=8B)
+        fw[85] = 32'h00B52A23;  // sw   x11, 0x14(x10)
+        fw[86] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[87] = 32'h20058593;  // addi x11, x11, 0x200 B=0xA200 (5*4=20 nibbles=10B)
+        fw[88] = 32'h00B52C23;  // sw   x11, 0x18(x10)
+        fw[89] = 32'h0000A5B7;  // lui  x11, 0xA
+        fw[90] = 32'h40058593;  // addi x11, x11, 0x400 C=0xA400
+        fw[91] = 32'h00B52E23;  // sw   x11, 0x1C(x10)
+        fw[92] = 32'h000005B7;  // lui  x11, 0
+        fw[93] = 32'h00458593;  // addi x11, x11, 4    PREC=4 (INT4)
+        fw[94] = 32'h02B52023;  // sw   x11, 0x20(x10)
+        fw[95] = 32'h02052583;  // lw   x11, 0x20(x10) barrier
+        fw[96] = 32'h00100593;  // addi x11, x0, 1
+        fw[97] = 32'h00B52023;  // sw   x11, 0x00(x10) START
+        fw[98] = 32'h02052583;  // lw   x11, 0x20(x10) barrier read
+        fw[99] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
+        fw[100] = 32'h0025F593;  // andi x11, x11, 2    DONE bit
+        fw[101] = 32'hFE058CE3;  // beq  x11, x0, -8   poll done
+        fw[102] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
+        fw[103] = 32'h0015F593;  // andi x11, x11, 1    BUSY bit
+        fw[104] = 32'hFE059CE3;  // bne  x11, x0, -8   poll busy
+        fw[105] = 32'h000097B7;  // lui  x15, 0x9
+        fw[106] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        fw[107] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        fw[108] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC=0xDEADBEEF
+        fw[109] = 32'h0107A023;  // sw   x16, 0(x15)
+        fw[110] = 32'h0000006F;  // jal  x0, 0  self-loop
+        for (int i = 0; i < 111; i++) begin
           ddr_write_byte(i*4 + 0, fw[i][7:0]);
           ddr_write_byte(i*4 + 1, fw[i][15:8]);
           ddr_write_byte(i*4 + 2, fw[i][23:16]);
           ddr_write_byte(i*4 + 3, fw[i][31:24]);
         end
-        $display("  [TB] Phase 1 GEMM firmware loaded (%0d bytes)", 87*4);
+        $display("  [TB] Phase 1 GEMM firmware loaded (%0d bytes)", 111*4);
       end
 
       // --- Preload A/B operands ---
@@ -602,6 +627,16 @@ module tb_c930_soc_full;
         end
         $display("  [TB] GEMM2: BF16 2x12x8 all 1.0 (C[0][0] expect 0x41000000)");
       end
+      // GEMM 3: INT4 3x4x5 all 1s - A=15 nibbles (8B) @0xA000, B=20 nibbles (10B) @0xA200
+      begin
+        // INT4 packing: element e -> byte e/2, nibble (e%2)*4 (low nibble first)
+        for (int i = 0; i < 7; i++)
+          ddr_write_byte(32'hA000 + i, 8'h11);
+        ddr_write_byte(32'hA007, 8'h01);  // element 14 (last) in low nibble
+        for (int i = 0; i < 10; i++)
+          ddr_write_byte(32'hA200 + i, 8'h11);
+        $display("  [TB] GEMM3: INT4 3x4x5 all 1s (C[m][n] expect 0x00000005)");
+      end
 
       // Initialize DONE_ADDR to 0
       ddr_write_byte(32'h9410, 8'h00);
@@ -633,7 +668,7 @@ module tb_c930_soc_full;
             b2 = dut.u_ddr.mem[32'h9412];
             b3 = dut.u_ddr.mem[32'h9413];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
-              $display("  [PASS] Phase 1: all 3 GEMMs completed in %0d cycles", mg_cnt);
+              $display("  [PASS] Phase 1: all 4 GEMMs completed in %0d cycles", mg_cnt);
               disable wait_phase1;
             end
           end
@@ -654,6 +689,19 @@ module tb_c930_soc_full;
         $display("  [TB] GEMM2 BF16 (2x12x8) C[0][0] = 0x%08h (expect 0x41000000)", {c3, c2, c1, c0});
         if ({c3, c2, c1, c0} != 32'h41000000) begin
           $error("  [FAIL] GEMM2 BF16 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        // GEMM3 INT4: all 1s, K=5 -> every C element = 5
+        c0 = dut.u_ddr.mem[32'hA400]; c1 = dut.u_ddr.mem[32'hA401];
+        c2 = dut.u_ddr.mem[32'hA402]; c3 = dut.u_ddr.mem[32'hA403];
+        $display("  [TB] GEMM3 INT4 (3x4x5)  C[0][0] = 0x%08h (expect 0x00000005)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd5) begin
+          $error("  [FAIL] GEMM3 INT4 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+        c0 = dut.u_ddr.mem[32'hA42C]; c1 = dut.u_ddr.mem[32'hA42D];
+        c2 = dut.u_ddr.mem[32'hA42E]; c3 = dut.u_ddr.mem[32'hA42F];
+        $display("  [TB] GEMM3 INT4 (3x4x5)  C[2][3] = 0x%08h (expect 0x00000005)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd5) begin
+          $error("  [FAIL] GEMM3 INT4 C[2][3] wrong"); mg_errs = mg_errs + 1;
         end
       end
 
@@ -1938,12 +1986,12 @@ module tb_c930_soc_full;
     // =========================================================================
     // Test 8: Dual-NPU mixed-precision (FP16 + INT8)
     //
-    // NPU0: FP16 3x3x4 — values (1.0, 0.5, 2.0)
+    // NPU0: FP16 3x3x4 ï¿½ values (1.0, 0.5, 2.0)
     //   A = [[1.0, 0.5, 1.0], [2.0, 1.0, 0.5], [1.0, 1.0, 2.0]]
     //   B = [[1.0, 2.0, 0.5, 1.0], [0.5, 1.0, 1.0, 0.5], [1.0, 0.5, 2.0, 1.0]]
     //   C (FP32) = [[2.25, 3.0, 3.0, 2.25], [3.0, 5.25, 3.0, 3.0], [3.5, 4.0, 5.5, 3.5]]
     //
-    // NPU1: INT8 2x5x4 — includes negative weights
+    // NPU1: INT8 2x5x4 ï¿½ includes negative weights
     //   A = [[ 1,  2, -1,  3,  0], [ 2, -1,  1,  0,  3]]
     //   B = [[ 1,  0,  2,  1], [ 0,  1,  1,  0], [ 1,  1,  0,  2], [ 0,  2,  1,  1], [ 1,  0,  0,  1]]
     //   C (INT32) = [[ 0,  7,  7,  2], [ 6,  0,  3,  7]]
@@ -1956,12 +2004,12 @@ module tb_c930_soc_full;
     // =========================================================================
     // Test 8: Dual-NPU mixed-precision (FP16 + INT8)
     //
-    // NPU0: FP16 3x3x4 — values (1.0, 0.5, 2.0)
+    // NPU0: FP16 3x3x4 ï¿½ values (1.0, 0.5, 2.0)
     //   A = [[1.0, 0.5, 1.0], [2.0, 1.0, 0.5], [1.0, 1.0, 2.0]]
     //   B = [[1.0, 2.0, 0.5, 1.0], [0.5, 1.0, 1.0, 0.5], [1.0, 0.5, 2.0, 1.0]]
     //   C (FP32) = [[2.25, 3.0, 3.0, 2.25], [3.0, 5.25, 3.0, 3.0], [3.5, 4.0, 5.5, 3.5]]
     //
-    // NPU1: INT8 2x5x4 — includes negative weights
+    // NPU1: INT8 2x5x4 ï¿½ includes negative weights
     //   A = [[ 1,  2, -1,  3,  0], [ 2, -1,  1,  0,  3]]
     //   B = [[ 1,  0,  2,  1], [ 0,  1,  1,  0], [ 1,  1,  0,  2], [ 0,  2,  1,  1], [ 1,  0,  0,  1]]
     //   C (INT32) = [[ 0,  7,  7,  2], [ 6,  0,  3,  7]]
