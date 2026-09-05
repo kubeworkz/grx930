@@ -439,7 +439,8 @@ module tb_c930_soc_full;
     // Phase 1: CPU boots GEMM firmware -> queues 3 GEMMs -> polls completion
     // Phase 2: CPU boots verification firmware -> reads all 21 C elements of
     //          GEMM1 via D-cache LW -> compares with expected FP32 8.0, then
-    //          reads all 12 C elements of GEMM3 (INT4) -> compares vs table
+    //          reads all 12 C elements of GEMM3 (INT4) and all 15 of GEMM0
+    //          (INT8) -> both compare vs expected tables
     //
     //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32)
     //   GEMM1: FP16  7x3x8,  all 1.0 -> C[m][n] = 8.0 (FP32 0x41000000) ALL 21
@@ -651,6 +652,15 @@ module tb_c930_soc_full;
         end
         $display("  [TB] GEMM3: INT4 3x4x5 signed pattern (12 unique C values)");
       end
+      // Expected C table for GEMM0 (15 words, all 8) @0xB100
+      begin : gemm0_exp
+        for (int i = 0; i < 15; i++) begin
+          ddr_write_byte(32'hB100 + i*4 + 0, 8'h08);
+          ddr_write_byte(32'hB100 + i*4 + 1, 8'h00);
+          ddr_write_byte(32'hB100 + i*4 + 2, 8'h00);
+          ddr_write_byte(32'hB100 + i*4 + 3, 8'h00);
+        end
+      end
       // Expected C table for GEMM3 (12 words) @0xB000
       begin : gemm3_exp
         logic [31:0] ewords [0:11];
@@ -703,15 +713,10 @@ module tb_c930_soc_full;
         end
       end
 
-      // Quick C[0][0] check for GEMM0 and GEMM2 (Phase 1 readback)
+      // Quick C[0][0] check for GEMM2 (Phase 1 readback; GEMM0 and GEMM3 are
+      // fully verified by the Phase 2 firmware)
       begin
         logic [7:0] c0, c1, c2, c3;
-        c0 = dut.u_ddr.mem[32'h8400]; c1 = dut.u_ddr.mem[32'h8401];
-        c2 = dut.u_ddr.mem[32'h8402]; c3 = dut.u_ddr.mem[32'h8403];
-        $display("  [TB] GEMM0 INT8 (3x5x8)  C[0][0] = 0x%08h (expect 0x00000008)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'd8) begin
-          $error("  [FAIL] GEMM0 INT8 C[0][0] wrong"); mg_errs = mg_errs + 1;
-        end
         c0 = dut.u_ddr.mem[32'h9400]; c1 = dut.u_ddr.mem[32'h9401];
         c2 = dut.u_ddr.mem[32'h9402]; c3 = dut.u_ddr.mem[32'h9403];
         $display("  [TB] GEMM2 BF16 (2x12x8) C[0][0] = 0x%08h (expect 0x41000000)", {c3, c2, c1, c0});
@@ -742,7 +747,7 @@ module tb_c930_soc_full;
 
       // Load Phase 2 verification firmware into DDR[0x000]
       begin
-        logic [31:0] vfw [0:56];
+        logic [31:0] vfw [0:83];
         vfw[ 0] = 32'h00009537;  // lui  x10, 0x9
         vfw[ 1] = 32'hC0050513;  // addi x10, x10, 0xC00   x10 = 0x8C00 (GEMM1 C base)
         vfw[ 2] = 32'h41000737;  // lui  x14, 0x41000  x14 = 0x41000000 (FP32 8.0)
@@ -764,7 +769,7 @@ module tb_c930_soc_full;
         vfw[18] = 32'h00168693;  // addi x13, x13, 1   advance row counter
         vfw[19] = 32'hFD46CAE3;  // blt  x13, x20, row_loop if row < 7, loop
         vfw[20] = 32'h00000537;  // lui  x10, 0
-        vfw[21] = 32'h10050513;  // addi x10, x10, 0x100  verify buffer address
+        vfw[21] = 32'h30050513;  // addi x10, x10, 0x300  verify buffer address
         vfw[22] = 32'h00F52023;  // sw   x15, 0(x10)   store error mask
         vfw[23] = 32'h01052223;  // sw   x16, 4(x10)   store element count
         vfw[24] = 32'h0000A537;  // lui  x10, 0xA
@@ -791,22 +796,49 @@ module tb_c930_soc_full;
         vfw[45] = 32'h00168693;  // addi x13, x13, 1       advance row counter
         vfw[46] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 3, loop
         vfw[47] = 32'h00000537;  // lui  x10, 0
-        vfw[48] = 32'h10850513;  // addi x10, x10, 0x108   verify buffer addr 2
+        vfw[48] = 32'h30850513;  // addi x10, x10, 0x308   verify buffer addr 2
         vfw[49] = 32'h01752023;  // sw   x23, 0(x10)       store GEMM3 error mask
         vfw[50] = 32'h01652223;  // sw   x22, 4(x10)       store GEMM3 element count
-        vfw[51] = 32'h000097B7;  // lui  x15, 0x9
-        vfw[52] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
-        vfw[53] = 32'hDEADC837;  // lui  x16, 0xDEADC
-        vfw[54] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
-        vfw[55] = 32'h0107A023;  // sw   x16, 0(x15)
-        vfw[56] = 32'h0000006F;  // jal  x0, 0  self-loop
-        for (int i = 0; i < 57; i++) begin
+        vfw[51] = 32'h00008537;  // lui  x10, 0x8
+        vfw[52] = 32'h40050513;  // addi x10, x10, 0x400   x10 = 0x8400 (GEMM0 C base)
+        vfw[53] = 32'h0000B5B7;  // lui  x11, 0xB
+        vfw[54] = 32'h10058593;  // addi x11, x11, 0x100   x11 = 0xB100 (EXP table)
+        vfw[55] = 32'h00000C13;  // addi x24, x0, 0        GEMM0 error mask = 0
+        vfw[56] = 32'h00000C93;  // addi x25, x0, 0        GEMM0 element index = 0
+        vfw[57] = 32'h00000693;  // addi x13, x0, 0        row counter = 0
+        vfw[58] = 32'h00300A13;  // addi x20, x0, 3        NUM_ROWS = 3
+        vfw[59] = 32'h00500A93;  // addi x21, x0, 5        NUM_COLS = 5
+        vfw[60] = 32'h00000613;  // addi x12, x0, 0        row_loop: col counter = 0
+        vfw[61] = 32'h00052903;  // lw   x18, 0(x10)       col_loop: load C[row][col]
+        vfw[62] = 32'h0005A883;  // lw   x17, 0(x11)       load expected from table
+        vfw[63] = 32'h01190863;  // beq  x18, x17, +16     if match, skip mismatch
+        vfw[64] = 32'h00100993;  // addi x19, x0, 1        mismatch: bit = 1
+        vfw[65] = 32'h019999B3;  // sll  x19, x19, x25     shift by GEMM0 element index
+        vfw[66] = 32'h013C6C33;  // or   x24, x24, x19     set bit in GEMM0 mask
+        vfw[67] = 32'h00450513;  // addi x10, x10, 4       next: advance C address
+        vfw[68] = 32'h00458593;  // addi x11, x11, 4       advance EXP address
+        vfw[69] = 32'h001C8C93;  // addi x25, x25, 1       advance element index
+        vfw[70] = 32'h00160613;  // addi x12, x12, 1       advance col counter
+        vfw[71] = 32'hFD564CE3;  // blt  x12, x21, col_loop if col < 5, loop
+        vfw[72] = 32'h00168693;  // addi x13, x13, 1       advance row counter
+        vfw[73] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 3, loop
+        vfw[74] = 32'h00000537;  // lui  x10, 0
+        vfw[75] = 32'h31050513;  // addi x10, x10, 0x310   verify buffer addr 3
+        vfw[76] = 32'h01852023;  // sw   x24, 0(x10)       store GEMM0 error mask
+        vfw[77] = 32'h01952223;  // sw   x25, 4(x10)       store GEMM0 element count
+        vfw[78] = 32'h000097B7;  // lui  x15, 0x9
+        vfw[79] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        vfw[80] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        vfw[81] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
+        vfw[82] = 32'h0107A023;  // sw   x16, 0(x15)
+        vfw[83] = 32'h0000006F;  // jal  x0, 0  self-loop
+        for (int i = 0; i < 84; i++) begin
           ddr_write_byte(i*4 + 0, vfw[i][7:0]);
           ddr_write_byte(i*4 + 1, vfw[i][15:8]);
           ddr_write_byte(i*4 + 2, vfw[i][23:16]);
           ddr_write_byte(i*4 + 3, vfw[i][31:24]);
         end
-        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 57*4);
+        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 84*4);
       end
 
       // Clear DONE_MAGIC so Phase 2 can detect its own completion
@@ -815,16 +847,17 @@ module tb_c930_soc_full;
       ddr_write_byte(32'h9412, 8'h00);
       ddr_write_byte(32'h9413, 8'h00);
 
-      // Clear verification buffer
-      ddr_write_byte(32'h0100, 8'h00);
-      ddr_write_byte(32'h0101, 8'h00);
-      ddr_write_byte(32'h0102, 8'h00);
-      ddr_write_byte(32'h0103, 8'h00);
+      // Clear verification buffers (0x300/0x308/0x310 for GEMM1/GEMM3/GEMM0)
+      ddr_write_byte(32'h0300, 8'h00);
+      ddr_write_byte(32'h0301, 8'h00);
+      ddr_write_byte(32'h0302, 8'h00);
+      ddr_write_byte(32'h0303, 8'h00);
 
       // Reset CPU and boot Phase 2
       rst_n = 1'b0;
       repeat(10) @(posedge clk);
       rst_n = 1'b1;
+
 
       // Wait for DONE_MAGIC from Phase 2
       begin : wait_phase2
@@ -852,14 +885,14 @@ module tb_c930_soc_full;
         end
       end
 
-      // Read verification buffer at DDR[0x100] and check all 21 elements
+      // Read verification buffer at DDR[0x300] and check all 21 elements
       begin
         logic [7:0] v0, v1, v2, v3;
         logic [31:0] err_mask;
-        v0 = dut.u_ddr.mem[32'h0100];
-        v1 = dut.u_ddr.mem[32'h0101];
-        v2 = dut.u_ddr.mem[32'h0102];
-        v3 = dut.u_ddr.mem[32'h0103];
+        v0 = dut.u_ddr.mem[32'h0300];
+        v1 = dut.u_ddr.mem[32'h0301];
+        v2 = dut.u_ddr.mem[32'h0302];
+        v3 = dut.u_ddr.mem[32'h0303];
         err_mask = {v3, v2, v1, v0};
         $display("  [TB] GEMM1 C verification: error mask = 0x%08h (%0d failures)",
                  err_mask, $countones(err_mask));
@@ -876,14 +909,38 @@ module tb_c930_soc_full;
         end
       end
 
-      // Read GEMM3 verification buffer at DDR[0x108] and check all 12 elements
+      // Read GEMM0 verification buffer at DDR[0x310] and check all 15 elements
       begin
         logic [7:0] v0, v1, v2, v3;
         logic [31:0] err_mask;
-        v0 = dut.u_ddr.mem[32'h0108];
-        v1 = dut.u_ddr.mem[32'h0109];
-        v2 = dut.u_ddr.mem[32'h010A];
-        v3 = dut.u_ddr.mem[32'h010B];
+        v0 = dut.u_ddr.mem[32'h0310];
+        v1 = dut.u_ddr.mem[32'h0311];
+        v2 = dut.u_ddr.mem[32'h0312];
+        v3 = dut.u_ddr.mem[32'h0313];
+        err_mask = {v3, v2, v1, v0};
+        $display("  [TB] GEMM0 C verification: error mask = 0x%08h (%0d failures)",
+                 err_mask, $countones(err_mask));
+        if (err_mask == 32'h0000000) begin
+          $display("  [PASS] GEMM0: all 15 C elements verified correct (INT32 8)");
+        end else begin
+          // Decode which elements failed
+          for (int idx = 0; idx < 15; idx++) begin
+            if (err_mask[idx]) begin
+              $error("  [FAIL] GEMM0 C[%0d][%0d] wrong (elem %0d)", idx/5, idx%5, idx);
+            end
+          end
+          mg_errs = mg_errs + 1;
+        end
+      end
+
+      // Read GEMM3 verification buffer at DDR[0x308] and check all 12 elements
+      begin
+        logic [7:0] v0, v1, v2, v3;
+        logic [31:0] err_mask;
+        v0 = dut.u_ddr.mem[32'h0308];
+        v1 = dut.u_ddr.mem[32'h0309];
+        v2 = dut.u_ddr.mem[32'h030A];
+        v3 = dut.u_ddr.mem[32'h030B];
         err_mask = {v3, v2, v1, v0};
         $display("  [TB] GEMM3 C verification: error mask = 0x%08h (%0d failures)",
                  err_mask, $countones(err_mask));
