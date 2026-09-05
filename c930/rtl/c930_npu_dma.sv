@@ -213,10 +213,12 @@ module c930_npu_dma
   logic [31:0] next_a_base, next_b_base, next_c_base;
   logic [2:0]  next_precision;
 
-  // ---- Staging buffer for next GEMM's first row of A and B ----
-  // A staging: MAX_K elements (enough for one row of A)
+  // ---- Staging buffer for next GEMM's A and B ----
+  // A staging: MAX_M * MAX_K elements.  For INT8/16/FP16/BF16 this holds
+  // row 0 only (rest is PF1-prefetched during compute); for INT4 the whole
+  // of A is nibble-packed and prefetched upfront (PF1 is disabled for INT4).
   // B staging: MAX_K * MAX_N elements (enough for one row-block of B)
-  logic signed [DIN_W-1:0] next_a_buf [0:MAX_K-1];
+  logic signed [DIN_W-1:0] next_a_buf [0:MAX_M*MAX_K-1];
   logic signed [DIN_W-1:0] next_b_buf [0:MAX_K*MAX_N-1];
   logic        next_a_ready;   // 1 when staging buffer has valid A data
   logic        next_b_ready;   // 1 when staging buffer has valid B data
@@ -403,7 +405,11 @@ module c930_npu_dma
               if (staging_ready) begin
                 staging_load_a <= 1'b1;
                 staging_cnt    <= 0;
-                staging_total  <= i_dim_k;  // dk elements for A (INT4/INT8/INT16: same element count)
+                // INT4: PF2 prefetched ALL of A (nibble-packed, dm*dk elements).
+                // INT8/16/FP16/BF16: only row 0 (dk elements), rest comes
+                // from PF1 row prefetch during compute.
+                staging_total  <= (i_precision == 3'd4) ? i_dim_m * i_dim_k
+                                                        : i_dim_k;
                 staging_ready  <= 1'b0;  // consumed
                 phase          <= P_STAGING;
     
@@ -705,11 +711,12 @@ module c930_npu_dma
                 pf2_rd_beat    <= 0;
                 pf2_unpack_idx <= 0;
                 pf2_reading_a  <= 1'b1;
-                // INT4: 16 elements per beat, read ceil(dk/16) beats
+                // INT4: 16 elements per beat; whole A (M*K nibbles) is read
+                //       upfront because PF1 row prefetch is disabled for INT4.
                 // INT8: 8 elements per beat, read ceil(dk/8) beats
                 // INT16/FP16: 4 elements per beat, read ceil(dk/4) beats
-                if (next_precision == 3'd4)  // INT4
-                  pf2_rd_beats <= (next_dk + 15) / 16;
+                if (next_precision == 3'd4)  // INT4: all of A
+                  pf2_rd_beats <= (next_dm * next_dk + 15) / 16;
                 else if (next_precision == 3'd0)  // INT8
                   pf2_rd_beats <= (next_dk + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 else  // INT16/FP16/BF16
@@ -742,7 +749,9 @@ module c930_npu_dma
                 // Unpack into staging buffer
                 // INT4: 16 elements/beat (4-bit nibbles), INT8: 8, INT16: 4
                 if (pf2_reading_a) begin
-                  if (pf2_flat_idx < next_dk) begin
+                  // INT4: whole of A (next_dm*next_dk nibbles); INT8/16: row 0
+                  if (pf2_flat_idx < (next_precision == 3'd4 ? next_dm * next_dk
+                                                             : next_dk)) begin
                     if (next_precision == 3'd4)  // INT4: nibble unpack
                       next_a_buf[pf2_flat_idx] <= {{12{pf2_rword[pf2_unpack_idx*4+3]}}, pf2_rword[pf2_unpack_idx*4 +: 4]};
                     else if (next_precision == 3'd0)  // INT8
@@ -945,16 +954,21 @@ module c930_npu_dma
         P_DONE: begin
           o_done <= 1'b1;
           o_dma_last_count <= o_dma_cycle_count;
-          // Stop PF state machine from issuing new reads
-          pf_state <= PF_IDLE;
-          if (m_axi_rvalid) begin
-            // Drain pending read data so the DDR model can release r_busy
-            m_axi_rready <= 1'b1;
-            if (m_axi_rlast) begin
-              phase <= P_IDLE;
-            end
-          end else begin
-            // No pending read — safe to return to P_IDLE immediately
+          // Stop PF/PF2 state machines from issuing new reads.
+          // PF2 may have left an AR pending from the last P_WRITE_C cycle:
+          // if it is accepted HERE (the model's read channel just went idle),
+          // its first beat arrives next cycle.  Exiting now would strand the
+          // burst and hang the NEXT GEMM's P_READ_A on arready=0 forever.
+          pf_state  <= PF_IDLE;
+          pf2_state <= PF2_IDLE;
+          // Keep accepting read data so any in-flight or just-accepted
+          // burst drains completely and the model releases r_busy.
+          m_axi_rready <= 1'b1;
+          if (m_axi_rvalid && m_axi_rlast) begin
+            phase <= P_IDLE;
+          end else if (!m_axi_rvalid && !(m_axi_arvalid && m_axi_arready)) begin
+            // No read data pending AND no AR accepted this cycle — the
+            // channel is truly idle, safe to return to P_IDLE immediately.
             phase <= P_IDLE;
           end
         end
