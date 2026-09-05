@@ -40,10 +40,14 @@ module c930_cla_sub
   wire P23 = P3 & P2;
 
   // ---- All carries from CLA equations (c0 = 1 for subtraction) ----
+  // c6 is the carry INTO bit 6, i.e. the carry OUT of bit 5: it depends only
+  // on group 2 (bits 4-5), NOT on G23 (bits 4-7).  Using G23/P23 here was a
+  // bug: it set c6=1 whenever bit 7 alone generated, corrupting the upper
+  // bits of the difference (e.g. 130-106 came out as 88 instead of 24).
   wire c0 = 1'b1;
   wire c2 = G0 | (P0 & c0);           // carry into bit 2
   wire c4 = G01 | (P01 & c0);         // carry into bit 4
-  wire c6 = G23 | (P23 & c4);         // carry into bit 6
+  wire c6 = G2  | (P2  & c4);         // carry into bit 6
 
   // Per-bit carries within 2-bit groups (depend only on group inputs + cin)
   wire c1 = g[0] | (p[0] & c0);

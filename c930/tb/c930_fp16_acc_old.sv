@@ -14,26 +14,13 @@
 // data (NB assignment vs combinational read on the same posedge).
 // The PE's own output register provides sufficient pipeline staging.
 //
-// Area optimization (dual-NPU SoC fit on Arty A7-200T):
-//   The previous implementation computed three speculative 28-bit results
-//   (A+B, A-B, B-A) plus a 28-bit magnitude comparator and selected between
-//   them.  Because the input sort below guarantees |A| >= |B| (exponent sort
-//   with mantissa tie-break, and the alignment shift of B is exact), the
-//   subtraction direction is fixed: A - B is always non-negative.  The
-//   comparator and the B-A subtractor were therefore dead logic.  They are
-//   replaced by ONE fused add/sub unit (c930_fp16_addsub) which maps to a
-//   single DSP48E1 in synthesis (multiplier bypassed, 48-bit adder only) --
-//   saving ~2 adders + 1 comparator + one mux level (~90 LUTs) per PE.
-//   The DSP path is used only under `ifdef SYNTHESIS` (defined by the Vivado
-//   flow); simulation uses an identical behavioral add/sub.
-//
 // Barrel-shifter optimization: for FP16 inputs, the exponent difference is at
 // most 31.  If exp_diff >= 16, the smaller mantissa is shifted to zero (all 27
-// bits fall off).  We cap the effective shift to 5 bits (0-31) and hardwire
-// the upper bits, reducing the barrel shifter from 8 mux stages to 5.
+// bits fall off).  We cap the effective shift to 4 bits (0-15) and hardwire
+// the upper bits, reducing the barrel shifter from 8 mux stages to 4.
 // -----------------------------------------------------------------------------
 
-module c930_fp16_acc
+module c930_fp16_acc_old
 (
   input  logic        i_clk,      // unused (combinational), kept for port compat
   input  logic        i_rst_n,    // unused
@@ -90,12 +77,10 @@ module c930_fp16_acc
 
   // ---- Narrow barrel shifter: cap shift to 5 bits (FP16 exponent range) ----
   // mant_b_pre = {1, mant_b[22:0], 3 guard} = 27 bits
-  // For FP16 inputs, exp_diff <= 31 (5-bit exponent range), which keeps the
-  // barrel at 5 mux stages.  Exponents are 8-bit, so CLAMP the shift at 31:
-  // taking exp_diff[4:0] directly would WRAP (e.g. diff 128 -> shift 0) and
-  // break alignment for BF16 products or inf operands.
+  // For FP16 inputs, exp_diff <= 31 (5-bit exponent range).
+  // Capping to 5 bits reduces barrel shifter from 8 mux stages to 5.
   wire [26:0] mant_b_pre = {1'b1, mant_b, 3'b0};
-  wire [4:0]  shift_amt   = (exp_diff > 8'd31) ? 5'd31 : exp_diff[4:0];
+  wire [4:0]  shift_amt   = exp_diff[4:0];  // FP16 max shift = 31
   wire [26:0] mant_b_ext  = mant_b_pre >> shift_amt;
 
   // ---- Sticky bit: OR of bits shifted out during alignment ----
@@ -107,36 +92,35 @@ module c930_fp16_acc
                              ((27'h1 << shift_amt) - 27'h1);
   wire sticky = ~(s_zero || p_zero) & (|(mant_b_pre & sticky_mask));
 
-  // ---- Add / subtract magnitudes (single fused unit) ----
-  // The sort guarantees A >= B, so the subtraction is always A - B >= 0.
-  wire        do_sub = !signs_same;
-  wire [27:0] sum_raw_pre;
-  c930_fp16_addsub u_addsub (
-    .i_clk  (i_clk),
-    .i_a    ({1'b0, mant_a_ext}),
-    .i_b    ({1'b0, mant_b_ext}),
-    .i_sub  (do_sub),
-    .o_out  (sum_raw_pre)
-  );
+  // ---- Add / subtract magnitudes (combinational) ----
+  wire [27:0] sum_same   = {1'b0, mant_a_ext} + {1'b0, mant_b_ext};
+  wire [27:0] sum_diff_a = {1'b0, mant_a_ext} - {1'b0, mant_b_ext};
+  wire [27:0] sum_diff_b = {1'b0, mant_b_ext} - {1'b0, mant_a_ext};
+  wire        a_geq_b    = (mant_a_ext >= mant_b_ext);
 
   // Subtraction sticky clamp: if exact cancellation with sticky, set to 1
-  wire [27:0] sum_diff_clamped = (sum_raw_pre == 28'd0 && sticky && do_sub) ? 28'd1 : sum_raw_pre;
+  wire [27:0] sum_diff_clamped_a = (sum_diff_a == 28'd0 && sticky) ? 28'd1 : sum_diff_a;
+  wire [27:0] sum_diff_clamped_b = (sum_diff_b == 28'd0 && sticky) ? 28'd1 : sum_diff_b;
 
   // Mux the result based on case
   wire [27:0] sum_raw_w;
   wire        sum_sign_w;
 
   assign sum_raw_w =
-    both_zero  ? 28'd0 :
-    s_zero     ? {1'b0, mant_a_ext} :
-    p_zero     ? {1'b0, mant_a_ext} :
-                 sum_diff_clamped;
+    both_zero        ? 28'd0 :
+    s_zero           ? {1'b0, mant_a_ext} :
+    p_zero           ? {1'b0, mant_a_ext} :
+    signs_same       ? sum_same :
+    a_geq_b          ? sum_diff_clamped_a :
+                       sum_diff_clamped_b;
 
   assign sum_sign_w =
     both_zero  ? 1'b0 :
     s_zero     ? p_sign :
     p_zero     ? s_sign :
-                 sign_a;    // A >= B, so the result takes A's sign
+    signs_same ? sign_a :
+    a_geq_b    ? sign_a :
+                 sign_b;
 
   // ---- Leading-zero count for normalization ----
   wire [4:0] lzc =
@@ -189,91 +173,3 @@ module c930_fp16_acc
   assign o_ps_out = result_pre;
 
 endmodule
-
-
-// -----------------------------------------------------------------------------
-// c930_fp16_addsub
-//
-// 28-bit fused add/sub:  o = a + b  (i_sub = 0),  o = a - b  (i_sub = 1).
-// The subtract direction assumes i_a >= i_b (guaranteed by the caller's
-// exponent sort + exact alignment shift), so the result is non-negative.
-//
-// In synthesis this maps to one DSP48E1 used as a pure 48-bit adder with the
-// multiplier bypassed (USE_MULT = "NONE"):
-//     OPMODE = 7'b0110011  ->  X = A:B, Y = 0, Z = C
-//     ALUMODE[1:0]         ->  00: out = X + Y + Z + CIN
-//                               01: out = X + Y - Z - 1 + CIN
-//     CARRYIN = i_sub      ->  sub=1 turns X - Z - 1 into X - Z
-//   with A:B = i_a (zero-extended to 48) and C = i_b (zero-extended).
-//   => P = i_a + i_b  (sub=0)   or   P = i_a - i_b  (sub=1).
-// All pipeline registers are disabled (AREG/BREG/CREG/PREG = 0) so the DSP
-// output is combinational, matching the systolic cascade's single-cycle
-// requirement.  Simulation uses an identical behavioral add/sub.
-// -----------------------------------------------------------------------------
-module c930_fp16_addsub
-(
-  input  logic        i_clk,   // unused (combinational), kept for DSP clock
-  input  logic [27:0] i_a,
-  input  logic [27:0] i_b,
-  input  logic        i_sub,
-  output logic [27:0] o_out
-);
-`ifdef SYNTHESIS
-  wire [47:0] p;
-
-  DSP48E1 #(
-    // Feature Control Attributes: Data Path Selection
-    .A_INPUT("DIRECT"),
-    .B_INPUT("DIRECT"),
-    .USE_DPORT("FALSE"),
-    .USE_MULT("NONE"),
-    .USE_SIMD("ONE48"),
-    // Pattern Detector Attributes
-    .AUTORESET_PATDET("NO_RESET"),
-    .MASK(48'h3fffffffffff),
-    .PATTERN(48'h000000000000),
-    .SEL_MASK("MASK"),
-    .SEL_PATTERN("PATTERN"),
-    .USE_PATTERN_DETECT("NO_PATDET"),
-    // Register Control Attributes: all registers bypassed (combinational)
-    .ACASCREG(0), .ADREG(0), .ALUMODEREG(0), .AREG(0),
-    .BCASCREG(0), .BREG(0), .CARRYINREG(0), .CARRYINSELREG(0),
-    .CREG(0), .DREG(0), .INMODEREG(0), .MREG(0), .OPMODEREG(0), .PREG(0)
-  ) u_dsp (
-    // Cascade outputs (unused)
-    .ACOUT(), .BCOUT(), .CARRYCASCOUT(), .MULTSIGNOUT(), .PCOUT(),
-    // Control/status outputs (unused)
-    .OVERFLOW(), .PATTERNBDETECT(), .PATTERNDETECT(), .UNDERFLOW(),
-    .CARRYOUT(),
-    // Data output
-    .P(p),
-    // Cascade inputs (unused)
-    .ACIN(30'b0), .BCIN(18'b0), .CARRYCASCIN(1'b0), .MULTSIGNIN(1'b0),
-    .PCIN(48'b0),
-    // Control inputs
-    .ALUMODE({2'b00, 1'b0, i_sub}),   // 0000: add, 0001: subtract form
-    .CARRYINSEL(3'b000),              // carry source = CARRYIN port
-    .CLK(i_clk),
-    .INMODE(5'b00000),
-    .OPMODE(7'b0110011),              // X = A:B, Y = 0, Z = C
-    // Data inputs
-    .A({20'b0, i_a[27:18]}),          // A:B = {A[29:0], B[17:0]} = i_a
-    .B(i_a[17:0]),
-    .C({20'b0, i_b}),
-    .CARRYIN(i_sub),                  // +1 turns (X - Z - 1) into (X - Z)
-    .D(25'b0),
-    // Clock enables (unused with all registers bypassed)
-    .CEA1(1'b0), .CEA2(1'b0), .CEAD(1'b0), .CEALUMODE(1'b0),
-    .CEB1(1'b0), .CEB2(1'b0), .CEC(1'b0), .CECARRYIN(1'b0), .CECTRL(1'b0),
-    .CED(1'b0), .CEINMODE(1'b0), .CEM(1'b0), .CEP(1'b0),
-    // Resets (unused with all registers bypassed)
-    .RSTA(1'b0), .RSTALLCARRYIN(1'b0), .RSTALUMODE(1'b0),
-    .RSTB(1'b0), .RSTC(1'b0), .RSTCTRL(1'b0), .RSTD(1'b0),
-    .RSTINMODE(1'b0), .RSTM(1'b0), .RSTP(1'b0)
-  );
-
-  assign o_out = p[27:0];
-`else
-  assign o_out = i_sub ? (i_a - i_b) : (i_a + i_b);
-`endif
-endmodule
