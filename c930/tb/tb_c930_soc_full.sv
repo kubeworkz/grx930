@@ -436,11 +436,11 @@ module tb_c930_soc_full;
     // =========================================================================
     // Test 4: Mixed-precision varying-shape queue drain + full C verification
     //
-    // Phase 1: CPU boots GEMM firmware -> queues 3 GEMMs -> polls completion
+    // Phase 1: CPU boots GEMM firmware -> queues 4 GEMMs -> polls completion
     // Phase 2: CPU boots verification firmware -> reads all 21 C elements of
     //          GEMM1 via D-cache LW -> compares with expected FP32 8.0, then
-    //          reads all 12 C elements of GEMM3 (INT4) and all 15 of GEMM0
-    //          (INT8) -> both compare vs expected tables
+    //          reads all C elements of GEMM3 (INT4), GEMM0 (INT8) and GEMM2
+    //          (BF16) -> all compare vs expected tables (72 elements total)
     //
     //   GEMM0: INT8  3x5x8,  all 1s  -> C[0][0] = 8   (INT32)
     //   GEMM1: FP16  7x3x8,  all 1.0 -> C[m][n] = 8.0 (FP32 0x41000000) ALL 21
@@ -581,8 +581,8 @@ module tb_c930_soc_full;
         fw[102] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
         fw[103] = 32'h0015F593;  // andi x11, x11, 1    BUSY bit
         fw[104] = 32'hFE059CE3;  // bne  x11, x0, -8   poll busy
-        fw[105] = 32'h000097B7;  // lui  x15, 0x9
-        fw[106] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
+        fw[105] = 32'h0000B7B7;  // lui  x15, 0xB
+        fw[106] = 32'h30078793;  // addi x15, x15, 0x300 DONE_ADDR=0xB300
         fw[107] = 32'hDEADC837;  // lui  x16, 0xDEADC
         fw[108] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC=0xDEADBEEF
         fw[109] = 32'h0107A023;  // sw   x16, 0(x15)
@@ -661,6 +661,15 @@ module tb_c930_soc_full;
           ddr_write_byte(32'hB100 + i*4 + 3, 8'h00);
         end
       end
+      // Expected C table for GEMM2 (24 words, all FP32 8.0) @0xB200
+      begin : gemm2_exp
+        for (int i = 0; i < 24; i++) begin
+          ddr_write_byte(32'hB200 + i*4 + 0, 8'h00);
+          ddr_write_byte(32'hB200 + i*4 + 1, 8'h00);
+          ddr_write_byte(32'hB200 + i*4 + 2, 8'h00);
+          ddr_write_byte(32'hB200 + i*4 + 3, 8'h41);
+        end
+      end
       // Expected C table for GEMM3 (12 words) @0xB000
       begin : gemm3_exp
         logic [31:0] ewords [0:11];
@@ -694,10 +703,10 @@ module tb_c930_soc_full;
       end
 
       // Initialize DONE_ADDR to 0
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Reset CPU and boot Phase 1
       rst_n = 1'b0;
@@ -718,10 +727,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Phase 1: all 4 GEMMs completed in %0d cycles", mg_cnt);
               disable wait_phase1;
@@ -730,18 +739,7 @@ module tb_c930_soc_full;
         end
       end
 
-      // Quick C[0][0] check for GEMM2 (Phase 1 readback; GEMM0 and GEMM3 are
-      // fully verified by the Phase 2 firmware)
-      begin
-        logic [7:0] c0, c1, c2, c3;
-        c0 = dut.u_ddr.mem[32'h9400]; c1 = dut.u_ddr.mem[32'h9401];
-        c2 = dut.u_ddr.mem[32'h9402]; c3 = dut.u_ddr.mem[32'h9403];
-        $display("  [TB] GEMM2 BF16 (2x12x8) C[0][0] = 0x%08h (expect 0x41000000)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'h41000000) begin
-          $error("  [FAIL] GEMM2 BF16 C[0][0] wrong"); mg_errs = mg_errs + 1;
-        end
-        // GEMM3 (INT4): all 12 elements verified by Phase 2 firmware via D-cache
-      end
+      // All C matrices (GEMM0/1/2/3) fully verified by the Phase 2 firmware
 
       // ---- Phase 2: Verification firmware (reads all 21 C elements via D-cache) ----
       // Reload NPU firmware (CPU needs I-cache to boot, but DDR contents preserved)
@@ -764,7 +762,7 @@ module tb_c930_soc_full;
 
       // Load Phase 2 verification firmware into DDR[0x000]
       begin
-        logic [31:0] vfw [0:83];
+        logic [31:0] vfw [0:110];
         vfw[ 0] = 32'h00009537;  // lui  x10, 0x9
         vfw[ 1] = 32'hC0050513;  // addi x10, x10, 0xC00   x10 = 0x8C00 (GEMM1 C base)
         vfw[ 2] = 32'h41000737;  // lui  x14, 0x41000  x14 = 0x41000000 (FP32 8.0)
@@ -843,26 +841,53 @@ module tb_c930_soc_full;
         vfw[75] = 32'h31050513;  // addi x10, x10, 0x310   verify buffer addr 3
         vfw[76] = 32'h01852023;  // sw   x24, 0(x10)       store GEMM0 error mask
         vfw[77] = 32'h01952223;  // sw   x25, 4(x10)       store GEMM0 element count
-        vfw[78] = 32'h000097B7;  // lui  x15, 0x9
-        vfw[79] = 32'h41078793;  // addi x15, x15, 0x410 DONE_ADDR=0x9410
-        vfw[80] = 32'hDEADC837;  // lui  x16, 0xDEADC
-        vfw[81] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
-        vfw[82] = 32'h0107A023;  // sw   x16, 0(x15)
-        vfw[83] = 32'h0000006F;  // jal  x0, 0  self-loop
-        for (int i = 0; i < 84; i++) begin
+        vfw[78] = 32'h00009537;  // lui  x10, 0x9
+        vfw[79] = 32'h40050513;  // addi x10, x10, 0x400   x10 = 0x9400 (GEMM2 C base)
+        vfw[80] = 32'h0000B5B7;  // lui  x11, 0xB
+        vfw[81] = 32'h20058593;  // addi x11, x11, 0x200   x11 = 0xB200 (EXP table)
+        vfw[82] = 32'h00000C13;  // addi x24, x0, 0        GEMM2 error mask = 0
+        vfw[83] = 32'h00000C93;  // addi x25, x0, 0        GEMM2 element index = 0
+        vfw[84] = 32'h00000693;  // addi x13, x0, 0        row counter = 0
+        vfw[85] = 32'h00200A13;  // addi x20, x0, 2        NUM_ROWS = 2
+        vfw[86] = 32'h00C00A93;  // addi x21, x0, 12       NUM_COLS = 12
+        vfw[87] = 32'h00000613;  // addi x12, x0, 0        row_loop: col counter = 0
+        vfw[88] = 32'h00052903;  // lw   x18, 0(x10)       col_loop: load C[row][col]
+        vfw[89] = 32'h0005A883;  // lw   x17, 0(x11)       load expected from table
+        vfw[90] = 32'h01190863;  // beq  x18, x17, +16     if match, skip mismatch
+        vfw[91] = 32'h00100993;  // addi x19, x0, 1        mismatch: bit = 1
+        vfw[92] = 32'h019999B3;  // sll  x19, x19, x25     shift by GEMM2 element index
+        vfw[93] = 32'h013C6C33;  // or   x24, x24, x19     set bit in GEMM2 mask
+        vfw[94] = 32'h00450513;  // addi x10, x10, 4       next: advance C address
+        vfw[95] = 32'h00458593;  // addi x11, x11, 4       advance EXP address
+        vfw[96] = 32'h001C8C93;  // addi x25, x25, 1       advance element index
+        vfw[97] = 32'h00160613;  // addi x12, x12, 1       advance col counter
+        vfw[98] = 32'hFD564CE3;  // blt  x12, x21, col_loop if col < 12, loop
+        vfw[99] = 32'h00168693;  // addi x13, x13, 1       advance row counter
+        vfw[100] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 2, loop
+        vfw[101] = 32'h00000537;  // lui  x10, 0
+        vfw[102] = 32'h31850513;  // addi x10, x10, 0x318   verify buffer addr 4
+        vfw[103] = 32'h01852023;  // sw   x24, 0(x10)       store GEMM2 error mask
+        vfw[104] = 32'h01952223;  // sw   x25, 4(x10)       store GEMM2 element count
+        vfw[105] = 32'h0000B7B7;  // lui  x15, 0xB
+        vfw[106] = 32'h30078793;  // addi x15, x15, 0x300 DONE_ADDR=0xB300
+        vfw[107] = 32'hDEADC837;  // lui  x16, 0xDEADC
+        vfw[108] = 32'hEEF80813;  // addi x16, x16, 0xEEF DONE_MAGIC
+        vfw[109] = 32'h0107A023;  // sw   x16, 0(x15)
+        vfw[110] = 32'h0000006F;  // jal  x0, 0  self-loop
+        for (int i = 0; i < 111; i++) begin
           ddr_write_byte(i*4 + 0, vfw[i][7:0]);
           ddr_write_byte(i*4 + 1, vfw[i][15:8]);
           ddr_write_byte(i*4 + 2, vfw[i][23:16]);
           ddr_write_byte(i*4 + 3, vfw[i][31:24]);
         end
-        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 84*4);
+        $display("  [TB] Phase 2 verification firmware loaded (%0d bytes)", 111*4);
       end
 
       // Clear DONE_MAGIC so Phase 2 can detect its own completion
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Clear verification buffers (0x300/0x308/0x310 for GEMM1/GEMM3/GEMM0)
       ddr_write_byte(32'h0300, 8'h00);
@@ -890,10 +915,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Phase 2: verification complete in %0d cycles", mg_cnt);
               disable wait_phase2;
@@ -944,6 +969,30 @@ module tb_c930_soc_full;
           for (int idx = 0; idx < 15; idx++) begin
             if (err_mask[idx]) begin
               $error("  [FAIL] GEMM0 C[%0d][%0d] wrong (elem %0d)", idx/5, idx%5, idx);
+            end
+          end
+          mg_errs = mg_errs + 1;
+        end
+      end
+
+      // Read GEMM2 verification buffer at DDR[0x318] and check all 24 elements
+      begin
+        logic [7:0] v0, v1, v2, v3;
+        logic [31:0] err_mask;
+        v0 = dut.u_ddr.mem[32'h0318];
+        v1 = dut.u_ddr.mem[32'h0319];
+        v2 = dut.u_ddr.mem[32'h031A];
+        v3 = dut.u_ddr.mem[32'h031B];
+        err_mask = {v3, v2, v1, v0};
+        $display("  [TB] GEMM2 C verification: error mask = 0x%08h (%0d failures)",
+                 err_mask, $countones(err_mask));
+        if (err_mask == 32'h0000000) begin
+          $display("  [PASS] GEMM2: all 24 C elements verified correct (FP32 8.0)");
+        end else begin
+          // Decode which elements failed
+          for (int idx = 0; idx < 24; idx++) begin
+            if (err_mask[idx]) begin
+              $error("  [FAIL] GEMM2 C[%0d][%0d] wrong (elem %0d)", idx/12, idx%12, idx);
             end
           end
           mg_errs = mg_errs + 1;
@@ -1140,8 +1189,8 @@ module tb_c930_soc_full;
         fw[116] = 32'h00452583;
         fw[117] = 32'h0015F593;
         fw[118] = 32'hFE059CE3;
-        fw[119] = 32'h000097B7;
-        fw[120] = 32'h41078793;
+        fw[119] = 32'h0000B7B7;
+        fw[120] = 32'h30078793;
         fw[121] = 32'hDEADC837;
         fw[122] = 32'hEEF80813;
         fw[123] = 32'h0107A023;
@@ -1200,10 +1249,10 @@ module tb_c930_soc_full;
       end
 
       // Initialize DONE_ADDR to 0
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Reset CPU and boot
       rst_n = 1'b0;
@@ -1224,10 +1273,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Queue-stress: all 6 GEMMs completed in %0d cycles", mg_cnt);
               disable wait_stress;
@@ -1385,8 +1434,8 @@ module tb_c930_soc_full;
         fw[47] = 32'h00472583;
         fw[48] = 32'h0025F593;
         fw[49] = 32'hFE058CE3;
-        fw[50] = 32'h000097B7;
-        fw[51] = 32'h41078793;
+        fw[50] = 32'h0000B7B7;
+        fw[51] = 32'h30078793;
         fw[52] = 32'hDEADC837;
         fw[53] = 32'hEEF80813;
         fw[54] = 32'h0107A023;
@@ -1418,10 +1467,10 @@ module tb_c930_soc_full;
       end
 
       // Clear DONE_ADDR
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Reset CPU and boot
       rst_n = 1'b0;
@@ -1442,10 +1491,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Dual-NPU: both GEMMs completed in %0d cycles", mg_cnt);
               disable wait_dual;
@@ -1838,8 +1887,8 @@ module tb_c930_soc_full;
         fw[47] = 32'h00472583;
         fw[48] = 32'h0025F593;
         fw[49] = 32'hFE058CE3;
-        fw[50] = 32'h000097B7;
-        fw[51] = 32'h41078793;
+        fw[50] = 32'h0000B7B7;
+        fw[51] = 32'h30078793;
         fw[52] = 32'hDEADC837;
         fw[53] = 32'hEEF80813;
         fw[54] = 32'h0107A023;
@@ -1886,10 +1935,10 @@ module tb_c930_soc_full;
         ddr_write_byte(32'h8925, 8'h01);  // B[2][1] = 1
 
       // Clear DONE_ADDR
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Reset CPU and boot
       rst_n = 1'b0;
@@ -1910,10 +1959,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Dual-NPU: both GEMMs completed in %0d cycles", mg_cnt);
               disable wait_dual;
@@ -2234,8 +2283,8 @@ module tb_c930_soc_full;
         fw[47] = 32'h00472583;
         fw[48] = 32'h0025F593;
         fw[49] = 32'hFE058CE3;
-        fw[50] = 32'h000097B7;
-        fw[51] = 32'h41078793;
+        fw[50] = 32'h0000B7B7;
+        fw[51] = 32'h30078793;
         fw[52] = 32'hDEADC837;
         fw[53] = 32'hEEF80813;
         fw[54] = 32'h0107A023;
@@ -2328,10 +2377,10 @@ module tb_c930_soc_full;
         ddr_write_byte(32'h9133, 8'h01);  // B[4][3] = 1
 
       // Clear DONE_ADDR
-      ddr_write_byte(32'h9410, 8'h00);
-      ddr_write_byte(32'h9411, 8'h00);
-      ddr_write_byte(32'h9412, 8'h00);
-      ddr_write_byte(32'h9413, 8'h00);
+      ddr_write_byte(32'hB300, 8'h00);
+      ddr_write_byte(32'hB301, 8'h00);
+      ddr_write_byte(32'hB302, 8'h00);
+      ddr_write_byte(32'hB303, 8'h00);
 
       // Reset CPU and boot
       rst_n = 1'b0;
@@ -2352,10 +2401,10 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'h9410];
-            b1 = dut.u_ddr.mem[32'h9411];
-            b2 = dut.u_ddr.mem[32'h9412];
-            b3 = dut.u_ddr.mem[32'h9413];
+            b0 = dut.u_ddr.mem[32'hB300];
+            b1 = dut.u_ddr.mem[32'hB301];
+            b2 = dut.u_ddr.mem[32'hB302];
+            b3 = dut.u_ddr.mem[32'hB303];
             if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
               $display("  [PASS] Dual-NPU mixed-precision: both completed in %0d cycles", mg_cnt);
               disable wait_dual;
