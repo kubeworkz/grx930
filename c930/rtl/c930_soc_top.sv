@@ -42,11 +42,17 @@ module c930_soc_top
   input  logic i_clk,
   input  logic i_rst_n,
 
-  // ---- NPU status ----
+  // ---- NPU0 status ----
   output logic o_npu_busy,
   output logic o_npu_done,
   output logic o_npu_error,
   output logic o_npu_irq,
+
+  // ---- NPU1 status ----
+  output logic o_npu1_busy,
+  output logic o_npu1_done,
+  output logic o_npu1_error,
+  output logic o_npu1_irq,
 
   // ---- UART ----
   output logic o_uart_txd,
@@ -164,7 +170,7 @@ module c930_soc_top
   logic         csr_rready;
 
   // =========================================================================
-  // NPU AXI4 full master (to crossbar)
+  // NPU0 AXI4 full master (to DMA arbiter -> crossbar)
   // =========================================================================
   logic [3:0]   npu_awid;
   logic [63:0]  npu_awaddr;
@@ -195,6 +201,93 @@ module c930_soc_top
   logic         npu_rlast;
   logic         npu_rvalid;
   logic         npu_rready;
+
+  // =========================================================================
+  // NPU1 AXI4-Lite CSR slave (from MMIO bridge, address 0x4000_0040+)
+  // =========================================================================
+  logic [31:0]  csr1_awaddr;
+  logic         csr1_awvalid;
+  logic         csr1_awready;
+  logic [31:0]  csr1_wdata;
+  logic [3:0]   csr1_wstrb;
+  logic         csr1_wvalid;
+  logic         csr1_wready;
+  logic [1:0]   csr1_bresp;
+  logic         csr1_bvalid;
+  logic         csr1_bready;
+  logic [31:0]  csr1_araddr;
+  logic         csr1_arvalid;
+  logic         csr1_arready;
+  logic [31:0]  csr1_rdata;
+  logic [1:0]   csr1_rresp;
+  logic         csr1_rvalid;
+  logic         csr1_rready;
+
+  // =========================================================================
+  // NPU1 AXI4 full master (to DMA arbiter -> crossbar)
+  // =========================================================================
+  logic [3:0]   npu1_awid;
+  logic [63:0]  npu1_awaddr;
+  logic [7:0]   npu1_awlen;
+  logic [2:0]   npu1_awsize;
+  logic [1:0]   npu1_awburst;
+  logic         npu1_awvalid;
+  logic         npu1_awready;
+  logic [63:0]  npu1_wdata;
+  logic [7:0]   npu1_wstrb;
+  logic         npu1_wlast;
+  logic         npu1_wvalid;
+  logic         npu1_wready;
+  logic [3:0]   npu1_bid;
+  logic [1:0]   npu1_bresp;
+  logic         npu1_bvalid;
+  logic         npu1_bready;
+  logic [3:0]   npu1_arid;
+  logic [63:0]  npu1_araddr;
+  logic [7:0]   npu1_arlen;
+  logic [2:0]   npu1_arsize;
+  logic [1:0]   npu1_arburst;
+  logic         npu1_arvalid;
+  logic         npu1_arready;
+  logic [3:0]   npu1_rid;
+  logic [63:0]  npu1_rdata;
+  logic [1:0]   npu1_rresp;
+  logic         npu1_rlast;
+  logic         npu1_rvalid;
+  logic         npu1_rready;
+
+  // =========================================================================
+  // DMA arbiter output (shared M2 port to crossbar)
+  // =========================================================================
+  logic [3:0]   arb_awid;
+  logic [63:0]  arb_awaddr;
+  logic [7:0]   arb_awlen;
+  logic [2:0]   arb_awsize;
+  logic [1:0]   arb_awburst;
+  logic         arb_awvalid;
+  logic         arb_awready;
+  logic [63:0]  arb_wdata;
+  logic [7:0]   arb_wstrb;
+  logic         arb_wlast;
+  logic         arb_wvalid;
+  logic         arb_wready;
+  logic [3:0]   arb_bid;
+  logic [1:0]   arb_bresp;
+  logic         arb_bvalid;
+  logic         arb_bready;
+  logic [3:0]   arb_arid;
+  logic [63:0]  arb_araddr;
+  logic [7:0]   arb_arlen;
+  logic [2:0]   arb_arsize;
+  logic [1:0]   arb_arburst;
+  logic         arb_arvalid;
+  logic         arb_arready;
+  logic [3:0]   arb_rid;
+  logic [63:0]  arb_rdata;
+  logic [1:0]   arb_rresp;
+  logic         arb_rlast;
+  logic         arb_rvalid;
+  logic         arb_rready;
 
   // =========================================================================
   // I-cache adapter: CPU I-cache → AXI4 full master (to crossbar)
@@ -531,19 +624,19 @@ module c930_soc_top
     .m1_rid     (dcache_rid),     .m1_rdata   (dcache_rdata),   .m1_rresp  (dcache_rresp),
     .m1_rlast   (dcache_rlast),   .m1_rvalid  (dcache_rvalid),  .m1_rready (dcache_rready),
 
-    // ---- M2: NPU DMA ----
-    .m2_awid    (npu_awid),      .m2_awaddr  (npu_awaddr),     .m2_awlen  (npu_awlen),
-    .m2_awsize  (npu_awsize),    .m2_awburst (npu_awburst),    .m2_awvalid(npu_awvalid),
-    .m2_awready (npu_awready),
-    .m2_wdata   (npu_wdata),     .m2_wstrb   (npu_wstrb),      .m2_wlast  (npu_wlast),
-    .m2_wvalid  (npu_wvalid),    .m2_wready  (npu_wready),
-    .m2_bid     (npu_bid),       .m2_bresp   (npu_bresp),      .m2_bvalid (npu_bvalid),
-    .m2_bready  (npu_bready),
-    .m2_arid    (npu_arid),      .m2_araddr  (npu_araddr),     .m2_arlen  (npu_arlen),
-    .m2_arsize  (npu_arsize),    .m2_arburst (npu_arburst),    .m2_arvalid(npu_arvalid),
-    .m2_arready (npu_arready),
-    .m2_rid     (npu_rid),       .m2_rdata   (npu_rdata),      .m2_rresp  (npu_rresp),
-    .m2_rlast   (npu_rlast),     .m2_rvalid  (npu_rvalid),     .m2_rready (npu_rready),
+    // ---- M2: DMA arbiter output (NPU0 + NPU1 shared) ----
+    .m2_awid    (arb_awid),      .m2_awaddr  (arb_awaddr),     .m2_awlen  (arb_awlen),
+    .m2_awsize  (arb_awsize),    .m2_awburst (arb_awburst),    .m2_awvalid(arb_awvalid),
+    .m2_awready (arb_awready),
+    .m2_wdata   (arb_wdata),     .m2_wstrb   (arb_wstrb),      .m2_wlast  (arb_wlast),
+    .m2_wvalid  (arb_wvalid),    .m2_wready  (arb_wready),
+    .m2_bid     (arb_bid),       .m2_bresp   (arb_bresp),      .m2_bvalid (arb_bvalid),
+    .m2_bready  (arb_bready),
+    .m2_arid    (arb_arid),      .m2_araddr  (arb_araddr),     .m2_arlen  (arb_arlen),
+    .m2_arsize  (arb_arsize),    .m2_arburst (arb_arburst),    .m2_arvalid(arb_arvalid),
+    .m2_arready (arb_arready),
+    .m2_rid     (arb_rid),       .m2_rdata   (arb_rdata),      .m2_rresp  (arb_rresp),
+    .m2_rlast   (arb_rlast),     .m2_rvalid  (arb_rvalid),     .m2_rready (arb_rready),
 
     // ---- S0: Boot ROM ----
     .s0_awid    (boot_awid),     .s0_awaddr  (boot_awaddr),    .s0_awlen  (boot_awlen),
@@ -865,12 +958,139 @@ module c930_soc_top
     .o_irq         (o_npu_irq)
   );
 
+  // NPU0 doesn't use AXI ID signals — the arbiter drives npu_bid/npu_rid
+  // as outputs; they're dead-end signals since the NPU has no bid/rid ports.
+
+  // =========================================================================
+  // DMA arbiter: merges NPU0 and NPU1 DMA into shared crossbar M2 port
+  // =========================================================================
+  c930_axi_dma_arb #(
+    .ADDR_WIDTH (64),
+    .DATA_WIDTH (64),
+    .ID_WIDTH   (4)
+  ) u_dma_arb (
+    .i_clk     (core_clk),
+    .i_rst_n   (core_rst_n),
+
+    // NPU0 DMA (master 0)
+    .m0_awid    (npu_awid),    .m0_awaddr  (npu_awaddr),  .m0_awlen  (npu_awlen),
+    .m0_awsize  (npu_awsize),  .m0_awburst (npu_awburst), .m0_awvalid(npu_awvalid),
+    .m0_awready (npu_awready),
+    .m0_wdata   (npu_wdata),   .m0_wstrb   (npu_wstrb),   .m0_wlast  (npu_wlast),
+    .m0_wvalid  (npu_wvalid),  .m0_wready  (npu_wready),
+    .m0_bid     (npu_bid),     .m0_bresp   (npu_bresp),   .m0_bvalid (npu_bvalid),
+    .m0_bready  (npu_bready),
+    .m0_arid    (npu_arid),    .m0_araddr  (npu_araddr),  .m0_arlen  (npu_arlen),
+    .m0_arsize  (npu_arsize),  .m0_arburst (npu_arburst), .m0_arvalid(npu_arvalid),
+    .m0_arready (npu_arready),
+    .m0_rid     (npu_rid),     .m0_rdata   (npu_rdata),   .m0_rresp  (npu_rresp),
+    .m0_rlast   (npu_rlast),   .m0_rvalid  (npu_rvalid),  .m0_rready (npu_rready),
+
+    // NPU1 DMA (master 1)
+    .m1_awid    (npu1_awid),   .m1_awaddr  (npu1_awaddr), .m1_awlen  (npu1_awlen),
+    .m1_awsize  (npu1_awsize), .m1_awburst (npu1_awburst),.m1_awvalid(npu1_awvalid),
+    .m1_awready (npu1_awready),
+    .m1_wdata   (npu1_wdata),  .m1_wstrb   (npu1_wstrb),  .m1_wlast  (npu1_wlast),
+    .m1_wvalid  (npu1_wvalid), .m1_wready  (npu1_wready),
+    .m1_bid     (npu1_bid),    .m1_bresp   (npu1_bresp),  .m1_bvalid (npu1_bvalid),
+    .m1_bready  (npu1_bready),
+    .m1_arid    (npu1_arid),   .m1_araddr  (npu1_araddr), .m1_arlen  (npu1_arlen),
+    .m1_arsize  (npu1_arsize), .m1_arburst (npu1_arburst),.m1_arvalid(npu1_arvalid),
+    .m1_arready (npu1_arready),
+    .m1_rid     (npu1_rid),    .m1_rdata   (npu1_rdata),  .m1_rresp  (npu1_rresp),
+    .m1_rlast   (npu1_rlast),  .m1_rvalid  (npu1_rvalid), .m1_rready (npu1_rready),
+
+    // Shared slave (to crossbar M2)
+    .s_awid     (arb_awid),    .s_awaddr   (arb_awaddr),  .s_awlen   (arb_awlen),
+    .s_awsize   (arb_awsize),  .s_awburst  (arb_awburst), .s_awvalid (arb_awvalid),
+    .s_awready  (arb_awready),
+    .s_wdata    (arb_wdata),    .s_wstrb    (arb_wstrb),    .s_wlast   (arb_wlast),
+    .s_wvalid   (arb_wvalid),  .s_wready   (arb_wready),
+    .s_bid      (arb_bid),     .s_bresp    (arb_bresp),    .s_bvalid  (arb_bvalid),
+    .s_bready   (arb_bready),
+    .s_arid     (arb_arid),    .s_araddr   (arb_araddr),  .s_arlen   (arb_arlen),
+    .s_arsize   (arb_arsize),  .s_arburst  (arb_arburst), .s_arvalid (arb_arvalid),
+    .s_arready  (arb_arready),
+    .s_rid      (arb_rid),     .s_rdata    (arb_rdata),    .s_rresp   (arb_rresp),
+    .s_rlast    (arb_rlast),   .s_rvalid   (arb_rvalid),  .s_rready  (arb_rready)
+  );
+
+  // =========================================================================
+  // NPU1 (second GEMM tile, same config as NPU0)
+  // CSR at 0x4000_0040-0x4000_007F (address decode in MMIO mux below)
+  // =========================================================================
+  c930_npu_top #(
+    .NUM_ROWS (NUM_ROWS),
+    .NUM_COLS (NUM_COLS),
+    .DIN_W    (16),
+    .ACC_W    (48),
+    .MAX_M    (MAX_M),
+    .MAX_K    (MAX_K),
+    .MAX_N    (MAX_N)
+  ) u_npu1 (
+    .i_clk         (core_clk),
+    .i_rst_n       (core_rst_n),
+
+    // AXI4-Lite CSR slave (from MMIO bridge mux)
+    .s_axi_awaddr  (csr1_awaddr),
+    .s_axi_awvalid (csr1_awvalid),
+    .s_axi_awready (csr1_awready),
+    .s_axi_wdata   (csr1_wdata),
+    .s_axi_wstrb   (csr1_wstrb),
+    .s_axi_wvalid  (csr1_wvalid),
+    .s_axi_wready  (csr1_wready),
+    .s_axi_bresp   (csr1_bresp),
+    .s_axi_bvalid  (csr1_bvalid),
+    .s_axi_bready  (csr1_bready),
+    .s_axi_araddr  (csr1_araddr),
+    .s_axi_arvalid (csr1_arvalid),
+    .s_axi_arready (csr1_arready),
+    .s_axi_rdata   (csr1_rdata),
+    .s_axi_rresp   (csr1_rresp),
+    .s_axi_rvalid  (csr1_rvalid),
+    .s_axi_rready  (csr1_rready),
+
+    // AXI4 full master -> DMA arbiter
+    .m_axi_araddr  (npu1_araddr),
+    .m_axi_arlen   (npu1_arlen),
+    .m_axi_arsize  (npu1_arsize),
+    .m_axi_arburst (npu1_arburst),
+    .m_axi_arvalid (npu1_arvalid),
+    .m_axi_arready (npu1_arready),
+    .m_axi_rdata   (npu1_rdata),
+    .m_axi_rresp   (npu1_rresp),
+    .m_axi_rlast   (npu1_rlast),
+    .m_axi_rvalid  (npu1_rvalid),
+    .m_axi_rready  (npu1_rready),
+    .m_axi_awaddr  (npu1_awaddr),
+    .m_axi_awlen   (npu1_awlen),
+    .m_axi_awsize  (npu1_awsize),
+    .m_axi_awburst (npu1_awburst),
+    .m_axi_awvalid (npu1_awvalid),
+    .m_axi_awready (npu1_awready),
+    .m_axi_wdata   (npu1_wdata),
+    .m_axi_wstrb   (npu1_wstrb),
+    .m_axi_wlast   (npu1_wlast),    .m_axi_wvalid  (npu1_wvalid), .m_axi_wready  (npu1_wready),
+    .m_axi_bresp   (npu1_bresp),
+    .m_axi_bvalid  (npu1_bvalid),
+    .m_axi_bready  (npu1_bready),
+
+    .o_busy        (o_npu1_busy),
+    .o_done        (o_npu1_done),
+    .o_error       (o_npu1_error),
+    .o_irq         (o_npu1_irq)
+  );
+
+  // NPU1 doesn't use AXI ID signals — the arbiter drives npu1_bid/npu1_rid
+  // as outputs; they're dead-end signals since the NPU has no bid/rid ports.
+
   // =========================================================================
   // CPU MMIO bridge (CPU uncached MMIO → AXI4-Lite peripherals)
   //
   // The bridge converts the CPU's simple req/done MMIO protocol to AXI4-Lite.
   // An address-decode mux downstream routes:
-  //   0x4000_0000-0x4000_003F  → NPU CSR (backward compat)
+  //   0x4000_0000-0x4000_003F  → NPU0 CSR (backward compat)
+  //   0x4000_0040-0x4000_007F  → NPU1 CSR
   //   0x4000_1000-0x4000_100F  → UART TX/RX/status
   // =========================================================================
   logic [31:0]  mmio_awaddr_raw;
@@ -927,22 +1147,35 @@ module c930_soc_top
   );
 
   // ---- Address decode mux ----
-  // Route MMIO bridge output to NPU CSR or UART based on address.
-  logic mmio_to_uart;
-  assign mmio_to_uart = (mmio_awaddr_raw[31:12] == 20'h40001);  // 0x4000_1000-0x4000_1FFF
+  // Route MMIO bridge output to NPU0 CSR, NPU1 CSR, or UART based on address.
+  //   0x4000_0000-0x4000_003F  → NPU0 CSR
+  //   0x4000_0040-0x4000_007F  → NPU1 CSR
+  //   0x4000_1000-0x4000_1FFF  → UART
+  wire mmio_to_uart = (mmio_awaddr_raw[31:12] == 20'h40001);
+  wire mmio_to_npu1 = (mmio_awaddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
+  wire mmio_to_npu0 = ~mmio_to_uart & ~mmio_to_npu1;              // default: NPU0
 
-  // Write channel: select NPU CSR or UART
+  // NPU0 CSR (backward compat)
   assign csr_awaddr  = mmio_awaddr_raw;
-  assign csr_awvalid = mmio_awvalid_raw & ~mmio_to_uart;
+  assign csr_awvalid = mmio_awvalid_raw & mmio_to_npu0;
   assign csr_wdata   = mmio_wdata_raw;
   assign csr_wstrb   = mmio_wstrb_raw;
-  assign csr_wvalid  = mmio_wvalid_raw & ~mmio_to_uart;
-  assign csr_bready  = mmio_bready_raw & ~mmio_to_uart;
-
-  // Read channel: select NPU CSR or UART
+  assign csr_wvalid  = mmio_wvalid_raw & mmio_to_npu0;
+  assign csr_bready  = mmio_bready_raw & mmio_to_npu0;
   assign csr_araddr  = mmio_araddr_raw;
-  assign csr_arvalid = mmio_arvalid_raw & ~mmio_to_uart;
-  assign csr_rready  = mmio_rready_raw & ~mmio_to_uart;
+  assign csr_arvalid = mmio_arvalid_raw & mmio_to_npu0;
+  assign csr_rready  = mmio_rready_raw & mmio_to_npu0;
+
+  // NPU1 CSR
+  assign csr1_awaddr  = mmio_awaddr_raw;
+  assign csr1_awvalid = mmio_awvalid_raw & mmio_to_npu1;
+  assign csr1_wdata   = mmio_wdata_raw;
+  assign csr1_wstrb   = mmio_wstrb_raw;
+  assign csr1_wvalid  = mmio_wvalid_raw & mmio_to_npu1;
+  assign csr1_bready  = mmio_bready_raw & mmio_to_npu1;
+  assign csr1_araddr  = mmio_araddr_raw;
+  assign csr1_arvalid = mmio_arvalid_raw & mmio_to_npu1;
+  assign csr1_rready  = mmio_rready_raw & mmio_to_npu1;
 
   // UART AXI4-Lite signals (active when mmio_to_uart)
   assign uart_awaddr  = mmio_awaddr_raw;
@@ -964,22 +1197,28 @@ module c930_soc_top
   assign uart_arburst = 2'b00;
   assign uart_rready  = mmio_rready_raw & mmio_to_uart;
 
-  // Mux responses back to bridge
-  logic sel_uart_r;
+  // Mux responses back to bridge (3 targets: NPU0, NPU1, UART)
+  logic [1:0] sel_r;
+  localparam logic [1:0] SEL_NPU0 = 2'd0, SEL_NPU1 = 2'd1, SEL_UART = 2'd2;
   always_ff @(posedge core_clk or negedge core_rst_n) begin
     if (!core_rst_n)
-      sel_uart_r <= 1'b0;
+      sel_r <= SEL_NPU0;
     else if (mmio_arvalid_raw && mmio_arready_raw)
-      sel_uart_r <= mmio_to_uart;
+      sel_r <= mmio_to_uart ? SEL_UART : mmio_to_npu1 ? SEL_NPU1 : SEL_NPU0;
   end
 
-  assign mmio_awready_raw = mmio_to_uart ? uart_awready : csr_awready;
-  assign mmio_wready_raw  = mmio_to_uart ? uart_wready  : csr_wready;
-  assign mmio_bresp_raw   = mmio_to_uart ? uart_bresp   : csr_bresp;
-  assign mmio_bvalid_raw  = mmio_to_uart ? uart_bvalid  : csr_bvalid;
-  assign mmio_arready_raw = mmio_to_uart ? uart_arready : csr_arready;
-  assign mmio_rdata_raw   = sel_uart_r   ? uart_rdata[31:0] : csr_rdata;
-  assign mmio_rresp_raw   = sel_uart_r   ? uart_rresp  : csr_rresp;
-  assign mmio_rvalid_raw  = sel_uart_r   ? uart_rvalid : csr_rvalid;
+  // Write response mux (combinational, use current address)
+  assign mmio_awready_raw = mmio_to_uart ? uart_awready : mmio_to_npu1 ? csr1_awready : csr_awready;
+  assign mmio_wready_raw  = mmio_to_uart ? uart_wready  : mmio_to_npu1 ? csr1_wready  : csr_wready;
+  assign mmio_bresp_raw   = mmio_to_uart ? uart_bresp   : mmio_to_npu1 ? csr1_bresp   : csr_bresp;
+  assign mmio_bvalid_raw  = mmio_to_uart ? uart_bvalid  : mmio_to_npu1 ? csr1_bvalid  : csr_bvalid;
+  // Read response mux (uses registered sel_r for correct data return)
+  assign mmio_arready_raw = mmio_to_uart ? uart_arready : mmio_to_npu1 ? csr1_arready : csr_arready;
+  assign mmio_rdata_raw   = (sel_r == SEL_UART) ? uart_rdata[31:0] :
+                            (sel_r == SEL_NPU1) ? csr1_rdata : csr_rdata;
+  assign mmio_rresp_raw   = (sel_r == SEL_UART) ? uart_rresp  :
+                            (sel_r == SEL_NPU1) ? csr1_rresp  : csr_rresp;
+  assign mmio_rvalid_raw  = (sel_r == SEL_UART) ? uart_rvalid :
+                            (sel_r == SEL_NPU1) ? csr1_rvalid : csr_rvalid;
 
 endmodule

@@ -27,6 +27,7 @@ module tb_c930_soc_full;
   logic clk   = 1'b0;
   logic rst_n = 1'b0;
   logic o_npu_busy, o_npu_done, o_npu_error, o_npu_irq;
+  logic o_npu1_busy, o_npu1_done, o_npu1_error, o_npu1_irq;
   logic o_uart_txd;
   logic i_uart_rxd = 1'b1;
   logic        tb_wr_en;
@@ -50,10 +51,14 @@ module tb_c930_soc_full;
   ) dut (
     .i_clk       (clk),
     .i_rst_n     (rst_n),
-    .o_npu_busy  (o_npu_busy),
-    .o_npu_done  (o_npu_done),
-    .o_npu_error (o_npu_error),
-    .o_npu_irq   (o_npu_irq),
+    .o_npu_busy   (o_npu_busy),
+    .o_npu_done   (o_npu_done),
+    .o_npu_error  (o_npu_error),
+    .o_npu_irq    (o_npu_irq),
+    .o_npu1_busy  (o_npu1_busy),
+    .o_npu1_done  (o_npu1_done),
+    .o_npu1_error (o_npu1_error),
+    .o_npu1_irq   (o_npu1_irq),
     .o_uart_txd  (o_uart_txd),
     .i_uart_rxd  (i_uart_rxd),
     .i_tb_wr_en  (tb_wr_en),
@@ -1086,6 +1091,179 @@ module tb_c930_soc_full;
         $display("  [TB] GEMM5 (6x6x4) C[0][0] = 0x%08h (expect 0x00000004)", {c3, c2, c1, c0});
         if ({c3, c2, c1, c0} != 32'd4) begin
           $error("  [FAIL] GEMM5 (6x6x4) C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+      end
+      total_errs = total_errs + mg_errs;
+    end
+
+
+    // =========================================================================
+    // Test 6: Dual-NPU simultaneous GEMM
+    //
+    // Runs independent GEMMs on NPU0 (CSR at 0x4000_0000) and NPU1
+    // (CSR at 0x4000_0040) simultaneously. Both share DDR through the
+    // DMA arbiter, testing concurrent DMA arbitration.
+    //
+    //   NPU0: 2x2x2 INT8 all 1s -> C[0][0] = 2
+    //   NPU1: 2x2x2 INT8 all 1s -> C[0][0] = 2
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 6: Dual-NPU simultaneous GEMM");
+    $display("========================================");
+    begin
+      int mg_errs;
+      mg_errs = 0;
+
+      // Reload NPU firmware
+      begin
+        int fw_fd; logic [7:0] fw_byte; int fw_addr;
+        fw_fd = $fopen("sw/npu_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+        end
+      end
+
+      // Load dual-NPU firmware
+      begin
+        logic [31:0] fw [0:55];
+        fw[ 0] = 32'h40000537;
+        fw[ 1] = 32'h00050513;
+        fw[ 2] = 32'h40000737;
+        fw[ 3] = 32'h04070713;
+        fw[ 4] = 32'h00200593;
+        fw[ 5] = 32'h00B52423;
+        fw[ 6] = 32'h00200593;
+        fw[ 7] = 32'h00B52623;
+        fw[ 8] = 32'h00200593;
+        fw[ 9] = 32'h00B52823;
+        fw[10] = 32'h000085B7;
+        fw[11] = 32'h00058593;
+        fw[12] = 32'h00B52A23;
+        fw[13] = 32'h000085B7;
+        fw[14] = 32'h08058593;
+        fw[15] = 32'h00B52C23;
+        fw[16] = 32'h000085B7;
+        fw[17] = 32'h10058593;
+        fw[18] = 32'h00B52E23;
+        fw[19] = 32'h00000593;
+        fw[20] = 32'h02B52023;
+        fw[21] = 32'h02052583;
+        fw[22] = 32'h00100593;
+        fw[23] = 32'h00B52023;
+        fw[24] = 32'h00200593;
+        fw[25] = 32'h00B72423;
+        fw[26] = 32'h00200593;
+        fw[27] = 32'h00B72623;
+        fw[28] = 32'h00200593;
+        fw[29] = 32'h00B72823;
+        fw[30] = 32'h000085B7;
+        fw[31] = 32'h20058593;
+        fw[32] = 32'h00B72A23;
+        fw[33] = 32'h000085B7;
+        fw[34] = 32'h28058593;
+        fw[35] = 32'h00B72C23;
+        fw[36] = 32'h000085B7;
+        fw[37] = 32'h30058593;
+        fw[38] = 32'h00B72E23;
+        fw[39] = 32'h00000593;
+        fw[40] = 32'h02B72023;
+        fw[41] = 32'h02072583;
+        fw[42] = 32'h00100593;
+        fw[43] = 32'h00B72023;
+        fw[44] = 32'h00452583;
+        fw[45] = 32'h0025F593;
+        fw[46] = 32'hFE058CE3;
+        fw[47] = 32'h00472583;
+        fw[48] = 32'h0025F593;
+        fw[49] = 32'hFE058CE3;
+        fw[50] = 32'h000097B7;
+        fw[51] = 32'h41078793;
+        fw[52] = 32'hDEADC837;
+        fw[53] = 32'hEEF80813;
+        fw[54] = 32'h0107A023;
+        fw[55] = 32'h0000006F;
+
+        for (int i = 0; i < 56; i++) begin
+          ddr_write_byte(i*4 + 0, fw[i][7:0]);
+          ddr_write_byte(i*4 + 1, fw[i][15:8]);
+          ddr_write_byte(i*4 + 2, fw[i][23:16]);
+          ddr_write_byte(i*4 + 3, fw[i][31:24]);
+        end
+      end
+
+      // Preload A/B for NPU0: 2x2x2 all 1s
+      begin
+        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8000 + i, 8'd1);
+        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8080 + i, 8'd1);
+      end
+      // Preload A/B for NPU1: 2x2x2 all 1s
+      begin
+        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8200 + i, 8'd1);
+        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8280 + i, 8'd1);
+      end
+
+      // Clear DONE_ADDR
+      ddr_write_byte(32'h9410, 8'h00);
+      ddr_write_byte(32'h9411, 8'h00);
+      ddr_write_byte(32'h9412, 8'h00);
+      ddr_write_byte(32'h9413, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for DONE_MAGIC
+      begin : wait_dual
+        int mg_cnt;
+        mg_cnt = 0;
+        forever begin
+          @(posedge clk);
+          mg_cnt = mg_cnt + 1;
+          if (mg_cnt > 500_000) begin
+            $error("  [FAIL] Dual-NPU TIMEOUT");
+            mg_errs = mg_errs + 1;
+            disable wait_dual;
+          end
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9410];
+            b1 = dut.u_ddr.mem[32'h9411];
+            b2 = dut.u_ddr.mem[32'h9412];
+            b3 = dut.u_ddr.mem[32'h9413];
+            if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
+              $display("  [PASS] Dual-NPU: both GEMMs completed in %0d cycles", mg_cnt);
+              disable wait_dual;
+            end
+          end
+        end
+      end
+
+      // Verify NPU0 result
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8100]; c1 = dut.u_ddr.mem[32'h8101];
+        c2 = dut.u_ddr.mem[32'h8102]; c3 = dut.u_ddr.mem[32'h8103];
+        $display("  [TB] NPU0 (2x2x2) C[0][0] = 0x%08h (expect 0x00000002)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd2) begin
+          $error("  [FAIL] NPU0 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        end
+      end
+      // Verify NPU1 result
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8300]; c1 = dut.u_ddr.mem[32'h8301];
+        c2 = dut.u_ddr.mem[32'h8302]; c3 = dut.u_ddr.mem[32'h8303];
+        $display("  [TB] NPU1 (2x2x2) C[0][0] = 0x%08h (expect 0x00000002)", {c3, c2, c1, c0});
+        if ({c3, c2, c1, c0} != 32'd2) begin
+          $error("  [FAIL] NPU1 C[0][0] wrong"); mg_errs = mg_errs + 1;
         end
       end
       total_errs = total_errs + mg_errs;

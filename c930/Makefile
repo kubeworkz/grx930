@@ -55,6 +55,7 @@ SOC_RTL := $(NPU_RTL) \
 
 SOC_FULL_RTL := $(SOC_RTL) \
   rtl/c930_axi_crossbar.sv \
+  rtl/c930_axi_dma_arb.sv \
   rtl/c930_axi_cache_adapter.sv \
   rtl/c930_bootrom.sv \
   rtl/c930_uart.sv
