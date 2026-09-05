@@ -1107,8 +1107,21 @@ module tb_c930_soc_full;
     //   NPU0: 2x2x2 INT8 all 1s -> C[0][0] = 2
     //   NPU1: 2x2x2 INT8 all 1s -> C[0][0] = 2
     // =========================================================================
+
+
+    // =========================================================================
+    // Test 6: Dual-NPU different-shape stress test
+    //
+    // Runs independent GEMMs on NPU0 (CSR at 0x4000_0000) and NPU1
+    // (CSR at 0x4000_0040) simultaneously with different shapes.
+    // Both share DDR through the DMA arbiter, testing concurrent DMA
+    // arbitration with asymmetric operand sizes.
+    //
+    //   NPU0: 4x4x4 INT8 all 1s -> C[m][n] = 4 (16 elements verified)
+    //   NPU1: 2x3x2 INT8 all 1s -> C[m][n] = 2 (6 elements verified)
+    // =========================================================================
     $display("\n========================================");
-    $display("  TEST 6: Dual-NPU simultaneous GEMM");
+    $display("  TEST 6: Dual-NPU different shapes (4x4x4 + 2x3x2)");
     $display("========================================");
     begin
       int mg_errs;
@@ -1137,20 +1150,20 @@ module tb_c930_soc_full;
         fw[ 1] = 32'h00050513;
         fw[ 2] = 32'h40000737;
         fw[ 3] = 32'h04070713;
-        fw[ 4] = 32'h00200593;
+        fw[ 4] = 32'h00400593;
         fw[ 5] = 32'h00B52423;
-        fw[ 6] = 32'h00200593;
+        fw[ 6] = 32'h00400593;
         fw[ 7] = 32'h00B52623;
-        fw[ 8] = 32'h00200593;
+        fw[ 8] = 32'h00400593;
         fw[ 9] = 32'h00B52823;
         fw[10] = 32'h000085B7;
         fw[11] = 32'h00058593;
         fw[12] = 32'h00B52A23;
         fw[13] = 32'h000085B7;
-        fw[14] = 32'h08058593;
+        fw[14] = 32'h02058593;
         fw[15] = 32'h00B52C23;
         fw[16] = 32'h000085B7;
-        fw[17] = 32'h10058593;
+        fw[17] = 32'h04058593;
         fw[18] = 32'h00B52E23;
         fw[19] = 32'h00000593;
         fw[20] = 32'h02B52023;
@@ -1159,18 +1172,18 @@ module tb_c930_soc_full;
         fw[23] = 32'h00B52023;
         fw[24] = 32'h00200593;
         fw[25] = 32'h00B72423;
-        fw[26] = 32'h00200593;
+        fw[26] = 32'h00300593;
         fw[27] = 32'h00B72623;
         fw[28] = 32'h00200593;
         fw[29] = 32'h00B72823;
         fw[30] = 32'h000085B7;
-        fw[31] = 32'h20058593;
+        fw[31] = 32'h10058593;
         fw[32] = 32'h00B72A23;
         fw[33] = 32'h000085B7;
-        fw[34] = 32'h28058593;
+        fw[34] = 32'h12058593;
         fw[35] = 32'h00B72C23;
         fw[36] = 32'h000085B7;
-        fw[37] = 32'h30058593;
+        fw[37] = 32'h14058593;
         fw[38] = 32'h00B72E23;
         fw[39] = 32'h00000593;
         fw[40] = 32'h02B72023;
@@ -1198,15 +1211,21 @@ module tb_c930_soc_full;
         end
       end
 
-      // Preload A/B for NPU0: 2x2x2 all 1s
+      // Preload A for NPU0: 4x4 = 16 bytes, all 1s
       begin
-        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8000 + i, 8'd1);
-        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8080 + i, 8'd1);
+        for (int i = 0; i < 16; i++) ddr_write_byte(32'h8000 + i, 8'd1);
       end
-      // Preload A/B for NPU1: 2x2x2 all 1s
+      // Preload B for NPU0: 4x4 = 16 bytes, all 1s
       begin
-        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8200 + i, 8'd1);
-        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8280 + i, 8'd1);
+        for (int i = 0; i < 16; i++) ddr_write_byte(32'h8020 + i, 8'd1);
+      end
+      // Preload A for NPU1: 2x2 = 4 bytes, all 1s
+      begin
+        for (int i = 0; i < 4; i++) ddr_write_byte(32'h8100 + i, 8'd1);
+      end
+      // Preload B for NPU1: 2x3 = 6 bytes, all 1s
+      begin
+        for (int i = 0; i < 6; i++) ddr_write_byte(32'h8120 + i, 8'd1);
       end
 
       // Clear DONE_ADDR
@@ -1246,26 +1265,276 @@ module tb_c930_soc_full;
         end
       end
 
-      // Verify NPU0 result
+      // Verify NPU0 result: 4x4x4 -> all C = 4
+      $display("  [TB] Verifying NPU0 (4x4x4) C matrix...");
+      // NPU0 C[0][0]
       begin
         logic [7:0] c0, c1, c2, c3;
-        c0 = dut.u_ddr.mem[32'h8100]; c1 = dut.u_ddr.mem[32'h8101];
-        c2 = dut.u_ddr.mem[32'h8102]; c3 = dut.u_ddr.mem[32'h8103];
-        $display("  [TB] NPU0 (2x2x2) C[0][0] = 0x%08h (expect 0x00000002)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'd2) begin
-          $error("  [FAIL] NPU0 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        c0 = dut.u_ddr.mem[32'h8040]; c1 = dut.u_ddr.mem[32'h8041];
+        c2 = dut.u_ddr.mem[32'h8042]; c3 = dut.u_ddr.mem[32'h8043];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[0][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[0][0] = %0d OK", $signed({c3, c2, c1, c0}));
         end
       end
-      // Verify NPU1 result
+      // NPU0 C[0][1]
       begin
         logic [7:0] c0, c1, c2, c3;
-        c0 = dut.u_ddr.mem[32'h8300]; c1 = dut.u_ddr.mem[32'h8301];
-        c2 = dut.u_ddr.mem[32'h8302]; c3 = dut.u_ddr.mem[32'h8303];
-        $display("  [TB] NPU1 (2x2x2) C[0][0] = 0x%08h (expect 0x00000002)", {c3, c2, c1, c0});
-        if ({c3, c2, c1, c0} != 32'd2) begin
-          $error("  [FAIL] NPU1 C[0][0] wrong"); mg_errs = mg_errs + 1;
+        c0 = dut.u_ddr.mem[32'h8044]; c1 = dut.u_ddr.mem[32'h8045];
+        c2 = dut.u_ddr.mem[32'h8046]; c3 = dut.u_ddr.mem[32'h8047];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[0][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[0][1] = %0d OK", $signed({c3, c2, c1, c0}));
         end
       end
+      // NPU0 C[0][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8048]; c1 = dut.u_ddr.mem[32'h8049];
+        c2 = dut.u_ddr.mem[32'h804A]; c3 = dut.u_ddr.mem[32'h804B];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[0][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[0][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[0][3]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h804C]; c1 = dut.u_ddr.mem[32'h804D];
+        c2 = dut.u_ddr.mem[32'h804E]; c3 = dut.u_ddr.mem[32'h804F];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[0][3] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[0][3] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[1][0]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8050]; c1 = dut.u_ddr.mem[32'h8051];
+        c2 = dut.u_ddr.mem[32'h8052]; c3 = dut.u_ddr.mem[32'h8053];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[1][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[1][0] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[1][1]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8054]; c1 = dut.u_ddr.mem[32'h8055];
+        c2 = dut.u_ddr.mem[32'h8056]; c3 = dut.u_ddr.mem[32'h8057];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[1][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[1][1] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[1][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8058]; c1 = dut.u_ddr.mem[32'h8059];
+        c2 = dut.u_ddr.mem[32'h805A]; c3 = dut.u_ddr.mem[32'h805B];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[1][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[1][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[1][3]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h805C]; c1 = dut.u_ddr.mem[32'h805D];
+        c2 = dut.u_ddr.mem[32'h805E]; c3 = dut.u_ddr.mem[32'h805F];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[1][3] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[1][3] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[2][0]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8060]; c1 = dut.u_ddr.mem[32'h8061];
+        c2 = dut.u_ddr.mem[32'h8062]; c3 = dut.u_ddr.mem[32'h8063];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[2][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[2][0] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[2][1]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8064]; c1 = dut.u_ddr.mem[32'h8065];
+        c2 = dut.u_ddr.mem[32'h8066]; c3 = dut.u_ddr.mem[32'h8067];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[2][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[2][1] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[2][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8068]; c1 = dut.u_ddr.mem[32'h8069];
+        c2 = dut.u_ddr.mem[32'h806A]; c3 = dut.u_ddr.mem[32'h806B];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[2][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[2][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[2][3]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h806C]; c1 = dut.u_ddr.mem[32'h806D];
+        c2 = dut.u_ddr.mem[32'h806E]; c3 = dut.u_ddr.mem[32'h806F];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[2][3] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[2][3] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[3][0]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8070]; c1 = dut.u_ddr.mem[32'h8071];
+        c2 = dut.u_ddr.mem[32'h8072]; c3 = dut.u_ddr.mem[32'h8073];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[3][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[3][0] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[3][1]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8074]; c1 = dut.u_ddr.mem[32'h8075];
+        c2 = dut.u_ddr.mem[32'h8076]; c3 = dut.u_ddr.mem[32'h8077];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[3][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[3][1] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[3][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8078]; c1 = dut.u_ddr.mem[32'h8079];
+        c2 = dut.u_ddr.mem[32'h807A]; c3 = dut.u_ddr.mem[32'h807B];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[3][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[3][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU0 C[3][3]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h807C]; c1 = dut.u_ddr.mem[32'h807D];
+        c2 = dut.u_ddr.mem[32'h807E]; c3 = dut.u_ddr.mem[32'h807F];
+        if ({c3, c2, c1, c0} !== 32'd4) begin
+          $error("  [FAIL] NPU0 C[3][3] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd4);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU0 C[3][3] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+
+      // Verify NPU1 result: 2x3x2 -> all C = 2
+      $display("  [TB] Verifying NPU1 (2x3x2) C matrix...");
+      // NPU1 C[0][0]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8140]; c1 = dut.u_ddr.mem[32'h8141];
+        c2 = dut.u_ddr.mem[32'h8142]; c3 = dut.u_ddr.mem[32'h8143];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[0][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[0][0] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU1 C[0][1]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8144]; c1 = dut.u_ddr.mem[32'h8145];
+        c2 = dut.u_ddr.mem[32'h8146]; c3 = dut.u_ddr.mem[32'h8147];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[0][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[0][1] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU1 C[0][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8148]; c1 = dut.u_ddr.mem[32'h8149];
+        c2 = dut.u_ddr.mem[32'h814A]; c3 = dut.u_ddr.mem[32'h814B];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[0][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[0][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU1 C[1][0]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h814C]; c1 = dut.u_ddr.mem[32'h814D];
+        c2 = dut.u_ddr.mem[32'h814E]; c3 = dut.u_ddr.mem[32'h814F];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[1][0] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[1][0] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU1 C[1][1]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8150]; c1 = dut.u_ddr.mem[32'h8151];
+        c2 = dut.u_ddr.mem[32'h8152]; c3 = dut.u_ddr.mem[32'h8153];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[1][1] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[1][1] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+      // NPU1 C[1][2]
+      begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8154]; c1 = dut.u_ddr.mem[32'h8155];
+        c2 = dut.u_ddr.mem[32'h8156]; c3 = dut.u_ddr.mem[32'h8157];
+        if ({c3, c2, c1, c0} !== 32'd2) begin
+          $error("  [FAIL] NPU1 C[1][2] = 0x%08h (expect 0x%08h)", {c3, c2, c1, c0}, 32'd2);
+          mg_errs = mg_errs + 1;
+        end else begin
+          $display("  [TB] NPU1 C[1][2] = %0d OK", $signed({c3, c2, c1, c0}));
+        end
+      end
+
       total_errs = total_errs + mg_errs;
     end
 
