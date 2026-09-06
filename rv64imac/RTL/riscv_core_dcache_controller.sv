@@ -199,7 +199,12 @@ end
 //            TAG COMPARISON BLOCK             //
 /////////////////////////////////////////////////
 
-assign   tag_hit    = (TAG_MEM[  i_addr_from_core[`INDEX]   ] == i_addr_from_core[`TAG]) &&  VALID_MEM[  i_addr_from_core[`INDEX]   ]; 
+// Icarus Verilog does not re-trigger sensitivity on array element NBA updates
+// when the read is inside an 'assign' statement. Using always_comb ensures the
+// block re-evaluates when VALID_MEM or TAG_MEM elements change.
+always_comb begin : TAG_HIT_BLOCK
+    tag_hit = (TAG_MEM[i_addr_from_core[`INDEX]] == i_addr_from_core[`TAG]) && VALID_MEM[i_addr_from_core[`INDEX]];
+end 
 
 // MMIO (uncached peripheral) region detection
 logic                      mmio_sel;
