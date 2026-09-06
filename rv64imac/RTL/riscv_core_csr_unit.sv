@@ -1071,11 +1071,24 @@ assign o_csr_unit_addr_ctrl = i_csr_unit_mret_wb | i_csr_unit_sret;
 assign o_csr_unit_mux1 = ((current_state == setting_up) | i_csr_unit_mret_wb | i_csr_unit_sret);
 
 
+// An interrupt is "pending" only when its source is asserted AND its global
+// enable is set.  The flush terms below previously used the bare
+// (mstatus_mie | mstatus_sie) levels: merely ENABLING interrupts (with no
+// source pending) kept csr_flush_exe/id/if asserted every cycle, so no
+// instruction could ever retire past ID/EX and the pipeline starved -- the
+// fetch ran ahead while mepc captured a speculative fetch PC on the
+// eventual trap.  Gating on a real pending interrupt drains the pipeline
+// precisely when a trap is about to be taken (and lets it run normally
+// otherwise).
+wire intr_pend_m = mstatus_mie & ((mie_meie & mip_meip) | (mie_mtie & mip_mtip));
+wire intr_pend_s = mstatus_sie & ((mie_seie & ip_seip) | (mie_stie & ip_stip));
+wire intr_pending = intr_pend_m | intr_pend_s;
+
 //flush signals
-assign csr_flush_mem = i_csr_unit_lw_access_fault | i_csr_unit_sw_access_fault | ((mstatus_mie | mstatus_sie) & i_csr_unit_mem_wen) | (i_csr_unit_mret_wb | i_csr_unit_sret);
-assign csr_flush_exe = csr_flush_mem | i_csr_unit_illegal_instr_exe | i_csr_unit_instr_addr_misaligned | (mstatus_mie | mstatus_sie);
-assign csr_flush_id  = csr_flush_exe | pending_exception | (mstatus_mie | mstatus_sie);
-assign csr_flush_if  = pending_exception |(current_state == setting_up) | (mstatus_mie) | (mstatus_sie) | (i_csr_unit_mret_wb | i_csr_unit_sret);
+assign csr_flush_mem = i_csr_unit_lw_access_fault | i_csr_unit_sw_access_fault | (intr_pending & i_csr_unit_mem_wen) | (i_csr_unit_mret_wb | i_csr_unit_sret);
+assign csr_flush_exe = csr_flush_mem | i_csr_unit_illegal_instr_exe | i_csr_unit_instr_addr_misaligned | intr_pending;
+assign csr_flush_id  = csr_flush_exe | pending_exception | intr_pending;
+assign csr_flush_if  = pending_exception |(current_state == setting_up) | intr_pending | (i_csr_unit_mret_wb | i_csr_unit_sret);
 
 
 assign o_csr_unit_mem_flush = csr_flush_mem;
