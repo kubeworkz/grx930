@@ -2,15 +2,23 @@
 
 ## Executive Summary
 
-The C930 SoC currently has a single RV64IMAC core and an 8×8 systolic NPU.
-This document outlines a path to a dual-core architecture, covering resource
-budget, bus coherence, NPU scheduling, and FPGA feasibility.
+The C930 SoC now has **two RV64IMAC cores, two 8×8 systolic NPUs**, a
+4-master AXI crossbar, and a dual-core MMIO arbiter.  The dual-core
+groundwork is complete and verified end-to-end: CPU1 boots from the boot
+ROM, parks in a `CORE1_RELEASE` poll loop, and both cores can program the
+NPUs and exchange mailboxes through the shared crossbar (Test 9 in
+`tb_c930_soc_full.sv`).  This document records that work and the roadmap
+for the ambitious **Phase 3: 4-core + 2-NPU**.
 
-**Recommendation:** Add a second core only after completing three higher-
-leverage optimizations: (1) NPU command queue (done), (2) DDR bandwidth
-doubling, and (3) NPU command coalescing. A second core costs ~20K LUTs
-and requires bus coherence logic — it fits on Artix-7-200T but not on the
-current Arty A7-100T.
+**Phase 3 scope (agreed):**
+
+- 4 cores (CPU0-3), 2 NPUs (already done), MESI directory-based cache
+  coherence, 64 KB shared L2, RISC-V AIA APLIC for interrupt routing,
+  and DDR command reordering for mixed CPU/NPU traffic.
+
+**Estimated effort: ~6-8 weeks.**  The dual-core and 2-NPU halves are
+banked; the coherence stack (MESI directory + shared L2) is the bulk of
+what remains and is architectural, not incremental.
 
 ---
 
@@ -45,7 +53,15 @@ current Arty A7-100T.
 
 ---
 
-## 2. Dual-Core Architecture
+## 2. Dual-Core Architecture (IMPLEMENTED ✅)
+
+Status: CPU1 boots at boot-ROM `0x10020`, parks polling `CORE1_RELEASE`
+(`0x4000_0FF4`), and jumps to a worker entry address when armed.  Both
+cores read `HART_ID` (`0x4000_0FF0`) to branch on identity.  Verified by
+Test 9 (dual-core HART_ID + RELEASE handshake, per-core GEMM
+verification) in the full-SoC suite.
+
+Resource budget (analysis from the original design):
 
 ### 2.1 Resource Budget
 
@@ -185,7 +201,9 @@ GEMM:   A[8×8] × B[8×8] = C[8×8]   (single larger GEMM)
 The NPU already supports arbitrary M/N/K up to MAX_M/MAX_N/MAX_K. The
 backend's tiling logic should batch small GEMMs into larger ones.
 
-### 3.3 Future: Dual-Core NPU Scheduling
+### 3.3 Dual-Core NPU Scheduling (IMPLEMENTED ✅)
+
+Two cores and two NPUs now exist; the scheduling model is:
 
 With two cores, scheduling becomes:
 
@@ -248,31 +266,55 @@ For v2, a second DDR3L chip (or wider bus) would double bandwidth:
 
 ## 5. Implementation Roadmap
 
-### Phase 1: Current (done)
+### Phase 1: Single-core SoC (done)
 - [x] 8×8 systolic array
 - [x] 4-entry NPU command queue
 - [x] DDR3L MIG controller
 - [x] Arty A7-100T board bring-up firmware
 - [x] ECP5 and Artix-7 synthesis flows
 
-### Phase 2: Bandwidth (next)
-- [ ] DMA prefetch optimization (already implemented)
-- [ ] NPU command coalescing (software-level in grxcp backend)
-- [ ] Wider DDR bus (board change)
+### Phase 2: Dual-core + 2-NPU groundwork (done)
+- [x] Second RV64IMAC core (CPU1, boots at 0x10020, `CORE_RESET_PC`)
+- [x] Second NPU (NPU1 through the DMA arbiter)
+- [x] 4-master AXI crossbar (CPU0 I/D, CPU1 I/D, NPU DMA arbiter)
+- [x] Dual-core MMIO arbiter (`c930_mmio_arb`) with `HART_ID`
+- [x] Boot-ROM parking loop + `CORE1_RELEASE` handshake
+- [x] I-cache fetch-PC race fix (`post_fill` refresh; kills the +2 slip)
+- [x] MMIO bridge special-transaction path (HART_ID/RELEASE at
+      registered AXI timing)
+- [x] Dual-core firmware test (Test 9: handshake + per-core GEMM verify)
 
-### Phase 3: Multi-Core (future)
-- [ ] Upgrade to Arty A7-200T ($180, same family)
-- [ ] Add second RV64IMAC core
-- [ ] Shared-bus round-robin arbiter
-- [ ] Dual-port icache/dcache
-- [ ] Core 1 I/O offload firmware
-- [ ] Core 1 DMA prefetch manager
+### Phase 3: 4-core + 2-NPU (ambitious, ~6-8 weeks)
+
+Target: 4 cores, 2 NPUs, coherent memory hierarchy, real interrupt
+routing, and a memory controller that copes with mixed CPU/NPU traffic.
+
+- [ ] Cores 2-3: same boot-ROM poll architecture, new `CORE_RESET_PC`
+      values + per-core RELEASE slots (mechanical; independent of
+      coherence work)
+- [ ] **64 KB shared L2** (point of coherence between per-core L1s and
+      DDR)
+- [ ] **MESI directory-based coherency**: per-core L1 ownership states,
+      home directory in the crossbar/L2, invalidation + writeback flows
+- [ ] **APLIC** (RISC-V AIA, machine level, minimal subset) at
+      `0x4000_4000`: 3-source priority encoder (NPU0/NPU1/UART) with
+      claim/complete
+- [ ] **DDR command reordering** for mixed CPU/NPU traffic (bank-aware
+      scheduling in a new memory-controller front-end)
+
+Sequencing: APLIC → L2 → MESI directory → DDR reorder (coherence is
+first built against the L2, then made multi-core).  Cores 3-4 can be
+added at any point.
+
+**Feasibility note:** 4 cores + 64 KB L2 + MESI directory will not fit
+Arty A7-200T (2 cores alone project ~35%).  Phase 3 is ASIC-class or
+requires a larger part (e.g. Nexys Video at ~$250).
 
 ### Phase 4: Advanced (long-term)
-- [ ] Cache coherence (MESI protocol) if needed
 - [ ] NPU hardware scheduler (auto-dispatch from DDR-resident queue)
 - [ ] DDR4 upgrade for higher bandwidth
 - [ ] Linux support on Core 1 (Core 0 runs bare-metal NPU firmware)
+- [ ] Coherence extensions (MOESI / scoped coherence, see GRXIConnect)
 
 ---
 
@@ -280,29 +322,36 @@ For v2, a second DDR3L chip (or wider bus) would double bandwidth:
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| Artix-7-200T doesn't fit 2 cores | Blocks Phase 3 | Low (35% utilization projected) | Use Nexys Video (same part) |
-| Bus contention slows dual-core | Reduces benefit | Medium | Round-robin arbiter, Core 1 handles I/O only |
-| DDR bandwidth still bottleneck | NPU underutilized | High (already 5:1 ratio) | DMA prefetch, command coalescing |
-| Cache coherence bugs | Data corruption | Low (v1 uses shared cache) | No coherence needed for shared-bus model |
+| 4 cores + 64KB L2 + MESI don't fit Arty A7-200T | Blocks Phase 3 on current board | High | Use Nexys Video (same part) or target ASIC flow |
+| MESI directory subtle bugs (lost invalidations, stale ownership) | Data corruption | Medium | Formal verification on the coherence FSM; directed multi-core mailbox tests |
+| Shared L2 becomes the new bottleneck | NPU underutilized | Medium | DDR reordering; wider data path |
+| DDR bandwidth still bottleneck | NPU underutilized | High (already 5:1 ratio) | DMA prefetch, command coalescing, DDR reorder |
+| APLIC interrupt storms / lost claims | System hangs | Low | Claim/complete protocol, edge vs level source config, TB stress tests |
 | grxcp backend doesn't coalesce | Missed optimization | Medium | Document coalescing API for grxcp team |
 
 ---
 
 ## 7. Recommendations
 
-1. **Don't add a second core yet.** The three higher-leverage optimizations
-   (command queue ✅, DMA prefetch ✅, command coalescing) have better
-   ROI and don't require a bigger FPGA.
+1. **Dual-core and 2-NPU are banked.**  The remaining Phase 3 work is
+   the coherence stack, APLIC, and DDR reordering — architectural, not
+   incremental.
 
-2. **Upgrade to Arty A7-200T when ready.** Same board family, $50 more,
-   2.5× the LUTs. The 2-core design fits at ~35% utilization.
+2. **Build in this order: APLIC → shared L2 → MESI directory → DDR
+   reorder.**  APLIC is self-contained (good warm-up), the L2 is the
+   coherence point, MESI makes it multi-core, and reordering only pays
+   off once the L2 aggregates traffic.
 
-3. **Use shared-bus round-robin for v1.** No coherence needed. Core 0
-   runs NPU firmware, Core 1 handles I/O and prefetch.
+3. **Cores 3-4 are independent of coherence.**  Add them whenever;
+   they reuse the verified boot/poll architecture.
 
-4. **Let grxcp handle command coalescing.** The NPU already supports
-   arbitrary M/N/K. The backend should batch small GEMMs into larger ones.
+4. **Plan the board now.**  Phase 3 exceeds the A7-200T; decide between
+   Nexys Video and the ASIC flow before the coherence work lands.
 
-5. **Defer cache coherence.** The grxcp workload is NPU-bound, not
-   CPU-bound. Two cores sharing DDR3L through a round-robin arbiter is
-   sufficient.
+5. **Let grxcp handle command coalescing.**  The NPU already supports
+   arbitrary M/N/K. The backend should batch small GEMMs into larger
+   ones (documented for the grxcp team).
+
+6. **Use the NPU queue lock pattern.**  Both cores can queue GEMMs to
+   the shared NPU CSRs; production firmware should take a software
+   spinlock around queue programming.
