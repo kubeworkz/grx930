@@ -1391,6 +1391,7 @@ module c930_soc_top
   logic [7:0]   mmio_arb_wr_strobe;
   logic         mmio_arb_wr_valid;
   logic         mmio_arb_wr_done;
+  logic         mmio_arb_req_core;
 
   c930_mmio_arb u_mmio_arb (
     .i_clk           (core_clk),
@@ -1427,7 +1428,10 @@ module c930_soc_top
     .o_mmio_write_data   (mmio_arb_wr_data),
     .o_mmio_write_strobe (mmio_arb_wr_strobe),
     .o_mmio_write_valid  (mmio_arb_wr_valid),
-    .i_mmio_write_done   (mmio_arb_wr_done)
+    .i_mmio_write_done   (mmio_arb_wr_done),
+
+    // Requesting core ID (for the bridge's HART_ID register)
+    .o_req_core          (mmio_arb_req_core)
   );
 
   c930_mmio_bridge u_mmio_bridge (
@@ -1444,6 +1448,8 @@ module c930_soc_top
     .i_mmio_write_strobe(mmio_arb_wr_strobe),
     .i_mmio_write_valid (mmio_arb_wr_valid),
     .o_mmio_write_done  (mmio_arb_wr_done),
+
+    .i_hart_id          (mmio_arb_req_core),
 
     // Raw AXI4-Lite output (before address decode mux)
     .m_axi_awaddr       (mmio_awaddr_raw),

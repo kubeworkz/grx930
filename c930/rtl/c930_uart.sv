@@ -134,7 +134,13 @@ module c930_uart
   logic [3:0]  tx_baud_cnt;
   logic        tx_pop_req;  // TX state machine requests FIFO pop
 
-  assign tx_pop_req = (tx_state == TX_IDLE) && !tx_fifo_empty;
+  // Pop only on a baud tick: the TX engine latches tx_shift_reg from the
+  // FIFO exclusively on baud_tick in TX_IDLE, so popping as soon as a byte
+  // lands (previous code) discarded it before the shift register ever saw
+  // it -- tx_pop_req stayed high, rd_ptr advanced, and by the next tick the
+  // FIFO was empty again.  Gating the pop on baud_tick pairs the dequeue
+  // with the latch that actually consumes the byte.
+  assign tx_pop_req = (tx_state == TX_IDLE) && !tx_fifo_empty && baud_tick;
   assign tx_done = (tx_state == TX_STOP) && (tx_baud_cnt == 4'd15);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin

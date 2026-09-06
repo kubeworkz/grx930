@@ -2662,6 +2662,194 @@ module tb_c930_soc_full;
       total_errs = total_errs + mg_errs;
     end
 
+    // =========================================================================
+    // Test 9: Dual-core (HART_ID + CORE1_RELEASE handshake)
+    //
+    // CPU0 (DDR 0x0000): reads HART_ID (expect 0), queues GEMM A (4x4x4
+    //   INT8, all-1s -> C = 4), verifies all 16 C elements, writes
+    //   CORE1_RELEASE = 0x4000 (CPU1 worker entry), waits for CPU1's GEMM
+    //   (STATUS.busy 0->1 then 1->0), writes DONE magic to 0x9300.
+    // CPU1 (boots at boot ROM 0x10020, parks polling RELEASE): jumps to
+    //   DDR 0x4000, reads HART_ID (expect 1), queues GEMM B (3x3x3 INT8,
+    //   all-2s -> C = 12), verifies all 9 C elements, writes 0xCAFE to
+    //   0x9200.
+    //
+    // Exercises: shared-bus dual-core boot, HART_ID MMIO reads from both
+    // cores, RELEASE register handshake, both cores programming the NPU
+    // through the shared CSR (serialized via busy polling), and each core
+    // verifying its own C matrix through the shared crossbar.
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 9: Dual-core (HART_ID + RELEASE handshake)");
+    $display("========================================");
+    begin
+      int dc_errs;
+      dc_errs = 0;
+
+      // Load dual-core firmware into DDR (0x0000 CPU0 + 0x4000 CPU1)
+      begin
+        int fw_fd; logic [7:0] fw_byte; int fw_addr;
+        fw_fd = $fopen("sw/dualcore_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+        end
+      end
+
+      // GEMM A operands: 4x4x4 INT8, all-1s (A 16B @0x8000, B 16B @0x8400)
+      for (int i = 0; i < 16; i++) begin
+        ddr_write_byte(32'h8000 + i, 8'h01);
+        ddr_write_byte(32'h8400 + i, 8'h01);
+      end
+      // GEMM B operands: 3x3x3 INT8, all-2s (A 9B @0xA000, B 9B @0xA400)
+      for (int i = 0; i < 9; i++) begin
+        ddr_write_byte(32'hA000 + i, 8'h02);
+        ddr_write_byte(32'hA400 + i, 8'h02);
+      end
+
+      // Clear status/mailbox region (0x9100-0x9300)
+      for (int i = 0; i < 32; i++)
+        ddr_write_byte(32'h9100 + i, 8'h00);
+      for (int i = 0; i < 8; i++)
+        ddr_write_byte(32'h9200 + i, 8'h00);
+      for (int i = 0; i < 8; i++)
+        ddr_write_byte(32'h9300 + i, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for CPU0 DONE magic
+      begin : wait_dc
+        int dc_cnt;
+        dc_cnt = 0;
+        forever begin
+          @(posedge clk);
+          dc_cnt = dc_cnt + 1;
+          if (dc_cnt > 500_000) begin
+            $error("  [FAIL] Dual-core TIMEOUT");
+            dc_errs = dc_errs + 1;
+            disable wait_dc;
+          end
+
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9300];
+            b1 = dut.u_ddr.mem[32'h9301];
+            b2 = dut.u_ddr.mem[32'h9302];
+            b3 = dut.u_ddr.mem[32'h9303];
+            if ({b3, b2, b1, b0} == 32'hDEADBEEF) begin
+              $display("  [PASS] Dual-core: both cores completed in %0d cycles", dc_cnt);
+              disable wait_dc;
+            end
+          end
+        end
+      end
+
+      // HART_ID checks (both cores read the same register, get own ID)
+      begin
+        logic [7:0] b0, b1, b2, b3;
+        b0 = dut.u_ddr.mem[32'h9100]; b1 = dut.u_ddr.mem[32'h9101];
+        b2 = dut.u_ddr.mem[32'h9102]; b3 = dut.u_ddr.mem[32'h9103];
+        if ({b3, b2, b1, b0} !== 32'h00000000) begin
+          $error("  [FAIL] CPU0 HART_ID = %0d (expect 0)", {b3, b2, b1, b0});
+          dc_errs = dc_errs + 1;
+        end else begin
+          $display("  [TB] CPU0 HART_ID = 0 OK");
+        end
+        b0 = dut.u_ddr.mem[32'h9108]; b1 = dut.u_ddr.mem[32'h9109];
+        b2 = dut.u_ddr.mem[32'h910A]; b3 = dut.u_ddr.mem[32'h910B];
+        if ({b3, b2, b1, b0} !== 32'h00000001) begin
+          $error("  [FAIL] CPU1 HART_ID = %0d (expect 1)", {b3, b2, b1, b0});
+          dc_errs = dc_errs + 1;
+        end else begin
+          $display("  [TB] CPU1 HART_ID = 1 OK");
+        end
+      end
+
+      // On-core C-verify error masks (0 = all elements matched)
+      begin
+        logic [7:0] b0, b1, b2, b3;
+        b0 = dut.u_ddr.mem[32'h9104]; b1 = dut.u_ddr.mem[32'h9105];
+        b2 = dut.u_ddr.mem[32'h9106]; b3 = dut.u_ddr.mem[32'h9107];
+        if ({b3, b2, b1, b0} !== 32'h00000000) begin
+          $error("  [FAIL] CPU0 C-verify mask = %08h (expect 0)", {b3, b2, b1, b0});
+          dc_errs = dc_errs + 1;
+        end else begin
+          $display("  [TB] CPU0 GEMM A all 16 elements == 4 OK");
+        end
+        b0 = dut.u_ddr.mem[32'h910C]; b1 = dut.u_ddr.mem[32'h910D];
+        b2 = dut.u_ddr.mem[32'h910E]; b3 = dut.u_ddr.mem[32'h910F];
+        if ({b3, b2, b1, b0} !== 32'h00000000) begin
+          $error("  [FAIL] CPU1 C-verify mask = %08h (expect 0)", {b3, b2, b1, b0});
+          dc_errs = dc_errs + 1;
+        end else begin
+          $display("  [TB] CPU1 GEMM B all 9 elements == 12 OK");
+        end
+      end
+
+      // CPU1 completion mailbox.  CPU1's store goes through the write-through
+      // D-cache -> crossbar -> DDR and may still be in flight the moment CPU0's
+      // DEADBEEF is detected (both cores finish back-to-back), so poll the
+      // mailbox with a bounded timeout instead of reading DDR immediately.
+      begin
+        logic [7:0] b0, b1, b2, b3;
+        int mb_cnt;
+        logic mb_ok;
+        mb_ok = 1'b0;
+        mb_cnt = 0;
+        while (!mb_ok && mb_cnt < 50_000) begin
+          @(posedge clk);
+          mb_cnt = mb_cnt + 1;
+          b0 = dut.u_ddr.mem[32'h9200]; b1 = dut.u_ddr.mem[32'h9201];
+          b2 = dut.u_ddr.mem[32'h9202]; b3 = dut.u_ddr.mem[32'h9203];
+          if ({b3, b2, b1, b0} === 32'h0000CAFE)
+            mb_ok = 1'b1;
+        end
+        if (!mb_ok) begin
+          $error("  [FAIL] CPU1 mailbox = %08h (expect 0xCAFE)", {b3, b2, b1, b0});
+          dc_errs = dc_errs + 1;
+        end else begin
+          $display("  [TB] CPU1 completion mailbox = 0xCAFE OK (after %0d cyc)", mb_cnt);
+        end
+      end
+
+      // TB-side C readbacks (independent of on-core verification)
+      $display("  [TB] Verifying GEMM A C matrix (16 x 4)...");
+      for (int i = 0; i < 16; i++) begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'h8800 + i*4];
+        c1 = dut.u_ddr.mem[32'h8800 + i*4 + 1];
+        c2 = dut.u_ddr.mem[32'h8800 + i*4 + 2];
+        c3 = dut.u_ddr.mem[32'h8800 + i*4 + 3];
+        if ({c3, c2, c1, c0} !== 32'h00000004) begin
+          $error("  [FAIL] GEMM A C[%0d] = %0d (expect 4)", i, $signed({c3, c2, c1, c0}));
+          dc_errs = dc_errs + 1;
+        end
+      end
+      $display("  [TB] Verifying GEMM B C matrix (9 x 12)...");
+      for (int i = 0; i < 9; i++) begin
+        logic [7:0] c0, c1, c2, c3;
+        c0 = dut.u_ddr.mem[32'hA800 + i*4];
+        c1 = dut.u_ddr.mem[32'hA800 + i*4 + 1];
+        c2 = dut.u_ddr.mem[32'hA800 + i*4 + 2];
+        c3 = dut.u_ddr.mem[32'hA800 + i*4 + 3];
+        if ({c3, c2, c1, c0} !== 32'h0000000C) begin
+          $error("  [FAIL] GEMM B C[%0d] = %0d (expect 12)", i, $signed({c3, c2, c1, c0}));
+          dc_errs = dc_errs + 1;
+        end
+      end
+
+      total_errs = total_errs + dc_errs;
+    end
+
 
     // Summary
     $display("\n========================================");

@@ -66,13 +66,30 @@ module c930_bootrom
   initial begin
     for (int i = 0; i < MEM_DEPTH; i++)
       rom[i] = '0;
-    // Built-in core-1 parking loop at word 4 (byte 0x10020): jal x0, 0.
-    // CPU1 resets to 0x10020 and must never run the CPU0 firmware; the
-    // defaults stand unless the hex file provides its own words 4-7.
-    rom[4] = 64'h0000_0000_0000_006f;  // jal x0, 0  (self-loop)
-    rom[5] = 64'h0000_0000_0000_0013;  // nop padding
-    rom[6] = 64'h0000_0000_0000_0013;
-    rom[7] = 64'h0000_0000_0000_0013;
+    // Built-in core-1 parking loop at entry 4 (byte 0x10020): poll the
+    // CORE1_RELEASE register (0x4000_0FF4) and jump to the address the
+    // primary core writes there.  CPU1 resets to 0x10020 and must never
+    // run the CPU0 firmware; the defaults stand unless the hex file
+    // provides its own words 4-7.
+    //   0x10020: nop              (first-instruction slip-buffer)
+    //   0x10024: lui  x5, 0x40001  x5 = 0x4000_1000
+    //   0x10028: lw   x6, -12(x5)  x6 = RELEASE (0x4000_0FF4 = 0x1000-0xC)
+    //   0x1002C: beq  x6, x0, -8   loop to 0x10024 while RELEASE == 0
+    //   0x10030: jalr x0, x6, 0    jump to RELEASE (worker entry address)
+    //
+    // NOTE: +0xFF4 (4084) does not fit a signed 12-bit I-immediate, so the
+    // RELEASE load uses lui 0x40001 + lw -12 instead of lui 0x40000 + lw
+    // 0xFF4 (the latter would sign-extend to -12 and read 0x3FFF_FFF4).
+    //
+    // PACKED layout: the I-cache fills 32-bit words contiguously, so each
+    // 64-bit ROM entry must hold TWO instructions -- [31:0] at byte
+    // address 0x10000+8*i, [63:32] at 0x10000+8*i+4.  One zero-extended
+    // instruction per entry left a zero gap at every other word, which
+    // CPU1 decoded as compressed zeroes and walked off into the firmware.
+    rom[4] = 64'h4000_12B7_0000_0013;   // nop@0x10020 | lui@0x10024
+    rom[5] = 64'hFE03_0CE3_FF42_A303;   // lw@0x10028   | beq@0x1002C
+    rom[6] = 64'h0000_0013_0003_0067;   // jalr@0x10030 | nop@0x10034
+    rom[7] = 64'h0000_0013_0000_0013;   // nop | nop
     // Only load if a real hex file is provided (not empty or placeholder)
     // Icarus crashes on $readmemh("")
     $readmemh(HEX_FILE, rom);

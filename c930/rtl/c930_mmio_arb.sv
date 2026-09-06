@@ -7,10 +7,15 @@
 // a core holds its request until done is asserted, so the arbiter serializes
 // transactions and routes the response back to the granted core.
 //
-// Also implements a HART_ID register at 0x4000_0FF0 (read-only): a read
-// returns the requesting core's ID (0 or 1) without touching the bridge.
-// This lets shared boot firmware branch on the calling core.  Writes to
-// HART_ID are ignored (completed immediately).
+// ALL transactions (including the SoC-status registers HART_ID at
+// 0x4000_0FF0 and CORE1_RELEASE at 0x4000_0FF4) are forwarded to the bridge,
+// which intercepts those addresses and responds with its normal REGISTERED
+// done timing.  This is deliberate: an arbiter-local "instant" response
+// (combinational done, ~2 cycles) breaks the CPU's load pipeline, which is
+// tuned for the bridge's ~5+ cycle registered-done AXI-style transactions.
+//
+// The requesting core's ID is passed to the bridge as o_req_core so the
+// bridge can answer HART_ID reads with the correct value.
 // -----------------------------------------------------------------------------
 module c930_mmio_arb
 (
@@ -49,10 +54,11 @@ module c930_mmio_arb
   output logic [63:0] o_mmio_write_data,
   output logic [7:0]  o_mmio_write_strobe,
   output logic        o_mmio_write_valid,
-  input  logic        i_mmio_write_done
-);
+  input  logic        i_mmio_write_done,
 
-  localparam logic [63:0] HART_ID_ADDR = 64'h4000_0FF0;
+  // ---- Requesting core ID (for the bridge's HART_ID register) ----
+  output logic        o_req_core
+);
 
   // -------------------------------------------------------------------------
   // Grant state machine (round-robin, holds grant until transaction done)
@@ -65,7 +71,6 @@ module c930_mmio_arb
   state_t state;
   logic   grant;        // 0 = core0, 1 = core1
   logic   is_write;     // 0 = read, 1 = write
-  logic   is_hart;      // current transaction is the HART_ID register
 
   logic [1:0] rr_ptr;   // round-robin pointer (only bit 0 used)
 
@@ -73,17 +78,16 @@ module c930_mmio_arb
   wire core0_req = i0_rd_req | i0_wr_valid;
   wire core1_req = i1_rd_req | i1_wr_valid;
 
-  // Registered grant for response routing
+  // Registered grant for response routing / HART_ID
   logic grant_r;
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      state   <= IDLE;
-      grant   <= 1'b0;
-      grant_r <= 1'b0;
-      is_write<= 1'b0;
-      is_hart <= 1'b0;
-      rr_ptr  <= 2'd0;
+      state    <= IDLE;
+      grant    <= 1'b0;
+      grant_r  <= 1'b0;
+      is_write <= 1'b0;
+      rr_ptr   <= 2'd0;
     end else begin
       case (state)
         IDLE: begin
@@ -92,39 +96,25 @@ module c930_mmio_arb
             grant    <= rr_ptr[0];
             grant_r  <= rr_ptr[0];
             is_write <= rr_ptr[0] ? i1_wr_valid : i0_wr_valid;
-            // HART_ID check on the winning core's address
-            if (rr_ptr[0]) begin
-              is_hart <= (i1_rd_req && i1_rd_addr == HART_ID_ADDR) ||
-                         (i1_wr_valid && i1_wr_addr == HART_ID_ADDR);
-            end else begin
-              is_hart <= (i0_rd_req && i0_rd_addr == HART_ID_ADDR) ||
-                         (i0_wr_valid && i0_wr_addr == HART_ID_ADDR);
-            end
-            state   <= TRANS;
-            rr_ptr  <= rr_ptr + 1'b1;
+            state    <= TRANS;
+            rr_ptr   <= rr_ptr + 1'b1;
           end else if (core0_req) begin
             grant    <= 1'b0;
             grant_r  <= 1'b0;
             is_write <= i0_wr_valid;
-            is_hart  <= (i0_rd_req && i0_rd_addr == HART_ID_ADDR) ||
-                        (i0_wr_valid && i0_wr_addr == HART_ID_ADDR);
             state    <= TRANS;
             rr_ptr   <= rr_ptr + 1'b1;
           end else if (core1_req) begin
             grant    <= 1'b1;
             grant_r  <= 1'b1;
             is_write <= i1_wr_valid;
-            is_hart  <= (i1_rd_req && i1_rd_addr == HART_ID_ADDR) ||
-                        (i1_wr_valid && i1_wr_addr == HART_ID_ADDR);
             state    <= TRANS;
             rr_ptr   <= rr_ptr + 1'b1;
           end
         end
         TRANS: begin
-          // Hold until the bridge (or HART_ID logic) completes the transaction
-          if (is_hart) begin
-            state <= IDLE;  // one-cycle HART_ID response
-          end else if (is_write) begin
+          // Hold until the bridge completes the transaction
+          if (is_write) begin
             if (i_mmio_write_done)
               state <= IDLE;
           end else begin
@@ -140,32 +130,29 @@ module c930_mmio_arb
   // -------------------------------------------------------------------------
   // Forwarding to bridge
   // -------------------------------------------------------------------------
-  // Read: granted core's address/request, or the HART_ID path (no bridge)
   assign o_mmio_read_addr = grant ? i1_rd_addr : i0_rd_addr;
-  assign o_mmio_read_req  = (state == TRANS) && !is_write && !is_hart &&
+  assign o_mmio_read_req  = (state == TRANS) && !is_write &&
                             (grant ? i1_rd_req : i0_rd_req);
 
-  // Write: granted core's data path
   assign o_mmio_write_addr   = grant ? i1_wr_addr   : i0_wr_addr;
   assign o_mmio_write_data   = grant ? i1_wr_data   : i0_wr_data;
   assign o_mmio_write_strobe = grant ? i1_wr_strobe : i0_wr_strobe;
-  assign o_mmio_write_valid  = (state == TRANS) && is_write && !is_hart &&
+  assign o_mmio_write_valid  = (state == TRANS) && is_write &&
                                (grant ? i1_wr_valid : i0_wr_valid);
+
+  // Requesting core ID, registered at grant time (stable through TRANS)
+  assign o_req_core = grant_r;
 
   // -------------------------------------------------------------------------
   // Response routing
   // -------------------------------------------------------------------------
-  // Read done: bridge done (routed to granted core), or HART_ID one-shot
-  assign o0_rd_done = (state == TRANS) && !grant_r && (is_hart || i_mmio_read_done);
-  assign o1_rd_done = (state == TRANS) &&  grant_r && (is_hart || i_mmio_read_done);
+  assign o0_rd_done = (state == TRANS) && !grant_r && i_mmio_read_done;
+  assign o1_rd_done = (state == TRANS) &&  grant_r && i_mmio_read_done;
 
-  // HART_ID data: core ID in [31:0]; otherwise bridge read data
-  wire [63:0] hart_data = 64'h0000_0000_0000_0000 | grant_r;
-  assign o0_rd_data = is_hart ? hart_data : i_mmio_read_data;
-  assign o1_rd_data = is_hart ? hart_data : i_mmio_read_data;
+  assign o0_rd_data = i_mmio_read_data;
+  assign o1_rd_data = i_mmio_read_data;
 
-  // Write done: bridge done (or one-shot for HART_ID writes)
-  assign o0_wr_done = (state == TRANS) && !grant_r && (is_hart || i_mmio_write_done);
-  assign o1_wr_done = (state == TRANS) &&  grant_r && (is_hart || i_mmio_write_done);
+  assign o0_wr_done = (state == TRANS) && !grant_r && i_mmio_write_done;
+  assign o1_wr_done = (state == TRANS) &&  grant_r && i_mmio_write_done;
 
 endmodule

@@ -58,6 +58,14 @@ logic                      fill_s2 = 1'b0;   // s2 condition captured at MEM_REQ
 // read also needs the pipeline to advance), preventing the two period-2
 // hit-stall loops from phase-locking in anti-phase and deadlocking.
 logic [ADDR_WIDTH-1      : 0] served_pc = 'b0;
+// Set on the UPDATE_CACHE exit: the line was just written to INSTR_MEM, so
+// read_data_reg still holds the OLD line (zeros at reset).  The core's
+// fetch-PC offset register samples the instruction bus during the IDLE read
+// cycle that precedes LOAD_DONE, so serving a just-filled line one cycle
+// later would make it latch an offset computed from stale data (a zero word
+// decodes as "compressed" -> PC slips +2 and the stream desyncs forever).
+// Hold one extra stalled IDLE cycle to refresh read_data_reg first.
+logic                       post_fill = 1'b0;
 // Initializers keep the combinational FSM/tag logic defined before the first
 // reset edge (Icarus would otherwise cascade X through the cache at t=0).
 initial begin
@@ -79,10 +87,14 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         fill_addr <= 'b0;
         fill_s2 <= 1'b0;
         served_pc <= 'b0;
+        post_fill <= 1'b0;
     end
     else 
     begin
         STATE <= NEXT ;
+        // post_fill: high during the first IDLE cycle after a fill write.
+        if (STATE == UPDATE_CACHE)      post_fill <= 1'b1;
+        else if (STATE == IDLE)         post_fill <= 1'b0;
         // Latch the fill target when a miss is accepted in IDLE (only the
         // IDLE->MEM_REQ transition; MEM_REQ keeps NEXT==MEM_REQ while waiting
         // for the line and must not re-latch a redirected fetch PC).
@@ -166,7 +178,14 @@ case (STATE)
                              // core samples the word from read_data_reg in LOAD_DONE)
                 o_rd_en = 1;
                 o_stall = 1;
-                NEXT = LOAD_DONE;
+                // After a fill the line was just written to INSTR_MEM but
+                // read_data_reg still holds stale data; spend one extra
+                // stalled cycle refreshing it so the core's fetch-PC offset
+                // is computed from the real instruction, not old-line data.
+                if (post_fill)
+                    NEXT = IDLE;
+                else
+                    NEXT = LOAD_DONE;
             end
             else begin // READ MISS
                 o_stall = 1;
