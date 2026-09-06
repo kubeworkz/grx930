@@ -3,10 +3,13 @@
 //
 // Full C930-class SoC integrating:
 //
-//   * riscv_core_top       : CPU (RV64IMAC, 5-stage in-order, I/D caches)
+//   * riscv_core_top       : CPU0 (RV64IMAC, 5-stage in-order, I/D caches)
+//   * riscv_core_top       : CPU1 (second core, boots at DDR[0x2000])
 //   * c930_npu_top         : NPU (AXI4-Lite CSR + AXI4 full DMA)
-//   * c930_axi_cache_adapter (x2) : CPU cache-line ports → AXI4 full master
-//   * c930_axi_crossbar    : 3-master × 4-slave AXI4 shared-bus crossbar
+//   * c930_axi_cache_adapter (x4) : CPU cache-line ports → AXI4 full master
+//   * c930_axi_crossbar    : 4-master × 4-slave AXI4 shared-bus crossbar
+//   * c930_axi_dma_arb     : NPU0+NPU1 DMA merge (M2) and CPU1 I/D merge (M3)
+//   * c930_mmio_arb        : CPU0+CPU1 uncached MMIO merge + HART_ID register
 //   * c930_bootrom         : 1 KB boot ROM (AXI4 full slave, read-only)
 //   * c930_ddr             : unified DDR (AXI4 full slave)
 //   * c930_uart            : 16550-compatible UART (AXI4-Lite slave)
@@ -453,7 +456,217 @@ module c930_soc_top
   );
 
   // =========================================================================
-  // AXI4 crossbar: 3 masters × 4 slaves
+  // CPU1 cache-line ports (second core)
+  // =========================================================================
+  logic [63:0]  icache1_rd_addr;
+  logic         icache1_rd_req;
+  logic         icache1_rd_done;
+  logic [255:0] icache1_rd_line;
+
+  logic [63:0]  dcache1_rd_addr;
+  logic         dcache1_rd_req;
+  logic         dcache1_rd_done;
+  logic [255:0] dcache1_rd_line;
+
+  logic [63:0]  dcache1_wr_addr;
+  logic [63:0]  dcache1_wr_data;
+  logic [7:0]   dcache1_wr_strobe;
+  logic         dcache1_wr_valid;
+  logic         dcache1_wr_done;
+
+  // CPU1 MMIO port (uncached, merged with CPU0 by c930_mmio_arb)
+  logic [63:0]  mmio1_rd_addr;
+  logic         mmio1_rd_req;
+  logic         mmio1_rd_done;
+  logic [63:0]  mmio1_rd_data;
+  logic [63:0]  mmio1_wr_addr;
+  logic [63:0]  mmio1_wr_data;
+  logic [7:0]   mmio1_wr_strobe;
+  logic         mmio1_wr_valid;
+  logic         mmio1_wr_done;
+
+  // CPU1 cache adapter AXI4 signals
+  logic [3:0]   icache1_awid;   logic [63:0]  icache1_awaddr;  logic [7:0]   icache1_awlen;
+  logic [2:0]   icache1_awsize; logic [1:0]   icache1_awburst; logic         icache1_awvalid;
+  logic         icache1_awready;
+  logic [63:0]  icache1_wdata;  logic [7:0]   icache1_wstrb;   logic         icache1_wlast;
+  logic         icache1_wvalid; logic         icache1_wready;
+  logic [3:0]   icache1_bid;    logic [1:0]   icache1_bresp;   logic         icache1_bvalid;
+  logic         icache1_bready;
+  logic [3:0]   icache1_arid;   logic [63:0]  icache1_araddr;  logic [7:0]   icache1_arlen;
+  logic [2:0]   icache1_arsize; logic [1:0]   icache1_arburst; logic         icache1_arvalid;
+  logic         icache1_arready;
+  logic [3:0]   icache1_rid;    logic [63:0]  icache1_rdata;   logic [1:0]   icache1_rresp;
+  logic         icache1_rlast;  logic         icache1_rvalid;  logic         icache1_rready;
+
+  logic [3:0]   dcache1_awid;   logic [63:0]  dcache1_awaddr;  logic [7:0]   dcache1_awlen;
+  logic [2:0]   dcache1_awsize; logic [1:0]   dcache1_awburst; logic         dcache1_awvalid;
+  logic         dcache1_awready;
+  logic [63:0]  dcache1_wdata;  logic [7:0]   dcache1_wstrb;   logic         dcache1_wlast;
+  logic         dcache1_wvalid; logic         dcache1_wready;
+  logic [3:0]   dcache1_bid;    logic [1:0]   dcache1_bresp;   logic         dcache1_bvalid;
+  logic         dcache1_bready;
+  logic [3:0]   dcache1_arid;   logic [63:0]  dcache1_araddr;  logic [7:0]   dcache1_arlen;
+  logic [2:0]   dcache1_arsize; logic [1:0]   dcache1_arburst; logic         dcache1_arvalid;
+  logic         dcache1_arready;
+  logic [3:0]   dcache1_rid;    logic [63:0]  dcache1_rdata;   logic [1:0]   dcache1_rresp;
+  logic         dcache1_rlast;  logic         dcache1_rvalid;  logic         dcache1_rready;
+
+  c930_axi_cache_adapter u_icache1_adapter (
+    .i_clk           (core_clk),
+    .i_rst_n         (core_rst_n),
+    .i_cache_rd_addr (icache1_rd_addr),
+    .i_cache_rd_req  (icache1_rd_req),
+    .o_cache_rd_done (icache1_rd_done),
+    .o_cache_rd_line (icache1_rd_line),
+    .i_cache_wr_addr  (64'd0),
+    .i_cache_wr_data  (64'd0),
+    .i_cache_wr_strobe(8'd0),
+    .i_cache_wr_valid (1'b0),
+    .o_cache_wr_done  (),
+    .m_axi_awid      (icache1_awid),
+    .m_axi_awaddr    (icache1_awaddr),
+    .m_axi_awlen     (icache1_awlen),
+    .m_axi_awsize    (icache1_awsize),
+    .m_axi_awburst   (icache1_awburst),
+    .m_axi_awvalid   (icache1_awvalid),
+    .m_axi_awready   (icache1_awready),
+    .m_axi_wdata     (icache1_wdata),
+    .m_axi_wstrb     (icache1_wstrb),
+    .m_axi_wlast     (icache1_wlast),
+    .m_axi_wvalid    (icache1_wvalid),
+    .m_axi_wready    (icache1_wready),
+    .m_axi_bid       (icache1_bid),
+    .m_axi_bresp     (icache1_bresp),
+    .m_axi_bvalid    (icache1_bvalid),
+    .m_axi_bready    (icache1_bready),
+    .m_axi_arid      (icache1_arid),
+    .m_axi_araddr    (icache1_araddr),
+    .m_axi_arlen     (icache1_arlen),
+    .m_axi_arsize    (icache1_arsize),
+    .m_axi_arburst   (icache1_arburst),
+    .m_axi_arvalid   (icache1_arvalid),
+    .m_axi_arready   (icache1_arready),
+    .m_axi_rid       (icache1_rid),
+    .m_axi_rdata     (icache1_rdata),
+    .m_axi_rresp     (icache1_rresp),
+    .m_axi_rlast     (icache1_rlast),
+    .m_axi_rvalid    (icache1_rvalid),
+    .m_axi_rready    (icache1_rready)
+  );
+
+  c930_axi_cache_adapter u_dcache1_adapter (
+    .i_clk           (core_clk),
+    .i_rst_n         (core_rst_n),
+    .i_cache_rd_addr (dcache1_rd_addr),
+    .i_cache_rd_req  (dcache1_rd_req),
+    .o_cache_rd_done (dcache1_rd_done),
+    .o_cache_rd_line (dcache1_rd_line),
+    .i_cache_wr_addr  (dcache1_wr_addr),
+    .i_cache_wr_data  (dcache1_wr_data),
+    .i_cache_wr_strobe(dcache1_wr_strobe),
+    .i_cache_wr_valid (dcache1_wr_valid),
+    .o_cache_wr_done  (dcache1_wr_done),
+    .m_axi_awid      (dcache1_awid),
+    .m_axi_awaddr    (dcache1_awaddr),
+    .m_axi_awlen     (dcache1_awlen),
+    .m_axi_awsize    (dcache1_awsize),
+    .m_axi_awburst   (dcache1_awburst),
+    .m_axi_awvalid   (dcache1_awvalid),
+    .m_axi_awready   (dcache1_awready),
+    .m_axi_wdata     (dcache1_wdata),
+    .m_axi_wstrb     (dcache1_wstrb),
+    .m_axi_wlast     (dcache1_wlast),
+    .m_axi_wvalid    (dcache1_wvalid),
+    .m_axi_wready    (dcache1_wready),
+    .m_axi_bid       (dcache1_bid),
+    .m_axi_bresp     (dcache1_bresp),
+    .m_axi_bvalid    (dcache1_bvalid),
+    .m_axi_bready    (dcache1_bready),
+    .m_axi_arid      (dcache1_arid),
+    .m_axi_araddr    (dcache1_araddr),
+    .m_axi_arlen     (dcache1_arlen),
+    .m_axi_arsize    (dcache1_arsize),
+    .m_axi_arburst   (dcache1_arburst),
+    .m_axi_arvalid   (dcache1_arvalid),
+    .m_axi_arready   (dcache1_arready),
+    .m_axi_rid       (dcache1_rid),
+    .m_axi_rdata     (dcache1_rdata),
+    .m_axi_rresp     (dcache1_rresp),
+    .m_axi_rlast     (dcache1_rlast),
+    .m_axi_rvalid    (dcache1_rvalid),
+    .m_axi_rready    (dcache1_rready)
+  );
+
+  // =========================================================================
+  // CPU1 bus arbiter: merges CPU1 I/D caches into crossbar M3 port
+  // =========================================================================
+  logic [3:0]   arb1_awid;   logic [63:0]  arb1_awaddr;  logic [7:0]   arb1_awlen;
+  logic [2:0]   arb1_awsize; logic [1:0]   arb1_awburst; logic         arb1_awvalid;
+  logic         arb1_awready;
+  logic [63:0]  arb1_wdata;  logic [7:0]   arb1_wstrb;   logic         arb1_wlast;
+  logic         arb1_wvalid; logic         arb1_wready;
+  logic [3:0]   arb1_bid;    logic [1:0]   arb1_bresp;   logic         arb1_bvalid;
+  logic         arb1_bready;
+  logic [3:0]   arb1_arid;   logic [63:0]  arb1_araddr;  logic [7:0]   arb1_arlen;
+  logic [2:0]   arb1_arsize; logic [1:0]   arb1_arburst; logic         arb1_arvalid;
+  logic         arb1_arready;
+  logic [3:0]   arb1_rid;    logic [63:0]  arb1_rdata;   logic [1:0]   arb1_rresp;
+  logic         arb1_rlast;  logic         arb1_rvalid;  logic         arb1_rready;
+
+  c930_axi_dma_arb #(
+    .ADDR_WIDTH (64),
+    .DATA_WIDTH (64),
+    .ID_WIDTH   (4)
+  ) u_core1_arb (
+    .i_clk     (core_clk),
+    .i_rst_n   (core_rst_n),
+
+    // CPU1 I-cache (master 0)
+    .m0_awid    (icache1_awid),  .m0_awaddr  (icache1_awaddr), .m0_awlen  (icache1_awlen),
+    .m0_awsize  (icache1_awsize),.m0_awburst (icache1_awburst),.m0_awvalid(icache1_awvalid),
+    .m0_awready (icache1_awready),
+    .m0_wdata   (icache1_wdata), .m0_wstrb   (icache1_wstrb),  .m0_wlast  (icache1_wlast),
+    .m0_wvalid  (icache1_wvalid),.m0_wready  (icache1_wready),
+    .m0_bid     (icache1_bid),   .m0_bresp   (icache1_bresp),  .m0_bvalid (icache1_bvalid),
+    .m0_bready  (icache1_bready),
+    .m0_arid    (icache1_arid),  .m0_araddr  (icache1_araddr), .m0_arlen  (icache1_arlen),
+    .m0_arsize  (icache1_arsize),.m0_arburst (icache1_arburst),.m0_arvalid(icache1_arvalid),
+    .m0_arready (icache1_arready),
+    .m0_rid     (icache1_rid),   .m0_rdata   (icache1_rdata),  .m0_rresp  (icache1_rresp),
+    .m0_rlast   (icache1_rlast), .m0_rvalid  (icache1_rvalid), .m0_rready (icache1_rready),
+
+    // CPU1 D-cache (master 1)
+    .m1_awid    (dcache1_awid),  .m1_awaddr  (dcache1_awaddr), .m1_awlen  (dcache1_awlen),
+    .m1_awsize  (dcache1_awsize),.m1_awburst (dcache1_awburst),.m1_awvalid(dcache1_awvalid),
+    .m1_awready (dcache1_awready),
+    .m1_wdata   (dcache1_wdata), .m1_wstrb   (dcache1_wstrb),  .m1_wlast  (dcache1_wlast),
+    .m1_wvalid  (dcache1_wvalid),.m1_wready  (dcache1_wready),
+    .m1_bid     (dcache1_bid),   .m1_bresp   (dcache1_bresp),  .m1_bvalid (dcache1_bvalid),
+    .m1_bready  (dcache1_bready),
+    .m1_arid    (dcache1_arid),  .m1_araddr  (dcache1_araddr), .m1_arlen  (dcache1_arlen),
+    .m1_arsize  (dcache1_arsize),.m1_arburst (dcache1_arburst),.m1_arvalid(dcache1_arvalid),
+    .m1_arready (dcache1_arready),
+    .m1_rid     (dcache1_rid),   .m1_rdata   (dcache1_rdata),  .m1_rresp  (dcache1_rresp),
+    .m1_rlast   (dcache1_rlast), .m1_rvalid  (dcache1_rvalid), .m1_rready (dcache1_rready),
+
+    // Merged AXI4 master (to crossbar M3)
+    .s_awid    (arb1_awid),    .s_awaddr  (arb1_awaddr),   .s_awlen  (arb1_awlen),
+    .s_awsize  (arb1_awsize),  .s_awburst (arb1_awburst),  .s_awvalid(arb1_awvalid),
+    .s_awready (arb1_awready),
+    .s_wdata   (arb1_wdata),   .s_wstrb   (arb1_wstrb),    .s_wlast  (arb1_wlast),
+    .s_wvalid  (arb1_wvalid),  .s_wready  (arb1_wready),
+    .s_bid     (arb1_bid),     .s_bresp   (arb1_bresp),    .s_bvalid (arb1_bvalid),
+    .s_bready  (arb1_bready),
+    .s_arid    (arb1_arid),    .s_araddr  (arb1_araddr),   .s_arlen  (arb1_arlen),
+    .s_arsize  (arb1_arsize),  .s_arburst (arb1_arburst),  .s_arvalid(arb1_arvalid),
+    .s_arready (arb1_arready),
+    .s_rid     (arb1_rid),     .s_rdata   (arb1_rdata),    .s_rresp  (arb1_rresp),
+    .s_rlast   (arb1_rlast),   .s_rvalid  (arb1_rvalid),   .s_rready (arb1_rready)
+  );
+
+  // =========================================================================
+  // AXI4 crossbar: 4 masters × 4 slaves
   //
   // M0: I-cache adapter
   // M1: D-cache adapter
@@ -637,6 +850,20 @@ module c930_soc_top
     .m2_arready (arb_arready),
     .m2_rid     (arb_rid),       .m2_rdata   (arb_rdata),      .m2_rresp  (arb_rresp),
     .m2_rlast   (arb_rlast),     .m2_rvalid  (arb_rvalid),     .m2_rready (arb_rready),
+
+    // ---- M3: CPU1 bus arbiter output (I/D caches) ----
+    .m3_awid    (arb1_awid),     .m3_awaddr  (arb1_awaddr),    .m3_awlen  (arb1_awlen),
+    .m3_awsize  (arb1_awsize),   .m3_awburst (arb1_awburst),   .m3_awvalid(arb1_awvalid),
+    .m3_awready (arb1_awready),
+    .m3_wdata   (arb1_wdata),    .m3_wstrb   (arb1_wstrb),     .m3_wlast  (arb1_wlast),
+    .m3_wvalid  (arb1_wvalid),   .m3_wready  (arb1_wready),
+    .m3_bid     (arb1_bid),      .m3_bresp   (arb1_bresp),     .m3_bvalid (arb1_bvalid),
+    .m3_bready  (arb1_bready),
+    .m3_arid    (arb1_arid),     .m3_araddr  (arb1_araddr),    .m3_arlen  (arb1_arlen),
+    .m3_arsize  (arb1_arsize),   .m3_arburst (arb1_arburst),   .m3_arvalid(arb1_arvalid),
+    .m3_arready (arb1_arready),
+    .m3_rid     (arb1_rid),      .m3_rdata   (arb1_rdata),     .m3_rresp  (arb1_rresp),
+    .m3_rlast   (arb1_rlast),    .m3_rvalid  (arb1_rvalid),    .m3_rready (arb1_rready),
 
     // ---- S0: Boot ROM ----
     .s0_awid    (boot_awid),     .s0_awaddr  (boot_awaddr),    .s0_awlen  (boot_awlen),
@@ -892,6 +1119,48 @@ module c930_soc_top
   );
 
   // =========================================================================
+  // CPU1 (second core; boots at boot ROM 0x10020 = idle loop in boot.hex,
+  // so it never touches DDR/MMIO until dual-core firmware is loaded)
+  // =========================================================================
+  riscv_core_top #(
+    .CORE_RESET_PC (64'h0001_0020)
+  ) u_cpu1 (
+    .i_riscv_core_clk                  (core_clk),
+    .i_riscv_core_rst_n                (core_rst_n),
+    .i_riscv_core_external_interrupt_m (1'b0),
+    .i_riscv_core_external_interrupt_s (1'b0),
+    .o_riscv_core_ack                  (),
+
+    // data cache → D-cache adapter
+    .mem_read_address              (dcache1_rd_addr),
+    .o_mem_write_data              (dcache1_wr_data),
+    .o_mem_write_address           (dcache1_wr_addr),
+    .mem_read_req                  (dcache1_rd_req),
+    .o_mem_write_valid             (dcache1_wr_valid),
+    .mem_read_done                 (dcache1_rd_done),
+    .i_mem_write_done              (dcache1_wr_done),
+    .i_block_from_axi_data_cache   (dcache1_rd_line),
+    .o_mem_write_strobe            (dcache1_wr_strobe),
+
+    // instruction cache → I-cache adapter
+    .o_addr_from_control_to_axi    (icache1_rd_addr),
+    .o_mem_req                     (icache1_rd_req),
+    .i_mem_done                    (icache1_rd_done),
+    .i_block_from_axi_i_cache      (icache1_rd_line),
+
+    // MMIO (uncached) → MMIO arbiter → bridge
+    .o_mmio_read_address           (mmio1_rd_addr),
+    .o_mmio_read_req               (mmio1_rd_req),
+    .i_mmio_read_done              (mmio1_rd_done),
+    .i_mmio_read_data              (mmio1_rd_data),
+    .o_mmio_write_address          (mmio1_wr_addr),
+    .o_mmio_write_data             (mmio1_wr_data),
+    .o_mmio_write_strobe           (mmio1_wr_strobe),
+    .o_mmio_write_valid            (mmio1_wr_valid),
+    .i_mmio_write_done             (mmio1_wr_done)
+  );
+
+  // =========================================================================
   // NPU
   // =========================================================================
   c930_npu_top #(
@@ -1111,20 +1380,70 @@ module c930_soc_top
   logic         mmio_rvalid_raw;
   logic         mmio_rready_raw;
 
+  // MMIO arbiter: merges CPU0 + CPU1 uncached MMIO into the bridge, and
+  // provides the HART_ID register at 0x4000_0FF0 (returns requesting core).
+  logic [63:0]  mmio_arb_rd_addr;
+  logic         mmio_arb_rd_req;
+  logic         mmio_arb_rd_done;
+  logic [63:0]  mmio_arb_rd_data;
+  logic [63:0]  mmio_arb_wr_addr;
+  logic [63:0]  mmio_arb_wr_data;
+  logic [7:0]   mmio_arb_wr_strobe;
+  logic         mmio_arb_wr_valid;
+  logic         mmio_arb_wr_done;
+
+  c930_mmio_arb u_mmio_arb (
+    .i_clk           (core_clk),
+    .i_rst_n         (core_rst_n),
+
+    // Core 0 (CPU0)
+    .i0_rd_addr      (mmio_rd_addr),
+    .i0_rd_req       (mmio_rd_req),
+    .o0_rd_done      (mmio_rd_done),
+    .o0_rd_data      (mmio_rd_data),
+    .i0_wr_addr      (mmio_wr_addr),
+    .i0_wr_data      (mmio_wr_data),
+    .i0_wr_strobe    (mmio_wr_strobe),
+    .i0_wr_valid     (mmio_wr_valid),
+    .o0_wr_done      (mmio_wr_done),
+
+    // Core 1 (CPU1)
+    .i1_rd_addr      (mmio1_rd_addr),
+    .i1_rd_req       (mmio1_rd_req),
+    .o1_rd_done      (mmio1_rd_done),
+    .o1_rd_data      (mmio1_rd_data),
+    .i1_wr_addr      (mmio1_wr_addr),
+    .i1_wr_data      (mmio1_wr_data),
+    .i1_wr_strobe    (mmio1_wr_strobe),
+    .i1_wr_valid     (mmio1_wr_valid),
+    .o1_wr_done      (mmio1_wr_done),
+
+    // Merged port to bridge
+    .o_mmio_read_addr  (mmio_arb_rd_addr),
+    .o_mmio_read_req   (mmio_arb_rd_req),
+    .i_mmio_read_done  (mmio_arb_rd_done),
+    .i_mmio_read_data  (mmio_arb_rd_data),
+    .o_mmio_write_addr   (mmio_arb_wr_addr),
+    .o_mmio_write_data   (mmio_arb_wr_data),
+    .o_mmio_write_strobe (mmio_arb_wr_strobe),
+    .o_mmio_write_valid  (mmio_arb_wr_valid),
+    .i_mmio_write_done   (mmio_arb_wr_done)
+  );
+
   c930_mmio_bridge u_mmio_bridge (
     .i_clk              (core_clk),
     .i_rst_n            (core_rst_n),
 
-    .i_mmio_read_addr   (mmio_rd_addr),
-    .i_mmio_read_req    (mmio_rd_req),
-    .o_mmio_read_done   (mmio_rd_done),
-    .o_mmio_read_data   (mmio_rd_data),
+    .i_mmio_read_addr   (mmio_arb_rd_addr),
+    .i_mmio_read_req    (mmio_arb_rd_req),
+    .o_mmio_read_done   (mmio_arb_rd_done),
+    .o_mmio_read_data   (mmio_arb_rd_data),
 
-    .i_mmio_write_addr  (mmio_wr_addr),
-    .i_mmio_write_data  (mmio_wr_data),
-    .i_mmio_write_strobe(mmio_wr_strobe),
-    .i_mmio_write_valid (mmio_wr_valid),
-    .o_mmio_write_done  (mmio_wr_done),
+    .i_mmio_write_addr  (mmio_arb_wr_addr),
+    .i_mmio_write_data  (mmio_arb_wr_data),
+    .i_mmio_write_strobe(mmio_arb_wr_strobe),
+    .i_mmio_write_valid (mmio_arb_wr_valid),
+    .o_mmio_write_done  (mmio_arb_wr_done),
 
     // Raw AXI4-Lite output (before address decode mux)
     .m_axi_awaddr       (mmio_awaddr_raw),

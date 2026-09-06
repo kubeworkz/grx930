@@ -66,6 +66,13 @@ module c930_bootrom
   initial begin
     for (int i = 0; i < MEM_DEPTH; i++)
       rom[i] = '0;
+    // Built-in core-1 parking loop at word 4 (byte 0x10020): jal x0, 0.
+    // CPU1 resets to 0x10020 and must never run the CPU0 firmware; the
+    // defaults stand unless the hex file provides its own words 4-7.
+    rom[4] = 64'h0000_0000_0000_006f;  // jal x0, 0  (self-loop)
+    rom[5] = 64'h0000_0000_0000_0013;  // nop padding
+    rom[6] = 64'h0000_0000_0000_0013;
+    rom[7] = 64'h0000_0000_0000_0013;
     // Only load if a real hex file is provided (not empty or placeholder)
     // Icarus crashes on $readmemh("")
     $readmemh(HEX_FILE, rom);
@@ -95,6 +102,15 @@ module c930_bootrom
   logic [7:0]            r_beat;
   logic [$clog2(MEM_DEPTH)-1:0] r_idx;
 
+  // Combinational read: r_idx is the *current* beat index (it advances on
+  // the handshake edge), so presenting rom[r_idx] directly gives exactly
+  // one data word per beat.
+  assign s_axi_rdata = rom[r_idx];
+
+  // Combinational rlast: if rlast were registered it would lag the beat by
+  // one cycle and never overlap rvalid on the final beat, so a crossbar that
+  // waits for (rvalid && rready && rlast) could never complete the burst.
+  assign s_axi_rlast = (r_beat == r_len);
   assign s_axi_arready = (r_state == R_IDLE);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
@@ -106,15 +122,12 @@ module c930_bootrom
       r_beat     <= '0;
       r_idx      <= '0;
       s_axi_rvalid <= 1'b0;
-      s_axi_rlast  <= 1'b0;
       s_axi_rresp  <= 2'b00;
-      s_axi_rdata  <= '0;
       s_axi_rid    <= '0;
     end else begin
       case (r_state)
         R_IDLE: begin
           s_axi_rvalid <= 1'b0;
-          s_axi_rlast  <= 1'b0;
           if (s_axi_arvalid && s_axi_arready) begin
             r_id   <= s_axi_arid;
             r_addr <= s_axi_araddr;
@@ -129,17 +142,23 @@ module c930_bootrom
         R_ACTIVE: begin
           // Drive current beat data
           s_axi_rvalid <= 1'b1;
-          s_axi_rdata  <= rom[r_idx];
+          // NOTE: s_axi_rdata and s_axi_rlast are combinational (assigns
+          // above).  Registered versions would lag the beat counter by one
+          // cycle (r_beat advances in this same always_ff), repeating words
+          // / holding rlast late — corrupting bursts and breaking the
+          // crossbar's (rvalid && rlast) completion handshake.
           s_axi_rid    <= r_id;
           s_axi_rresp  <= 2'b00;  // OKAY
-          s_axi_rlast  <= (r_beat == r_len);
 
           if (s_axi_rvalid && s_axi_rready) begin
             if (r_beat == r_len) begin
-              // Transaction complete — rvalid/rlast stay high this cycle
-              // (set by default assignments above), deassert NEXT cycle
-              // when R_IDLE block fires.
-              r_state <= R_IDLE;
+              // Transaction complete.  Deassert rvalid IMMEDIATELY (same
+              // edge) — if it stayed high until the R_IDLE block fires next
+              // cycle, the master would see a phantom beat after rlast and
+              // latch it into its line buffer (beat counters wrap),
+              // corrupting the burst data.
+              r_state    <= R_IDLE;
+              s_axi_rvalid <= 1'b0;
             end else begin
               r_beat <= r_beat + 1;
               r_idx  <= r_idx + 1;

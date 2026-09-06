@@ -2,7 +2,10 @@ module riscv_core_top
 #(
   // Cache geometry (FPGA sizing: defaults match the reference core).
   parameter int ICACHE_INDEX_WIDTH = 7,
-  parameter int DCACHE_INDEX_WIDTH = 7
+  parameter int DCACHE_INDEX_WIDTH = 7,
+  // Reset PC (fetch start address); used to boot a second core at a
+  // different vector (e.g. the boot ROM) in multi-core configurations.
+  parameter logic [63:0] CORE_RESET_PC = 64'h0
 )
 (
   // Global inputs
@@ -294,6 +297,7 @@ u_riscv_core_mux2x1_stg3
 riscv_core_pipe //pc FF
 #(
   .W_PIPE_BUS (64)
+  ,.PIPE_RST_VAL (CORE_RESET_PC)
 )
 u_riscv_core_pipe_pcf_if
 (

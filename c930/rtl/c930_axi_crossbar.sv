@@ -1,12 +1,13 @@
 // -----------------------------------------------------------------------------
 // c930_axi_crossbar.sv
 //
-// AXI4 shared-bus crossbar: 3 masters × 4 slaves.
+// AXI4 shared-bus crossbar: 4 masters × 4 slaves.
 //
 // Masters:
-//   M0: CPU I-cache (via c930_axi_cache_adapter)
-//   M1: CPU D-cache (via c930_axi_cache_adapter)
-//   M2: NPU DMA    (AXI4 full master, direct connection)
+//   M0: CPU0 I-cache (via c930_axi_cache_adapter)
+//   M1: CPU0 D-cache (via c930_axi_cache_adapter)
+//   M2: NPU DMA arb  (NPU0+NPU1, via c930_axi_dma_arb)
+//   M3: CPU1 bus arb (CPU1 I/D caches, via c930_axi_dma_arb)
 //
 // Slaves (address-decoded):
 //   S0: Boot ROM   (0x0000_0000 – 0x0000_03FF, 1 KB, read-only)
@@ -125,6 +126,37 @@ module c930_axi_crossbar
   output logic                   m2_rlast,
   output logic                   m2_rvalid,
   input  logic                   m2_rready,
+
+  // ---- Master 3: CPU1 bus (I/D caches via core arbiter) ----
+  input  logic [ID_WIDTH-1:0]    m3_awid,
+  input  logic [ADDR_WIDTH-1:0]  m3_awaddr,
+  input  logic [7:0]             m3_awlen,
+  input  logic [2:0]             m3_awsize,
+  input  logic [1:0]             m3_awburst,
+  input  logic                   m3_awvalid,
+  output logic                   m3_awready,
+  input  logic [DATA_WIDTH-1:0]  m3_wdata,
+  input  logic [DATA_WIDTH/8-1:0] m3_wstrb,
+  input  logic                   m3_wlast,
+  input  logic                   m3_wvalid,
+  output logic                   m3_wready,
+  output logic [ID_WIDTH-1:0]    m3_bid,
+  output logic [1:0]             m3_bresp,
+  output logic                   m3_bvalid,
+  input  logic                   m3_bready,
+  input  logic [ID_WIDTH-1:0]    m3_arid,
+  input  logic [ADDR_WIDTH-1:0]  m3_araddr,
+  input  logic [7:0]             m3_arlen,
+  input  logic [2:0]             m3_arsize,
+  input  logic [1:0]             m3_arburst,
+  input  logic                   m3_arvalid,
+  output logic                   m3_arready,
+  output logic [ID_WIDTH-1:0]    m3_rid,
+  output logic [DATA_WIDTH-1:0]  m3_rdata,
+  output logic [1:0]             m3_rresp,
+  output logic                   m3_rlast,
+  output logic                   m3_rvalid,
+  input  logic                   m3_rready,
 
   // ---- Slave 0: Boot ROM (AXI4 read-only) ----
   output logic [ID_WIDTH-1:0]    s0_awid,
@@ -302,8 +334,8 @@ module c930_axi_crossbar
   logic       r_active;       // transaction in progress
 
   // Read request per master
-  logic [2:0] r_req;
-  assign r_req = {m2_arvalid, m1_arvalid, m0_arvalid};
+  logic [3:0] r_req;
+  assign r_req = {m3_arvalid, m2_arvalid, m1_arvalid, m0_arvalid};
 
   // Combinational next-grant: what r_grant will be on the next cycle
   logic [1:0] r_grant_next;
@@ -314,20 +346,24 @@ module c930_axi_crossbar
     if (r_req[r_rr_ptr]) begin
       r_grant_next  = r_rr_ptr;
       r_grant_valid = 1'b1;
-    end else if (r_req[(r_rr_ptr + 1) % 3]) begin
-      r_grant_next  = (r_rr_ptr + 1) % 3;
+    end else if (r_req[(r_rr_ptr + 1) % 4]) begin
+      r_grant_next  = (r_rr_ptr + 1) % 4;
       r_grant_valid = 1'b1;
-    end else if (r_req[(r_rr_ptr + 2) % 3]) begin
-      r_grant_next  = (r_rr_ptr + 2) % 3;
+    end else if (r_req[(r_rr_ptr + 2) % 4]) begin
+      r_grant_next  = (r_rr_ptr + 2) % 4;
+      r_grant_valid = 1'b1;
+    end else if (r_req[(r_rr_ptr + 3) % 4]) begin
+      r_grant_next  = (r_rr_ptr + 3) % 4;
       r_grant_valid = 1'b1;
     end
   end
 
   // Read address decode per master
-  slave_idx_t r_slave [2:0];
+  slave_idx_t r_slave [3:0];
   assign r_slave[0] = decode_addr(m0_araddr);
   assign r_slave[1] = decode_addr(m1_araddr);
   assign r_slave[2] = decode_addr(m2_araddr);
+  assign r_slave[3] = decode_addr(m3_araddr);
 
   // Round-robin arbiter for read channel
   always_ff @(posedge i_clk or negedge i_rst_n) begin
@@ -346,16 +382,21 @@ module c930_axi_crossbar
             r_state  <= R_GRANTED;
             r_active <= 1'b1;
             r_rr_ptr <= r_rr_ptr + 1;
-          end else if (r_req[(r_rr_ptr + 1) % 3]) begin
-            r_grant  <= (r_rr_ptr + 1) % 3;
+          end else if (r_req[(r_rr_ptr + 1) % 4]) begin
+            r_grant  <= (r_rr_ptr + 1) % 4;
             r_state  <= R_GRANTED;
             r_active <= 1'b1;
-            r_rr_ptr <= (r_rr_ptr + 2) % 3;
-          end else if (r_req[(r_rr_ptr + 2) % 3]) begin
-            r_grant  <= (r_rr_ptr + 2) % 3;
+            r_rr_ptr <= (r_rr_ptr + 2) % 4;
+          end else if (r_req[(r_rr_ptr + 2) % 4]) begin
+            r_grant  <= (r_rr_ptr + 2) % 4;
             r_state  <= R_GRANTED;
             r_active <= 1'b1;
-            r_rr_ptr <= (r_rr_ptr + 3) % 3;
+            r_rr_ptr <= (r_rr_ptr + 3) % 4;
+          end else if (r_req[(r_rr_ptr + 3) % 4]) begin
+            r_grant  <= (r_rr_ptr + 3) % 4;
+            r_state  <= R_GRANTED;
+            r_active <= 1'b1;
+            r_rr_ptr <= r_rr_ptr + 1;  // wraps mod 4
           end
         end
         R_GRANTED: begin
@@ -384,8 +425,8 @@ module c930_axi_crossbar
   logic [1:0] w_rr_ptr;
   logic       w_active;
 
-  logic [2:0] w_req;
-  assign w_req = {m2_awvalid, m1_awvalid, m0_awvalid};
+  logic [3:0] w_req;
+  assign w_req = {m3_awvalid, m2_awvalid, m1_awvalid, m0_awvalid};
 
   // Combinational next-grant for write channel
   logic [1:0] w_grant_next;
@@ -396,19 +437,23 @@ module c930_axi_crossbar
     if (w_req[w_rr_ptr]) begin
       w_grant_next  = w_rr_ptr;
       w_grant_valid = 1'b1;
-    end else if (w_req[(w_rr_ptr + 1) % 3]) begin
-      w_grant_next  = (w_rr_ptr + 1) % 3;
+    end else if (w_req[(w_rr_ptr + 1) % 4]) begin
+      w_grant_next  = (w_rr_ptr + 1) % 4;
       w_grant_valid = 1'b1;
-    end else if (w_req[(w_rr_ptr + 2) % 3]) begin
-      w_grant_next  = (w_rr_ptr + 2) % 3;
+    end else if (w_req[(w_rr_ptr + 2) % 4]) begin
+      w_grant_next  = (w_rr_ptr + 2) % 4;
+      w_grant_valid = 1'b1;
+    end else if (w_req[(w_rr_ptr + 3) % 4]) begin
+      w_grant_next  = (w_rr_ptr + 3) % 4;
       w_grant_valid = 1'b1;
     end
   end
 
-  slave_idx_t w_slave [2:0];
+  slave_idx_t w_slave [3:0];
   assign w_slave[0] = decode_addr(m0_awaddr);
   assign w_slave[1] = decode_addr(m1_awaddr);
   assign w_slave[2] = decode_addr(m2_awaddr);
+  assign w_slave[3] = decode_addr(m3_awaddr);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -425,16 +470,21 @@ module c930_axi_crossbar
             w_state  <= W_GRANTED;
             w_active <= 1'b1;
             w_rr_ptr <= w_rr_ptr + 1;
-          end else if (w_req[(w_rr_ptr + 1) % 3]) begin
-            w_grant  <= (w_rr_ptr + 1) % 3;
+          end else if (w_req[(w_rr_ptr + 1) % 4]) begin
+            w_grant  <= (w_rr_ptr + 1) % 4;
             w_state  <= W_GRANTED;
             w_active <= 1'b1;
-            w_rr_ptr <= (w_rr_ptr + 2) % 3;
-          end else if (w_req[(w_rr_ptr + 2) % 3]) begin
-            w_grant  <= (w_rr_ptr + 2) % 3;
+            w_rr_ptr <= (w_rr_ptr + 2) % 4;
+          end else if (w_req[(w_rr_ptr + 2) % 4]) begin
+            w_grant  <= (w_rr_ptr + 2) % 4;
             w_state  <= W_GRANTED;
             w_active <= 1'b1;
-            w_rr_ptr <= (w_rr_ptr + 3) % 3;
+            w_rr_ptr <= (w_rr_ptr + 3) % 4;
+          end else if (w_req[(w_rr_ptr + 3) % 4]) begin
+            w_grant  <= (w_rr_ptr + 3) % 4;
+            w_state  <= W_GRANTED;
+            w_active <= 1'b1;
+            w_rr_ptr <= w_rr_ptr + 1;  // wraps mod 4
           end
         end
         W_GRANTED: begin
@@ -475,10 +525,16 @@ module c930_axi_crossbar
     r_shared_arsize  = '0;
     r_shared_arburst = '0;
     r_shared_arvalid = 1'b0;
+    // NOTE: requests are only presented when the FSM has committed to a
+    // grant (R_GRANTED).  In R_IDLE, r_grant still holds the *previous*
+    // master, so presenting its request would let a slave accept a
+    // transaction that the arbitration FSM never tracks — the response then
+    // routes to the wrong slave and wedges the read channel forever.
     case (r_grant)
-      2'd0: begin r_shared_arid = m0_arid; r_shared_araddr = m0_araddr; r_shared_arlen = m0_arlen; r_shared_arsize = m0_arsize; r_shared_arburst = m0_arburst; r_shared_arvalid = m0_arvalid; end
-      2'd1: begin r_shared_arid = m1_arid; r_shared_araddr = m1_araddr; r_shared_arlen = m1_arlen; r_shared_arsize = m1_arsize; r_shared_arburst = m1_arburst; r_shared_arvalid = m1_arvalid; end
-      2'd2: begin r_shared_arid = m2_arid; r_shared_araddr = m2_araddr; r_shared_arlen = m2_arlen; r_shared_arsize = m2_arsize; r_shared_arburst = m2_arburst; r_shared_arvalid = m2_arvalid; end
+      2'd0: begin r_shared_arid = m0_arid; r_shared_araddr = m0_araddr; r_shared_arlen = m0_arlen; r_shared_arsize = m0_arsize; r_shared_arburst = m0_arburst; r_shared_arvalid = m0_arvalid && (r_state == R_GRANTED); end
+      2'd1: begin r_shared_arid = m1_arid; r_shared_araddr = m1_araddr; r_shared_arlen = m1_arlen; r_shared_arsize = m1_arsize; r_shared_arburst = m1_arburst; r_shared_arvalid = m1_arvalid && (r_state == R_GRANTED); end
+      2'd2: begin r_shared_arid = m2_arid; r_shared_araddr = m2_araddr; r_shared_arlen = m2_arlen; r_shared_arsize = m2_arsize; r_shared_arburst = m2_arburst; r_shared_arvalid = m2_arvalid && (r_state == R_GRANTED); end
+      2'd3: begin r_shared_arid = m3_arid; r_shared_araddr = m3_araddr; r_shared_arlen = m3_arlen; r_shared_arsize = m3_arsize; r_shared_arburst = m3_arburst; r_shared_arvalid = m3_arvalid && (r_state == R_GRANTED); end
       default: ;
     endcase
   end
@@ -488,10 +544,12 @@ module c930_axi_crossbar
     m0_rdata  = '0; m0_rresp = '0; m0_rlast = 1'b0; m0_rvalid = 1'b0; m0_rid = '0;
     m1_rdata  = '0; m1_rresp = '0; m1_rlast = 1'b0; m1_rvalid = 1'b0; m1_rid = '0;
     m2_rdata  = '0; m2_rresp = '0; m2_rlast = 1'b0; m2_rvalid = 1'b0; m2_rid = '0;
+    m3_rdata  = '0; m3_rresp = '0; m3_rlast = 1'b0; m3_rvalid = 1'b0; m3_rid = '0;
     case (r_grant)
       2'd0: begin m0_rdata = r_shared_rdata; m0_rresp = r_shared_rresp; m0_rlast = r_shared_rlast; m0_rvalid = r_shared_rvalid; m0_rid = r_shared_rid; end
       2'd1: begin m1_rdata = r_shared_rdata; m1_rresp = r_shared_rresp; m1_rlast = r_shared_rlast; m1_rvalid = r_shared_rvalid; m1_rid = r_shared_rid; end
       2'd2: begin m2_rdata = r_shared_rdata; m2_rresp = r_shared_rresp; m2_rlast = r_shared_rlast; m2_rvalid = r_shared_rvalid; m2_rid = r_shared_rid; end
+      2'd3: begin m3_rdata = r_shared_rdata; m3_rresp = r_shared_rresp; m3_rlast = r_shared_rlast; m3_rvalid = r_shared_rvalid; m3_rid = r_shared_rid; end
       default: ;
     endcase
   end
@@ -499,12 +557,18 @@ module c930_axi_crossbar
   // Read ready: only the granted master can provide ready
   assign r_shared_rready = (r_grant == 2'd0) ? m0_rready :
                            (r_grant == 2'd1) ? m1_rready :
-                                               m2_rready;
+                           (r_grant == 2'd2) ? m2_rready :
+                                               m3_rready;
 
-  // All non-granted masters see ready=0 (cannot issue)
-  assign m0_arready = (r_grant == 2'd0) ? r_shared_arready : 1'b0;
-  assign m1_arready = (r_grant == 2'd1) ? r_shared_arready : 1'b0;
-  assign m2_arready = (r_grant == 2'd2) ? r_shared_arready : 1'b0;
+  // All non-granted masters see ready=0 (cannot issue).  Ready must be gated
+  // on R_GRANTED just like arvalid: slaves like the DDR stub assert arready
+  // unconditionally when idle, so leaking it in R_IDLE would let a master
+  // accept a handshake for a request that was never presented, then wait for
+  // data that never arrives (deadlock).
+  assign m0_arready = (r_grant == 2'd0 && r_state == R_GRANTED) ? r_shared_arready : 1'b0;
+  assign m1_arready = (r_grant == 2'd1 && r_state == R_GRANTED) ? r_shared_arready : 1'b0;
+  assign m2_arready = (r_grant == 2'd2 && r_state == R_GRANTED) ? r_shared_arready : 1'b0;
+  assign m3_arready = (r_grant == 2'd3 && r_state == R_GRANTED) ? r_shared_arready : 1'b0;
 
   // =========================================================================
   // Master → Shared bus multiplexing (write)
@@ -536,10 +600,15 @@ module c930_axi_crossbar
     w_shared_awsize  = '0;
     w_shared_awburst = '0;
     w_shared_awvalid = 1'b0;
+    // Same protection as the read channel: only present the write address
+    // once the FSM has committed to the grant (W_GRANTED).  Otherwise a
+    // slave could accept AW from the stale-grant master while the FSM
+    // switches to a different master, desyncing the write/response channels.
     case (w_grant)
-      2'd0: begin w_shared_awid = m0_awid; w_shared_awaddr = m0_awaddr; w_shared_awlen = m0_awlen; w_shared_awsize = m0_awsize; w_shared_awburst = m0_awburst; w_shared_awvalid = m0_awvalid; end
-      2'd1: begin w_shared_awid = m1_awid; w_shared_awaddr = m1_awaddr; w_shared_awlen = m1_awlen; w_shared_awsize = m1_awsize; w_shared_awburst = m1_awburst; w_shared_awvalid = m1_awvalid; end
-      2'd2: begin w_shared_awid = m2_awid; w_shared_awaddr = m2_awaddr; w_shared_awlen = m2_awlen; w_shared_awsize = m2_awsize; w_shared_awburst = m2_awburst; w_shared_awvalid = m2_awvalid; end
+      2'd0: begin w_shared_awid = m0_awid; w_shared_awaddr = m0_awaddr; w_shared_awlen = m0_awlen; w_shared_awsize = m0_awsize; w_shared_awburst = m0_awburst; w_shared_awvalid = m0_awvalid && (w_state == W_GRANTED); end
+      2'd1: begin w_shared_awid = m1_awid; w_shared_awaddr = m1_awaddr; w_shared_awlen = m1_awlen; w_shared_awsize = m1_awsize; w_shared_awburst = m1_awburst; w_shared_awvalid = m1_awvalid && (w_state == W_GRANTED); end
+      2'd2: begin w_shared_awid = m2_awid; w_shared_awaddr = m2_awaddr; w_shared_awlen = m2_awlen; w_shared_awsize = m2_awsize; w_shared_awburst = m2_awburst; w_shared_awvalid = m2_awvalid && (w_state == W_GRANTED); end
+      2'd3: begin w_shared_awid = m3_awid; w_shared_awaddr = m3_awaddr; w_shared_awlen = m3_awlen; w_shared_awsize = m3_awsize; w_shared_awburst = m3_awburst; w_shared_awvalid = m3_awvalid && (w_state == W_GRANTED); end
       default: ;
     endcase
   end
@@ -551,9 +620,10 @@ module c930_axi_crossbar
     w_shared_wlast  = 1'b0;
     w_shared_wvalid = 1'b0;
     case (w_grant)
-      2'd0: begin w_shared_wdata = m0_wdata; w_shared_wstrb = m0_wstrb; w_shared_wlast = m0_wlast; w_shared_wvalid = m0_wvalid; end
-      2'd1: begin w_shared_wdata = m1_wdata; w_shared_wstrb = m1_wstrb; w_shared_wlast = m1_wlast; w_shared_wvalid = m1_wvalid; end
-      2'd2: begin w_shared_wdata = m2_wdata; w_shared_wstrb = m2_wstrb; w_shared_wlast = m2_wlast; w_shared_wvalid = m2_wvalid; end
+      2'd0: begin w_shared_wdata = m0_wdata; w_shared_wstrb = m0_wstrb; w_shared_wlast = m0_wlast; w_shared_wvalid = m0_wvalid && (w_state == W_GRANTED); end
+      2'd1: begin w_shared_wdata = m1_wdata; w_shared_wstrb = m1_wstrb; w_shared_wlast = m1_wlast; w_shared_wvalid = m1_wvalid && (w_state == W_GRANTED); end
+      2'd2: begin w_shared_wdata = m2_wdata; w_shared_wstrb = m2_wstrb; w_shared_wlast = m2_wlast; w_shared_wvalid = m2_wvalid && (w_state == W_GRANTED); end
+      2'd3: begin w_shared_wdata = m3_wdata; w_shared_wstrb = m3_wstrb; w_shared_wlast = m3_wlast; w_shared_wvalid = m3_wvalid && (w_state == W_GRANTED); end
       default: ;
     endcase
   end
@@ -563,25 +633,32 @@ module c930_axi_crossbar
     m0_bid = '0; m0_bresp = '0; m0_bvalid = 1'b0;
     m1_bid = '0; m1_bresp = '0; m1_bvalid = 1'b0;
     m2_bid = '0; m2_bresp = '0; m2_bvalid = 1'b0;
+    m3_bid = '0; m3_bresp = '0; m3_bvalid = 1'b0;
     case (w_grant)
       2'd0: begin m0_bid = w_shared_bid; m0_bresp = w_shared_bresp; m0_bvalid = w_shared_bvalid; end
       2'd1: begin m1_bid = w_shared_bid; m1_bresp = w_shared_bresp; m1_bvalid = w_shared_bvalid; end
       2'd2: begin m2_bid = w_shared_bid; m2_bresp = w_shared_bresp; m2_bvalid = w_shared_bvalid; end
+      2'd3: begin m3_bid = w_shared_bid; m3_bresp = w_shared_bresp; m3_bvalid = w_shared_bvalid; end
       default: ;
     endcase
   end
 
-  assign w_shared_bready = (w_grant == 2'd0) ? m0_bready :
-                           (w_grant == 2'd1) ? m1_bready :
-                                               m2_bready;
+  assign w_shared_bready = (w_grant == 2'd0 && w_state == W_GRANTED) ? m0_bready :
+                           (w_grant == 2'd1 && w_state == W_GRANTED) ? m1_bready :
+                           (w_grant == 2'd2 && w_state == W_GRANTED) ? m2_bready :
+                                                                      m3_bready;
 
-  assign m0_awready = (w_grant == 2'd0) ? w_shared_awready : 1'b0;
-  assign m1_awready = (w_grant == 2'd1) ? w_shared_awready : 1'b0;
-  assign m2_awready = (w_grant == 2'd2) ? w_shared_awready : 1'b0;
+  // Same R_GRANTED-style gating as the read channel: ready is only visible to
+  // a master while the FSM is actually presenting its request in W_GRANTED.
+  assign m0_awready = (w_grant == 2'd0 && w_state == W_GRANTED) ? w_shared_awready : 1'b0;
+  assign m1_awready = (w_grant == 2'd1 && w_state == W_GRANTED) ? w_shared_awready : 1'b0;
+  assign m2_awready = (w_grant == 2'd2 && w_state == W_GRANTED) ? w_shared_awready : 1'b0;
+  assign m3_awready = (w_grant == 2'd3 && w_state == W_GRANTED) ? w_shared_awready : 1'b0;
 
-  assign m0_wready = (w_grant == 2'd0) ? w_shared_wready : 1'b0;
-  assign m1_wready = (w_grant == 2'd1) ? w_shared_wready : 1'b0;
-  assign m2_wready = (w_grant == 2'd2) ? w_shared_wready : 1'b0;
+  assign m0_wready = (w_grant == 2'd0 && w_state == W_GRANTED) ? w_shared_wready : 1'b0;
+  assign m1_wready = (w_grant == 2'd1 && w_state == W_GRANTED) ? w_shared_wready : 1'b0;
+  assign m2_wready = (w_grant == 2'd2 && w_state == W_GRANTED) ? w_shared_wready : 1'b0;
+  assign m3_wready = (w_grant == 2'd3 && w_state == W_GRANTED) ? w_shared_wready : 1'b0;
 
   // =========================================================================
   // Shared bus → Slave demultiplexing (read)
@@ -594,6 +671,7 @@ module c930_axi_crossbar
         2'd0: r_active_slave = decode_addr(m0_araddr);
         2'd1: r_active_slave = decode_addr(m1_araddr);
         2'd2: r_active_slave = decode_addr(m2_araddr);
+        2'd3: r_active_slave = decode_addr(m3_araddr);
         default: r_active_slave = SLAVE_UART;
       endcase
     end else if (r_state == R_IDLE && r_grant_valid) begin
@@ -602,6 +680,7 @@ module c930_axi_crossbar
         2'd0: r_active_slave = decode_addr(m0_araddr);
         2'd1: r_active_slave = decode_addr(m1_araddr);
         2'd2: r_active_slave = decode_addr(m2_araddr);
+        2'd3: r_active_slave = decode_addr(m3_araddr);
         default: r_active_slave = SLAVE_UART;
       endcase
     end else
@@ -659,6 +738,7 @@ module c930_axi_crossbar
         2'd0: w_active_slave = decode_addr(m0_awaddr);
         2'd1: w_active_slave = decode_addr(m1_awaddr);
         2'd2: w_active_slave = decode_addr(m2_awaddr);
+        2'd3: w_active_slave = decode_addr(m3_awaddr);
         default: w_active_slave = SLAVE_UART;
       endcase
     end else if (w_state == W_IDLE && w_grant_valid) begin
@@ -666,6 +746,7 @@ module c930_axi_crossbar
         2'd0: w_active_slave = decode_addr(m0_awaddr);
         2'd1: w_active_slave = decode_addr(m1_awaddr);
         2'd2: w_active_slave = decode_addr(m2_awaddr);
+        2'd3: w_active_slave = decode_addr(m3_awaddr);
         default: w_active_slave = SLAVE_UART;
       endcase
     end else

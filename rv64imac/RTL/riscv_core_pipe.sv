@@ -2,7 +2,8 @@
 
 module riscv_core_pipe 
 #(
-    parameter W_PIPE_BUS = 32
+    parameter W_PIPE_BUS = 32,
+    parameter PIPE_RST_VAL = 0   // reset value (used e.g. for PC FF reset vector)
 )
 (
 
@@ -26,7 +27,7 @@ always_ff @(posedge i_pipe_clk, negedge i_pipe_rst_n)
 begin : pipe_proc
     if (!i_pipe_rst_n) 
     begin
-        o_pipe_out <= 'b0;
+        o_pipe_out <= PIPE_RST_VAL;
     end
     else if (i_pipe_clr) begin
         o_pipe_out <= 'b0;

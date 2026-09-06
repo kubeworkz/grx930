@@ -59,7 +59,8 @@ SOC_FULL_RTL := $(SOC_RTL) \
   rtl/c930_axi_dma_arb.sv \
   rtl/c930_axi_cache_adapter.sv \
   rtl/c930_bootrom.sv \
-  rtl/c930_uart.sv
+  rtl/c930_uart.sv \
+  rtl/c930_mmio_arb.sv
 
 OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp

@@ -105,6 +105,7 @@ module c930_axi_cache_adapter
   logic [7:0]            wr_strobe_r;
   logic                  is_write_r;
   logic [1:0]            beat_cnt;
+  logic                  burst_done;
   logic [255:0]          line_buf;
 
   // AXI defaults
@@ -165,11 +166,13 @@ module c930_axi_cache_adapter
       wr_strobe_r <= '0;
       is_write_r  <= 1'b0;
       beat_cnt    <= '0;
+      burst_done  <= 1'b0;
       line_buf    <= '0;
     end else begin
       case (state)
         S_IDLE: begin
-          beat_cnt <= '0;
+          beat_cnt   <= '0;
+          burst_done <= 1'b0;
           if (i_cache_wr_valid) begin
             addr_r      <= i_cache_wr_addr;
             wr_data_r   <= i_cache_wr_data;
@@ -181,9 +184,13 @@ module c930_axi_cache_adapter
           end
         end
         S_RD_DATA: begin
-          if (m_axi_rvalid && m_axi_rready) begin
+          // Latch beats until rlast.  burst_done freezes the capture so a
+          // slave that holds rvalid one cycle past rlast (phantom beat) can
+          // never overwrite the line with garbage — beat counters wrap.
+          if (m_axi_rvalid && m_axi_rready && !burst_done) begin
             line_buf[beat_cnt*64 +: 64] <= m_axi_rdata;
-            beat_cnt <= beat_cnt + 1;
+            if (m_axi_rlast) burst_done <= 1'b1;
+            else             beat_cnt   <= beat_cnt + 1;
           end
         end
         default: ;
