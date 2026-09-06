@@ -802,6 +802,24 @@ module c930_soc_top
   logic         uart_rvalid;
   logic         uart_rready;
 
+  // APLIC interrupt controller signals (from MMIO bridge address-decode mux)
+  logic [63:0]  aplic_awaddr;
+  logic         aplic_awvalid, aplic_awready;
+  logic [63:0]  aplic_wdata;
+  logic [7:0]   aplic_wstrb;
+  logic         aplic_wvalid, aplic_wready;
+  logic [1:0]   aplic_bresp;
+  logic         aplic_bvalid, aplic_bready;
+  logic [63:0]  aplic_araddr;
+  logic         aplic_arvalid, aplic_arready;
+  logic [63:0]  aplic_rdata;
+  logic [1:0]   aplic_rresp;
+  logic         aplic_rvalid, aplic_rready;
+
+  // IRQ source nets: UART level (to APLIC src3) and APLIC muxed output (to CPUs)
+  logic uart_irq;
+  logic aplic_irq;
+
   // =========================================================================
   // Instantiate crossbar
   // =========================================================================
@@ -1050,7 +1068,7 @@ module c930_soc_top
 
     .o_uart_txd  (o_uart_txd),
     .i_uart_rxd  (i_uart_rxd),
-    .o_irq       (),  // TODO: connect to APLIC when built
+    .o_irq       (uart_irq),   // -> APLIC source 3
 
     // AXI4-Lite slave (from MMIO bridge address-decode mux)
     .s_axi_awaddr (uart_awaddr[31:0]),
@@ -1077,6 +1095,44 @@ module c930_soc_top
   assign uart_rid    = '0;
   assign uart_rlast  = 1'b1;  // single-beat, always last
 
+  // =========================================================================
+  // APLIC: 3-source interrupt controller (0x4000_4000, from MMIO bridge mux)
+  //   src1 = NPU0 done (edge)   src2 = NPU1 done (edge)   src3 = UART (level)
+  //   o_irq feeds BOTH CPUs' machine-external-interrupt inputs.
+  // =========================================================================
+  c930_aplic u_aplic (
+    .i_clk       (core_clk),
+    .i_rst_n     (core_rst_n),
+
+    .i_irq_npu0  (o_npu_irq),
+    .i_irq_npu1  (o_npu1_irq),
+    .i_irq_uart  (uart_irq),
+    .o_irq       (aplic_irq),
+
+    // AXI4-Lite slave (from MMIO bridge address-decode mux)
+    .s_axi_awaddr (aplic_awaddr[31:0]),
+    .s_axi_awvalid(aplic_awvalid),
+    .s_axi_awready(aplic_awready),
+    .s_axi_wdata  (aplic_wdata[31:0]),
+    .s_axi_wstrb  (aplic_wstrb[3:0]),
+    .s_axi_wvalid (aplic_wvalid),
+    .s_axi_wready (aplic_wready),
+    .s_axi_bresp  (aplic_bresp),
+    .s_axi_bvalid (aplic_bvalid),
+    .s_axi_bready (aplic_bready),
+    .s_axi_araddr (aplic_araddr[31:0]),
+    .s_axi_arvalid(aplic_arvalid),
+    .s_axi_arready(aplic_arready),
+    .s_axi_rdata  (aplic_rdata[31:0]),
+    .s_axi_rresp  (aplic_rresp),
+    .s_axi_rvalid (aplic_rvalid),
+    .s_axi_rready (aplic_rready)
+  );
+
+  // Tie off unused AXI4 fields from APLIC
+  assign aplic_bid    = '0;
+  assign aplic_rid    = '0;
+
 
 
   // =========================================================================
@@ -1085,7 +1141,7 @@ module c930_soc_top
   riscv_core_top u_cpu (
     .i_riscv_core_clk                  (core_clk),
     .i_riscv_core_rst_n                (core_rst_n),
-    .i_riscv_core_external_interrupt_m (1'b0),
+    .i_riscv_core_external_interrupt_m (aplic_irq),
     .i_riscv_core_external_interrupt_s (1'b0),
     .o_riscv_core_ack                  (),
 
@@ -1127,7 +1183,7 @@ module c930_soc_top
   ) u_cpu1 (
     .i_riscv_core_clk                  (core_clk),
     .i_riscv_core_rst_n                (core_rst_n),
-    .i_riscv_core_external_interrupt_m (1'b0),
+    .i_riscv_core_external_interrupt_m (aplic_irq),
     .i_riscv_core_external_interrupt_s (1'b0),
     .o_riscv_core_ack                  (),
 
@@ -1472,39 +1528,52 @@ module c930_soc_top
   );
 
   // ---- Address decode mux ----
-  // Route MMIO bridge output to NPU0 CSR, NPU1 CSR, or UART based on address.
+  // Route MMIO bridge output to NPU0 CSR, NPU1 CSR, UART, or APLIC.
   //   0x4000_0000-0x4000_003F  → NPU0 CSR
   //   0x4000_0040-0x4000_007F  → NPU1 CSR
   //   0x4000_1000-0x4000_1FFF  → UART
-  wire mmio_to_uart = (mmio_awaddr_raw[31:12] == 20'h40001);
-  wire mmio_to_npu1 = (mmio_awaddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
-  wire mmio_to_npu0 = ~mmio_to_uart & ~mmio_to_npu1;              // default: NPU0
+  //   0x4000_4000-0x4000_4FFF  → APLIC
+  // ---- Address decode mux (write side: decodes the write address) ----
+  wire w_to_uart  = (mmio_awaddr_raw[31:12] == 20'h40001);
+  wire w_to_aplic = (mmio_awaddr_raw[31:12] == 20'h40004);
+  wire w_to_npu1  = (mmio_awaddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
+  wire w_to_npu0  = ~w_to_uart & ~w_to_npu1 & ~w_to_aplic;  // default: NPU0
+
+  // ---- Address decode mux (read side: decodes the READ address) ----
+  // Reads must decode off the read address, NOT the write address.  The write
+  // address bus holds a stale last-write value during a read, so routing reads
+  // with it silently steered APLIC/NPU1/UART reads to NPU0 (the default) --
+  // which is exactly what happened to the APLIC claim/status reads.
+  wire r_to_uart  = (mmio_araddr_raw[31:12] == 20'h40001);
+  wire r_to_aplic = (mmio_araddr_raw[31:12] == 20'h40004);
+  wire r_to_npu1  = (mmio_araddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
+  wire r_to_npu0  = ~r_to_uart & ~r_to_npu1 & ~r_to_aplic;  // default: NPU0
 
   // NPU0 CSR (backward compat)
   assign csr_awaddr  = mmio_awaddr_raw;
-  assign csr_awvalid = mmio_awvalid_raw & mmio_to_npu0;
+  assign csr_awvalid = mmio_awvalid_raw & w_to_npu0;
   assign csr_wdata   = mmio_wdata_raw;
   assign csr_wstrb   = mmio_wstrb_raw;
-  assign csr_wvalid  = mmio_wvalid_raw & mmio_to_npu0;
-  assign csr_bready  = mmio_bready_raw & mmio_to_npu0;
+  assign csr_wvalid  = mmio_wvalid_raw & w_to_npu0;
+  assign csr_bready  = mmio_bready_raw & w_to_npu0;
   assign csr_araddr  = mmio_araddr_raw;
-  assign csr_arvalid = mmio_arvalid_raw & mmio_to_npu0;
-  assign csr_rready  = mmio_rready_raw & mmio_to_npu0;
+  assign csr_arvalid = mmio_arvalid_raw & r_to_npu0;
+  assign csr_rready  = mmio_rready_raw & r_to_npu0;
 
   // NPU1 CSR
   assign csr1_awaddr  = mmio_awaddr_raw;
-  assign csr1_awvalid = mmio_awvalid_raw & mmio_to_npu1;
+  assign csr1_awvalid = mmio_awvalid_raw & w_to_npu1;
   assign csr1_wdata   = mmio_wdata_raw;
   assign csr1_wstrb   = mmio_wstrb_raw;
-  assign csr1_wvalid  = mmio_wvalid_raw & mmio_to_npu1;
-  assign csr1_bready  = mmio_bready_raw & mmio_to_npu1;
+  assign csr1_wvalid  = mmio_wvalid_raw & w_to_npu1;
+  assign csr1_bready  = mmio_bready_raw & w_to_npu1;
   assign csr1_araddr  = mmio_araddr_raw;
-  assign csr1_arvalid = mmio_arvalid_raw & mmio_to_npu1;
-  assign csr1_rready  = mmio_rready_raw & mmio_to_npu1;
+  assign csr1_arvalid = mmio_arvalid_raw & r_to_npu1;
+  assign csr1_rready  = mmio_rready_raw & r_to_npu1;
 
-  // UART AXI4-Lite signals (active when mmio_to_uart)
+  // UART AXI4-Lite signals (active when w_to_uart / r_to_uart)
   assign uart_awaddr  = mmio_awaddr_raw;
-  assign uart_awvalid = mmio_awvalid_raw & mmio_to_uart;
+  assign uart_awvalid = mmio_awvalid_raw & w_to_uart;
   assign uart_awlen   = '0;
   assign uart_awsize  = 3'd2;
   assign uart_awburst = 2'b00;
@@ -1512,38 +1581,60 @@ module c930_soc_top
   assign uart_wstrb   = {{4{mmio_wstrb_raw[3]}}, {4{mmio_wstrb_raw[2]}},
                          {4{mmio_wstrb_raw[1]}}, {4{mmio_wstrb_raw[0]}}};
   assign uart_wlast   = 1'b1;
-  assign uart_wvalid  = mmio_wvalid_raw & mmio_to_uart;
-  assign uart_bready  = mmio_bready_raw & mmio_to_uart;
+  assign uart_wvalid  = mmio_wvalid_raw & w_to_uart;
+  assign uart_bready  = mmio_bready_raw & w_to_uart;
 
   assign uart_araddr  = mmio_araddr_raw;
-  assign uart_arvalid = mmio_arvalid_raw & mmio_to_uart;
+  assign uart_arvalid = mmio_arvalid_raw & r_to_uart;
   assign uart_arlen   = '0;
   assign uart_arsize  = 3'd2;
   assign uart_arburst = 2'b00;
-  assign uart_rready  = mmio_rready_raw & mmio_to_uart;
+  assign uart_rready  = mmio_rready_raw & r_to_uart;
 
-  // Mux responses back to bridge (3 targets: NPU0, NPU1, UART)
+  // APLIC AXI4-Lite signals (active when w_to_aplic / r_to_aplic)
+  assign aplic_awaddr  = mmio_awaddr_raw;
+  assign aplic_awvalid = mmio_awvalid_raw & w_to_aplic;
+  assign aplic_wdata   = {32'd0, mmio_wdata_raw};
+  assign aplic_wstrb   = {{4{mmio_wstrb_raw[3]}}, {4{mmio_wstrb_raw[2]}},
+                          {4{mmio_wstrb_raw[1]}}, {4{mmio_wstrb_raw[0]}}};
+  assign aplic_wvalid  = mmio_wvalid_raw & w_to_aplic;
+  assign aplic_bready  = mmio_bready_raw & w_to_aplic;
+
+  assign aplic_araddr  = mmio_araddr_raw;
+  assign aplic_arvalid = mmio_arvalid_raw & r_to_aplic;
+  assign aplic_rready  = mmio_rready_raw & r_to_aplic;
+
+  // Mux responses back to bridge (4 targets: NPU0, NPU1, UART, APLIC)
   logic [1:0] sel_r;
-  localparam logic [1:0] SEL_NPU0 = 2'd0, SEL_NPU1 = 2'd1, SEL_UART = 2'd2;
+  localparam logic [1:0] SEL_NPU0 = 2'd0, SEL_NPU1 = 2'd1, SEL_UART = 2'd2, SEL_APLIC = 2'd3;
   always_ff @(posedge core_clk or negedge core_rst_n) begin
     if (!core_rst_n)
       sel_r <= SEL_NPU0;
     else if (mmio_arvalid_raw && mmio_arready_raw)
-      sel_r <= mmio_to_uart ? SEL_UART : mmio_to_npu1 ? SEL_NPU1 : SEL_NPU0;
+      sel_r <= r_to_aplic ? SEL_APLIC : r_to_uart ? SEL_UART : r_to_npu1 ? SEL_NPU1 : SEL_NPU0;
   end
 
-  // Write response mux (combinational, use current address)
-  assign mmio_awready_raw = mmio_to_uart ? uart_awready : mmio_to_npu1 ? csr1_awready : csr_awready;
-  assign mmio_wready_raw  = mmio_to_uart ? uart_wready  : mmio_to_npu1 ? csr1_wready  : csr_wready;
-  assign mmio_bresp_raw   = mmio_to_uart ? uart_bresp   : mmio_to_npu1 ? csr1_bresp   : csr_bresp;
-  assign mmio_bvalid_raw  = mmio_to_uart ? uart_bvalid  : mmio_to_npu1 ? csr1_bvalid  : csr_bvalid;
+  // Write response mux (combinational, use current write address decode)
+  assign mmio_awready_raw = w_to_aplic ? aplic_awready : w_to_uart ? uart_awready :
+                            w_to_npu1 ? csr1_awready : csr_awready;
+  assign mmio_wready_raw  = w_to_aplic ? aplic_wready  : w_to_uart ? uart_wready  :
+                            w_to_npu1 ? csr1_wready  : csr_wready;
+  assign mmio_bresp_raw   = w_to_aplic ? aplic_bresp   : w_to_uart ? uart_bresp   :
+                            w_to_npu1 ? csr1_bresp   : csr_bresp;
+  assign mmio_bvalid_raw  = w_to_aplic ? aplic_bvalid  : w_to_uart ? uart_bvalid  :
+                            w_to_npu1 ? csr1_bvalid  : csr_bvalid;
+  // Read arready mux (use current READ address decode)
+  assign mmio_arready_raw = r_to_aplic ? aplic_arready : r_to_uart ? uart_arready :
+                            r_to_npu1 ? csr1_arready : csr_arready;
   // Read response mux (uses registered sel_r for correct data return)
-  assign mmio_arready_raw = mmio_to_uart ? uart_arready : mmio_to_npu1 ? csr1_arready : csr_arready;
-  assign mmio_rdata_raw   = (sel_r == SEL_UART) ? uart_rdata[31:0] :
+  assign mmio_rdata_raw   = (sel_r == SEL_APLIC) ? aplic_rdata[31:0] :
+                            (sel_r == SEL_UART) ? uart_rdata[31:0] :
                             (sel_r == SEL_NPU1) ? csr1_rdata : csr_rdata;
-  assign mmio_rresp_raw   = (sel_r == SEL_UART) ? uart_rresp  :
+  assign mmio_rresp_raw   = (sel_r == SEL_APLIC) ? aplic_rresp :
+                            (sel_r == SEL_UART) ? uart_rresp  :
                             (sel_r == SEL_NPU1) ? csr1_rresp  : csr_rresp;
-  assign mmio_rvalid_raw  = (sel_r == SEL_UART) ? uart_rvalid :
+  assign mmio_rvalid_raw  = (sel_r == SEL_APLIC) ? aplic_rvalid :
+                            (sel_r == SEL_UART) ? uart_rvalid :
                             (sel_r == SEL_NPU1) ? csr1_rvalid : csr_rvalid;
 
 endmodule

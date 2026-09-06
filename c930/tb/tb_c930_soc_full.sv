@@ -2850,6 +2850,144 @@ module tb_c930_soc_full;
       total_errs = total_errs + dc_errs;
     end
 
+    // =========================================================================
+    // Test 10: APLIC interrupt path (NPU0 completion -> CPU0 ISR)
+    //
+    // CPU0 firmware configures the APLIC (NPU0 prio3/edge, NPU1 prio2/edge,
+    // UART prio1/level), enables mie.MEIE + mstatus.MIE, sets mtvec to its ISR
+    // at 0x200, and queues a 4x4x4 INT8 all-ones GEMM.  On completion the NPU
+    // done pulse is edge-captured by the APLIC, o_irq drives CPU0's machine
+    // external interrupt, the CPU traps, the ISR claims source 1 (writes it to
+    // 0xB000), completes, and mrets.  Main then writes 0xC0FFEE to 0xB004.
+    //
+    // Exercises: APLIC config/claim/complete over the real MMIO bridge, mip
+    // wiring into the CPU core, edge capture of the NPU pulse, and an ISR that
+    // runs entirely in firmware.
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 10: APLIC interrupt (NPU0 -> CPU0 ISR)");
+    $display("========================================");
+    begin
+      int apl_errs;
+      apl_errs = 0;
+
+      // Load APLIC firmware into DDR at 0x0000
+      begin
+        int fw_fd; logic [7:0] fw_byte; int fw_addr;
+        fw_fd = $fopen("sw/aplic_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+          $display("  [TB] APLIC firmware loaded (%0d bytes)", fw_addr);
+        end else begin
+          $error("  [FAIL] Could not open sw/aplic_ddr_bytes.hex");
+          apl_errs = apl_errs + 1;
+        end
+      end
+
+      // GEMM operands: 4x4x4 INT8, all-1s (A 16B @0x8000, B 16B @0x8400)
+      for (int i = 0; i < 16; i++) begin
+        ddr_write_byte(32'h8000 + i, 8'h01);
+        ddr_write_byte(32'h8400 + i, 8'h01);
+      end
+
+      // Clear mailboxes
+      for (int i = 0; i < 32; i++)
+        ddr_write_byte(32'hB000 + i, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for main-line magic (written only after the ISR claimed)
+      begin : wait_aplic
+        int apl_cnt;
+        apl_cnt = 0;
+        forever begin
+          @(posedge clk);
+          apl_cnt = apl_cnt + 1;
+          if (apl_cnt > 300_000) begin
+            $error("  [FAIL] APLIC test TIMEOUT");
+            apl_errs = apl_errs + 1;
+            disable wait_aplic;
+          end
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'hB004];
+            b1 = dut.u_ddr.mem[32'hB005];
+            b2 = dut.u_ddr.mem[32'hB006];
+            b3 = dut.u_ddr.mem[32'hB007];
+            if ({b3, b2, b1, b0} == 32'h00C0FFEE) begin
+              $display("  [PASS] CPU0 handled the APLIC interrupt after %0d cycles", apl_cnt);
+              disable wait_aplic;
+            end
+          end
+        end
+      end
+
+      // ISR wrote the claimed source index to 0xB000 (expect 1 = NPU0)
+      begin
+        logic [7:0] b0, b1, b2, b3;
+        b0 = dut.u_ddr.mem[32'hB000];
+        b1 = dut.u_ddr.mem[32'hB001];
+        b2 = dut.u_ddr.mem[32'hB002];
+        b3 = dut.u_ddr.mem[32'hB003];
+        if ({b3, b2, b1, b0} !== 32'h00000001) begin
+          $error("  [FAIL] ISR claim value = %0d (expect 1 = NPU0)", {b3, b2, b1, b0});
+          apl_errs = apl_errs + 1;
+        end else begin
+          $display("  [PASS] ISR claimed source 1 (NPU0)");
+        end
+      end
+
+      // Verify all 16 C elements == 4 through DDR
+      begin
+        int bad;
+        bad = 0;
+        for (int i = 0; i < 16; i++) begin
+          logic [7:0] c0, c1, c2, c3;
+          c0 = dut.u_ddr.mem[32'h8800 + i*4];
+          c1 = dut.u_ddr.mem[32'h8800 + i*4 + 1];
+          c2 = dut.u_ddr.mem[32'h8800 + i*4 + 2];
+          c3 = dut.u_ddr.mem[32'h8800 + i*4 + 3];
+          if ({c3, c2, c1, c0} !== 32'h00000004) begin
+            $error("  [FAIL] GEMM C[%0d] = %0d (expect 4)", i, $signed({c3, c2, c1, c0}));
+            bad = bad + 1;
+          end
+        end
+        if (bad == 0)
+          $display("  [PASS] All 16 C elements == 4");
+        apl_errs = apl_errs + bad;
+      end
+
+      // APLIC is quiescent after the ISR completed
+      repeat (20) @(posedge clk);
+      begin
+        if (dut.u_aplic.o_irq !== 1'b0) begin
+          $error("  [FAIL] APLIC o_irq still high after ISR");
+          apl_errs = apl_errs + 1;
+        end else begin
+          $display("  [PASS] APLIC o_irq deasserted after complete");
+        end
+        if (dut.u_aplic.pnd_1 !== 1'b0 || dut.u_aplic.isv_1 !== 1'b0) begin
+          $error("  [FAIL] APLIC source-1 state: pnd=%0b isv=%0b (expect 0/0)",
+                 dut.u_aplic.pnd_1, dut.u_aplic.isv_1);
+          apl_errs = apl_errs + 1;
+        end else begin
+          $display("  [PASS] APLIC source-1 pending/in-service cleared");
+        end
+      end
+
+      total_errs = total_errs + apl_errs;
+    end
+
 
     // Summary
     $display("\n========================================");
