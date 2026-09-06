@@ -206,13 +206,19 @@ module c930_axi_cache_adapter
   // AXI read data channel (always ready when in RD_DATA)
   assign m_axi_rready = (state == S_RD_DATA);
 
-  // AXI write address channel
-  assign m_axi_awaddr = addr_r;
+  // AXI write address channel.  The address is 8-byte aligned and the data is
+  // shifted left by the low byte offset so the value lands in the strobe lane.
+  // The core's store data is delivered RAW in the low bits (the reference
+  // mem_shifter did this shift); without it, a store to a 4-byte-aligned-but-
+  // -not-8-byte-aligned address (byte offset 4/12) carries its value in the
+  // low 32 bits while the byte strobe selects the high 4 bytes, so the DDR AXI
+  // slave writes zeros (observed: the APLIC test's magic at 0xB004 was lost).
+  assign m_axi_awaddr = {addr_r[63:3], 3'b0};  // align to the 64-bit write lane
   assign m_axi_awlen  = 8'd0;  // single beat (64-bit write)
   assign m_axi_awvalid = (state == S_WR_ISSUE);
 
   // AXI write data channel
-  assign m_axi_wdata  = wr_data_r;
+  assign m_axi_wdata  = wr_data_r << (addr_r[2:0] * 8);  // shift into strobe lane
   assign m_axi_wstrb  = wr_strobe_r;
   assign m_axi_wlast  = 1'b1;  // single beat, always last
   assign m_axi_wvalid = (state == S_WR_DATA);
