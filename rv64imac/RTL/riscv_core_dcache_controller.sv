@@ -106,8 +106,23 @@ enum logic [3:0] {
     // o_rd_en; the core samples it here with o_stall released. The request
     // lines stay asserted (the load is still in MEM until the posedge), so
     // this state must NOT re-dispatch -- it just drains to IDLE.
-    LOAD_DONE      = 4'b1000
+    LOAD_DONE      = 4'b1000,
+    // After an MMIO store completes (done seen), the store must retire from
+    // MEM before the dcache returns to IDLE.  If the pipe cannot advance on
+    // the done cycle (e.g. the I-cache is mid-fill and holds the WB stage via
+    // the hazard unit's stall_wb), the store stays in MEM with i_write high;
+    // returning to IDLE then RE-ISSUES the completed store as a brand-new
+    // MMIO write.  That is harmless for idempotent config writes but fatal
+    // for non-idempotent ones (the NPU CSR START bit -> duplicate GEMM).
+    // MMIO_WR_RETIRE releases the pipe (o_stall=0, valid deasserted) and
+    // waits for the store to actually leave MEM before draining.
+    MMIO_WR_RETIRE = 4'b1001
 } STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
+
+  // Address of the MMIO store currently being retired (latched when its write
+  // completes), so MMIO_WR_RETIRE can tell whether the MEM stage still holds
+  // the same store or has advanced to a new access.
+  logic [ADDR_WIDTH-1 : 0] mmio_wr_addr_r;
 // Initializers keep the combinational FSM/tag/reservation logic defined before
 // the first reset edge (Icarus would otherwise cascade X through the cache).
 initial begin
@@ -157,6 +172,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         RES_SET <= 0;
         RES_SET_SIZE <= 0;
         amo_sc_serviced <= 0;
+        mmio_wr_addr_r <= 0;
         STATE <= IDLE;
     end
 
@@ -586,10 +602,61 @@ case (STATE)
         if (i_mmio_write_done) begin
             o_mmio_write_valid = 0;
             o_stall = 0;
-            NEXT = MMIO_DRAIN;
+            // Remember the completed store's address so MMIO_WR_RETIRE can
+            // detect when the store leaves MEM.
+            mmio_wr_addr_r <= i_addr_from_core;
+            NEXT = MMIO_WR_RETIRE;
         end
 
                end 
+
+      // Let the completed MMIO store retire from the pipeline.  The write
+      // itself is DONE (the bridge consumed it); we only need the store to
+      // advance MEM->WB so the dcache does not re-issue it.  With o_stall
+      // released the pipe advances the moment the WB stage is free (when any
+      // concurrent I-cache fill that held stall_wb completes).  We hold the
+      // request deasserted the whole time and wait until the MEM stage no
+      // longer holds THIS store (i_write drops or the address changes), then
+      // drain so IDLE services the next access.  Without this state, IDLE
+      // re-issues the completed store -> duplicate MMIO write (fatal for
+      // non-idempotent targets like the NPU CSR START bit).
+      MMIO_WR_RETIRE : begin
+
+        o_rd_en = 0;
+        o_wr_en = 0;
+        o_block_replace = 0;
+        o_stall = 0;                     // release the pipe so the store retires
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_req = 0;
+        update_en = 0;
+        o_amo_wr = 0;
+
+        o_mem_write_data = i_data_from_core;
+        o_mem_write_address = i_addr_from_core;
+        o_mem_write_valid = 0;
+
+        o_mmio_read_req      = 0;
+        o_mmio_read_sel      = 0;
+        o_mmio_read_address  = i_addr_from_core;
+        o_mmio_write_valid   = 0;
+        o_mmio_write_address = i_addr_from_core;
+        o_mmio_write_data    = i_data_from_core;
+        o_mmio_write_strobe  = o_mem_write_strobe;
+
+        if (!i_write || (i_addr_from_core != mmio_wr_addr_r)) begin
+            // Store left MEM (retired, or a new access advanced in).  Freeze
+            // the pipe so the next access stays in MEM for IDLE to service,
+            // then drain one cycle.
+            o_stall = 1;
+            NEXT = MMIO_DRAIN;
+        end else begin
+            // The same store is still in MEM (the pipe was held by an
+            // I-cache fill on the done cycle).  Keep the request deasserted
+            // and wait for it to retire.
+            NEXT = MMIO_WR_RETIRE;
+        end
+
+               end
 
       // One-cycle gap after an MMIO transaction. The dcache's request/valid
       // lines are LEVELs that the IDLE case re-asserts immediately when the
