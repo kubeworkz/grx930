@@ -29,7 +29,25 @@ module tb_c930_soc_full;
   logic o_npu_busy, o_npu_done, o_npu_error, o_npu_irq;
   logic o_npu1_busy, o_npu1_done, o_npu1_error, o_npu1_irq;
   logic o_uart_txd;
-  logic i_uart_rxd = 1'b1;
+  logic i_uart_rxd;
+  // UART bit period in core cycles (default divisor 53 -> 16 baud ticks/bit)
+  localparam int UART_BIT = 54 * 16;
+
+  // Drive one UART frame (start + 8 data LSB-first + stop) into the RX pin.
+  // The UART samples mid-bit, so holding each bit for a full bit period is
+  // correct regardless of the internal baud phase.
+  task automatic uart_send_byte(input logic [7:0] data);
+    begin
+      i_uart_rxd = 1'b0;                        // start bit
+      repeat(UART_BIT) @(posedge clk);
+      for (int b = 0; b < 8; b++) begin
+        i_uart_rxd = data[b];
+        repeat(UART_BIT) @(posedge clk);
+      end
+      i_uart_rxd = 1'b1;                        // stop bit
+      repeat(UART_BIT) @(posedge clk);
+    end
+  endtask
   logic        tb_wr_en;
   logic [31:0] tb_wr_addr;
   logic [7:0]  tb_wr_data;
@@ -162,11 +180,11 @@ module tb_c930_soc_full;
     $dumpfile("build/tb_c930_soc_full.vcd");
     $dumpvars(0, tb_c930_soc_full);
     total_errs = 0;
-
-    // Initialize preload port
+    // Initialize preload port + UART RX idle
     tb_wr_en   = 1'b0;
     tb_wr_addr = 32'd0;
     tb_wr_data = 8'd0;
+    i_uart_rxd = 1'b1;
 
     // =========================================================================
     // Test 1: D-cache stress (CPU load/store through crossbar → DDR)
@@ -2851,18 +2869,21 @@ module tb_c930_soc_full;
     end
 
     // =========================================================================
-    // Test 10: APLIC interrupt path (NPU0 completion -> CPU0 ISR)
+    // Test 10: APLIC interrupt path and priority encoder (NPU0/NPU1/UART)
     //
     // CPU0 firmware configures the APLIC (NPU0 prio3/edge, NPU1 prio2/edge,
-    // UART prio1/level), enables mie.MEIE + mstatus.MIE, sets mtvec to its ISR
-    // at 0x200, and queues a 4x4x4 INT8 all-ones GEMM.  On completion the NPU
-    // done pulse is edge-captured by the APLIC, o_irq drives CPU0's machine
-    // external interrupt, the CPU traps, the ISR claims source 1 (writes it to
-    // 0xB000), completes, and mrets.  Main then writes 0xC0FFEE to 0xB004.
+    // UART prio1/level), queues a GEMM on BOTH NPUs, and — with MIE still 0 —
+    // polls until both NPUs finish and a UART RX byte (injected by the TB) has
+    // arrived.  All three sources are therefore pending before interrupts are
+    // enabled.  The CPU then traps repeatedly: the first claim must return
+    // NPU0 (highest priority), then NPU1, then UART.  The ISR records each
+    // claim into a DDR array and completes; the main line verifies the order
+    // [1,2,3] and writes 0x0C0FFEE to 0xB000.
     //
-    // Exercises: APLIC config/claim/complete over the real MMIO bridge, mip
-    // wiring into the CPU core, edge capture of the NPU pulse, and an ISR that
-    // runs entirely in firmware.
+    // Exercises: APLIC config/claim/complete over the real MMIO bridge, the
+    // priority encoder with all three sources pending simultaneously, edge
+    // capture (NPU pulses) + level capture (UART RX), the RX FIFO drain that
+    // deasserts the level, and a firmware ISR that handles all three.
     // =========================================================================
     $display("\n========================================");
     $display("  TEST 10: APLIC interrupt (NPU0 -> CPU0 ISR)");
@@ -2891,11 +2912,20 @@ module tb_c930_soc_full;
         end
       end
 
-      // GEMM operands: 4x4x4 INT8, all-1s (A 16B @0x8000, B 16B @0x8400)
+      // GEMM operands: 4x4x4 INT8 all-1s (A 16B @0x8000, B 16B @0x8400)
       for (int i = 0; i < 16; i++) begin
         ddr_write_byte(32'h8000 + i, 8'h01);
         ddr_write_byte(32'h8400 + i, 8'h01);
       end
+
+      // NPU1 GEMM operands: 2x3x2 INT8
+      //   A[2x2] = [[1,2],[3,4]] @0x9000 (4 bytes)
+      //   B[2x3] = all-1s @0x9100 (6 bytes)
+      //   -> C[2x3] = [[3,3,3],[7,7,7]] @0x9200
+      ddr_write_byte(32'h9000, 8'h01); ddr_write_byte(32'h9001, 8'h02);
+      ddr_write_byte(32'h9002, 8'h03); ddr_write_byte(32'h9003, 8'h04);
+      for (int i = 0; i < 6; i++)
+        ddr_write_byte(32'h9100 + i, 8'h01);
 
       // Clear mailboxes
       for (int i = 0; i < 32; i++)
@@ -2906,10 +2936,18 @@ module tb_c930_soc_full;
       repeat(10) @(posedge clk);
       rst_n = 1'b1;
 
+      // Inject a UART RX byte (0x5A).  The firmware waits for it with MIE
+      // still off, so all three IRQ sources are pending before the CPU takes
+      // the first interrupt.
+      uart_send_byte(8'h5A);
+
       // Wait for main-line magic (written only after the ISR claimed)
       begin : wait_aplic
-        int apl_cnt;
+        int apl_cnt, trap_shown;
+        logic trap_seen_d;
         apl_cnt = 0;
+        trap_shown = 0;
+        trap_seen_d = 0;
         forever begin
           @(posedge clk);
           apl_cnt = apl_cnt + 1;
@@ -2920,34 +2958,41 @@ module tb_c930_soc_full;
           end
           begin
             logic [7:0] b0, b1, b2, b3;
-            b0 = dut.u_ddr.mem[32'hB004];
-            b1 = dut.u_ddr.mem[32'hB005];
-            b2 = dut.u_ddr.mem[32'hB006];
-            b3 = dut.u_ddr.mem[32'hB007];
+            b0 = dut.u_ddr.mem[32'hB000];
+            b1 = dut.u_ddr.mem[32'hB001];
+            b2 = dut.u_ddr.mem[32'hB002];
+            b3 = dut.u_ddr.mem[32'hB003];
             if ({b3, b2, b1, b0} == 32'h00C0FFEE) begin
-              $display("  [PASS] CPU0 handled the APLIC interrupt after %0d cycles", apl_cnt);
+              $display("  [PASS] all 3 IRQ sources claimed in priority order after %0d cycles", apl_cnt);
               disable wait_aplic;
             end
           end
         end
       end
 
-      // ISR wrote the claimed source index to 0xB000 (expect 1 = NPU0)
+      // ISR claim order: claims[0]=1 (NPU0), claims[1]=2 (NPU1), claims[2]=3 (UART)
       begin
-        logic [7:0] b0, b1, b2, b3;
-        b0 = dut.u_ddr.mem[32'hB000];
-        b1 = dut.u_ddr.mem[32'hB001];
-        b2 = dut.u_ddr.mem[32'hB002];
-        b3 = dut.u_ddr.mem[32'hB003];
-        if ({b3, b2, b1, b0} !== 32'h00000001) begin
-          $error("  [FAIL] ISR claim value = %0d (expect 1 = NPU0)", {b3, b2, b1, b0});
-          apl_errs = apl_errs + 1;
-        end else begin
-          $display("  [PASS] ISR claimed source 1 (NPU0)");
+        int bad;
+        logic [31:0] got;
+        bad = 0;
+        for (int i = 0; i < 3; i++) begin
+          logic [7:0] c0, c1, c2, c3;
+          c0 = dut.u_ddr.mem[32'hB100 + i*4];
+          c1 = dut.u_ddr.mem[32'hB100 + i*4 + 1];
+          c2 = dut.u_ddr.mem[32'hB100 + i*4 + 2];
+          c3 = dut.u_ddr.mem[32'hB100 + i*4 + 3];
+          got = {c3, c2, c1, c0};
+          if (got !== (i + 1)) begin
+            $error("  [FAIL] claim #%0d = %0d (expect %0d)", i, got, i + 1);
+            bad = bad + 1;
+          end
         end
+        if (bad == 0)
+          $display("  [PASS] ISR claimed sources 1, 2, 3 in priority order");
+        apl_errs = apl_errs + bad;
       end
 
-      // Verify all 16 C elements == 4 through DDR
+      // Verify all 16 NPU0 C elements == 4 through DDR
       begin
         int bad;
         bad = 0;
@@ -2963,11 +3008,35 @@ module tb_c930_soc_full;
           end
         end
         if (bad == 0)
-          $display("  [PASS] All 16 C elements == 4");
+          $display("  [PASS] All 16 NPU0 C elements == 4");
         apl_errs = apl_errs + bad;
       end
 
-      // APLIC is quiescent after the ISR completed
+      // Verify all 6 NPU1 C elements == [[3,3,3],[7,7,7]] through DDR
+      begin
+        int bad;
+        bad = 0;
+        for (int i = 0; i < 6; i++) begin
+          logic [7:0] c0, c1, c2, c3;
+          logic [31:0] got, exp;
+          c0 = dut.u_ddr.mem[32'h9200 + i*4];
+          c1 = dut.u_ddr.mem[32'h9200 + i*4 + 1];
+          c2 = dut.u_ddr.mem[32'h9200 + i*4 + 2];
+          c3 = dut.u_ddr.mem[32'h9200 + i*4 + 3];
+          got = {c3, c2, c1, c0};
+          exp = (i < 3) ? 32'd3 : 32'd7;
+          if (got !== exp) begin
+            $error("  [FAIL] NPU1 C[%0d] = %0d (expect %0d)", i, $signed(got), $signed(exp));
+            bad = bad + 1;
+          end
+        end
+        if (bad == 0)
+          $display("  [PASS] All 6 NPU1 C elements == [[3,3,3],[7,7,7]]");
+        apl_errs = apl_errs + bad;
+      end
+
+      // APLIC is quiescent after the ISR completed: all pending/in-service
+      // bits cleared and o_irq low (the UART level was drained by the ISR)
       repeat (20) @(posedge clk);
       begin
         if (dut.u_aplic.o_irq !== 1'b0) begin
@@ -2976,12 +3045,14 @@ module tb_c930_soc_full;
         end else begin
           $display("  [PASS] APLIC o_irq deasserted after complete");
         end
-        if (dut.u_aplic.pnd_1 !== 1'b0 || dut.u_aplic.isv_1 !== 1'b0) begin
-          $error("  [FAIL] APLIC source-1 state: pnd=%0b isv=%0b (expect 0/0)",
-                 dut.u_aplic.pnd_1, dut.u_aplic.isv_1);
+        if (dut.u_aplic.pnd_1 !== 1'b0 || dut.u_aplic.pnd_2 !== 1'b0 || dut.u_aplic.pnd_3 !== 1'b0 ||
+            dut.u_aplic.isv_1 !== 1'b0 || dut.u_aplic.isv_2 !== 1'b0 || dut.u_aplic.isv_3 !== 1'b0) begin
+          $error("  [FAIL] APLIC state: pnd=%b%b%b isv=%b%b%b (expect all 0)",
+                 dut.u_aplic.pnd_1, dut.u_aplic.pnd_2, dut.u_aplic.pnd_3,
+                 dut.u_aplic.isv_1, dut.u_aplic.isv_2, dut.u_aplic.isv_3);
           apl_errs = apl_errs + 1;
         end else begin
-          $display("  [PASS] APLIC source-1 pending/in-service cleared");
+          $display("  [PASS] APLIC all sources pending/in-service cleared");
         end
       end
 
