@@ -86,10 +86,43 @@ module c930_bootrom
     // address 0x10000+8*i, [63:32] at 0x10000+8*i+4.  One zero-extended
     // instruction per entry left a zero gap at every other word, which
     // CPU1 decoded as compressed zeroes and walked off into the firmware.
-    rom[4] = 64'h4000_12B7_0000_0013;   // nop@0x10020 | lui@0x10024
-    rom[5] = 64'hFE03_0CE3_FF42_A303;   // lw@0x10028   | beq@0x1002C
-    rom[6] = 64'h0000_0013_0003_0067;   // jalr@0x10030 | nop@0x10034
-    rom[7] = 64'h0000_0013_0000_0013;   // nop | nop
+    // All three worker park loops poll their RELEASE register at a LOW rate
+    // (a ~4K-cycle idle delay between polls) so idle harts don't saturate the
+    // shared MMIO bridge while parked -- three tight poll loops would triple
+    // the bridge traffic and slow every other core's MMIO access.
+    //   0x10020: nop
+    //   0x10024: lui  x5, 0x40001     x5 = 0x4000_1000
+    //   0x10028: lw   x6, -12(x5)     x6 = RELEASE1 (0x4000_0FF4 = 0x1000-12)
+    //   0x1002C: beq  x6, x0, +8      -> sleep (0x10034) while RELEASE == 0
+    //   0x10030: jalr x0, x6, 0       jump to RELEASE (worker entry)
+    //   0x10034: addi x7, x0, 256     x7 = 256  (sleep counter)
+    //   0x10038: addi x7, x7, -1      (idle loop)
+    //   0x1003C: bne  x7, x0, -4      loop to 0x10038
+    //   0x10040: jal  x0, -24         back to poll (0x10028)
+    //   0x10044: nop
+    // The ~800-cycle gap between polls keeps an idle hart from saturating
+    // the shared MMIO bridge while parked (three tight poll loops would
+    // triple the bridge traffic and slow every other core's MMIO), while
+    // still releasing a worker within ~800 cycles of the write.
+    rom[4]  = 64'h4000_12B7_0000_0013;
+    rom[5]  = 64'h0003_0463_FF42_A303;
+    rom[6]  = 64'h1000_0393_0003_0067;
+    rom[7]  = 64'hFE03_9EE3_FFF3_8393;
+    rom[8]  = 64'h0000_0013_FE9F_F06F;
+    // CPU2 parking loop at entry 12 (byte 0x10060): same shape, polls
+    // CORE2_RELEASE (0x4000_0FF8 = 0x1000-8) via lw x6, -8(x5).
+    rom[12] = 64'h4000_12B7_0000_0013;
+    rom[13] = 64'h0003_0463_FF82_A303;
+    rom[14] = 64'h1000_0393_0003_0067;
+    rom[15] = 64'hFE03_9EE3_FFF3_8393;
+    rom[16] = 64'h0000_0013_FE9F_F06F;
+    // CPU3 parking loop at entry 20 (byte 0x100A0): same shape, polls
+    // CORE3_RELEASE (0x4000_0FFC = 0x1000-4) via lw x6, -4(x5).
+    rom[20] = 64'h4000_12B7_0000_0013;
+    rom[21] = 64'h0003_0463_FFC2_A303;
+    rom[22] = 64'h1000_0393_0003_0067;
+    rom[23] = 64'hFE03_9EE3_FFF3_8393;
+    rom[24] = 64'h0000_0013_FE9F_F06F;
     // Only load if a real hex file is provided (not empty or placeholder)
     // Icarus crashes on $readmemh("")
     $readmemh(HEX_FILE, rom);
