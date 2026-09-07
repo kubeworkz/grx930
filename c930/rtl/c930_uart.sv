@@ -207,8 +207,15 @@ module c930_uart
   assign rx_fifo_empty = (rx_fifo_wr_ptr == rx_fifo_rd_ptr);
   assign rx_fifo_rdata = rx_fifo_mem[rx_fifo_rd_ptr[FIFO_AW-1:0]];
 
+  // NOTE: rx_fifo_we is a registered level that the RX FSM holds for one
+  // full tick period (until the next tick's default clears it).  The FIFO
+  // pointer/memory blocks run every clock, so without tick-gating they would
+  // treat that level as ~baud_divisor separate writes and fill the FIFO with
+  // one frame's byte ~54 times -- keeping rx_fifo_empty false forever and
+  // the level-based UART IRQ stuck high.  Gating the store and the pointer
+  // increment on baud_tick makes each frame produce exactly one FIFO entry.
   always_ff @(posedge i_clk) begin
-    if (rx_fifo_we)
+    if (rx_fifo_we && baud_tick)
       rx_fifo_mem[rx_fifo_wr_ptr[FIFO_AW-1:0]] <= rx_fifo_wdata;
   end
 
@@ -217,7 +224,7 @@ module c930_uart
       rx_fifo_wr_ptr <= '0;
       rx_fifo_rd_ptr <= '0;
     end else begin
-      if (rx_fifo_we && !rx_fifo_full)
+      if (rx_fifo_we && baud_tick && !rx_fifo_full)
         rx_fifo_wr_ptr <= rx_fifo_wr_ptr + 1;
       if (rx_fifo_re && !rx_fifo_empty)
         rx_fifo_rd_ptr <= rx_fifo_rd_ptr + 1;
