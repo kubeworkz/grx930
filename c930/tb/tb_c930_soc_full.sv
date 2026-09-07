@@ -3060,6 +3060,192 @@ module tb_c930_soc_full;
     end
 
 
+    // =========================================================================
+    // Test 11: Quad-core (4 hart boot, chained RELEASE handoff)
+    //
+    // CPU0 (DDR 0x0000): reads HART_ID (expect 0), queues GEMM0 (4x4x4 INT8,
+    //   all-1s -> C = 4), verifies all 16 C elements, writes CORE1_RELEASE
+    //   (0x4000_0FF4) = 0x4000 to release CPU1, then polls CORE3_RELEASE
+    //   (0x4000_0FFC) until CPU3 writes 0x7777 there, then writes DONE magic
+    //   0xFACEFEED to 0x9400.
+    // CPU1 (boot ROM 0x10020): jumps to 0x4000, HART_ID (expect 1), GEMM1
+    //   (3x3x3 all-2s -> C = 12), verifies 9 elements, releases CPU2 via
+    //   0x4000_0FF8 = 0x4800.
+    // CPU2 (boot ROM 0x10060): jumps to 0x4800, HART_ID (expect 2), GEMM2
+    //   (3x3x3 all-3s -> C = 27), verifies 9 elements, releases CPU3 via
+    //   0x4000_0FFC = 0x5000.
+    // CPU3 (boot ROM 0x100A0): jumps to 0x5000, HART_ID (expect 3), GEMM3
+    //   (4x4x4 all-4s -> C = 64), verifies 16 elements, signals CPU0 by
+    //   writing 0x7777 to 0x4000_0FFC.
+    //
+    // The handoff is chained through the UNCACHED RELEASE MMIO registers (not
+    // DDR flags) because the D-caches have no cross-core coherency -- a core
+    // polling another core's fresh DDR flag can sit on a stale cached line.
+    // Chaining also serializes access to the shared NPU CSR (one core in its
+    // dims/base setup window at a time).
+    // =========================================================================
+    $display("\n========================================");
+    $display("  TEST 11: Quad-core (4 hart boot + chained RELEASE)");
+    $display("========================================");
+    begin
+      int qc_errs;
+      qc_errs = 0;
+
+      // Load 4-core firmware into DDR (0x0000 CPU0, 0x4000 CPU1,
+      // 0x4800 CPU2, 0x5000 CPU3)
+      begin
+        int fw_fd; logic [7:0] fw_byte; int fw_addr;
+        fw_fd = $fopen("sw/quadcore_ddr_bytes.hex", "r");
+        if (fw_fd != 0) begin
+          fw_addr = 0;
+          while (!$feof(fw_fd) && fw_addr < MEM_BYTES) begin
+            if ($fscanf(fw_fd, "%2h", fw_byte) == 1) begin
+              ddr_write_byte(fw_addr[31:0], fw_byte);
+              fw_addr = fw_addr + 1;
+            end
+          end
+          $fclose(fw_fd);
+        end
+      end
+
+      // GEMM0 operands: 4x4x4 INT8 all-1s (A 16B @0x8000, B 16B @0x8400)
+      for (int i = 0; i < 16; i++) begin
+        ddr_write_byte(32'h8000 + i, 8'h01);
+        ddr_write_byte(32'h8400 + i, 8'h01);
+      end
+      // GEMM1 operands: 3x3x3 INT8 all-2s (A 9B @0xA000, B 9B @0xA400)
+      for (int i = 0; i < 9; i++) begin
+        ddr_write_byte(32'hA000 + i, 8'h02);
+        ddr_write_byte(32'hA400 + i, 8'h02);
+      end
+      // GEMM2 operands: 3x3x3 INT8 all-3s (A 9B @0xB000, B 9B @0xB400)
+      for (int i = 0; i < 9; i++) begin
+        ddr_write_byte(32'hB000 + i, 8'h03);
+        ddr_write_byte(32'hB400 + i, 8'h03);
+      end
+      // GEMM3 operands: 4x4x4 INT8 all-4s (A 16B @0xD000, B 16B @0xD400)
+      for (int i = 0; i < 16; i++) begin
+        ddr_write_byte(32'hD000 + i, 8'h04);
+        ddr_write_byte(32'hD400 + i, 8'h04);
+      end
+
+      // Clear status slots + magic region
+      for (int i = 0; i < 1280; i++)
+        ddr_write_byte(32'h9000 + i, 8'h00);
+
+      // Reset CPU and boot
+      rst_n = 1'b0;
+      repeat(10) @(posedge clk);
+      rst_n = 1'b1;
+
+      // Wait for CPU0 DONE magic
+      begin : wait_qc
+        int qc_cnt;
+        qc_cnt = 0;
+        forever begin
+          @(posedge clk);
+          qc_cnt = qc_cnt + 1;
+          if (qc_cnt > 800_000) begin
+            $error("  [FAIL] Quad-core TIMEOUT");
+            qc_errs = qc_errs + 1;
+            disable wait_qc;
+          end
+
+          begin
+            logic [7:0] b0, b1, b2, b3;
+            b0 = dut.u_ddr.mem[32'h9400];
+            b1 = dut.u_ddr.mem[32'h9401];
+            b2 = dut.u_ddr.mem[32'h9402];
+            b3 = dut.u_ddr.mem[32'h9403];
+            if ({b3, b2, b1, b0} == 32'hFACEFEED) begin
+              $display("  [PASS] Quad-core: all 4 harts completed in %0d cycles", qc_cnt);
+              disable wait_qc;
+            end
+          end
+        end
+      end
+
+      // HART_ID checks: slots at 0x9000/0x9100/0x9200/0x9300 expect 0/1/2/3
+      begin
+        int bad;
+        logic [31:0] got;
+        bad = 0;
+        for (int c = 0; c < 4; c++) begin
+          logic [7:0] b0, b1, b2, b3;
+          b0 = dut.u_ddr.mem[32'h9000 + c*256];
+          b1 = dut.u_ddr.mem[32'h9000 + c*256 + 1];
+          b2 = dut.u_ddr.mem[32'h9000 + c*256 + 2];
+          b3 = dut.u_ddr.mem[32'h9000 + c*256 + 3];
+          got = {b3, b2, b1, b0};
+          if (got !== c) begin
+            $error("  [FAIL] CPU%0d HART_ID = %0d (expect %0d)", c, got, c);
+            bad = bad + 1;
+          end
+        end
+        if (bad == 0)
+          $display("  [PASS] HART_IDs = 0,1,2,3 on all four cores");
+        qc_errs = qc_errs + bad;
+      end
+
+      // On-core C-verify error masks (0 = all elements matched)
+      begin
+        int bad;
+        logic [31:0] got;
+        bad = 0;
+        for (int c = 0; c < 4; c++) begin
+          logic [7:0] b0, b1, b2, b3;
+          b0 = dut.u_ddr.mem[32'h9004 + c*256];
+          b1 = dut.u_ddr.mem[32'h9004 + c*256 + 1];
+          b2 = dut.u_ddr.mem[32'h9004 + c*256 + 2];
+          b3 = dut.u_ddr.mem[32'h9004 + c*256 + 3];
+          got = {b3, b2, b1, b0};
+          if (got !== 32'h00000000) begin
+            $error("  [FAIL] CPU%0d C-verify mask = %08h (expect 0)", c, got);
+            bad = bad + 1;
+          end
+        end
+        if (bad == 0)
+          $display("  [PASS] All four cores verified their C matrices on-core");
+        qc_errs = qc_errs + bad;
+      end
+
+      // TB-side C readbacks (independent of on-core verification)
+      begin
+        int bad;
+        logic [31:0] got, exp;
+        bad = 0;
+        for (int g = 0; g < 4; g++) begin
+          int count;
+          logic [31:0] cbase, cval;
+          case (g)
+            0: begin count = 16; cbase = 32'h8800; cval = 4;  end
+            1: begin count = 9;  cbase = 32'hA800; cval = 12; end
+            2: begin count = 9;  cbase = 32'hB800; cval = 27; end
+            default: begin count = 16; cbase = 32'hD800; cval = 64; end
+          endcase
+          for (int i = 0; i < count; i++) begin
+            logic [7:0] c0, c1, c2, c3;
+            c0 = dut.u_ddr.mem[cbase + i*4];
+            c1 = dut.u_ddr.mem[cbase + i*4 + 1];
+            c2 = dut.u_ddr.mem[cbase + i*4 + 2];
+            c3 = dut.u_ddr.mem[cbase + i*4 + 3];
+            got = {c3, c2, c1, c0};
+            exp = cval;
+            if (got !== exp) begin
+              $error("  [FAIL] GEMM%0d C[%0d] = %0d (expect %0d)", g, i, $signed(got), $signed(exp));
+              bad = bad + 1;
+            end
+          end
+        end
+        if (bad == 0)
+          $display("  [PASS] TB readback: all 50 C elements across 4 GEMMs correct");
+        qc_errs = qc_errs + bad;
+      end
+
+      total_errs = total_errs + qc_errs;
+    end
+
+
     // Summary
     $display("\n========================================");
     if (total_errs == 0)
