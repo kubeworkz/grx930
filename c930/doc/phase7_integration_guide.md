@@ -82,7 +82,27 @@ npu_dpi_csr_write(NPU_CSR_CTRL, 1);
 
 ## Step 6: Wait for completion
 
-Two options:
+The waits below assume **one command in flight** (submit → wait → read).
+That is the flow grxcp uses today and it is always correct.
+
+If you queue several GEMMs before waiting, do **not** poll DONE then BUSY:
+`STATUS.DONE` is a latched level cleared only by a START write (it goes 1
+after the first queued GEMM finishes and stays 1, so it cannot identify the
+last one), and `STATUS.BUSY` drops to 0 in the short P_DONE → next-dispatch
+bubble. The only correct batched-completion test is
+
+```c
+uint32_t q = npu_dpi_csr_read(NPU_CSR_QUEUE_STAT);  // 0x38
+uint32_t s = npu_dpi_csr_read(NPU_CSR_STATUS);      // 0x04
+while ((q & 0xF) != 0 || (s & 1) != 0) {            // occupancy && busy
+    npu_dpi_run(1);
+    q = npu_dpi_csr_read(NPU_CSR_QUEUE_STAT);
+    s = npu_dpi_csr_read(NPU_CSR_STATUS);
+}
+```
+
+(Full contract: `doc/c930_architecture.md`, "Command queue and completion
+contract".) Two options for the single-command flow:
 
 **Option A — Poll STATUS (recommended for shim):**
 ```c
@@ -272,9 +292,11 @@ device->backend = NPU_DPI_BACKEND_EMULATION;
 | 8 | 0x20 | PREC | 3 | R/W (0=INT8, 1=INT16, 2=FP16, 3=BF16, 4=INT4) |
 | 9 | 0x24 | CYCLE_COUNT | 32 | R (free-running, 32-bit) |
 | 10 | 0x28 | *(reserved)* | — | R (always 0, dead code in RTL) |
-| 11 | 0x2C | OP_COUNT | 32 | R (M×N×K×2) |
+| 11 | 0x2C | OP_COUNT | 32 | R (PE firings, not M×N×K×2 — see c930_architecture.md) |
 | 12 | 0x30 | STALL_COUNT | 32 | R |
 | 13 | 0x34 | DMA_CT | 32 | R |
+| 14 | 0x38 | QUEUE_STAT | 32 | R ([3:0] occupancy, [4] full) |
+| 15 | 0x3C | QUEUE_MAX | 32 | R (compile-time FIFO depth) |
 
 ## Timing model
 

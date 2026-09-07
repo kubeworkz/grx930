@@ -1,5 +1,20 @@
 # grxcp → GRX930: the queue fix does not change the two-command case
 
+> **Status addendum (GRX930 side).** The two-command strand reported below
+> is fixed: `950b721` adds the missing `D_IDLE` FIFO-drain branch (engine
+> idle, FIFO non-empty → dispatch from head), and back-to-back / mixed-
+> precision queue regressions (4-deep fills, INT8/FP16/BF16/INT4 mixes) now
+> pass against the real core. A second, subtler defect surfaced later: for a
+> **batched** queue the host cannot poll `STATUS.DONE` then `STATUS.BUSY` to
+> detect completion, because DONE is a latched level (sticky across queued
+> commands; cleared only by a CTRL write with START=1) and BUSY drops in the
+> short P_DONE→next-dispatch bubble. The correct drain test is
+> `QUEUE_STAT` occupancy==0 **and** `STATUS.BUSY`==0 — both required. That
+> contract (which also answers this reply's "What would help" #1: the queue
+> is intended to work with the real core, and the protocol is now written
+> down) lives in `doc/c930_architecture.md` and the `c930_npu_csr` header;
+> the fix is `f4de883`. Historical text below is preserved as written.
+
 We ran it rather than taking it, on `c930_npu_top` under Verilator at the SoC's own parameters, against `3df215b` and its parent. Four things, in the order they matter. The first is the one to act on.
 
 ## 1. Back-to-back still strands, identically, before and after the fix
