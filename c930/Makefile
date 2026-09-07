@@ -67,7 +67,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu hazard synth synth-fit wave clean bringup
+.PHONY: all sw soc soc_full npu hazard synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -270,6 +270,39 @@ tile_test: $(OUT_TILE)
 	$(VVP) $(OUT_TILE)
 
 # ---------------------------------------------------------------------------
+# NPU command-queue driver smoke test (full SoC, driver firmware)
+#
+# Builds sw/driver_test.c + sw/c930_npu_driver.c into firmware, boots it on
+# the full SoC (crossbar + boot ROM + UART + APLIC + 2 NPUs), and verifies
+# the driver's submit/drain path against real RTL. The TB runs three dims
+# (1x1x1, 3x4x8, 8x12x16); each queues the GEMM 3x back-to-back through
+# npu_drv_submit/npu_drv_drain and re-checks every C element on the TB side.
+# ---------------------------------------------------------------------------
+DRV_SW_ELF := sw/driver_test.elf
+DRV_SW_BIN := sw/driver_test.bin
+DRV_SW_HEX := sw/driver_prog.hex
+OUT_DRV    := $(BUILD_DIR)/tb_npu_driver.vvp
+
+$(DRV_SW_ELF): sw/start.S sw/driver_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/driver_test.c sw/c930_npu_driver.c
+
+$(DRV_SW_BIN): $(DRV_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(DRV_SW_HEX): $(DRV_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(DRV_SW_BIN) $(DRV_SW_HEX)
+
+$(OUT_DRV): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(DRV_SW_HEX)
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -DFW_HEX_FILE='"$(DRV_SW_HEX)"' -DTILE_WAIT_BOUND=500000 \
+	  -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_npu_tile.sv
+
+driver_test: $(OUT_DRV)
+	$(VVP) $(OUT_DRV)
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
 HOST_CC     ?= gcc
@@ -292,3 +325,4 @@ clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
 	rm -f $(TILE_SW_ELF) $(TILE_SW_BIN) $(TILE_SW_HEX)
+	rm -f $(DRV_SW_ELF) $(DRV_SW_BIN) $(DRV_SW_HEX)
