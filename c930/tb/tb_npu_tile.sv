@@ -10,6 +10,12 @@
 
 module tb_npu_tile;
 
+  // Firmware image to boot. Override at compile time with
+  //   -DFW_HEX_FILE="\"sw/driver_prog.hex\""   (note the escaped quotes)
+`ifndef FW_HEX_FILE
+`define FW_HEX_FILE "sw/npu_tile_prog.hex"
+`endif
+
   localparam int NUM_ROWS  = 8;
   localparam int NUM_COLS  = 8;
   localparam int MAX_M     = 8;
@@ -57,9 +63,9 @@ module tb_npu_tile;
   logic [31:0] img [0:IMG_WORDS-1];
   task automatic load_image();
     int i;
-    $display("[TILE-TEST] loading sw/npu_tile_prog.hex");
+    $display("[TILE-TEST] loading firmware image (override with -DFW_HEX_FILE)");
     for (i = 0; i < IMG_WORDS; i++) img[i] = 32'h0;
-    $readmemh("sw/npu_tile_prog.hex", img);
+    $readmemh(`FW_HEX_FILE, img);
     for (i = 0; i < MEM_BYTES; i++) dut.u_ddr.mem[i] = 8'h0;
     for (i = 0; i < IMG_WORDS; i++) begin
       dut.u_ddr.mem[4*i+0] = img[i][7:0];
@@ -116,16 +122,26 @@ module tb_npu_tile;
     ddr_write32(DIMS_ADDR + 8, k);
     ddr_write32(DIMS_ADDR + 12, 0);
     ddr_write32(DONE_ADDR, 32'h0);
+    ddr_write32(PHASE_ADDR, 32'h0);
+    ddr_write32(DIAG_ADDR, 32'h0);
 
     rst_n = 1'b0;
     repeat (8) @(posedge clk);
     rst_n = 1'b1;
 
     found = 0;
-    for (int t = 0; t < 3_000_000; t++) begin
-      @(posedge clk);
-      if (ddr_read32(DONE_ADDR) === DONE_MAGIC)
-        found = 1;
+    begin : wait_done_loop
+      int t = 0;
+`ifdef TILE_WAIT_BOUND
+      while (!found && t < `TILE_WAIT_BOUND) begin
+`else
+      while (!found && t < 3_000_000) begin
+`endif
+        @(posedge clk);
+        t = t + 1;
+        if (ddr_read32(DONE_ADDR) === DONE_MAGIC)
+          found = 1;
+      end
     end
 
     if (!found) begin
