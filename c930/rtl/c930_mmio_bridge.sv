@@ -33,8 +33,8 @@ module c930_mmio_bridge
   input  logic        i_mmio_write_valid,
   output logic        o_mmio_write_done,
 
-  // ---- Requesting core ID (0/1), for the HART_ID register ----
-  input  logic        i_hart_id,
+  // ---- Requesting core ID (0..3), for the HART_ID register ----
+  input  logic [1:0]  i_hart_id,
 
   // ---- AXI4-Lite master (toward c930_npu_csr) ----
   output logic [31:0] m_axi_awaddr,
@@ -58,6 +58,8 @@ module c930_mmio_bridge
 
   localparam logic [31:0] HART_ID_ADDR      = 32'h4000_0FF0;
   localparam logic [31:0] CORE1_RELEASE_ADDR = 32'h4000_0FF4;
+  localparam logic [31:0] CORE2_RELEASE_ADDR = 32'h4000_0FF8;
+  localparam logic [31:0] CORE3_RELEASE_ADDR = 32'h4000_0FFC;
 
   typedef enum logic [2:0] {
     IDLE   = 3'd0,
@@ -81,11 +83,11 @@ module c930_mmio_bridge
   logic        aw_ok, w_ok;
 
   // SoC-status registers (intercepted here, serviced with the bridge's normal
-  // registered-done timing)
-  logic [31:0] release_val;
-  logic        wr_special;   // current write targets RELEASE (no AXI needed)
-  logic        rd_special;   // current read targets HART_ID/RELEASE
-  logic        rd_hart;      // ...specifically HART_ID (vs RELEASE read)
+  // registered-done timing).  release_val[1..3] hold the worker entry addresses
+  // armed by the primary core (CPU1 @ 0x0FF4, CPU2 @ 0x0FF8, CPU3 @ 0x0FFC).
+  logic [31:0] release_val [1:3];
+  logic [1:0]  wr_rel;        // 0 = normal write, else RELEASE target core
+  logic [2:0]  rd_target;     // 0 = normal, 1 = HART_ID, 2..4 = RELEASE core
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
@@ -107,8 +109,8 @@ module c930_mmio_bridge
       aw_ok    <= 1'b0;
       w_ok     <= 1'b0;
     end else begin
-      done_ff  <= (state == W_B) && (m_axi_bvalid || wr_special);
-      rdone_ff <= (state == R_R) && (m_axi_rvalid || rd_special);
+      done_ff  <= (state == W_B) && (m_axi_bvalid || (wr_rel != 2'd0));
+      rdone_ff <= (state == R_R) && (m_axi_rvalid || (rd_target != 3'd0));
       // Latch each channel handshake as it completes; cleared once the
       // transaction leaves W_AW_W (see IDLE capture block below).
       if (state == W_AW_W) begin
@@ -136,9 +138,11 @@ module c930_mmio_bridge
     m_axi_rready  = 1'b0;
 
     o_mmio_read_done  = rdone_ff;
-    o_mmio_read_data  = rd_special ? (rd_hart ? {32'd0, 32'h0000_0000 | i_hart_id}
-                                              : {32'd0, release_val})
-                                   : {32'd0, m_axi_rdata};
+    o_mmio_read_data  = (rd_target == 3'd1) ? {32'd0, {30'd0, i_hart_id}} :
+                        (rd_target == 3'd2) ? {32'd0, release_val[1]} :
+                        (rd_target == 3'd3) ? {32'd0, release_val[2]} :
+                        (rd_target == 3'd4) ? {32'd0, release_val[3]} :
+                                              {32'd0, m_axi_rdata};
     o_mmio_write_done = done_ff;
 
     case (state)
@@ -160,7 +164,7 @@ module c930_mmio_bridge
       end
 
       W_AW_W: begin
-        if (!wr_special) begin
+        if (wr_rel == 2'd0) begin
           m_axi_awaddr  = awaddr_r;
           m_axi_wdata   = wdata_r;
           m_axi_wstrb   = wstrb_r;
@@ -186,12 +190,12 @@ module c930_mmio_bridge
         // still in TRANS and double-book the same transaction.  Exiting on
         // done_ff keeps both FSMs on the same edge and makes the pulse exactly
         // one cycle, so it cannot leak into the next granted transaction.
-        if (wr_special ? done_ff : !i_mmio_write_valid)
+        if ((wr_rel != 2'd0) ? done_ff : !i_mmio_write_valid)
           next_state = IDLE;
       end
 
       R_AR: begin
-        if (!rd_special) begin
+        if (rd_target == 3'd0) begin
           m_axi_araddr  = araddr_r;
           m_axi_arvalid = 1'b1;
           if (m_axi_arready)
@@ -204,13 +208,15 @@ module c930_mmio_bridge
 
       R_R: begin
         m_axi_rready = 1'b1;
-        o_mmio_read_data = rd_special ? (rd_hart ? {32'd0, 32'h0000_0000 | i_hart_id}
-                                                  : {32'd0, release_val})
-                                      : {32'd0, m_axi_rdata};
+        o_mmio_read_data = (rd_target == 3'd1) ? {32'd0, {30'd0, i_hart_id}} :
+                            (rd_target == 3'd2) ? {32'd0, release_val[1]} :
+                            (rd_target == 3'd3) ? {32'd0, release_val[2]} :
+                            (rd_target == 3'd4) ? {32'd0, release_val[3]} :
+                                                  {32'd0, m_axi_rdata};
         // Special reads exit on the done pulse -- see W_B note: this keeps
         // the bridge and arbiter on the same exit edge and makes the pulse
         // exactly one cycle so it cannot leak into the next transaction.
-        if (rd_special ? rdone_ff : !i_mmio_read_req)
+        if ((rd_target != 3'd0) ? rdone_ff : !i_mmio_read_req)
           next_state = IDLE;
       end
 
@@ -229,10 +235,11 @@ module c930_mmio_bridge
       araddr_r     <= 32'd0;
       wdata_r      <= 32'd0;
       wstrb_r      <= 4'hF;
-      release_val  <= 32'd0;
-      wr_special   <= 1'b0;
-      rd_special   <= 1'b0;
-      rd_hart      <= 1'b0;
+      release_val[1] <= 32'd0;
+      release_val[2] <= 32'd0;
+      release_val[3] <= 32'd0;
+      wr_rel       <= 2'd0;
+      rd_target    <= 3'd0;
     end else if (state == IDLE) begin
       aw_ok <= 1'b0;
       w_ok  <= 1'b0;
@@ -240,14 +247,21 @@ module c930_mmio_bridge
         awaddr_r <= i_mmio_write_addr[31:0];
         wdata_r  <= i_mmio_write_data[31:0];
         wstrb_r  <= i_mmio_write_strobe[7:4] != 4'b0 ? 4'hF : i_mmio_write_strobe[3:0];
-        wr_special <= (i_mmio_write_addr[31:0] == CORE1_RELEASE_ADDR);
-        if (i_mmio_write_addr[31:0] == CORE1_RELEASE_ADDR)
-          release_val <= i_mmio_write_data[31:0];
+        case (i_mmio_write_addr[31:0])
+          CORE1_RELEASE_ADDR: begin wr_rel <= 2'd1; release_val[1] <= i_mmio_write_data[31:0]; end
+          CORE2_RELEASE_ADDR: begin wr_rel <= 2'd2; release_val[2] <= i_mmio_write_data[31:0]; end
+          CORE3_RELEASE_ADDR: begin wr_rel <= 2'd3; release_val[3] <= i_mmio_write_data[31:0]; end
+          default:           wr_rel <= 2'd0;
+        endcase
       end else if (i_mmio_read_req) begin
         araddr_r <= i_mmio_read_addr[31:0];
-        rd_special <= (i_mmio_read_addr[31:0] == HART_ID_ADDR) ||
-                      (i_mmio_read_addr[31:0] == CORE1_RELEASE_ADDR);
-        rd_hart    <= (i_mmio_read_addr[31:0] == HART_ID_ADDR);
+        case (i_mmio_read_addr[31:0])
+          HART_ID_ADDR:       rd_target <= 3'd1;
+          CORE1_RELEASE_ADDR: rd_target <= 3'd2;
+          CORE2_RELEASE_ADDR: rd_target <= 3'd3;
+          CORE3_RELEASE_ADDR: rd_target <= 3'd4;
+          default:            rd_target <= 3'd0;
+        endcase
       end
     end
   end
