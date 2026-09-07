@@ -593,12 +593,16 @@ module tb_c930_soc_full;
         fw[96] = 32'h00100593;  // addi x11, x0, 1
         fw[97] = 32'h00B52023;  // sw   x11, 0x00(x10) START
         fw[98] = 32'h02052583;  // lw   x11, 0x20(x10) barrier read
-        fw[99] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
-        fw[100] = 32'h0025F593;  // andi x11, x11, 2    DONE bit
-        fw[101] = 32'hFE058CE3;  // beq  x11, x0, -8   poll done
+        // Queue-drain poll: DONE/BUSY polling is racy for batched queues
+        // (done_latch is sticky across queued commands and busy drops in the
+        // P_DONE->dispatch bubble), so wait for QUEUE_STAT occupancy==0 AND
+        // STATUS busy==0 — that guarantees all 4 GEMMs have finished.
+        fw[99] = 32'h03852583;  // lw   x11, 0x38(x10) QUEUE_STAT
+        fw[100] = 32'h00F5F593;  // andi x11, x11, 15   occupancy bits[3:0]
+        fw[101] = 32'hFE059CE3;  // bne  x11, x0, -8   poll while queued
         fw[102] = 32'h00452583;  // lw   x11, 0x04(x10) STATUS
         fw[103] = 32'h0015F593;  // andi x11, x11, 1    BUSY bit
-        fw[104] = 32'hFE059CE3;  // bne  x11, x0, -8   poll busy
+        fw[104] = 32'hFE059CE3;  // bne  x11, x0, -8   poll while busy
         fw[105] = 32'h0000B7B7;  // lui  x15, 0xB
         fw[106] = 32'h30078793;  // addi x15, x15, 0x300 DONE_ADDR=0xB300
         fw[107] = 32'hDEADC837;  // lui  x16, 0xDEADC
@@ -1161,12 +1165,13 @@ module tb_c930_soc_full;
         fw[ 70] = 32'h00B52E23;
         fw[ 71] = 32'h00100593;
         fw[ 72] = 32'h00B52023;
-        fw[ 73] = 32'h00452583;
-        fw[ 74] = 32'h0025F593;
-        fw[ 75] = 32'hFE058CE3;
-        fw[ 76] = 32'h00452583;
-        fw[ 77] = 32'h0015F593;
-        fw[ 78] = 32'hFE059CE3;
+        // Queue-drain poll (see Test 4): occupancy==0 AND !busy, not DONE/BUSY
+        fw[ 73] = 32'h03852583;  // lw x11, 0x38(x10) QUEUE_STAT
+        fw[ 74] = 32'h00F5F593;  // andi x11, x11, 15  occupancy
+        fw[ 75] = 32'hFE059CE3;  // bne x11, x0, -8   poll while queued
+        fw[ 76] = 32'h00452583;  // lw x11, 0x04(x10) STATUS
+        fw[ 77] = 32'h0015F593;  // andi x11, x11, 1   BUSY
+        fw[ 78] = 32'hFE059CE3;  // bne x11, x0, -8   poll while busy
         fw[ 79] = 32'h00300593;
         fw[ 80] = 32'h00B52423;
         fw[ 81] = 32'h00600593;
@@ -1201,12 +1206,13 @@ module tb_c930_soc_full;
         fw[110] = 32'h00B52E23;
         fw[111] = 32'h00100593;
         fw[112] = 32'h00B52023;
-        fw[113] = 32'h00452583;
-        fw[114] = 32'h0025F593;
-        fw[115] = 32'hFE058CE3;
-        fw[116] = 32'h00452583;
-        fw[117] = 32'h0015F593;
-        fw[118] = 32'hFE059CE3;
+        // Queue-drain poll (see Test 4): occupancy==0 AND !busy, not DONE/BUSY
+        fw[113] = 32'h03852583;  // lw x11, 0x38(x10) QUEUE_STAT
+        fw[114] = 32'h00F5F593;  // andi x11, x11, 15  occupancy
+        fw[115] = 32'hFE059CE3;  // bne x11, x0, -8   poll while queued
+        fw[116] = 32'h00452583;  // lw x11, 0x04(x10) STATUS
+        fw[117] = 32'h0015F593;  // andi x11, x11, 1   BUSY
+        fw[118] = 32'hFE059CE3;  // bne x11, x0, -8   poll while busy
         fw[119] = 32'h0000B7B7;
         fw[120] = 32'h30078793;
         fw[121] = 32'hDEADC837;
