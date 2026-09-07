@@ -151,6 +151,14 @@ $(OUT_SOC_FULL): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_c930_soc_full.sv
 soc_full: $(OUT_SOC_FULL)
 	$(VVP) $(OUT_SOC_FULL)
 
+# Isolated quad-core boot/handoff test (fast, validates the 4-hart path
+# without the ~10-minute full SoC suite)
+QUAD_OUT := $(BUILD_DIR)/tb_quad_isolated.vvp
+$(QUAD_OUT): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_quad_isolated.sv
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_quad_isolated.sv
+quad: $(QUAD_OUT)
+	$(VVP) $(QUAD_OUT)
+
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
 
