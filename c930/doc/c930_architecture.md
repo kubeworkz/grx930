@@ -213,15 +213,15 @@ Base address: `0x4000_0000` (byte-addressed; register offsets are word-aligned).
 
 | Bit | Name | Description |
 |-----|------|-------------|
-| [0] | **START** | Write 1 to launch a GEMM. Cleared automatically. Ignored if BUSY=1. Writing START also clears DONE. |
+| [0] | **START** | Write 1 to snapshot the current DIM/base/PREC registers into the command FIFO and launch. Cleared automatically. If the engine is busy the command **queues** (does not block; see the completion contract below). Writing START also clears DONE and ERROR. |
 | [31:1] | — | Reserved (read as 0) |
 
 ### STATUS (0x04) — Read-only
 
 | Bit | Name | Description |
 |-----|------|-------------|
-| [0] | **BUSY** | 1 while the NPU is executing a GEMM (DMA fetch through GEMM through DMA write). |
-| [1] | **DONE** | Latched 1 after a GEMM completes. Cleared by writing START. Read to acknowledge. |
+| [0] | **BUSY** | 1 while the DMA is executing the *current* GEMM (fetch → compute → C writeback). Drops to 0 in the short bubble between queued commands, so BUSY alone does not mean the queue is drained. |
+| [1] | **DONE** | **Latched level**, set 1 after any GEMM completes; cleared only by writing START. Not a per-command edge: with several commands queued it goes 1 after the first completes and stays 1, so it cannot identify which command finished. See the completion contract. |
 | [2] | **ERROR** | Latched 1 if an invalid dimension was programmed (any dim = 0 or exceeds MAX). Cleared by writing START. |
 | [31:3] | — | Reserved (read as 0) |
 
@@ -315,6 +315,81 @@ where N' = min(N, MAX_N). This is **not** `M×N×K×2` — it depends on the arr
 
 **Note:** DMA_CT and CYCLE_COUNT are on **different time bases**. DMA_CT starts counting when the CSR fires `CTRL.START` and counts through the entire DMA phase (A/B load + core compute + C writeback). CYCLE_COUNT starts later (when the core receives `i_start` from the DMA) and only counts during core activity. DMA_CT ≥ CYCLE_COUNT for any GEMM, and the difference includes the DMA overhead for A/B loading and C writeback. |
 
+### QUEUE_STAT (0x38) — Read-only
+
+| Bits | Name | Description |
+|------|------|-------------|
+| [3:0] | **OCCUPANCY** | Number of commands currently in the command FIFO (0..CMD_QUEUE_DEPTH, default 4) |
+| [4] | **FULL** | 1 when the FIFO is full (occupancy == CMD_QUEUE_DEPTH) |
+| [31:5] | — | Reserved (read as 0) |
+
+`QUEUE_MAX` (0x3C) reports the compile-time FIFO depth.
+
+### Command queue and completion contract (normative)
+
+`CTRL.START` never blocks the CPU. It **snapshots** the current DIM/A_BASE/
+B_BASE/C_BASE/PREC values into a FIFO (depth `CMD_QUEUE_DEPTH` = 4). If the
+engine is idle and the FIFO is empty the command dispatches immediately;
+otherwise it waits in the FIFO and dispatches automatically when the engine
+next becomes idle. This makes three properties of the status interface
+definitive for software:
+
+1. **`STATUS.DONE` is a latched level, not a per-command edge.** It is set
+   whenever a GEMM completes and is cleared **only** by a write to `CTRL`
+   with `START=1`. Because a START write and the dispatch of that command
+   are decoupled (the write may push to the FIFO while an earlier command
+   is still executing), DONE cannot identify *which* queued command
+   completed. With N > 1 commands in the FIFO, DONE reads 1 from the moment
+   the first command completes until the next START write — it says nothing
+   about the others.
+
+2. **`STATUS.BUSY` is per-command, with idle bubbles between commands.**
+   BUSY is 1 only while the DMA is executing the *current* command
+   (A/B fetch → core compute → C writeback). Between the completion of one
+   queued command and the dispatch of the next there is a short bubble
+   (P_DONE → P_IDLE → dispatch) during which BUSY reads 0 even though the
+   FIFO is not empty.
+
+3. **Therefore, for a batch of queued commands, polling `DONE` then `BUSY`
+   is invalid.** It can observe DONE=1 (left over from an earlier command in
+   the batch) in a BUSY=0 dispatch bubble and declare the whole batch
+   finished while the last command has only just launched — its C writeback
+   has not happened yet. Any host readback performed after that false
+   completion races the in-flight GEMM. (This exact bug corrupted INT4
+   results in the SoC regression; see commit `f4de883`.)
+
+The **only** robust completion test for a batch is:
+
+```
+while (QUEUE_STAT.occupancy != 0 || STATUS.BUSY != 0)
+    ;   // all commands dispatched AND the last one finished
+```
+
+Both conditions are required: occupancy alone reaches 0 while the final
+command is still executing, and BUSY alone reads 0 in the inter-command
+bubbles. When the loop exits, every submitted command has fully completed
+and its C matrix is visible in DDR.
+
+Recommended submission patterns:
+
+- **One at a time (always correct):** submit → wait `DONE` then `!BUSY` →
+  submit next. With a single command in flight, DONE and BUSY are
+  unambiguous.
+- **Batched (≤ CMD_QUEUE_DEPTH = 4 outstanding):** submit the batch, then
+  use the occupancy + BUSY drain poll above before touching any C buffer.
+  Never write START while the FIFO is full: START is a one-cycle pulse and
+  its snapshot push requires FIFO space in that same cycle, so a submission
+  against a full FIFO can be silently dropped. Keep at most
+  `CMD_QUEUE_DEPTH` commands outstanding and drain between batches.
+- Do not rely on `DONE` alone even for single commands: DONE is set when
+  the DMA *enters* its done phase, which is fine — but the level never
+  clears by itself, so poll for `!BUSY` (or re-arm with a fresh START)
+  before reusing C buffers.
+
+`STATUS.ERROR` is also latched and cleared by a `CTRL.START` write; software
+should check it after a drain poll and treat a nonzero value as a
+programming error on the batch.
+
 ### Full register index map
 
 | Index | Offset | Name | RTL localparam | Notes |
@@ -333,6 +408,8 @@ where N' = min(N, MAX_N). This is **not** `M×N×K×2` — it depends on the arr
 | 11 | 0x2C | OP_COUNT | ADDR_OP_COUNT | |
 | 12 | 0x30 | STALL_COUNT | ADDR_STALL_CT | |
 | 13 | 0x34 | DMA_CT | ADDR_DMA_CT | |
+| 14 | 0x38 | QUEUE_STAT | ADDR_QUEUE_STAT | [3:0] occupancy, [4] full |
+| 15 | 0x3C | QUEUE_MAX | ADDR_QUEUE_MAX | compile-time FIFO depth |
 
 ---
 
@@ -444,7 +521,9 @@ NPU_CSR_C_BASE = c_ddr_addr;
 // 2. Launch (also clears DONE and ERROR)
 NPU_CSR_CTRL = 1;
 
-// 3. Poll until done
+// 3. Poll until done — single-command flow only. If you submit more than
+//    one command before draining, use the occupancy+BUSY drain poll in
+//    the command queue completion contract above instead.
 while (!(NPU_CSR_STATUS & STATUS_DONE))
     ;
 
@@ -495,8 +574,10 @@ The `src/backends/npu_c930/` backend in grxcp must implement:
    (no `GRX_CAP_KERNEL_LAUNCH` — the NPU has no SIMT pipeline).
 3. **Memory management** — allocate A/B/C buffers in DDR, translate host pointers
    to physical DDR addresses for `A_BASE/B_BASE/C_BASE`.
-4. **GEMM dispatch** — program DIM_M/N/K and A/B/C_BASE, write CTRL.START,
-   poll STATUS.DONE (or wait on `o_irq` if AIA is wired).
+4. **GEMM dispatch** — program DIM_M/N/K and A/B/C_BASE, write CTRL.START.
+   For one command at a time, poll STATUS.DONE then `!BUSY` (or wait on
+   `o_irq` if AIA is wired). For batched submission, use the occupancy +
+   BUSY drain poll from the completion contract in the register section.
 5. **Result readback** — C is written to DDR by the DMA; the backend reads it
    back through the normal memory path.
 
