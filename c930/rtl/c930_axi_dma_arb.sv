@@ -1,15 +1,16 @@
 // -----------------------------------------------------------------------------
 // c930_axi_dma_arb.sv
 //
-// AXI4 round-robin arbiter: merges 2 NPU DMA masters into 1 shared port.
-// Used for dual-NPU configurations where both NPUs share DDR bandwidth.
+// AXI4 round-robin arbiter: merges up to 4 masters into 1 shared port.
+// Originally a 2-input NPU DMA merge; widened to 4 inputs so the shared
+// crossbar ports can also carry CPU2/CPU3 cache traffic:
+//   * u_dma_arb    (crossbar M2): NPU0 DMA, NPU1 DMA, CPU3 I-cache, CPU3 D-cache
+//   * u_core1_arb  (crossbar M3): CPU1 I-cache, CPU1 D-cache, CPU2 I-cache, CPU2 D-cache
 //
-// The arbiter round-robins between m0 (NPU0 DMA) and m1 (NPU1 DMA),
-// forwarding whichever has an active request to the shared s (slave) port.
-// Only one transaction is active at a time; the other master waits.
-//
-// AXI4 ID signals are preserved with a 1-bit prefix (0/1) so responses
-// can be routed back to the correct master.
+// Only one transaction is active at a time; the others wait.  Round-robin
+// ordering keeps any single master from starving the port.  AXI4 ID values
+// pass through unchanged -- responses are routed back purely by the
+// registered owner, so no ID remapping is needed.
 // -----------------------------------------------------------------------------
 module c930_axi_dma_arb
 #(
@@ -21,7 +22,7 @@ module c930_axi_dma_arb
   input  logic i_clk,
   input  logic i_rst_n,
 
-  // ---- Master 0: NPU0 DMA ----
+  // ---- Master 0 ----
   input  logic [ID_WIDTH-1:0]    m0_awid,
   input  logic [ADDR_WIDTH-1:0]  m0_awaddr,
   input  logic [7:0]             m0_awlen,
@@ -52,7 +53,7 @@ module c930_axi_dma_arb
   output logic                   m0_rvalid,
   input  logic                   m0_rready,
 
-  // ---- Master 1: NPU1 DMA ----
+  // ---- Master 1 ----
   input  logic [ID_WIDTH-1:0]    m1_awid,
   input  logic [ADDR_WIDTH-1:0]  m1_awaddr,
   input  logic [7:0]             m1_awlen,
@@ -83,7 +84,69 @@ module c930_axi_dma_arb
   output logic                   m1_rvalid,
   input  logic                   m1_rready,
 
-  // ---- Shared slave port (to crossbar M2) ----
+  // ---- Master 2 ----
+  input  logic [ID_WIDTH-1:0]    m2_awid,
+  input  logic [ADDR_WIDTH-1:0]  m2_awaddr,
+  input  logic [7:0]             m2_awlen,
+  input  logic [2:0]             m2_awsize,
+  input  logic [1:0]             m2_awburst,
+  input  logic                   m2_awvalid,
+  output logic                   m2_awready,
+  input  logic [DATA_WIDTH-1:0]  m2_wdata,
+  input  logic [DATA_WIDTH/8-1:0] m2_wstrb,
+  input  logic                   m2_wlast,
+  input  logic                   m2_wvalid,
+  output logic                   m2_wready,
+  output logic [ID_WIDTH-1:0]    m2_bid,
+  output logic [1:0]             m2_bresp,
+  output logic                   m2_bvalid,
+  input  logic                   m2_bready,
+  input  logic [ID_WIDTH-1:0]    m2_arid,
+  input  logic [ADDR_WIDTH-1:0]  m2_araddr,
+  input  logic [7:0]             m2_arlen,
+  input  logic [2:0]             m2_arsize,
+  input  logic [1:0]             m2_arburst,
+  input  logic                   m2_arvalid,
+  output logic                   m2_arready,
+  output logic [ID_WIDTH-1:0]    m2_rid,
+  output logic [DATA_WIDTH-1:0]  m2_rdata,
+  output logic [1:0]             m2_rresp,
+  output logic                   m2_rlast,
+  output logic                   m2_rvalid,
+  input  logic                   m2_rready,
+
+  // ---- Master 3 ----
+  input  logic [ID_WIDTH-1:0]    m3_awid,
+  input  logic [ADDR_WIDTH-1:0]  m3_awaddr,
+  input  logic [7:0]             m3_awlen,
+  input  logic [2:0]             m3_awsize,
+  input  logic [1:0]             m3_awburst,
+  input  logic                   m3_awvalid,
+  output logic                   m3_awready,
+  input  logic [DATA_WIDTH-1:0]  m3_wdata,
+  input  logic [DATA_WIDTH/8-1:0] m3_wstrb,
+  input  logic                   m3_wlast,
+  input  logic                   m3_wvalid,
+  output logic                   m3_wready,
+  output logic [ID_WIDTH-1:0]    m3_bid,
+  output logic [1:0]             m3_bresp,
+  output logic                   m3_bvalid,
+  input  logic                   m3_bready,
+  input  logic [ID_WIDTH-1:0]    m3_arid,
+  input  logic [ADDR_WIDTH-1:0]  m3_araddr,
+  input  logic [7:0]             m3_arlen,
+  input  logic [2:0]             m3_arsize,
+  input  logic [1:0]             m3_arburst,
+  input  logic                   m3_arvalid,
+  output logic                   m3_arready,
+  output logic [ID_WIDTH-1:0]    m3_rid,
+  output logic [DATA_WIDTH-1:0]  m3_rdata,
+  output logic [1:0]             m3_rresp,
+  output logic                   m3_rlast,
+  output logic                   m3_rvalid,
+  input  logic                   m3_rready,
+
+  // ---- Shared slave port (to crossbar) ----
   output logic [ID_WIDTH-1:0]    s_awid,
   output logic [ADDR_WIDTH-1:0]  s_awaddr,
   output logic [7:0]             s_awlen,
@@ -115,54 +178,84 @@ module c930_axi_dma_arb
   output logic                   s_rready
 );
 
-  // =========================================================================
-  // Read channel arbitration
-  // =========================================================================
-  // Which master currently owns the read channel: 0=NPU0, 1=NPU1
-  logic       rd_owner;      // registered owner (1 bit)
-  logic       rd_active;     // read transaction in progress
-  logic       rd_rr;         // round-robin flip-flop
+  localparam int NUM_M = 4;
 
-  // Read request from each master (valid and not yet granted)
-  wire rd_req0 = m0_arvalid && (!rd_active && !rd_addr_phase || (rd_owner == 0));
-  wire rd_req1 = m1_arvalid && (!rd_active && !rd_addr_phase || (rd_owner == 1));
+  // Per-master input vectors (index = master number, packed as {m3,...,m0})
+  logic [NUM_M-1:0][ID_WIDTH-1:0]    arid_v;
+  logic [NUM_M-1:0][ADDR_WIDTH-1:0]  araddr_v;
+  logic [NUM_M-1:0][7:0]             arlen_v;
+  logic [NUM_M-1:0][2:0]             arsize_v;
+  logic [NUM_M-1:0][1:0]             arburst_v;
+  logic [NUM_M-1:0]                  arvalid_v;
+  logic [NUM_M-1:0][ID_WIDTH-1:0]    awid_v;
+  logic [NUM_M-1:0][ADDR_WIDTH-1:0]  awaddr_v;
+  logic [NUM_M-1:0][7:0]             awlen_v;
+  logic [NUM_M-1:0][2:0]             awsize_v;
+  logic [NUM_M-1:0][1:0]             awburst_v;
+  logic [NUM_M-1:0]                  awvalid_v;
+  logic [NUM_M-1:0][DATA_WIDTH-1:0]  wdata_v;
+  logic [NUM_M-1:0][DATA_WIDTH/8-1:0] wstrb_v;
+  logic [NUM_M-1:0]                  wlast_v;
+  logic [NUM_M-1:0]                  wvalid_v;
+  logic [NUM_M-1:0]                  rready_v;
+  logic [NUM_M-1:0]                  bready_v;
 
-  // Grant selection: round-robin when both request, prioritize current owner
-  logic rd_grant0, rd_grant1;
+  assign arid_v    = {m3_arid, m2_arid, m1_arid, m0_arid};
+  assign araddr_v  = {m3_araddr, m2_araddr, m1_araddr, m0_araddr};
+  assign arlen_v   = {m3_arlen, m2_arlen, m1_arlen, m0_arlen};
+  assign arsize_v  = {m3_arsize, m2_arsize, m1_arsize, m0_arsize};
+  assign arburst_v = {m3_arburst, m2_arburst, m1_arburst, m0_arburst};
+  assign arvalid_v = {m3_arvalid, m2_arvalid, m1_arvalid, m0_arvalid};
+  assign awid_v    = {m3_awid, m2_awid, m1_awid, m0_awid};
+  assign awaddr_v  = {m3_awaddr, m2_awaddr, m1_awaddr, m0_awaddr};
+  assign awlen_v   = {m3_awlen, m2_awlen, m1_awlen, m0_awlen};
+  assign awsize_v  = {m3_awsize, m2_awsize, m1_awsize, m0_awsize};
+  assign awburst_v = {m3_awburst, m2_awburst, m1_awburst, m0_awburst};
+  assign awvalid_v = {m3_awvalid, m2_awvalid, m1_awvalid, m0_awvalid};
+  assign wdata_v   = {m3_wdata, m2_wdata, m1_wdata, m0_wdata};
+  assign wstrb_v   = {m3_wstrb, m2_wstrb, m1_wstrb, m0_wstrb};
+  assign wlast_v   = {m3_wlast, m2_wlast, m1_wlast, m0_wlast};
+  assign wvalid_v  = {m3_wvalid, m2_wvalid, m1_wvalid, m0_wvalid};
+  assign rready_v  = {m3_rready, m2_rready, m1_rready, m0_rready};
+  assign bready_v  = {m3_bready, m2_bready, m1_bready, m0_bready};
+
+  // =========================================================================
+  // Read channel arbitration (round-robin over NUM_M masters)
+  // =========================================================================
+  logic [1:0] rd_owner;     // which master owns the read transaction
+  logic       rd_active;    // read data phase in progress
+  logic       rd_addr_phase;// address handshake in progress
+  logic [1:0] rd_rr;        // round-robin pointer
+
+  // Grant: pick the first requesting master at/after rd_rr (wrapping).
+  logic [1:0] rd_owner_next;
+  logic       rd_grant_valid;
   always_comb begin
-    rd_grant0 = 1'b0;
-    rd_grant1 = 1'b0;
-    if (rd_active || rd_addr_phase) begin
-      if (rd_owner == 1'b0) rd_grant0 = 1'b1;
-      else                  rd_grant1 = 1'b1;
-    end else begin
-      // New transaction: round-robin
-      if (rd_rr == 1'b0) begin
-        if (rd_req0) rd_grant0 = 1'b1;
-        else if (rd_req1) rd_grant1 = 1'b1;
-      end else begin
-        if (rd_req1) rd_grant1 = 1'b1;
-        else if (rd_req0) rd_grant0 = 1'b1;
+    rd_owner_next  = '0;
+    rd_grant_valid = 1'b0;
+    // First requesting master at/after rd_rr (wrapping).  rd_grant_valid is
+    // set once the first match is latched, guarding the remaining iterations
+    // (an unrolled break -- iverilog rejects `break` in always_comb).
+    for (int i = 0; i < NUM_M; i++) begin
+      if (!rd_grant_valid && arvalid_v[(rd_rr + i) % NUM_M]) begin
+        rd_owner_next  = (rd_rr + i) % NUM_M;
+        rd_grant_valid = 1'b1;
       end
     end
   end
 
-  // Read channel state machine
-  // rd_addr_phase: high from grant until address handshake completes
-  // rd_active: high from address handshake completion until rlast
-  logic rd_addr_phase;
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      rd_active     <= 1'b0;
-      rd_addr_phase <= 1'b0;
-      rd_owner      <= 1'b0;
-      rd_rr         <= 1'b0;
+      rd_active      <= 1'b0;
+      rd_addr_phase  <= 1'b0;
+      rd_owner       <= '0;
+      rd_rr          <= '0;
     end else begin
       if (!rd_active && !rd_addr_phase) begin
-        if (rd_grant0 || rd_grant1) begin
+        if (rd_grant_valid) begin
           rd_addr_phase <= 1'b1;
-          rd_owner       <= rd_grant1 ? 1'b1 : 1'b0;
-          rd_rr          <= rd_grant1 ? 1'b0 : 1'b1;
+          rd_owner      <= rd_owner_next;
+          rd_rr         <= (rd_owner_next + 1) % NUM_M;
         end
       end else if (rd_addr_phase) begin
         // Address handshake in progress — wait for slave accept
@@ -179,74 +272,71 @@ module c930_axi_dma_arb
     end
   end
 
-  // Read address channel mux
-  assign s_arid    = rd_owner ? m1_arid    : m0_arid;
-  assign s_araddr  = rd_owner ? m1_araddr  : m0_araddr;
-  assign s_arlen   = rd_owner ? m1_arlen   : m0_arlen;
-  assign s_arsize  = rd_owner ? m1_arsize  : m0_arsize;
-  assign s_arburst = rd_owner ? m1_arburst : m0_arburst;
-  assign s_arvalid = rd_addr_phase && (rd_owner ? m1_arvalid : m0_arvalid);
+  // Read address channel: mux the granted owner's request
+  assign s_arid    = arid_v[rd_owner];
+  assign s_araddr  = araddr_v[rd_owner];
+  assign s_arlen   = arlen_v[rd_owner];
+  assign s_arsize  = arsize_v[rd_owner];
+  assign s_arburst = arburst_v[rd_owner];
+  assign s_arvalid = rd_addr_phase && arvalid_v[rd_owner];
 
-  // Read address ready: only during address phase, to the granted master
-  assign m0_arready = rd_addr_phase && (rd_owner == 1'b0) && s_arready;
-  assign m1_arready = rd_addr_phase && (rd_owner == 1'b1) && s_arready;
+  // Read address ready: only during the address phase, to the granted master
+  assign m0_arready = rd_addr_phase && (rd_owner == 2'd0) && s_arready;
+  assign m1_arready = rd_addr_phase && (rd_owner == 2'd1) && s_arready;
+  assign m2_arready = rd_addr_phase && (rd_owner == 2'd2) && s_arready;
+  assign m3_arready = rd_addr_phase && (rd_owner == 2'd3) && s_arready;
 
-  // Read data channel: forward from slave to the owner
-  assign m0_rdata  = s_rdata;
-  assign m0_rresp  = s_rresp;
-  assign m0_rlast  = s_rlast;
-  assign m0_rvalid = s_rvalid && (rd_owner == 1'b0);
-  assign m0_rid    = s_rid;
+  // Read data channel: broadcast to all masters, gate valid by owner
+  assign m0_rdata  = s_rdata;   assign m0_rresp = s_rresp;
+  assign m0_rlast  = s_rlast;   assign m0_rid   = s_rid;
+  assign m1_rdata  = s_rdata;   assign m1_rresp = s_rresp;
+  assign m1_rlast  = s_rlast;   assign m1_rid   = s_rid;
+  assign m2_rdata  = s_rdata;   assign m2_rresp = s_rresp;
+  assign m2_rlast  = s_rlast;   assign m2_rid   = s_rid;
+  assign m3_rdata  = s_rdata;   assign m3_rresp = s_rresp;
+  assign m3_rlast  = s_rlast;   assign m3_rid   = s_rid;
 
-  assign m1_rdata  = s_rdata;
-  assign m1_rresp  = s_rresp;
-  assign m1_rlast  = s_rlast;
-  assign m1_rvalid = s_rvalid && (rd_owner == 1'b1);
-  assign m1_rid    = s_rid;
+  assign m0_rvalid = s_rvalid && (rd_owner == 2'd0);
+  assign m1_rvalid = s_rvalid && (rd_owner == 2'd1);
+  assign m2_rvalid = s_rvalid && (rd_owner == 2'd2);
+  assign m3_rvalid = s_rvalid && (rd_owner == 2'd3);
 
-  assign s_rready = rd_owner ? m1_rready : m0_rready;
+  assign s_rready = rready_v[rd_owner];
 
   // =========================================================================
-  // Write channel arbitration
+  // Write channel arbitration (round-robin over NUM_M masters)
   // =========================================================================
-  logic       wr_owner;      // registered owner
-  logic       wr_active;     // write transaction in progress
-  logic       wr_rr;         // round-robin flip-flop
+  logic [1:0] wr_owner;
+  logic       wr_active;
+  logic       wr_addr_phase;
+  logic [1:0] wr_rr;
 
-  wire wr_req0 = m0_awvalid && (!wr_active && !wr_addr_phase || (wr_owner == 0));
-  wire wr_req1 = m1_awvalid && (!wr_active && !wr_addr_phase || (wr_owner == 1));
-
-  logic wr_grant0, wr_grant1;
+  logic [1:0] wr_owner_next;
+  logic       wr_grant_valid;
   always_comb begin
-    wr_grant0 = 1'b0;
-    wr_grant1 = 1'b0;
-    if (wr_active || wr_addr_phase) begin
-      if (wr_owner == 1'b0) wr_grant0 = 1'b1;
-      else                  wr_grant1 = 1'b1;
-    end else begin
-      if (wr_rr == 1'b0) begin
-        if (wr_req0) wr_grant0 = 1'b1;
-        else if (wr_req1) wr_grant1 = 1'b1;
-      end else begin
-        if (wr_req1) wr_grant1 = 1'b1;
-        else if (wr_req0) wr_grant0 = 1'b1;
+    wr_owner_next  = '0;
+    wr_grant_valid = 1'b0;
+    // First requesting master at/after wr_rr (wrapping) -- see read side.
+    for (int i = 0; i < NUM_M; i++) begin
+      if (!wr_grant_valid && awvalid_v[(wr_rr + i) % NUM_M]) begin
+        wr_owner_next  = (wr_rr + i) % NUM_M;
+        wr_grant_valid = 1'b1;
       end
     end
   end
 
-  logic wr_addr_phase;
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       wr_active      <= 1'b0;
       wr_addr_phase  <= 1'b0;
-      wr_owner       <= 1'b0;
-      wr_rr          <= 1'b0;
+      wr_owner       <= '0;
+      wr_rr          <= '0;
     end else begin
       if (!wr_active && !wr_addr_phase) begin
-        if (wr_grant0 || wr_grant1) begin
+        if (wr_grant_valid) begin
           wr_addr_phase <= 1'b1;
-          wr_owner       <= wr_grant1 ? 1'b1 : 1'b0;
-          wr_rr          <= wr_grant1 ? 1'b0 : 1'b1;
+          wr_owner      <= wr_owner_next;
+          wr_rr         <= (wr_owner_next + 1) % NUM_M;
         end
       end else if (wr_addr_phase) begin
         if (s_awvalid && s_awready) begin
@@ -261,35 +351,41 @@ module c930_axi_dma_arb
     end
   end
 
-  // Write address channel mux
-  assign s_awid    = wr_owner ? m1_awid    : m0_awid;
-  assign s_awaddr  = wr_owner ? m1_awaddr  : m0_awaddr;
-  assign s_awlen   = wr_owner ? m1_awlen   : m0_awlen;
-  assign s_awsize  = wr_owner ? m1_awsize  : m0_awsize;
-  assign s_awburst = wr_owner ? m1_awburst : m0_awburst;
-  assign s_awvalid = wr_addr_phase && (wr_owner ? m1_awvalid : m0_awvalid);
+  // Write address channel
+  assign s_awid    = awid_v[wr_owner];
+  assign s_awaddr  = awaddr_v[wr_owner];
+  assign s_awlen   = awlen_v[wr_owner];
+  assign s_awsize  = awsize_v[wr_owner];
+  assign s_awburst = awburst_v[wr_owner];
+  assign s_awvalid = wr_addr_phase && awvalid_v[wr_owner];
 
-  assign m0_awready = wr_addr_phase && (wr_owner == 1'b0) && s_awready;
-  assign m1_awready = wr_addr_phase && (wr_owner == 1'b1) && s_awready;
+  assign m0_awready = wr_addr_phase && (wr_owner == 2'd0) && s_awready;
+  assign m1_awready = wr_addr_phase && (wr_owner == 2'd1) && s_awready;
+  assign m2_awready = wr_addr_phase && (wr_owner == 2'd2) && s_awready;
+  assign m3_awready = wr_addr_phase && (wr_owner == 2'd3) && s_awready;
 
-  // Write data channel: forward from owner to slave
-  assign s_wdata  = wr_owner ? m1_wdata  : m0_wdata;
-  assign s_wstrb  = wr_owner ? m1_wstrb  : m0_wstrb;
-  assign s_wlast  = wr_owner ? m1_wlast  : m0_wlast;
-  assign s_wvalid = wr_active && (wr_owner ? m1_wvalid : m0_wvalid);
+  // Write data channel
+  assign s_wdata  = wdata_v[wr_owner];
+  assign s_wstrb  = wstrb_v[wr_owner];
+  assign s_wlast  = wlast_v[wr_owner];
+  assign s_wvalid = wr_active && wvalid_v[wr_owner];
 
-  assign m0_wready = s_wready && (wr_owner == 1'b0);
-  assign m1_wready = s_wready && (wr_owner == 1'b1);
+  assign m0_wready = s_wready && (wr_owner == 2'd0);
+  assign m1_wready = s_wready && (wr_owner == 2'd1);
+  assign m2_wready = s_wready && (wr_owner == 2'd2);
+  assign m3_wready = s_wready && (wr_owner == 2'd3);
 
-  // Write response channel: forward from slave to the owner
-  assign m0_bid    = s_bid;
-  assign m0_bresp  = s_bresp;
-  assign m0_bvalid = s_bvalid && (wr_owner == 1'b0);
+  // Write response channel
+  assign m0_bid    = s_bid;    assign m0_bresp = s_bresp;
+  assign m1_bid    = s_bid;    assign m1_bresp = s_bresp;
+  assign m2_bid    = s_bid;    assign m2_bresp = s_bresp;
+  assign m3_bid    = s_bid;    assign m3_bresp = s_bresp;
 
-  assign m1_bid    = s_bid;
-  assign m1_bresp  = s_bresp;
-  assign m1_bvalid = s_bvalid && (wr_owner == 1'b1);
+  assign m0_bvalid = s_bvalid && (wr_owner == 2'd0);
+  assign m1_bvalid = s_bvalid && (wr_owner == 2'd1);
+  assign m2_bvalid = s_bvalid && (wr_owner == 2'd2);
+  assign m3_bvalid = s_bvalid && (wr_owner == 2'd3);
 
-  assign s_bready = wr_owner ? m1_bready : m0_bready;
+  assign s_bready = bready_v[wr_owner];
 
 endmodule
