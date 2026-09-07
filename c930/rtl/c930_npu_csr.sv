@@ -26,6 +26,21 @@
 //   is idle and the FIFO is empty, the command dispatches immediately from
 //   the live CSRs. If the engine is busy, the command waits in the FIFO and
 //   dispatches automatically when the engine completes. The CPU never blocks.
+//
+// Completion contract (drivers MUST read this):
+//   * STATUS.DONE is a latched LEVEL, cleared only by a CTRL write with
+//     START=1. It is set whenever ANY queued GEMM completes, so with N>1
+//     commands in the FIFO it cannot identify which command finished.
+//   * STATUS.BUSY is per-command and drops to 0 in the short P_DONE->next-
+//     dispatch bubble even when the FIFO is not empty.
+//   * Polling DONE then BUSY is therefore INVALID for a batch: it can
+//     observe the stale DONE in a BUSY=0 dispatch bubble and declare the
+//     batch finished while the last command has only just launched.
+//   * Correct batch completion test: QUEUE_STAT occupancy==0 AND
+//     STATUS busy==0. Both are required (see doc/c930_architecture.md).
+//   * Never write START while the FIFO is full: START is a one-cycle pulse
+//     and the snapshot push requires FIFO space in that same cycle, so a
+//     submission against a full FIFO is silently dropped.
 // -----------------------------------------------------------------------------
 module c930_npu_csr
 #(
