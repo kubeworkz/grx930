@@ -262,9 +262,9 @@ $(TILE_SW_HEX): $(TILE_SW_BIN) sw/bin2hex.py
 
 tile_sw: $(TILE_SW_HEX)
 
-$(OUT_TILE): $(SOC_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(TILE_SW_HEX)
+$(OUT_TILE): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(TILE_SW_HEX)
 	@mkdir -p $(BUILD_DIR)
-	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_RTL) tb/tb_npu_tile.sv
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_npu_tile.sv
 
 tile_test: $(OUT_TILE)
 	$(VVP) $(OUT_TILE)
