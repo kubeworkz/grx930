@@ -116,12 +116,14 @@ cannot find the renamed divider FF, the design passes timing at 100 MHz
 
 ### 4.1 Systolic array
 
-Weight-stationary dataflow (TPU-style). Default configuration: 4×4 PEs.
+Weight-stationary dataflow (TPU-style). Default configuration: 8×8 PEs
+(`NUM_ROWS = NUM_COLS = 8` in `c930_npu_top`). The diagram below shows the
+first four rows/columns for legibility; the array is 8×8.
 
 ```
          activations (A rows) ──►  left → right
               │
-   ┌───────┬───────┬───────┬───────┐
+   ┌───────┬───────┬───────┬───────┐  (×2: rows k=4..7)
    │ PE00  │ PE01  │ PE02  │ PE03  │  ◄── row k=0  (weight B[0][*])
    ├───────┼───────┼───────┼───────┤
    │ PE10  │ PE11  │ PE12  │ PE13  │  ◄── row k=1
@@ -130,7 +132,7 @@ Weight-stationary dataflow (TPU-style). Default configuration: 4×4 PEs.
    ├───────┼───────┼───────┼───────┤
    │ PE30  │ PE31  │ PE32  │ PE33  │  ◄── row k=3
    └───────┴───────┴───────┴───────┘
-          │       │       │       │
+          │       │       │       │      (×2: columns n=4..7)
           ▼       ▼       ▼       ▼
       C[m][0]  C[m][1]  C[m][2]  C[m][3]   ◄── partial sums flow top → bottom
 ```
@@ -161,13 +163,13 @@ because the A/B/C buffers are statically sized by MAX_M, MAX_N, MAX_K:
 If the grxcp backend needs GEMMs larger than MAX_M/MAX_N/MAX_K, it must
 tile externally — see §14.7.
 
-With default SoC parameters (NUM_ROWS=4, NUM_COLS=4, MAX_M=8, MAX_K=16, MAX_N=12):
+With default SoC parameters (NUM_ROWS=8, NUM_COLS=8, MAX_M=8, MAX_K=16, MAX_N=12):
 
 | Dimension | Range | Internal tiling passes |
 |-----------|-------|------------------------|
 | M | 1–8 | M passes (1 row each) |
-| N | 1–12 | 1–3 N-tile passes (4 columns each) |
-| K | 1–16 | 1–4 K-tile passes (4 rows each) |
+| N | 1–12 | 1–2 N-tile passes (8 columns each) |
+| K | 1–16 | 1–2 K-tile passes (8 rows each) |
 | M>8 | — | **External tiling required** (split into ≤8-row chunks) |
 | N>12 | — | **External tiling required** (split into ≤12-col chunks) |
 | K>16 | — | **External tiling required** (split into ≤16-length chunks) |
@@ -678,7 +680,7 @@ on the 200T (53.5%). The FP16 CLA subtractor and barrel shifter dominate
 
 | Board | Part | LUTs | Fit? | Notes |
 |-------|------|------|------|-------|
-| **Arty A7-100T** | XC7A100TCSG324-1 | 63.4K | ✅ 52% | **4×4 array target** |
+| **Arty A7-100T** | XC7A100TCSG324-1 | 63.4K | ✅ | Smaller parameterized array only — 8×8 (~72K LUTs) overflows; the old 52% figure is a pre-widening 4×4-era measurement |
 | **Artix-7 200T** | XC7A200TFBG484-1 | 134.6K | ✅ 53% | **8×8 array target, 513.8 MHz** |
 | Arty A7-35T | XC7A35TCSG324-1 | 20.8K | ❌ 76% | Too small |
 | Nexys A7-100T | XC7A100TCSG324-1 | 63.4K | ✅ | Same FPGA, more I/O, $180 |

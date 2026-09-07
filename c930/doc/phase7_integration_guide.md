@@ -300,16 +300,60 @@ device->backend = NPU_DPI_BACKEND_EMULATION;
 
 ## Timing model
 
-For SoC defaults (4×4 array, MAX_N=12):
+Shipped SoC geometry (`c930_soc_top.sv` defaults):
 
 ```
-INT8/INT16/INT4:  cycles = ceil(M/4) × ceil(N'/4) × ceil(K/4) × (4 + 0 + 4 + 2)
-FP16/BF16:        cycles = ceil(M/4) × ceil(N'/4) × ceil(K/4) × (4 + 4 + 4 + 2)
-
-where N' = min(N, 12), and N-tiling handles N > NUM_COLS internally.
+NUM_ROWS = 8   NUM_COLS = 8   MAX_M = 8   MAX_K = 16   MAX_N = 12
+DIN_W = 16     ACC_W = 48     CMD_QUEUE_DEPTH = 4
 ```
 
-For N > MAX_N: the caller must tile externally (see `npu_tile.h` and
+(The earlier 4×4-array numbers in this guide and in the `OP_COUNT` table
+of `reply_to_grx930_team.md` are invalidated by the 8×8 widening — see
+that reply's §5. `c930_npu_top` is parameterized, so everything below is
+written in terms of NUM_ROWS/NUM_COLS and holds for any instantiation.)
+
+The core processes one output row and one N-tile of `NUM_COLS` columns at
+a time (`c930_npu_core.sv` FSM). Per (row m, N-tile) the work is:
+
+- **Weight loads** — the tile's `B` weights stream into the PE mesh through
+the `S_WLOAD`/`S_PRELOAD` states: a `K`-row × `nc`-column tile costs
+`K × nc` cycles total (the tile's K-rows are loaded across `ceil(K/NUM_ROWS)`
+chunks — the double-buffer holds the next chunk in the inactive bank, but
+the loads themselves are **serial** with compute: the FSM alternates
+`S_RUN`/`S_PRELOAD`, it does not overlap them).
+- **K-tile runs** — `ceil(K / NUM_ROWS)` systolic passes (`S_RUN`) of
+  `NUM_ROWS + NUM_COLS + 2` cycles each, identical for every precision.
+- **C write** — `nc` cycles (`S_WRITE`).
+
+So a first-order core-cycle model is
+
+```
+core ≈ M × Σ over N-tiles [ K·nc + ceil(K/NUM_ROWS)·(NUM_ROWS+NUM_COLS+2) + nc ]
+     = M × [ (K+1)·N + ceil(K/NUM_ROWS)·(NUM_ROWS+NUM_COLS+2)·(number of N-tiles) ]
+```
+
+(`nc` = columns in the N-tile, ≤ NUM_COLS; `N` here = total problem N, since
+Σ nc across tiles = N.)
+
+Add DMA A/B fetch and C writeback on top; the DMA prefetches the next
+command's A/B during compute and writeback, so queued GEMMs drain
+back-to-back without idle gaps (measured on the 8×8 RTL in the full-SoC
+regression's mixed INT8/FP16/BF16/INT4 batch). The exact per-GEMM numbers
+should be measured on the 8×8 RTL rather than recovered from the 4×4-era
+tables; `npu_dpi_expected_cycles()` on the grxcp side must be re-derived
+accordingly.
+
+`OP_COUNT` (0x2C) counts **PE firings**, not M×N×K operations: for a
+problem M×N×K on this array it reads
+
+```
+OP_COUNT = ceil(M/NUM_ROWS) × ceil(N'/NUM_COLS) × ceil(K/NUM_ROWS)
+           × NUM_ROWS × NUM_COLS     (N' = min(N, MAX_N))
+```
+
+(see `c930_architecture.md`, OP_COUNT section).
+
+For N > MAX_N the caller must tile externally (see `npu_tile.h` and
 `c930_architecture.md` §14.7).
 
 ## Verilator path (RTL-backed simulation)
