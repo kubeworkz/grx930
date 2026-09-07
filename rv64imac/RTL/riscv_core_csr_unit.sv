@@ -433,7 +433,7 @@ begin:trap_setup_proc
                 //external interrupts
                 if (mstatus_mie & mie_meie & mip_meip)
                   begin
-                    trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                    trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                     current_state <= setting_up;
                     mtval  <= 64'b0;
@@ -448,7 +448,7 @@ begin:trap_setup_proc
                 //timer interrupts
                 else if (mstatus_mie & mie_mtie & mip_mtip)
                   begin
-                    trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                    trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                     current_state <= setting_up;
                     mtval  <= 64'b0;
@@ -465,7 +465,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                              trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
@@ -490,7 +490,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                              trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
@@ -511,7 +511,7 @@ begin:trap_setup_proc
                       case (current_mode)
                         `m_mode:
                           begin
-                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                              trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
@@ -534,7 +534,7 @@ begin:trap_setup_proc
 
                             else
                              begin
-                              trap_pc_reg <= i_csr_unit_pc;   // pipelined: committed to mepc in setting_up
+                              trap_pc_reg <= intr_trap_pc;   // pipelined: committed to mepc in setting_up
 
                               mtval  <= 64'b0;
                               mtinst <= 64'b0;
@@ -1083,6 +1083,16 @@ assign o_csr_unit_mux1 = ((current_state == setting_up) | i_csr_unit_mret_wb | i
 wire intr_pend_m = mstatus_mie & ((mie_meie & mip_meip) | (mie_mtie & mip_mtip));
 wire intr_pend_s = mstatus_sie & ((mie_seie & ip_seip) | (mie_stie & ip_stip));
 wire intr_pending = intr_pend_m | intr_pend_s;
+// Interrupt traps can fire with the pipeline empty -- most commonly the cycle
+// after an ISR's mret, when another source is still pending.  The mret flush
+// has cleared IF/ID/EX by the time the CSR FSM captures i_csr_unit_pc, so
+// mepc would be set to 0 and the handler's mret would return to 0x0,
+// re-running the firmware in an interrupt storm.  In that window mepc still
+// holds the mret return address -- the very next instruction to execute -- so
+// fall back to it when the pipeline is empty.  Exceptions always have the
+// faulting instruction in the pipeline and keep the plain i_csr_unit_pc
+// capture.
+wire [`XLEN-1:0] intr_trap_pc = (i_csr_unit_pc == `XLEN'd0) ? mepc : i_csr_unit_pc;
 
 //flush signals
 assign csr_flush_mem = i_csr_unit_lw_access_fault | i_csr_unit_sw_access_fault | (intr_pending & i_csr_unit_mem_wen) | (i_csr_unit_mret_wb | i_csr_unit_sret);
