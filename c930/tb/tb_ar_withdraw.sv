@@ -23,19 +23,20 @@
 //     B4. recovery read from the same master completes
 //     B5. next round-robin master's read completes
 //   Part C (crossbar write channel): for EVERY master m0..m3 --
-//     C1. issue an AW with the DDR slave holding awready=0 (no accept)
+//     C1. issue a 3-beat AW with the slave holding awready=0 (no accept);
+//         only the first W beat is presented (partial data in flight)
 //     C2. confirm the crossbar granted (W_GRANTED, w_grant==m) and is NOT
 //         presenting a false accept (mX_awready stays 0)
-//     C3. withdraw awvalid -> crossbar must return to W_IDLE with the AW
-//         never accepted
-//     C4. recovery: a full write from the same master must then complete
-//         (W beats + B response, channel idle again)
-//     C5. fairness: the next round-robin master's write must also complete
+//     C3. withdraw awvalid + W -> crossbar must return to W_IDLE with the
+//         AW never accepted and no W beats taken
+//     C4. recovery: a full 3-beat burst from the same master must complete
+//         (all beats + B response, channel idle again)
+//     C5. fairness: the next round-robin master's 2-beat write completes
 //   Part D (DMA arbiter write channel): same flow for every arbiter master --
 //     D1..D3. issue -> wr_addr_phase==1 with owner==m -> withdraw ->
-//             wr_addr_phase must clear (AW never accepted)
-//     D4. recovery write from the same master completes
-//     D5. next round-robin master's write completes
+//             wr_addr_phase must clear (AW never accepted, no W taken)
+//     D4. recovery 3-beat burst from the same master completes
+//     D5. next round-robin master's 2-beat write completes
 //
 // Timeout discipline: the condition waits use bare `wait` statements; a
 // global watchdog kills the bench if any sub-test deadlocks.
@@ -151,7 +152,8 @@ module t_axi_w_slave #(
   output logic                s_bvalid,
   input  logic                s_bready,
   output logic                busy,
-  output logic [31:0]         aw_cnt    // AWs accepted (for never-accepted checks)
+  output logic [31:0]         aw_cnt,   // AWs accepted (never-accepted checks)
+  output logic [31:0]         w_cnt     // W beats accepted (burst-length checks)
 );
   typedef enum logic [1:0] { S_IDLE = 0, S_DATA = 1, S_BRESP = 2 } st_t;
   st_t  st;
@@ -169,6 +171,7 @@ module t_axi_w_slave #(
       bid_reg  <= '0;
       s_bvalid <= 1'b0;
       aw_cnt   <= '0;
+      w_cnt    <= '0;
     end else begin
       case (st)
         S_IDLE: begin
@@ -180,10 +183,13 @@ module t_axi_w_slave #(
           end
         end
         S_DATA: begin
-          // A single-beat burst (wlast=1) or any beat with wlast completes.
-          if (s_wvalid && s_wready && s_wlast) begin
-            s_bvalid <= 1'b1;
-            st       <= S_BRESP;
+          // Count every accepted beat; wlast ends the burst.
+          if (s_wvalid && s_wready) begin
+            w_cnt <= w_cnt + 1;
+            if (s_wlast) begin
+              s_bvalid <= 1'b1;
+              st       <= S_BRESP;
+            end
           end
         end
         S_BRESP: begin
@@ -392,7 +398,7 @@ module tb_ar_withdraw;
 
   // DDR write slave (S1) with a hold switch for AW-accept refusal
   logic xb_hold_aw = 0;
-  logic [31:0] xslv_aw_cnt;
+  logic [31:0] xslv_aw_cnt, xslv_w_cnt;
   t_axi_w_slave #(.ADDR_W(ADDR_W), .DATA_W(DATA_W), .ID_W(ID_W)) u_ddr_wslv (
     .clk(clk), .rst_n(rst_n), .hold(xb_hold_aw),
     .s_awid(s_awid[1]), .s_awaddr(s_awaddr[1]), .s_awlen(s_awlen[1]),
@@ -401,7 +407,8 @@ module tb_ar_withdraw;
     .s_wdata(s_wdata[1]), .s_wstrb(s_wstrb[1]), .s_wlast(s_wlast[1]),
     .s_wvalid(s_wvalid[1]), .s_wready(s_wready[1]),
     .s_bid(s_bid[1]), .s_bresp(s_bresp[1]), .s_bvalid(s_bvalid[1]),
-    .s_bready(s_bready[1]), .busy(), .aw_cnt(xslv_aw_cnt)
+    .s_bready(s_bready[1]), .busy(), .aw_cnt(xslv_aw_cnt),
+    .w_cnt(xslv_w_cnt)
   );
 
   // Beat counters for the crossbar read path
@@ -428,7 +435,7 @@ module tb_ar_withdraw;
   logic              hold_ars = 0;
   // Arbiter write-side nets (driven by the arb write slave below)
   logic              a_hold_aw = 0;
-  logic [31:0]       aslv_aw_cnt;
+  logic [31:0]       aslv_aw_cnt, aslv_w_cnt;
   logic [ID_W-1:0]   a_s_awid;
   logic [ADDR_W-1:0] a_s_awaddr;
   logic [7:0]        a_s_awlen;
@@ -517,7 +524,8 @@ module tb_ar_withdraw;
     .s_wdata(a_s_wdata), .s_wstrb(a_s_wstrb), .s_wlast(a_s_wlast),
     .s_wvalid(a_s_wvalid), .s_wready(arb_s_wready),
     .s_bid(arb_s_bid), .s_bresp(arb_s_bresp), .s_bvalid(arb_s_bvalid),
-    .s_bready(arb_s_bready), .busy(), .aw_cnt(aslv_aw_cnt)
+    .s_bready(arb_s_bready), .busy(), .aw_cnt(aslv_aw_cnt),
+    .w_cnt(aslv_w_cnt)
   );
 
   // Beat counters for the arbiter read path (shared-port beats, per owner)
@@ -611,6 +619,27 @@ module tb_ar_withdraw;
     m_bready[m]  <= 1'b0;
   endtask
 
+  // Complete a burst started by issue_write(m, addr, len): drive the
+  // remaining `left` beats (len+1 total) with wlast on the last one.
+  // Both DUTs present W exactly one cycle after the AW handshake and their
+  // slaves accept one beat per cycle, so aligning to m_awready makes the
+  // beat count exact: intermediate beats keep wlast=0, the final beat is
+  // marked one cycle before the slave samples it, and wvalid drops after
+  // the burst is taken (the slave leaves its data phase on wlast, so no
+  // extra beat can sneak in).
+  task automatic wbeats(input int m, input int left);
+    // Sample the AW handshake at posedges only: iverilog's `wait` can
+    // resume mid-posedge-processing, making the cycle count of the
+    // following @(posedge) ambiguous (observed 0 vs 1 cycles).  A
+    // while-loop consumes exactly one posedge per iteration.
+    while (!(m_awvalid[m] && m_awready[m])) @(posedge clk);  // AW accepted
+    repeat (left - 1) @(posedge clk);       // intermediate beats (wlast=0)
+    @(posedge clk);
+    m_wlast[m] <= 1'b1;                     // final beat, visible next cycle
+    repeat (2) @(posedge clk);
+    m_wvalid[m] <= 1'b0;                    // burst complete
+  endtask
+
   task automatic clear_all_writes();
     @(posedge clk);
     for (int i = 0; i < NM; i++) begin
@@ -698,8 +727,13 @@ module tb_ar_withdraw;
     $display("=== %s: withdraw AW mid-address-phase ===", nm);
     clear_all_writes();
 
+    // Both slaves hold: neither DUT may accept while the master is
+    // withdrawing, so the checks below are exact on both sides.
     xb_hold_aw = 1'b1;
-    issue_write(m, 64'h0000_8000, 8'd0);
+    a_hold_aw  = 1'b1;
+    // 3-beat burst (len=2): only the first W beat is presented before the
+    // AW is withdrawn -- partial W data is in flight on the shared bus.
+    issue_write(m, 64'h0000_8000, 8'd2);
     wait (xbar.w_state == 2'd1 && xbar.w_grant == m[1:0]);
     check(xbar.w_state == 2'd1 && xbar.w_grant == m[1:0],
           $sformatf("%s granted while slave holds awready=0", nm));
@@ -710,39 +744,50 @@ module tb_ar_withdraw;
           $sformatf("%s no false awready during hold", nm));
     check(xbar.w_shared_awvalid == 1'b1,
           $sformatf("%s AW presented to slave", nm));
+    check(xbar.w_shared_wvalid == 1'b1,
+          $sformatf("%s partial W data presented with AW during hold", nm));
 
     begin : wnoacc
       int c0 = xslv_aw_cnt;
-      withdraw_write(m);
+      int w0 = xslv_w_cnt;
+      withdraw_write(m);   // AW + W dropped mid-burst
       wait (xbar.w_state == 2'd0);
       check(xbar.w_state == 2'd0,
             $sformatf("%s returns to W_IDLE after withdrawal", nm));
       check(xslv_aw_cnt == c0,
             $sformatf("%s AW never accepted", nm));
+      check(xslv_w_cnt == w0,
+            $sformatf("%s no W beats accepted during hold", nm));
       check(m_awready[m] == 1'b0,
             $sformatf("%s still no accept across the whole window", nm));
       repeat (2) @(posedge clk);
     end
 
-    // Recovery: full write from the same master must complete normally.
+    // Recovery: a full 3-beat burst from the same master must complete.
     xb_hold_aw = 1'b0;
+    a_hold_aw  = 1'b0;
     begin : wrec
       int nw = xb_wdone[m];
-      issue_write(m, 64'h0000_8000, 8'd0);
+      int w0 = xslv_w_cnt;
+      issue_write(m, 64'h0000_8000, 8'd2);
+      wbeats(m, 2);       // beats 2..3, wlast on the last
       wait (xb_wdone[m] >= nw + 1);
       check(xb_wdone[m] >= nw + 1,
-            $sformatf("%s recovery write completes (B received)", nm));
+            $sformatf("%s recovery 3-beat write completes (B received)", nm));
+      check(xslv_w_cnt >= w0 + 3,
+            $sformatf("%s all 3 W beats of the recovery burst accepted (got %0d)", nm, xslv_w_cnt - w0));
       write_done(m);
       wait (xbar.w_state == 2'd0);
       check(xbar.w_state == 2'd0,
             $sformatf("%s channel idle after recovery", nm));
     end
 
-    // Fairness: next round-robin master also completes.
+    // Fairness: next round-robin master completes a 2-beat burst.
     begin : wfair
       int n = (m + 1) % NM;
       int nw = xb_wdone[n];
-      issue_write(n, 64'h0000_8100, 8'd0);
+      issue_write(n, 64'h0000_8100, 8'd1);
+      wbeats(n, 1);
       wait (xb_wdone[n] >= nw + 1);
       check(xb_wdone[n] >= nw + 1,
             $sformatf("xbar m%0d write completes after m%0d withdrawal", n, m));
@@ -820,13 +865,18 @@ module tb_ar_withdraw;
     $display("=== %s: withdraw AW mid-address-phase ===", nm);
     clear_all_writes();
 
-    a_hold_aw = 1'b1;
-    issue_write(m, 64'h0000_8000, 8'd0);
+    // Both slaves hold while the master withdraws (see Part C).
+    xb_hold_aw = 1'b1;
+    a_hold_aw  = 1'b1;
+    // 3-beat burst (len=2): only the first W beat is presented.
+    issue_write(m, 64'h0000_8000, 8'd2);
     wait (arb.wr_addr_phase == 1'b1 && arb.wr_owner == m[1:0]);
     check(arb.wr_addr_phase == 1'b1 && arb.wr_owner == m[1:0],
           $sformatf("%s granted (wr_addr_phase, owner=%0d)", nm, m));
     check(a_s_awvalid == 1'b1,
           $sformatf("%s AW presented on shared port", nm));
+    check(m_wvalid[m] == 1'b1,
+          $sformatf("%s partial W data presented with AW during hold", nm));
 
     repeat (3) @(posedge clk);
     check(arb_s_awready == 1'b0,
@@ -836,12 +886,15 @@ module tb_ar_withdraw;
 
     begin : wnoacc2
       int c0 = aslv_aw_cnt;
-      withdraw_write(m);
+      int w0 = aslv_w_cnt;
+      withdraw_write(m);   // AW + W dropped mid-burst
       wait (arb.wr_addr_phase == 1'b0);
       check(arb.wr_addr_phase == 1'b0,
             $sformatf("%s clears wr_addr_phase after withdrawal", nm));
       check(aslv_aw_cnt == c0,
             $sformatf("%s AW never accepted", nm));
+      check(aslv_w_cnt == w0,
+            $sformatf("%s no W beats accepted during hold", nm));
       check(arb.wr_active == 1'b0,
             $sformatf("%s wr_active stays clear", nm));
       check(a_s_awvalid == 1'b0,
@@ -849,25 +902,31 @@ module tb_ar_withdraw;
       repeat (2) @(posedge clk);
     end
 
-    // Recovery: full write from the same master.
-    a_hold_aw = 1'b0;
+    // Recovery: a full 3-beat burst from the same master.
+    xb_hold_aw = 1'b0;
+    a_hold_aw  = 1'b0;
     begin : wrec2
       int nw = arb_wdone[m];
-      issue_write(m, 64'h0000_8000, 8'd0);
+      int w0 = aslv_w_cnt;
+      issue_write(m, 64'h0000_8000, 8'd2);
+      wbeats(m, 2);
       wait (arb_wdone[m] >= nw + 1);
       check(arb_wdone[m] >= nw + 1,
-            $sformatf("%s recovery write completes (B received)", nm));
+            $sformatf("%s recovery 3-beat write completes (B received)", nm));
+      check(aslv_w_cnt >= w0 + 3,
+            $sformatf("%s all 3 W beats of the recovery burst accepted (got %0d)", nm, aslv_w_cnt - w0));
       write_done(m);
       wait (arb.wr_active == 1'b0 && arb.wr_addr_phase == 1'b0);
       check(arb.wr_active == 1'b0 && arb.wr_addr_phase == 1'b0,
             $sformatf("%s arbiter idle after recovery", nm));
     end
 
-    // Fairness: next round-robin master also completes.
+    // Fairness: next round-robin master completes a 2-beat burst.
     begin : wfair2
       int n = (m + 1) % NM;
       int nw = arb_wdone[n];
-      issue_write(n, 64'h0000_8100, 8'd0);
+      issue_write(n, 64'h0000_8100, 8'd1);
+      wbeats(n, 1);
       wait (arb_wdone[n] >= nw + 1);
       check(arb_wdone[n] >= nw + 1,
             $sformatf("arb m%0d write completes after m%0d withdrawal", n, m));
