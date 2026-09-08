@@ -266,6 +266,12 @@ module c930_axi_dma_arb
         if (s_arvalid && s_arready) begin
           rd_addr_phase <= 1'b0;
           rd_active     <= 1'b1;  // data phase starts
+        end else if (!arvalid_v[rd_owner]) begin
+          // The granted master withdrew arvalid before the handshake
+          // completed (AXI allows withdrawal before acceptance).  Abandon
+          // the pending grant so we don't strand the slave (crossbar/L2)
+          // waiting on a transaction that will never present.
+          rd_addr_phase <= 1'b0;
         end
       end else begin
         // Data phase — wait for last data beat

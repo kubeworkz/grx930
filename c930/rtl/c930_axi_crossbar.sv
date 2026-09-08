@@ -332,6 +332,7 @@ module c930_axi_crossbar
   logic [1:0] r_grant;       // which master has read grant
   logic [1:0] r_rr_ptr;      // round-robin pointer
   logic       r_active;       // transaction in progress
+  logic       r_ar_accepted;  // AR handshake completed for the current grant
 
   // Read request per master
   logic [3:0] r_req;
@@ -372,10 +373,12 @@ module c930_axi_crossbar
       r_grant   <= '0;
       r_rr_ptr  <= '0;
       r_active  <= 1'b0;
+      r_ar_accepted <= 1'b0;
     end else begin
       case (r_state)
         R_IDLE: begin
           r_active <= 1'b0;
+          r_ar_accepted <= 1'b0;
           // Find next requesting master (round-robin)
           if (r_req[r_rr_ptr]) begin
             r_grant  <= r_rr_ptr;
@@ -402,6 +405,17 @@ module c930_axi_crossbar
         R_GRANTED: begin
           // Wait for last data beat on the shared read bus
           if (r_shared_rvalid && r_shared_rready && r_shared_rlast) begin
+            r_active <= 1'b0;
+            r_state  <= R_IDLE;
+          end else if (r_shared_arvalid && r_shared_arready) begin
+            // AR accepted — the transaction is committed; data will follow.
+            r_ar_accepted <= 1'b1;
+          end else if (!r_ar_accepted && !r_shared_arvalid) begin
+            // The granted master withdrew arvalid before the slave accepted
+            // (AXI permits withdrawal before acceptance) — e.g. the NPU DMA
+            // abandons a prefetch AR when its phase advances past P_WRITE_C.
+            // Abandon the grant; otherwise the read channel waits forever on
+            // data that will never arrive and blocks every other master.
             r_active <= 1'b0;
             r_state  <= R_IDLE;
           end
