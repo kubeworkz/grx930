@@ -198,6 +198,12 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
             pending_inv      <= 1'b1;
             pending_inv_addr <= i_inv_addr;
         end
+
+        // Latch the address of a completing MMIO store (same edge that
+        // transitions to MMIO_WR_RETIRE) so the retire state can detect
+        // when the store leaves the MEM stage.
+        if ((STATE == MMIO_WRITE) && i_mmio_write_done)
+            mmio_wr_addr_r <= i_addr_from_core;
         STATE <= NEXT ;
         VALID_RES <= NEXT_VALID_RES;
         RES_SET <= NEXT_RES_SET;
@@ -632,9 +638,9 @@ case (STATE)
         if (i_mmio_write_done) begin
             o_mmio_write_valid = 0;
             o_stall = 0;
-            // Remember the completed store's address so MMIO_WR_RETIRE can
-            // detect when the store leaves MEM.
-            mmio_wr_addr_r <= i_addr_from_core;
+            // The completed store's address is latched into mmio_wr_addr_r by
+            // the always_ff below (STATE==MMIO_WRITE && done), so
+            // MMIO_WR_RETIRE can detect when the store leaves MEM.
             NEXT = MMIO_WR_RETIRE;
         end
 
