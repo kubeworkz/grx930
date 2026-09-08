@@ -703,7 +703,13 @@ module c930_npu_dma
           // --- Cross-GEMM prefetch (PF2): read next GEMM's A row 0 + B row 0 ---
           // Uses the AXI read channel when the existing A-row prefetch is idle.
           // Stores into staging buffers for the next GEMM.
-          if (next_valid && pf_state == PF_IDLE) begin
+          // Runs exactly ONCE per queued GEMM: the staging buffers
+          // (next_a_ready && next_b_ready) are the done latch -- once both are
+          // full, PF2 stays idle until the next dispatch consumes them and
+          // clears the flags.  Without this guard, PF2 re-reads A then B every
+          // ~140 cycles forever while the next GEMM is still queued.
+          if (next_valid && pf_state == PF_IDLE &&
+              !(next_a_ready && next_b_ready)) begin
             case (pf2_state)
               PF2_IDLE: begin
                 // Start prefetching next GEMM's A row 0
