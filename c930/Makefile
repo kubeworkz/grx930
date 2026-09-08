@@ -169,6 +169,16 @@ $(L2_OUT): rtl/c930_l2.sv tb/tb_l2_coherent.sv
 l2_coherent: $(L2_OUT)
 	$(VVP) $(L2_OUT)
 
+# Directed AR-withdrawal regression: verifies both the DMA arbiter and the
+# crossbar abandon a granted-but-unaccepted AR when the master withdraws
+# arvalid (the NPU prefetch abandonment deadlock).  Mutation-checked: with
+# the abandonment branches removed this bench hangs in the watchdog.
+ARW_OUT := $(BUILD_DIR)/tb_ar_withdraw.vvp
+$(ARW_OUT): rtl/c930_axi_crossbar.sv rtl/c930_axi_dma_arb.sv tb/tb_ar_withdraw.sv
+	$(IVERILOG) $(GFLAGS) -o $@ tb/tb_ar_withdraw.sv rtl/c930_axi_crossbar.sv rtl/c930_axi_dma_arb.sv
+ar_withdraw: $(ARW_OUT)
+	$(VVP) $(ARW_OUT)
+
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
 
