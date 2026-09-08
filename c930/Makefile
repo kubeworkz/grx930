@@ -219,6 +219,33 @@ verilate: $(SW_HEX)
 verilate-run: verilate
 	$(VERIL_OUT)/Vc930_soc_verilator
 
+# ---------------------------------------------------------------------------
+# Full 4-core SoC with the shared L2 ACTIVE -- hardware-speed integration
+# coherence verification (Icarus cannot simulate the L2+4-core at usable
+# speed; Verilator can).  Mirrors tb_quad_isolated.sv: preload quadcore DDR
+# image + operands, boot 4 harts, wait for the 0xFACEFEED magic at 0x9400.
+# ---------------------------------------------------------------------------
+VERIL4_TOP   := sim/c930_soc4_verilator.sv
+VERIL4_TB    := sim/tb_soc4.cc
+VERIL4_OUT   := $(BUILD_DIR)/verilator4
+VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal \
+  -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+  -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL \
+  --top-module c930_soc4_verilator
+
+verilate-soc4: $(SW_HEX)
+	@mkdir -p $(VERIL4_OUT)
+	VERILATOR_ROOT=$(OSS_DIR)/share/verilator \
+	$(VERILATOR) $(VERIL4_FLAGS) \
+	  --Mdir $(VERIL4_OUT) \
+	  $(VERIL4_TOP) $(VERIL4_TB) $(CORE_RTL) $(SOC_FULL_RTL)
+
+# The generated C++ is a Linux ELF (built and run by WSL g++ -- the
+# oss-cad-suite verilator_bin.exe only generates C++; firmware paths are
+# relative, so run from the c930 dir).
+verilate-soc4-run: verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run
+
 # Standalone NPU DPI wrapper for grxcp backend testing
 NPU_DPI_RTL := $(NPU_RTL) rtl/c930_npu_top.sv
 NPU_DPI_SRC := sim/c930_npu_dpi.sv sim/npu_dpi.cc sim/npu_dpi_test.cc

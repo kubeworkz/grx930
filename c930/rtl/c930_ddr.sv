@@ -68,13 +68,19 @@ module c930_ddr
   output logic        s_axi_wready,
   output logic [1:0]  s_axi_bresp,
   output logic        s_axi_bvalid,
-  input  logic        s_axi_bready
+  input  logic        s_axi_bready,
+
+  // ---- Testbench readback port (simulation/debug only; synthesis ties off) ----
+  input  logic [31:0] i_tb_rd_addr,
+  output logic [7:0]  o_tb_rd_data
 );
 
   // ---------------------------------------------------------------------------
   // Byte storage
   // ---------------------------------------------------------------------------
   logic [7:0] mem [0:MEM_BYTES-1];
+
+  assign o_tb_rd_data = mem[i_tb_rd_addr[31:0]];
 
   // Optional hex preload (for testbenches that need operand data at time 0)
   initial begin
