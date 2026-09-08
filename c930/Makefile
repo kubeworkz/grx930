@@ -55,6 +55,7 @@ SOC_RTL := $(NPU_RTL) \
   rtl/c930_soc_top.sv
 
 SOC_FULL_RTL := $(SOC_RTL) \
+  rtl/c930_l2.sv \
   rtl/c930_axi_crossbar.sv \
   rtl/c930_axi_dma_arb.sv \
   rtl/c930_axi_cache_adapter.sv \
@@ -158,6 +159,15 @@ $(QUAD_OUT): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_quad_isolated.sv
 	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_quad_isolated.sv
 quad: $(QUAD_OUT)
 	$(VVP) $(QUAD_OUT)
+
+# Standalone shared-L2 verification: refill/hit/write-through/readback and
+# directory-based coherence invalidation (fast; the L2 is too heavy for the
+# full 4-core sim in iverilog).
+L2_OUT := $(BUILD_DIR)/tb_l2_coherent.vvp
+$(L2_OUT): rtl/c930_l2.sv tb/tb_l2_coherent.sv
+	$(IVERILOG) $(GFLAGS) -o $@ rtl/c930_l2.sv tb/tb_l2_coherent.sv
+l2_coherent: $(L2_OUT)
+	$(VVP) $(L2_OUT)
 
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
