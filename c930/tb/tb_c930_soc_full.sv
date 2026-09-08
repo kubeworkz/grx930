@@ -835,7 +835,7 @@ module tb_c930_soc_full;
         vfw[43] = 32'h00160613;  // addi x12, x12, 1       advance col counter
         vfw[44] = 32'hFD564CE3;  // blt  x12, x21, col_loop if col < 4, loop
         vfw[45] = 32'h00168693;  // addi x13, x13, 1       advance row counter
-        vfw[46] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 3, loop
+        vfw[46] = 32'hFD46C6E3;  // blt  x13, x20, row_loop if row < 3, loop
         vfw[47] = 32'h00000537;  // lui  x10, 0
         vfw[48] = 32'h30850513;  // addi x10, x10, 0x308   verify buffer addr 2
         vfw[49] = 32'h01752023;  // sw   x23, 0(x10)       store GEMM3 error mask
@@ -862,7 +862,7 @@ module tb_c930_soc_full;
         vfw[70] = 32'h00160613;  // addi x12, x12, 1       advance col counter
         vfw[71] = 32'hFD564CE3;  // blt  x12, x21, col_loop if col < 5, loop
         vfw[72] = 32'h00168693;  // addi x13, x13, 1       advance row counter
-        vfw[73] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 3, loop
+        vfw[73] = 32'hFD46C6E3;  // blt  x13, x20, row_loop if row < 3, loop
         vfw[74] = 32'h00000537;  // lui  x10, 0
         vfw[75] = 32'h31050513;  // addi x10, x10, 0x310   verify buffer addr 3
         vfw[76] = 32'h01852023;  // sw   x24, 0(x10)       store GEMM0 error mask
@@ -889,7 +889,7 @@ module tb_c930_soc_full;
         vfw[97] = 32'h00160613;  // addi x12, x12, 1       advance col counter
         vfw[98] = 32'hFD564CE3;  // blt  x12, x21, col_loop if col < 12, loop
         vfw[99] = 32'h00168693;  // addi x13, x13, 1       advance row counter
-        vfw[100] = 32'hFD468CE3;  // blt  x13, x20, row_loop if row < 2, loop
+        vfw[100] = 32'hFD46C6E3;  // blt  x13, x20, row_loop if row < 2, loop
         vfw[101] = 32'h00000537;  // lui  x10, 0
         vfw[102] = 32'h31850513;  // addi x10, x10, 0x318   verify buffer addr 4
         vfw[103] = 32'h01852023;  // sw   x24, 0(x10)       store GEMM2 error mask
