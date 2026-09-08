@@ -18,7 +18,10 @@ module c930_axi_cache_adapter
 #(
   parameter int ADDR_WIDTH = 64,
   parameter int DATA_WIDTH = 256,  // cache line width
-  parameter int ID_WIDTH   = 4
+  parameter int ID_WIDTH   = 4,
+  // SOURCE_ID stamped onto the AXI ID of every request; the shared L2 uses
+  // it for the coherence directory (0=CPU0-I, 1=CPU0-D; 4..11 see soc_top).
+  parameter int SOURCE_ID  = 0
 )
 (
   input  logic i_clk,
@@ -109,10 +112,10 @@ module c930_axi_cache_adapter
   logic [255:0]          line_buf;
 
   // AXI defaults
-  assign m_axi_awid    = '0;
+  assign m_axi_awid    = SOURCE_ID[ID_WIDTH-1:0];
   assign m_axi_awsize  = 3'b011;  // 8 bytes (64-bit)
   assign m_axi_awburst = 2'b01;   // INCR
-  assign m_axi_arid    = '0;
+  assign m_axi_arid    = SOURCE_ID[ID_WIDTH-1:0];
   assign m_axi_arsize  = 3'b011;  // 8 bytes
   assign m_axi_arburst = 2'b01;   // INCR
 

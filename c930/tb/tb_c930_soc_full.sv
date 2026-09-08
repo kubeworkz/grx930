@@ -65,7 +65,11 @@ module tb_c930_soc_full;
     .MAX_N          (MAX_N),
     .MEM_BYTES      (MEM_BYTES),
     .DDR_INIT_FILE  ("sw/npu_ddr_bytes.hex"),
-    .BOOT_INIT_FILE ("sw/boot.hex")
+    .BOOT_INIT_FILE ("sw/boot.hex"),
+    // Bypass the shared L2 for this iverilog regression: the 64 KB L2 + 4
+    // active cores exceed what iverilog simulates at usable speed.  The L2 is
+    // covered by tb_l2_coherent (fast, standalone) and tb_quad_isolated.
+    .BYPASS_L2 (1'b1)
   ) dut (
     .i_clk       (clk),
     .i_rst_n     (rst_n),

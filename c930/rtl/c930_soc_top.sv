@@ -38,6 +38,14 @@ module c930_soc_top
   parameter int MAX_N    = 12,
   parameter int MEM_BYTES = 65536,
   parameter int CLK_DIV  = 1,
+  // Shared L2 geometry.  Default 64 KB (512 sets x 4 ways x 32 B).  Tests can
+  // shrink this (e.g. L2_NUM_SETS=64) for fast Icarus simulation; coherence
+  // behavior is identical at any size.
+  parameter int L2_NUM_SETS = 512,
+  parameter int L2_NUM_WAYS = 4,
+  // Debug: bypass the L2 (crossbar S1 -> DDR directly).  For isolating
+  // boot hangs; normal operation leaves this 0.
+  parameter bit BYPASS_L2 = 0,
   parameter     DDR_INIT_FILE = "",  // optional hex preload for DDR (testbench use)
   parameter     BOOT_INIT_FILE = "sw/boot.hex"  // boot ROM firmware hex
 )
@@ -407,7 +415,7 @@ module c930_soc_top
   logic         dcache_rvalid;
   logic         dcache_rready;
 
-  c930_axi_cache_adapter u_dcache_adapter (
+  c930_axi_cache_adapter #(.SOURCE_ID(1)) u_dcache_adapter (
     .i_clk           (core_clk),
     .i_rst_n         (core_rst_n),
 
@@ -891,7 +899,8 @@ module c930_soc_top
   c930_axi_dma_arb #(
     .ADDR_WIDTH (64),
     .DATA_WIDTH (64),
-    .ID_WIDTH   (4)
+    .ID_WIDTH   (4),
+    .ARB_ID_BASE (2'b01)
   ) u_core1_arb (
     .i_clk     (core_clk),
     .i_rst_n   (core_rst_n),
@@ -1012,6 +1021,45 @@ module c930_soc_top
   logic         boot_rready;
 
   // DDR signals (from crossbar slave 1)
+  // Shared L2 slave-side nets (crossbar S1 -> L2).  The L2 master side
+  // drives the ddr_* nets below.
+  logic [3:0]   l2_s_awid;
+  logic [63:0]  l2_s_awaddr;
+  logic [7:0]   l2_s_awlen;
+  logic [2:0]   l2_s_awsize;
+  logic [1:0]   l2_s_awburst;
+  logic         l2_s_awvalid;
+  logic         l2_s_awready;
+  logic [63:0]  l2_s_wdata;
+  logic [7:0]   l2_s_wstrb;
+  logic         l2_s_wlast;
+  logic         l2_s_wvalid;
+  logic         l2_s_wready;
+  logic [3:0]   l2_s_bid;
+  logic [1:0]   l2_s_bresp;
+  logic         l2_s_bvalid;
+  logic         l2_s_bready;
+  logic [3:0]   l2_s_arid;
+  logic [63:0]  l2_s_araddr;
+  logic [7:0]   l2_s_arlen;
+  logic [2:0]   l2_s_arsize;
+  logic [1:0]   l2_s_arburst;
+  logic         l2_s_arvalid;
+  logic         l2_s_arready;
+  logic [3:0]   l2_s_rid;
+  logic [63:0]  l2_s_rdata;
+  logic [1:0]   l2_s_rresp;
+  logic         l2_s_rlast;
+  logic         l2_s_rvalid;
+  logic         l2_s_rready;
+
+  // L1 invalidation bus (L2 -> the 8 per-core caches):
+  //   port 0 = CPU0-I   1 = CPU0-D   2 = CPU1-I   3 = CPU1-D
+  //   port 4 = CPU2-I   5 = CPU2-D   6 = CPU3-I   7 = CPU3-D
+  logic [7:0]   l2_inv_valid;
+  logic [63:0]  l2_inv_addr;
+  logic [7:0]   l2_inv_ack;
+
   logic [3:0]   ddr_awid;
   logic [63:0]  ddr_awaddr;
   logic [7:0]   ddr_awlen;
@@ -1200,18 +1248,18 @@ module c930_soc_top
     .s0_rlast   (boot_rlast),    .s0_rvalid  (boot_rvalid),    .s0_rready (boot_rready),
 
     // ---- S1: DDR ----
-    .s1_awid    (ddr_awid),      .s1_awaddr  (ddr_awaddr),     .s1_awlen  (ddr_awlen),
-    .s1_awsize  (ddr_awsize),    .s1_awburst (ddr_awburst),    .s1_awvalid(ddr_awvalid),
-    .s1_awready (ddr_awready),
-    .s1_wdata   (ddr_wdata),     .s1_wstrb   (ddr_wstrb),      .s1_wlast  (ddr_wlast),
-    .s1_wvalid  (ddr_wvalid),    .s1_wready  (ddr_wready),
-    .s1_bid     (ddr_bid),       .s1_bresp   (ddr_bresp),      .s1_bvalid (ddr_bvalid),
-    .s1_bready  (ddr_bready),
-    .s1_arid    (ddr_arid),      .s1_araddr  (ddr_araddr),     .s1_arlen  (ddr_arlen),
-    .s1_arsize  (ddr_arsize),    .s1_arburst (ddr_arburst),    .s1_arvalid(ddr_arvalid),
-    .s1_arready (ddr_arready),
-    .s1_rid     (ddr_rid),       .s1_rdata   (ddr_rdata),      .s1_rresp  (ddr_rresp),
-    .s1_rlast   (ddr_rlast),     .s1_rvalid  (ddr_rvalid),     .s1_rready (ddr_rready),
+    .s1_awid    (l2_s_awid),    .s1_awaddr  (l2_s_awaddr),   .s1_awlen  (l2_s_awlen),
+    .s1_awsize  (l2_s_awsize),  .s1_awburst (l2_s_awburst),  .s1_awvalid(l2_s_awvalid),
+    .s1_awready (l2_s_awready),
+    .s1_wdata   (l2_s_wdata),   .s1_wstrb   (l2_s_wstrb),    .s1_wlast  (l2_s_wlast),
+    .s1_wvalid  (l2_s_wvalid),  .s1_wready  (l2_s_wready),
+    .s1_bid     (l2_s_bid),     .s1_bresp   (l2_s_bresp),    .s1_bvalid (l2_s_bvalid),
+    .s1_bready  (l2_s_bready),
+    .s1_arid    (l2_s_arid),    .s1_araddr  (l2_s_araddr),   .s1_arlen  (l2_s_arlen),
+    .s1_arsize  (l2_s_arsize),  .s1_arburst (l2_s_arburst),  .s1_arvalid(l2_s_arvalid),
+    .s1_arready (l2_s_arready),
+    .s1_rid     (l2_s_rid),     .s1_rdata   (l2_s_rdata),    .s1_rresp  (l2_s_rresp),
+    .s1_rlast   (l2_s_rlast),   .s1_rvalid  (l2_s_rvalid),   .s1_rready (l2_s_rready),
 
     // ---- S2: MMIO (stub for future peripherals) ----
     .s2_awid    (mmio_sl_awid),  .s2_awaddr  (mmio_sl_awaddr), .s2_awlen  (mmio_sl_awlen),
@@ -1280,6 +1328,78 @@ module c930_soc_top
   // =========================================================================
   // S1: Unified DDR (AXI4 full slave, 64 KB)
   //
+  // =========================================================================
+  // Shared L2 (64 KB, 4-way) + coherence directory, inserted between the
+  // crossbar's DDR slave port (S1) and the DDR.  Point of coherence for the
+  // four cores' write-through L1s (MSI-lite: no dirty states).  See
+  // c930_l2.sv for the protocol and the SOURCE_ID map.
+  // =========================================================================
+  generate
+    if (BYPASS_L2) begin : g_l2_bypass
+      // Debug: crossbar S1 -> DDR directly (no L2, no coherence).
+      assign ddr_awid = l2_s_awid;    assign ddr_awaddr = l2_s_awaddr; assign ddr_awlen = l2_s_awlen;
+      assign ddr_awsize = l2_s_awsize;assign ddr_awburst = l2_s_awburst;assign ddr_awvalid = l2_s_awvalid;
+      assign l2_s_awready = ddr_awready;
+      assign ddr_wdata = l2_s_wdata;  assign ddr_wstrb = l2_s_wstrb;   assign ddr_wlast = l2_s_wlast;
+      assign ddr_wvalid = l2_s_wvalid;assign l2_s_wready = ddr_wready;
+      assign l2_s_bid = ddr_bid;      assign l2_s_bresp = ddr_bresp;   assign l2_s_bvalid = ddr_bvalid;
+      assign ddr_bready = l2_s_bready;
+      assign ddr_arid = l2_s_arid;    assign ddr_araddr = l2_s_araddr; assign ddr_arlen = l2_s_arlen;
+      assign ddr_arsize = l2_s_arsize;assign ddr_arburst = l2_s_arburst;assign ddr_arvalid = l2_s_arvalid;
+      assign l2_s_arready = ddr_arready;
+      assign l2_s_rid = ddr_rid;      assign l2_s_rdata = ddr_rdata;   assign l2_s_rresp = ddr_rresp;
+      assign l2_s_rlast = ddr_rlast;  assign l2_s_rvalid = ddr_rvalid; assign ddr_rready = l2_s_rready;
+      assign l2_inv_valid = 8'b0;
+    end else begin : g_l2
+  c930_l2 #(
+    .ADDR_WIDTH (64),
+    .DATA_WIDTH (64),
+    .ID_WIDTH   (4),
+    .LINE_BYTES (32),
+    .NUM_SETS   (L2_NUM_SETS),
+    .NUM_WAYS   (L2_NUM_WAYS),
+    .NUM_SRC    (16),
+    .INV_PORTS  (8)
+  ) u_l2 (
+    .i_clk       (core_clk),
+    .i_rst_n     (core_rst_n),
+
+    // slave: crossbar S1 (all DDR traffic)
+    .s_awid      (l2_s_awid),    .s_awaddr  (l2_s_awaddr),   .s_awlen  (l2_s_awlen),
+    .s_awsize    (l2_s_awsize),  .s_awburst (l2_s_awburst),  .s_awvalid(l2_s_awvalid),
+    .s_awready   (l2_s_awready),
+    .s_wdata     (l2_s_wdata),   .s_wstrb   (l2_s_wstrb),    .s_wlast  (l2_s_wlast),
+    .s_wvalid    (l2_s_wvalid),  .s_wready  (l2_s_wready),
+    .s_bid       (l2_s_bid),     .s_bresp   (l2_s_bresp),    .s_bvalid (l2_s_bvalid),
+    .s_bready    (l2_s_bready),
+    .s_arid      (l2_s_arid),    .s_araddr  (l2_s_araddr),   .s_arlen  (l2_s_arlen),
+    .s_arsize    (l2_s_arsize),  .s_arburst (l2_s_arburst),  .s_arvalid(l2_s_arvalid),
+    .s_arready   (l2_s_arready),
+    .s_rid       (l2_s_rid),     .s_rdata   (l2_s_rdata),    .s_rresp  (l2_s_rresp),
+    .s_rlast     (l2_s_rlast),   .s_rvalid  (l2_s_rvalid),   .s_rready (l2_s_rready),
+
+    // master: DDR
+    .m_awid      (ddr_awid),     .m_awaddr  (ddr_awaddr),    .m_awlen  (ddr_awlen),
+    .m_awsize    (ddr_awsize),   .m_awburst (ddr_awburst),   .m_awvalid(ddr_awvalid),
+    .m_awready   (ddr_awready),
+    .m_wdata     (ddr_wdata),    .m_wstrb   (ddr_wstrb),     .m_wlast  (ddr_wlast),
+    .m_wvalid    (ddr_wvalid),   .m_wready  (ddr_wready),
+    .m_bid       (ddr_bid),      .m_bresp   (ddr_bresp),     .m_bvalid (ddr_bvalid),
+    .m_bready    (ddr_bready),
+    .m_arid      (ddr_arid),     .m_araddr  (ddr_araddr),    .m_arlen  (ddr_arlen),
+    .m_arsize    (ddr_arsize),   .m_arburst (ddr_arburst),   .m_arvalid(ddr_arvalid),
+    .m_arready   (ddr_arready),
+    .m_rid       (ddr_rid),      .m_rdata   (ddr_rdata),     .m_rresp  (ddr_rresp),
+    .m_rlast     (ddr_rlast),    .m_rvalid  (ddr_rvalid),    .m_rready (ddr_rready),
+
+    // L1 invalidation ports
+    .o_inv_valid (l2_inv_valid),
+    .o_inv_addr  (l2_inv_addr),
+    .i_inv_ack   (l2_inv_ack)
+  );
+    end
+  endgenerate
+
   // NOTE: The existing c930_ddr module uses a mixed interface (cache-line
   // ports + AXI4 slave). For the crossbar integration, we connect it via
   // the AXI4 slave port only. The cache-line ports are unused (the cache
@@ -1473,7 +1593,15 @@ module c930_soc_top
     .o_mmio_write_data             (mmio_wr_data),
     .o_mmio_write_strobe           (mmio_wr_strobe),
     .o_mmio_write_valid            (mmio_wr_valid),
-    .i_mmio_write_done             (mmio_wr_done)
+    .i_mmio_write_done             (mmio_wr_done),
+
+    // coherence invalidation (from shared L2): ports 0 (I) and 1 (D)
+    .i_icache_inv_valid            (l2_inv_valid[0]),
+    .i_icache_inv_addr             (l2_inv_addr),
+    .o_icache_inv_ack              (l2_inv_ack[0]),
+    .i_dcache_inv_valid            (l2_inv_valid[1]),
+    .i_dcache_inv_addr             (l2_inv_addr),
+    .o_dcache_inv_ack              (l2_inv_ack[1])
   );
 
   // =========================================================================
@@ -1515,7 +1643,15 @@ module c930_soc_top
     .o_mmio_write_data             (mmio1_wr_data),
     .o_mmio_write_strobe           (mmio1_wr_strobe),
     .o_mmio_write_valid            (mmio1_wr_valid),
-    .i_mmio_write_done             (mmio1_wr_done)
+    .i_mmio_write_done             (mmio1_wr_done),
+
+    // coherence invalidation (from shared L2): ports 2 (I) and 3 (D)
+    .i_icache_inv_valid            (l2_inv_valid[2]),
+    .i_icache_inv_addr             (l2_inv_addr),
+    .o_icache_inv_ack              (l2_inv_ack[2]),
+    .i_dcache_inv_valid            (l2_inv_valid[3]),
+    .i_dcache_inv_addr             (l2_inv_addr),
+    .o_dcache_inv_ack              (l2_inv_ack[3])
   );
 
   // =========================================================================
@@ -1558,7 +1694,15 @@ module c930_soc_top
     .o_mmio_write_data             (mmio2_wr_data),
     .o_mmio_write_strobe           (mmio2_wr_strobe),
     .o_mmio_write_valid            (mmio2_wr_valid),
-    .i_mmio_write_done             (mmio2_wr_done)
+    .i_mmio_write_done             (mmio2_wr_done),
+
+    // coherence invalidation (from shared L2): ports 4 (I) and 5 (D)
+    .i_icache_inv_valid            (l2_inv_valid[4]),
+    .i_icache_inv_addr             (l2_inv_addr),
+    .o_icache_inv_ack              (l2_inv_ack[4]),
+    .i_dcache_inv_valid            (l2_inv_valid[5]),
+    .i_dcache_inv_addr             (l2_inv_addr),
+    .o_dcache_inv_ack              (l2_inv_ack[5])
   );
 
   // =========================================================================
@@ -1600,7 +1744,15 @@ module c930_soc_top
     .o_mmio_write_data             (mmio3_wr_data),
     .o_mmio_write_strobe           (mmio3_wr_strobe),
     .o_mmio_write_valid            (mmio3_wr_valid),
-    .i_mmio_write_done             (mmio3_wr_done)
+    .i_mmio_write_done             (mmio3_wr_done),
+
+    // coherence invalidation (from shared L2): ports 6 (I) and 7 (D)
+    .i_icache_inv_valid            (l2_inv_valid[6]),
+    .i_icache_inv_addr             (l2_inv_addr),
+    .o_icache_inv_ack              (l2_inv_ack[6]),
+    .i_dcache_inv_valid            (l2_inv_valid[7]),
+    .i_dcache_inv_addr             (l2_inv_addr),
+    .o_dcache_inv_ack              (l2_inv_ack[7])
   );
 
   // =========================================================================
@@ -1679,7 +1831,8 @@ module c930_soc_top
   c930_axi_dma_arb #(
     .ADDR_WIDTH (64),
     .DATA_WIDTH (64),
-    .ID_WIDTH   (4)
+    .ID_WIDTH   (4),
+    .ARB_ID_BASE (2'b10)
   ) u_dma_arb (
     .i_clk     (core_clk),
     .i_rst_n   (core_rst_n),

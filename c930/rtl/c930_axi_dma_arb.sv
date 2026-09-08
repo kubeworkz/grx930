@@ -16,7 +16,11 @@ module c930_axi_dma_arb
 #(
   parameter int ADDR_WIDTH = 64,
   parameter int DATA_WIDTH = 64,
-  parameter int ID_WIDTH   = 4
+  parameter int ID_WIDTH   = 4,
+  // 2-bit base for the re-stamped source IDs ({base, owner}).  Shared L2 map:
+  //   2'b01 -> 4..7   = CPU1-I/D, CPU2-I/D   (arb1)
+  //   2'b10 -> 8..11  = NPU0, NPU1, CPU3-I/D (dma arb)
+  parameter logic [1:0] ARB_ID_BASE = 2'b00
 )
 (
   input  logic i_clk,
@@ -272,8 +276,10 @@ module c930_axi_dma_arb
     end
   end
 
-  // Read address channel: mux the granted owner's request
-  assign s_arid    = arid_v[rd_owner];
+  // Read address channel: mux the granted owner's request.  The AXI ID is
+  // re-stamped with {ARB_ID_BASE, owner} so the shared L2 can attribute the
+  // transaction to a specific cache/NPU for its coherence directory.
+  assign s_arid    = {ARB_ID_BASE[1:0], rd_owner};
   assign s_araddr  = araddr_v[rd_owner];
   assign s_arlen   = arlen_v[rd_owner];
   assign s_arsize  = arsize_v[rd_owner];
@@ -351,8 +357,8 @@ module c930_axi_dma_arb
     end
   end
 
-  // Write address channel
-  assign s_awid    = awid_v[wr_owner];
+  // Write address channel (ID re-stamped, see read channel note)
+  assign s_awid    = {ARB_ID_BASE[1:0], wr_owner};
   assign s_awaddr  = awaddr_v[wr_owner];
   assign s_awlen   = awlen_v[wr_owner];
   assign s_awsize  = awsize_v[wr_owner];

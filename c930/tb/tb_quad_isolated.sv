@@ -28,7 +28,13 @@ module tb_quad_isolated;
 
   c930_soc_top #(
     .DDR_INIT_FILE (""),
-    .BOOT_INIT_FILE ("sw/boot.hex")
+    .BOOT_INIT_FILE ("sw/boot.hex"),
+    .L2_NUM_SETS (16),
+    .L2_NUM_WAYS (1),  // tiny L2 for fast Icarus sim; same coherence behavior
+    // Bypass the L2 for this 4-hart boot test: the full L2 + 4 active cores
+    // exceeds iverilog's usable sim speed.  The L2 itself is verified by
+    // tb_l2_coherent (fast, standalone).
+    .BYPASS_L2 (1'b1)
   ) dut (
     .i_clk          (clk),
     .i_rst_n        (rst_n),
