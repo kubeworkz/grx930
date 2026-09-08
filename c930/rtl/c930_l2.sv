@@ -178,6 +178,11 @@ module c930_l2
     // miss would silently drop every allocation and force refill loops).
     for (j = 0; j < NUM_SETS; j++)
       victim_cnt[j] = '0;
+    // Write-log entries start invalid (see wr_log_match_idx note).
+    for (j = 0; j < WR_LOG_DEPTH; j++) begin
+      wr_log_valid[j] = 1'b0;
+      wr_log_done[j]  = 1'b1;   // nothing pending
+    end
   end
 
   // ---------------------------------------------------------------------------
@@ -186,6 +191,7 @@ module c930_l2
   logic [ADDR_WIDTH-1:0]  wr_log_line [0:WR_LOG_DEPTH-1];
   logic [7:0]             wr_log_seq  [0:WR_LOG_DEPTH-1];
   logic                   wr_log_done [0:WR_LOG_DEPTH-1];
+  logic                   wr_log_valid [0:WR_LOG_DEPTH-1];
   logic [7:0]             wr_log_head;   // next entry to write
   logic [7:0]             wr_seq;        // monotonic write sequence
   logic                   wr_log_full;
@@ -193,10 +199,15 @@ module c930_l2
   assign wr_log_full = (wr_seq - wr_log_head) >= WR_LOG_DEPTH;
 
   // Index of the FIRST log entry for 'line' with seq >= seq_floor, or -1.
+  // Empty entries (never allocated) are invalid and can NEVER match -- a
+  // zero-initialized {line=0, seq=0} entry would otherwise false-match the
+  // very first refill to line 0 at seq_floor=0 and hang the read FSM waiting
+  // for a write that never happened (Icarus started these arrays as X so
+  // never matched; Verilator starts them as 0).
   function automatic int wr_log_match_idx(input logic [ADDR_WIDTH-1:0] line,
                                           input logic [7:0] seq_floor);
     for (int e = 0; e < WR_LOG_DEPTH; e++)
-      if (wr_log_line[e] == line && wr_log_seq[e] >= seq_floor)
+      if (wr_log_valid[e] && wr_log_line[e] == line && wr_log_seq[e] >= seq_floor)
         return e;
     return -1;
   endfunction
@@ -488,14 +499,14 @@ module c930_l2
         m_araddr  = rd_addr;
         m_arlen   = rd_len;
         m_arvalid = 1'b1;
-        m_rready  = 1'b1;          // forward data as it arrives
+        m_rready  = s_rready;      // only consume a beat when the downstream master takes it
         s_rvalid  = m_rvalid;
         s_rdata   = m_rdata;
         s_rlast   = m_rlast;
         s_rid     = rd_id;
       end
       RD_BYPASS_R: begin
-        m_rready = 1'b1;
+        m_rready = s_rready;       // gate on downstream readiness (rready drops during DMA unpack)
         s_rvalid = m_rvalid;
         s_rdata  = m_rdata;
         s_rlast  = m_rlast;
@@ -556,9 +567,10 @@ module c930_l2
             wr_set   <= s_awaddr[OFF_BITS +: SET_BITS];
             wr_tag   <= s_awaddr[ADDR_WIDTH-1 -: TAG_BITS];
             // Log the write BEFORE it becomes visible.
-            wr_log_line[wr_log_head] <= s_awaddr;
-            wr_log_seq[wr_log_head]  <= wr_seq;
-            wr_log_done[wr_log_head] <= 1'b0;
+            wr_log_line[wr_log_head]  <= s_awaddr;
+            wr_log_seq[wr_log_head]   <= wr_seq;
+            wr_log_done[wr_log_head]  <= 1'b0;
+            wr_log_valid[wr_log_head] <= 1'b1;
             wr_entry    <= wr_log_head;
             // Evaluate the hit from the INCOMING address, not the captured
             // wr_set/wr_tag (those only update this cycle, so they still hold
