@@ -444,7 +444,17 @@ module c930_l2
   // ---------------------------------------------------------------------------
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      // (valid/sharers initialized by the initial block; tags don't matter)
+      // Flush the L2 on reset.  The L1 caches clear their valid bits on reset
+      // too, so a reset that reboots firmware from DDR (rewritten behind the
+      // L2's back by a loader/bootrom) must not let the L2 serve stale lines
+      // from the previous boot.  (valid/sharers were previously cleared only
+      // by the initial block, so a mid-test reset left the directory holding
+      // lines whose memory content had changed.)
+      for (int w = 0; w < NUM_WAYS; w++)
+        for (int j = 0; j < NUM_SETS; j++) begin
+          valid_mem[w][j] <= 1'b0;
+          sharers[w][j]   <= '0;
+        end
     end else begin
       // Read path
       if (rd_state == RD_LOOKUP && rd_hit) begin
@@ -557,6 +567,11 @@ module c930_l2
       wr_inv_mask <= '0;
       wr_entry  <= '0;
       aw_ok     <= 1'b0;
+      // Drop any in-flight write-log entries (see reset-flush note above).
+      for (int e = 0; e < WR_LOG_DEPTH; e++) begin
+        wr_log_valid[e] <= 1'b0;
+        wr_log_done[e]  <= 1'b1;
+      end
     end else begin
       case (wr_state)
         WR_IDLE: begin
