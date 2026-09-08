@@ -67,7 +67,15 @@ module riscv_core_dcache_controller #(
     output logic [CORE_DATA_WIDTH-1 : 0] o_mmio_write_data,
     output logic [                7 : 0] o_mmio_write_strobe,
     output logic                        o_mmio_write_valid,
-    input  logic                        i_mmio_write_done
+    input  logic                        i_mmio_write_done,
+
+    // Coherence invalidation (from the shared L2).  i_inv_valid stays high
+    // until o_inv_ack.  The ack means ACCEPTED: the line will be cleared in
+    // IDLE before any subsequent core request is serviced (clear-before-use),
+    // so the L2 never deadlocks waiting for a busy cache.
+    input  logic                        i_inv_valid,
+    input  logic [ADDR_WIDTH-1     : 0] i_inv_addr,
+    output logic                        o_inv_ack
 );
 
 ///////////////////////////////////////////////
@@ -138,6 +146,12 @@ initial begin
 end
 
 logic                      update_en;
+// One pending coherence invalidation slot (accepted in any state, applied in
+// IDLE before the next core request).
+logic                      pending_inv = 1'b0;
+logic [ADDR_WIDTH-1:0]     pending_inv_addr = 'b0;
+
+assign o_inv_ack = i_inv_valid && !pending_inv;
 logic                      tag_hit;
 logic                      fault;
 
@@ -173,11 +187,17 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         RES_SET_SIZE <= 0;
         amo_sc_serviced <= 0;
         mmio_wr_addr_r <= 0;
+        pending_inv <= 1'b0;
         STATE <= IDLE;
     end
 
     else 
     begin
+        // Accept a coherence invalidation (one pending slot).
+        if (i_inv_valid && !pending_inv) begin
+            pending_inv      <= 1'b1;
+            pending_inv_addr <= i_inv_addr;
+        end
         STATE <= NEXT ;
         VALID_RES <= NEXT_VALID_RES;
         RES_SET <= NEXT_RES_SET;
@@ -196,6 +216,14 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // registers in synthesis, killing DPR16X4 inference.)
         if (update_en) begin
            VALID_MEM     [  i_addr_from_core[`INDEX]   ] <= 1'b1; 
+        end
+        // Apply a pending coherence invalidation in IDLE, tag-checked, before
+        // the next core request is serviced.  Placed after the update_en
+        // write so a same-cycle valid-set loses to the invalidation.
+        if (STATE == IDLE && pending_inv) begin
+            pending_inv <= 1'b0;
+            if (TAG_MEM[pending_inv_addr[`INDEX]] == pending_inv_addr[`TAG])
+                VALID_MEM[pending_inv_addr[`INDEX]] <= 1'b0;
         end
     end
 end
@@ -269,6 +297,12 @@ NEXT_RES_SET_SIZE = RES_SET_SIZE;
 case (STATE)
     IDLE   : begin
         // DEFAULT VALUES FOR IDLE//
+        // COHERENCE INVALIDATION: service the pending clear before any core
+        // request (the clear itself is in the NEXT_STATE_ASSIGN block).
+        if (pending_inv) begin
+            o_stall = 1;
+            NEXT = IDLE;
+        end else begin
 
         o_rd_en = 0;
         o_wr_en = 0;
@@ -419,14 +453,10 @@ case (STATE)
                     o_mem_read_req = 1;
                     o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
-                end    
-            end    
+                end
+            end
+        end
     end
-
-
-
-
-
      LOAD_DONE : begin
 
         // The registered read from the previous cycle is valid now; release

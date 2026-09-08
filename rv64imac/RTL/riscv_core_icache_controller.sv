@@ -27,7 +27,15 @@ module riscv_core_icache_controller #(
     input  logic                        i_mem_done,
     output logic                        o_offset,
     // Latched address of the line being filled (stable across the fill).
-    output logic [ADDR_WIDTH-1     : 0] o_fill_addr
+    output logic [ADDR_WIDTH-1     : 0] o_fill_addr,
+
+    // Coherence invalidation (from the shared L2).  i_inv_valid stays high
+    // until o_inv_ack.  The ack means ACCEPTED: the line will be cleared in
+    // IDLE before any subsequent core request is serviced (clear-before-use),
+    // so the L2 never deadlocks waiting for a busy cache.
+    input  logic                        i_inv_valid,
+    input  logic [ADDR_WIDTH-1     : 0] i_inv_addr,
+    output logic                        o_inv_ack
 );
 //             LOCAL PARAMETERS              //
 localparam CACHE_DEPTH = 2**INDEX_WIDTH ;
@@ -66,6 +74,13 @@ logic [ADDR_WIDTH-1      : 0] served_pc = 'b0;
 // decodes as "compressed" -> PC slips +2 and the stream desyncs forever).
 // Hold one extra stalled IDLE cycle to refresh read_data_reg first.
 logic                       post_fill = 1'b0;
+// One pending coherence invalidation slot (accepted in any state, applied in
+// IDLE before the next core request).  The L2 never issues two overlapping
+// invalidations to the same cache: it holds inv_valid until the ack.
+logic                       pending_inv = 1'b0;
+logic [ADDR_WIDTH-1:0]      pending_inv_addr = 'b0;
+
+assign o_inv_ack = i_inv_valid && !pending_inv;
 // Initializers keep the combinational FSM/tag logic defined before the first
 // reset edge (Icarus would otherwise cascade X through the cache at t=0).
 initial begin
@@ -88,9 +103,22 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         fill_s2 <= 1'b0;
         served_pc <= 'b0;
         post_fill <= 1'b0;
+        pending_inv <= 1'b0;
     end
     else 
     begin
+        // Accept a coherence invalidation (one pending slot).
+        if (i_inv_valid && !pending_inv) begin
+            pending_inv      <= 1'b1;
+            pending_inv_addr <= i_inv_addr;
+        end
+        // Apply it in IDLE: clear the line (tag-checked) before the next
+        // core request is serviced.
+        if (STATE == IDLE && pending_inv) begin
+            pending_inv <= 1'b0;
+            if (TAG_MEM[pending_inv_addr[`INDEX]] == pending_inv_addr[`TAG])
+                VALID_MEM[pending_inv_addr[`INDEX]] <= 1'b0;
+        end
         STATE <= NEXT ;
         // post_fill: high during the first IDLE cycle after a fill write.
         if (STATE == UPDATE_CACHE)      post_fill <= 1'b1;
@@ -173,6 +201,12 @@ case (STATE)
         o_stall = 0;
         o_mem_req = 0;
         update_en = 0;
+        // COHERENCE INVALIDATION: service the pending clear before any core
+        // request (the clear itself is in the NEXT_STATE_ASSIGN block).
+        if (pending_inv) begin
+            o_stall = 1;
+            NEXT = IDLE;
+        end else begin
         // READING SCINARIOs //
             if (!miss) begin // READ HIT (registered read: stall 1 cycle so the
                              // core samples the word from read_data_reg in LOAD_DONE)
@@ -195,7 +229,8 @@ case (STATE)
                 else if (s2)    //if s2 then get the next block from the start  //
                     o_addr_from_control_to_axi = {i_addr_from_core_next_block[`TAG],i_addr_from_core_next_block[`INDEX],`OFFSET'b0};
                 NEXT = MEM_REQ;
-            end        
+            end
+        end
     end
     MEM_REQ : begin
         o_rd_en = 0;

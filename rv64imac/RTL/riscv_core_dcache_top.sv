@@ -62,6 +62,12 @@ module riscv_core_dcache_top#(
     output logic [                7 : 0] o_mmio_write_strobe,
     output logic                        o_mmio_write_valid,
     input  logic                        i_mmio_write_done
+,
+
+    // Coherence invalidation (from the shared L2)
+    input  logic                        i_inv_valid,
+    input  logic [ADDR_WIDTH-1     : 0] i_inv_addr,
+    output logic                        o_inv_ack
 );
 
 ////////////////////////////////
@@ -140,6 +146,9 @@ riscv_core_dcache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH),
     .o_mmio_write_strobe(o_mmio_write_strobe),
     .o_mmio_write_valid(o_mmio_write_valid),
     .i_mmio_write_done(i_mmio_write_done),
+    .i_inv_valid(i_inv_valid),
+    .i_inv_addr(i_inv_addr),
+    .o_inv_ack(o_inv_ack),
     .o_store_fault(o_store_fault),
     .o_load_fault(o_load_fault),
     .o_amo_fault(o_amo_fault),

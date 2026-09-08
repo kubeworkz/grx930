@@ -22,7 +22,12 @@ module riscv_core_icache_top#(
     output logic [ADDR_WIDTH-1     : 0] o_addr_from_control_to_axi,
     output logic                        o_mem_req,
     input  logic                        i_mem_done,
-    input  logic [AXI_DATA_WIDTH-1 : 0] i_block_from_axi
+    input  logic [AXI_DATA_WIDTH-1 : 0] i_block_from_axi,
+
+    // Coherence invalidation (from the shared L2)
+    input  logic                        i_inv_valid,
+    input  logic [ADDR_WIDTH-1     : 0] i_inv_addr,
+    output logic                        o_inv_ack
 );
 //      INTERNAL REGISTERS    //
 logic                         control_to_mem_rd_en;
@@ -43,7 +48,10 @@ riscv_core_icache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH))
     .o_mem_req(o_mem_req),
     .i_mem_done(i_mem_done),
     .o_offset(control_to_mem_offset),
-    .o_fill_addr(control_to_mem_fill_addr));
+    .o_fill_addr(control_to_mem_fill_addr),
+    .i_inv_valid(i_inv_valid),
+    .i_inv_addr(i_inv_addr),
+    .o_inv_ack(o_inv_ack));
 riscv_core_icache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_memory (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),

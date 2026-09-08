@@ -40,7 +40,16 @@ module riscv_core_top
   output logic [63:0] o_mmio_write_data,
   output logic [7:0]  o_mmio_write_strobe,
   output logic        o_mmio_write_valid,
-  input  logic        i_mmio_write_done
+  input  logic        i_mmio_write_done,
+
+  // Coherence invalidation from the shared L2 (I-cache and D-cache).
+  // i_*_inv_valid stays high until o_*_inv_ack (clear-before-use semantics).
+  input  logic        i_icache_inv_valid,
+  input  logic [63:0] i_icache_inv_addr,
+  output logic        o_icache_inv_ack,
+  input  logic        i_dcache_inv_valid,
+  input  logic [63:0] i_dcache_inv_addr,
+  output logic        o_dcache_inv_ack
 );
 //-------------Local Parameters-------------//
 //-------------IF Intermediate Signals-------------//
@@ -382,6 +391,9 @@ u_riscv_core_i_cache_top
     ,.o_mem_req(o_mem_req)
     ,.i_mem_done(i_mem_done)
     ,.i_block_from_axi(i_block_from_axi_i_cache)
+    ,.i_inv_valid(i_icache_inv_valid)
+    ,.i_inv_addr(i_icache_inv_addr)
+    ,.o_inv_ack(o_icache_inv_ack)
 );
 
 
@@ -1640,6 +1652,9 @@ u_riscv_core_dcache_top
     ,.o_mmio_write_strobe(o_mmio_write_strobe)
     ,.o_mmio_write_valid(o_mmio_write_valid)
     ,.i_mmio_write_done(i_mmio_write_done)
+    ,.i_inv_valid(i_dcache_inv_valid)
+    ,.i_inv_addr(i_dcache_inv_addr)
+    ,.o_inv_ack(o_dcache_inv_ack)
 );
 
 riscv_core_ldextend #(
