@@ -354,6 +354,12 @@ module c930_axi_dma_arb
         if (s_awvalid && s_awready) begin
           wr_addr_phase <= 1'b0;
           wr_active     <= 1'b1;  // data phase starts
+        end else if (!awvalid_v[wr_owner]) begin
+          // The granted master withdrew awvalid before the handshake
+          // completed (AXI allows withdrawal before acceptance).  Abandon
+          // the pending grant so we don't strand the slave waiting on a
+          // transaction that will never present.
+          wr_addr_phase <= 1'b0;
         end
       end else begin
         if (s_bvalid && s_bready) begin

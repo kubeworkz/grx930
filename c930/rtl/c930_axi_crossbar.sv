@@ -438,6 +438,7 @@ module c930_axi_crossbar
   logic [1:0] w_grant;
   logic [1:0] w_rr_ptr;
   logic       w_active;
+  logic       w_aw_accepted;  // AW handshake completed for the current grant
 
   logic [3:0] w_req;
   assign w_req = {m3_awvalid, m2_awvalid, m1_awvalid, m0_awvalid};
@@ -475,10 +476,12 @@ module c930_axi_crossbar
       w_grant   <= '0;
       w_rr_ptr  <= '0;
       w_active  <= 1'b0;
+      w_aw_accepted <= 1'b0;
     end else begin
       case (w_state)
         W_IDLE: begin
           w_active <= 1'b0;
+          w_aw_accepted <= 1'b0;
           if (w_req[w_rr_ptr]) begin
             w_grant  <= w_rr_ptr;
             w_state  <= W_GRANTED;
@@ -504,6 +507,16 @@ module c930_axi_crossbar
         W_GRANTED: begin
           // Wait for write response on the shared write bus
           if (w_shared_bvalid && w_shared_bready) begin
+            w_active <= 1'b0;
+            w_state  <= W_IDLE;
+          end else if (w_shared_awvalid && w_shared_awready) begin
+            // AW accepted — the transaction is committed; B will follow.
+            w_aw_accepted <= 1'b1;
+          end else if (!w_aw_accepted && !w_shared_awvalid) begin
+            // The granted master withdrew awvalid before the slave accepted
+            // (AXI permits withdrawal before acceptance).  Abandon the grant;
+            // otherwise the write channel waits forever on a B response that
+            // will never arrive and blocks every other master.
             w_active <= 1'b0;
             w_state  <= W_IDLE;
           end
