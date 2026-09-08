@@ -244,7 +244,24 @@ verilate-soc4: $(SW_HEX)
 # oss-cad-suite verilator_bin.exe only generates C++; firmware paths are
 # relative, so run from the c930 dir).
 verilate-soc4-run: verilate-soc4
-	@bash synth_xilinx/build_soc4_verilator_wsl.sh run
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run quad
+
+# Test-4 firmware images for the suite harness (extracted from the SV TB so
+# the Verilator suite mode and the iverilog full-SoC suite stay in lockstep).
+$(BUILD_DIR)/tb4_suite_fw.stamp: tb/tb_c930_soc_full.sv sw/gen_tb4_suite_fw.py
+	@python sw/gen_tb4_suite_fw.py
+	@mkdir -p $(BUILD_DIR)
+	@touch $@
+
+# Full-SoC NPU firmware suite at hardware speed (L2 ACTIVE): CPU0 boots the
+# Test-4 phase-1 firmware (queues 4 mixed-precision GEMMs, drains), reboots
+# into the phase-2 verification firmware (reads all C back via the D-cache
+# through the L2), then checks the per-GEMM error masks are zero.
+verilate-soc4-suite: $(BUILD_DIR)/tb4_suite_fw.stamp
+	@echo "[tb4] firmware images ready"
+
+verilate-soc4-suite-run: verilate-soc4 verilate-soc4-suite
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run suite
 
 # Standalone NPU DPI wrapper for grxcp backend testing
 NPU_DPI_RTL := $(NPU_RTL) rtl/c930_npu_top.sv
