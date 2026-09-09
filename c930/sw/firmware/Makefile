@@ -20,16 +20,18 @@ CFLAGS = -march=rv64imac -mabi=lp64 -O2 -Wall -Wextra \
 LDFLAGS = -T linker.ld -nostdlib -nostartfiles -static \
           -Wl,--gc-sections
 
+# Target firmware (default: command processor, alternatives: uart_echo_test)
+TARGET ?= main
+
 # Sources
-SRCS = main.c
+SRCS = $(TARGET).c
 ASM_SRCS = start.S
 OBJS = $(SRCS:.c=.o) $(ASM_SRCS:.S=.o)
 
 # Output
-TARGET = firmware
-ELF = $(TARGET).elf
-BIN = $(TARGET).bin
-HEX = $(TARGET).hex
+ELF = firmware_$(TARGET).elf
+BIN = firmware_$(TARGET).bin
+HEX = firmware_$(TARGET).hex
 
 # Default target
 all: $(ELF) $(BIN) $(HEX)
@@ -57,16 +59,21 @@ $(HEX): $(ELF)
 
 # Generate disassembly for debugging
 disasm: $(ELF)
-	$(OBJDUMP) -d $< > $(TARGET).dis
+	$(OBJDUMP) -d $< > firmware_$(TARGET).dis
 
 # Clean
 clean:
-	rm -f $(OBJS) $(ELF) $(BIN) $(HEX) $(TARGET).dis
+	rm -f $(OBJS) $(ELF) $(BIN) $(HEX) firmware_*.dis firmware_*.elf firmware_*.bin firmware_*.hex
 
 # Flash via UART (example — replace with your actual flash command)
 flash: $(BIN)
 	@echo "Flash command not implemented — update this target for your hardware"
 	@echo "Example: python3 flash_tool.py --port /dev/ttyUSB0 --file $(BIN)"
+
+# Run UART echo test (host side)
+test-echo:
+	@echo "Run: python3 test_uart_echo.py --port /dev/ttyUSB0"
+	@echo "Or:  python3 test_uart_echo.py --port /dev/ttyUSB0 --interactive"
 
 # Debug: print section sizes
 info: $(ELF)
