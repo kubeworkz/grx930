@@ -1,0 +1,107 @@
+# GRX930 Verilator UART Test Makefile
+#
+# Builds a Verilator simulation of the GRX930 SoC with UART communication.
+#
+# Usage:
+#   make -f Makefile.verilator
+#   ./obj_dir/Vc930_uart_test ../sw/firmware/firmware_uart_echo_test.bin
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+RTL_DIR = ../c930/rtl
+SIM_DIR = .
+OBJ_DIR = obj_dir
+
+# Top module
+TOP = c930_soc4_verilator
+
+# Verilator flags
+VERILATOR = verilator
+VERILATOR_FLAGS = \
+    --cc \
+    --exe \
+    --build \
+    --trace \
+    -Wall \
+    -Wno-DECLFILENAME \
+    -Wno-UNUSED \
+    --top-module $(TOP) \
+    --Mdir $(OBJ_DIR)
+
+# Include paths
+INCLUDES = -I$(RTL_DIR)
+
+# RTL sources
+RTL_SRCS = \
+    $(RTL_DIR)/c930_soc_top.sv \
+    $(RTL_DIR)/c930_aplic.sv \
+    $(RTL_DIR)/c930_axi_cache_adapter.sv \
+    $(RTL_DIR)/c930_axi_crossbar.sv \
+    $(RTL_DIR)/c930_axi_dma_arb.sv \
+    $(RTL_DIR)/c930_bf16_mul.sv \
+    $(RTL_DIR)/c930_bootrom.sv \
+    $(RTL_DIR)/c930_cla_comp.sv \
+    $(RTL_DIR)/c930_cla_sub.sv \
+    $(RTL_DIR)/c930_ddr.sv \
+    $(RTL_DIR)/c930_ddr3l.sv \
+    $(RTL_DIR)/c930_fp16_acc.sv \
+    $(RTL_DIR)/c930_fp16_acc_nf.sv \
+    $(RTL_DIR)/c930_fp16_mul.sv \
+    $(RTL_DIR)/c930_fp32_acc.sv \
+    $(RTL_DIR)/c930_fp_mul.sv \
+    $(RTL_DIR)/c930_fx_acc.sv \
+    $(RTL_DIR)/c930_l2.sv \
+    $(RTL_DIR)/c930_mmio_arb.sv \
+    $(RTL_DIR)/c930_mmio_bridge.sv \
+    $(RTL_DIR)/c930_npu_core.sv \
+    $(RTL_DIR)/c930_npu_csr.sv \
+    $(RTL_DIR)/c930_npu_dma.sv \
+    $(RTL_DIR)/c930_npu_top.sv \
+    $(RTL_DIR)/c930_soc4_verilator.sv \
+    $(RTL_DIR)/c930_systolic_array.sv \
+    $(RTL_DIR)/c930_tensor_pe.sv \
+    $(RTL_DIR)/c930_uart.sv
+
+# Testbench
+TB_SRC = tb_uart_verilator.cpp
+
+# ============================================================================
+# Targets
+# ============================================================================
+
+.PHONY: all clean run
+
+all: $(OBJ_DIR)/V$(TOP)
+
+$(OBJ_DIR)/V$(TOP): $(RTL_SRCS) $(TB_SRC)
+	$(VERILATOR) $(VERILATOR_FLAGS) $(INCLUDES) $(RTL_SRCS) $(TB_SRC)
+
+run: $(OBJ_DIR)/V$(TOP)
+	./$(OBJ_DIR)/V$(TOP) ../sw/firmware/firmware_uart_echo_test.bin
+
+clean:
+	rm -rf $(OBJ_DIR)
+	rm -f *.log *.vcd
+
+# ============================================================================
+# Debug
+# ============================================================================
+
+# Run with VCD dump for waveform viewing
+run-vcd: $(OBJ_DIR)/V$(TOP)
+	./$(OBJ_DIR)/V$(TOP) ../sw/firmware/firmware_uart_echo_test.bin
+	gtkwave trace.vcd
+
+# Run with limited cycles
+run-limited: $(OBJ_DIR)/V$(TOP)
+	./$(OBJ_DIR)/V$(TOP) ../sw/firmware/firmware_uart_echo_test.bin 100000
+
+# Verilate only (no build)
+verilate:
+	$(VERILATOR) --cc --trace -Wall $(INCLUDES) $(RTL_SRCS) --Mdir $(OBJ_DIR)
+
+# Build only (after verilate)
+build:
+	cd $(OBJ_DIR) && make -f V$(TOP).mk
