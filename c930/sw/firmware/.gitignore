@@ -1,0 +1,9 @@
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.hex
+*.dis
+
+# Dependencies
+*.d
