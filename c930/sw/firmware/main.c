@@ -26,6 +26,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "elf64.h"
 
 /* Minimal string functions for freestanding */
 static void* memcpy_f(void* dst, const void* src, size_t len) {
@@ -36,6 +37,10 @@ static void* memcpy_f(void* dst, const void* src, size_t len) {
     }
     return dst;
 }
+
+/* Forward declarations from elf64_loader.c */
+extern int elf64_load(const void *elf_data, size_t elf_size, uint64_t *entry_out);
+extern void elf64_print_info(const void *elf_data, size_t elf_size);
 
 // ============================================================================
 // Hardware Register Map (must match VX_types.vh)
@@ -81,11 +86,33 @@ void uart_write(uint8_t c) {
     UART_TX_REG = c;
 }
 
+void uart_write_string(const char* str) {
+    while (*str) {
+        uart_write(*str++);
+    }
+}
+
 void uart_write_bytes(const void* data, size_t len) {
     const uint8_t* src = (const uint8_t*)data;
     for (size_t i = 0; i < len; i++) {
         uart_write(src[i]);
     }
+}
+
+void uart_write_hex32(uint32_t val) {
+    const char hex[] = "0123456789ABCDEF";
+    uart_write(hex[(val >> 24) & 0x0F]);
+    uart_write(hex[(val >> 20) & 0x0F]);
+    uart_write(hex[(val >> 16) & 0x0F]);
+    uart_write(hex[(val >> 12) & 0x0F]);
+    uart_write(hex[(val >> 8) & 0x0F]);
+    uart_write(hex[(val >> 4) & 0x0F]);
+    uart_write(hex[val & 0x0F]);
+}
+
+void uart_write_hex64(uint64_t val) {
+    uart_write_hex32((uint32_t)(val >> 32));
+    uart_write_hex32((uint32_t)(val & 0xFFFFFFFF));
 }
 
 void uart_read_bytes(void* data, size_t len) {
@@ -100,7 +127,10 @@ int main(void);
 void uart_init(void);
 uint8_t uart_read(void);
 void uart_write(uint8_t c);
+void uart_write_string(const char* str);
 void uart_write_bytes(const void* data, size_t len);
+void uart_write_hex32(uint32_t val);
+void uart_write_hex64(uint64_t val);
 void uart_read_bytes(void* data, size_t len);
 void cp_reg_write(uint32_t addr, uint32_t value);
 uint32_t cp_reg_read(uint32_t addr);
@@ -193,16 +223,32 @@ static int kernel_running = 0;
 
 /**
  * Load an ELF binary into memory and prepare for execution.
- * This is a simplified version — real implementation would parse ELF headers.
+ * Uses the ELF64 parser to load segments to correct addresses.
  */
 int load_kernel(uint64_t load_addr, const void* elf_data, size_t elf_size) {
-    // TODO: Parse ELF headers, load segments to correct addresses
-    // For now, just copy the entire binary
-    memcpy_f((void*)load_addr, elf_data, elf_size);
+    (void)load_addr;  // Not used — ELF loader places segments at their virtual addresses
+    uint64_t entry;
 
-    // TODO: Find entry point from ELF header
-    // For now, assume entry is at load_addr + 0x1000 (typical offset)
-    kernel_entry = (kernel_entry_t)(load_addr + 0x1000);
+    // Print ELF info for debugging
+    elf64_print_info(elf_data, elf_size);
+
+    // Load ELF binary using proper parser
+    int result = elf64_load(elf_data, elf_size, &entry);
+
+    if (result != 0) {
+        // ELF load failed
+        uart_write_string("ELF load failed: ");
+        uart_write((uint8_t)('0' + (-result)));
+        uart_write_string("\r\n");
+        return -1;
+    }
+
+    // Set kernel entry point from ELF header
+    kernel_entry = (kernel_entry_t)entry;
+
+    uart_write_string("Kernel loaded at entry=0x");
+    uart_write_hex64(entry);
+    uart_write_string("\r\n");
 
     return 0;
 }
