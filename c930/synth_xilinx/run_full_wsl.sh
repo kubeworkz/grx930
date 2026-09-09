@@ -11,16 +11,21 @@
 #   wsl.exe -e bash -lc 'tail -20 /tmp/vivado_full.log')
 # -----------------------------------------------------------------------------
 
+# Log to a persistent repo path (/mnt/c): /tmp lives in the VM and is wiped
+# every time Windows tears the utility VM down, destroying the evidence of
+# why an attempt died.
+PLOG=/mnt/c/Users/kubew/grx930/c930/build/vivado/full_flow_console.log
+
 source /mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh >/dev/null 2>&1 || {
-    echo "ERROR: Vivado settings64.sh not found" >> /tmp/vivado_full.log
+    echo "ERROR: Vivado settings64.sh not found" >> "$PLOG"
     exit 1
 }
 export XILINXD_LICENSE_FILE="$HOME/.Xilinx/Xilinx.lic"
 
 cd /mnt/c/Users/kubew/grx930/c930 || exit 1
 
-echo "=== full flow started $(date) ===" >> /tmp/vivado_full.log
-bash synth_xilinx/create_and_synth.sh >> /tmp/vivado_full.log 2>&1
+echo "=== full flow started $(date) ===" >> "$PLOG"
+bash synth_xilinx/create_and_synth.sh >> "$PLOG" 2>&1
 rc=$?
-echo "=== full flow finished $(date) rc=$rc ===" >> /tmp/vivado_full.log
+echo "=== full flow finished $(date) rc=$rc ===" >> "$PLOG"
 exit $rc
