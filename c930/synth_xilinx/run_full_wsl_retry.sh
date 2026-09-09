@@ -68,7 +68,10 @@ fi
 # watchdog must be root, so re-enter WSL as root to launch it detached.
 if ! pgrep -f 'mac_watchdo[g]' >/dev/null 2>&1; then
     echo "starting mac watchdog" >> "$LOG"
-    wsl.exe -u root -e bash -c "setsid nohup bash $REPO/synth_xilinx/mac_watchdog.sh >/dev/null 2>&1 < /dev/null &" >/dev/null 2>&1
+    # The trailing sleep keeps the nested wsl.exe session alive long enough
+    # for the daemonized child to finish detaching -- without it WSL kills
+    # the watchdog when the parent session exits.
+    wsl.exe -u root -e bash -c "setsid nohup bash $REPO/synth_xilinx/mac_watchdog.sh >/dev/null 2>&1 < /dev/null & sleep 3" >/dev/null 2>&1
 fi
 
 # ---- launch the flow --------------------------------------------------------
