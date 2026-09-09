@@ -24,64 +24,49 @@
 #include <stddef.h>
 
 // ============================================================================
-// Hardware Register Map (must match your GRX930 UART)
+// Hardware Register Map (c930_uart.sv, AXI4-Lite slave at 0x4000_1000)
 // ============================================================================
+#define UART_BASE       0x40001000ULL
 
-// TODO: Replace with your actual UART base address
-#define UART_BASE       0x10000000ULL
+// UART registers (offsets per c930_uart.sv)
+#define UART_TX_REG     (*(volatile uint32_t*)(UART_BASE + 0x00))  // W: TX data
+#define UART_RX_REG     (*(volatile uint32_t*)(UART_BASE + 0x04))  // R: RX data
+#define UART_STATUS_REG (*(volatile uint32_t*)(UART_BASE + 0x08))  // R: status
+#define UART_CTRL_REG   (*(volatile uint32_t*)(UART_BASE + 0x0C))  // R/W: CTRL[15:0] = baud divisor
+#define UART_IRQ_EN_REG (*(volatile uint32_t*)(UART_BASE + 0x10))  // R/W: IRQ enables
 
-// UART registers (example — adjust offsets for your UART IP)
-#define UART_TX_REG     (*(volatile uint32_t*)(UART_BASE + 0x00))
-#define UART_RX_REG     (*(volatile uint32_t*)(UART_BASE + 0x04))
-#define UART_STATUS_REG (*(volatile uint32_t*)(UART_BASE + 0x08))
-#define UART_CTRL_REG   (*(volatile uint32_t*)(UART_BASE + 0x0C))
-#define UART_BAUD_REG   (*(volatile uint32_t*)(UART_BASE + 0x10))
+// Status register bits (c930_uart.sv)
+#define UART_TX_FULL    (1 << 0)  // TX FIFO full
+#define UART_RX_EMPTY   (1 << 1)  // RX FIFO empty
+#define UART_TX_DONE    (1 << 2)  // TX shift register done
 
-// Status register bits
-#define UART_TX_READY   (1 << 0)  // TX FIFO not full
-#define UART_RX_VALID   (1 << 1)  // RX FIFO not empty
-#define UART_TX_EMPTY   (1 << 2)  // TX FIFO empty
-#define UART_RX_OVERRUN (1 << 3)  // RX overrun error
-
-// Control register bits
-#define UART_TX_EN      (1 << 0)
-#define UART_RX_EN      (1 << 1)
-#define UART_TX_IRQ_EN  (1 << 2)
-#define UART_RX_IRQ_EN  (1 << 3)
-
-// LED (if available)
-#define LED_BASE        0x20000000ULL
-#define LED_REG         (*(volatile uint32_t*)(LED_BASE))
+// Control register: CTRL[15:0] = baud divisor (baud = clk/(div+1)/16).
+// Default divisor (100 MHz -> 115200) is 53; no enable bits exist.
+#define UART_DIV_115200 53
 
 // ============================================================================
 // UART Driver
 // ============================================================================
 
-void uart_init(uint32_t baud_div) {
-    // Enable TX and RX
-    UART_CTRL_REG = UART_TX_EN | UART_RX_EN;
-
-    // Set baud rate divider
-    UART_BAUD_REG = baud_div;
-
-    // Wait for TX to be ready
-    while (!(UART_STATUS_REG & UART_TX_READY));
+void uart_init(void) {
+    // Set the baud divisor explicitly (default is already 53 @ 100 MHz).
+    UART_CTRL_REG = UART_DIV_115200;
 }
 
 void uart_write_char(uint8_t c) {
-    // Wait for TX FIFO to have space
-    while (!(UART_STATUS_REG & UART_TX_READY));
+    // Wait until the TX FIFO has space (bit0 = TX full)
+    while (UART_STATUS_REG & UART_TX_FULL);
     UART_TX_REG = c;
 }
 
 uint8_t uart_read_char(void) {
-    // Wait for RX data
-    while (!(UART_STATUS_REG & UART_RX_VALID));
+    // Wait until RX data is available (bit1 = RX empty)
+    while (UART_STATUS_REG & UART_RX_EMPTY);
     return (uint8_t)(UART_RX_REG & 0xFF);
 }
 
 int uart_rx_available(void) {
-    return (UART_STATUS_REG & UART_RX_VALID) != 0;
+    return !(UART_STATUS_REG & UART_RX_EMPTY);
 }
 
 void uart_write_string(const char* str) {
@@ -148,7 +133,6 @@ void handle_led(void) {
     // Toggle LED
     static uint32_t led_state = 0;
     led_state ^= 1;
-    LED_REG = led_state;
     uart_write_char('A');
 }
 
@@ -213,10 +197,8 @@ void startup_c(void) {
         *bss++ = 0;
     }
 
-    // Initialize UART (115200 baud — adjust divider for your clock)
-    // baud_div = clock_freq / (16 * baud_rate) - 1
-    // For 50 MHz clock: 50000000 / (16 * 115200) - 1 = 26
-    uart_init(26);
+    // Initialize UART (115200 baud)
+    uart_init();
 
     // Announce boot
     uart_write_string("\r\n=== GRX930 UART Echo Test ===\r\n");
