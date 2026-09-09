@@ -34,13 +34,17 @@ set_property generic {CLK_DIV=2} [current_fileset]
 set synth_status [get_property STATUS [get_runs synth_1]]
 if {![string match -nocase "*complete*" $synth_status]} {
     puts "INFO: Running synthesis..."
-    # -jobs 1: this dev machine has only 8 GB RAM; 2 jobs exhausted WSL's
-    # memory and swap-stormed mid-synthesis (VM wedged, no checkpoint saved)
     # RuntimeOptimized: cuts peak synth memory and wall time (fewer optimizer
     # passes) -- on this machine the default directive's 7.7 GB peak has
     # gotten the VM torn down repeatedly by host commit exhaustion.
+    # Note: this Vivado build rejects `-directive` on launch_runs (Common 17-170);
+    # the run *strategy* property is the portable way to select it.
     if {[llength [get_runs synth_1]] > 0} { reset_run synth_1 }
-    launch_runs synth_1 -jobs 1 -directive RuntimeOptimized
+    catch { set_property strategy Flow_RuntimeOptimized [get_runs synth_1] } strategyErr
+    if {[string length "$strategyErr"] > 0} {
+        puts "INFO: RuntimeOptimized strategy not set ($strategyErr); using defaults."
+    }
+    launch_runs synth_1 -jobs 1
     wait_on_run synth_1
     set synth_status [get_property STATUS [get_runs synth_1]]
 } else {
