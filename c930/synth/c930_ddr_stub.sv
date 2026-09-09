@@ -49,10 +49,12 @@ module c930_ddr
   input  logic i_clk,
   input  logic i_rst_n,
 
-  // ---- Testbench preload port (tied off in synthesis) ----
+  // ---- Testbench preload/readback ports (tied off in synthesis) ----
   input  logic        i_tb_wr_en,
   input  logic [31:0] i_tb_wr_addr,
   input  logic [7:0]  i_tb_wr_data,
+  input  logic [31:0] i_tb_rd_addr,
+  output logic [7:0]  o_tb_rd_data,
 
   // ---- CPU instruction-cache read port ----
   input  logic [ADDR_WIDTH-1:0]       i_icache_rd_addr,
@@ -107,6 +109,10 @@ module c930_ddr
   logic [31:0] mem [0:7][0:LINES-1];
 
   wire [3:0] ic_line  = i_icache_rd_addr[8:5];
+  // Byte readback for the testbench port, same addressing as the
+  // behavioral model: mem[bank][line], bank = addr[4:2], byte = addr[1:0].
+  assign o_tb_rd_data = mem[i_tb_rd_addr[4:2]][i_tb_rd_addr[8:5]][i_tb_rd_addr[1:0]*8 +: 8];
+
   wire [3:0] dc_line  = i_dcache_rd_addr[8:5];
   wire [3:0] dcw_line = i_dcache_wr_addr[8:5];
   wire [1:0] dcw_word = i_dcache_wr_addr[4:3];   // 64-bit word within the line

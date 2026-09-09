@@ -21,6 +21,8 @@ elif [ -f "/c/Xilinx/Vivado/2026.1/settings64.sh" ]; then
     source "/c/Xilinx/Vivado/2026.1/settings64.sh"
 elif [ -f "/mnt/c/Xilinx/Vivado/2026.1/settings64.sh" ]; then
     source "/mnt/c/Xilinx/Vivado/2026.1/settings64.sh"
+elif [ -f "/mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh" ]; then
+    source "/mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh"
 else
     echo "ERROR: Vivado settings64.sh not found. Install Vivado 2026.1 or adjust path."
     exit 1

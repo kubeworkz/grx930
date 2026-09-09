@@ -125,7 +125,12 @@ module c930_bootrom
     rom[24] = 64'h0000_0013_FE9F_F06F;
     // Only load if a real hex file is provided (not empty or placeholder)
     // Icarus crashes on $readmemh("")
-    $readmemh(HEX_FILE, rom);
+    // Synthesis: BOOT_HEX_FILE is defined by create_project.tcl with an
+    // absolute path (the synth run dir can't resolve relative paths).
+`ifndef BOOT_HEX_FILE
+    `define BOOT_HEX_FILE HEX_FILE
+`endif
+    $readmemh(`BOOT_HEX_FILE, rom);
   end
 
   // =========================================================================

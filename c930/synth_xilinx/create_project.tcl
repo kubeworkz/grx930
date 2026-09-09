@@ -41,12 +41,21 @@ add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/xc7a200t_c
 # ---- Top module ----
 set_property top c930_soc_top [current_fileset]
 
+# ---- Boot ROM hex: pass the absolute path as a define so $readmemh
+# ---- resolves in synthesis (launch_runs chdir's to the run dir, so
+# ---- relative "sw/boot.hex" is unreachable from there).
+set boot_hex [file normalize "[file dirname [info script]]/../sw/boot.hex"]
+puts "INFO: BOOT_HEX_FILE=$boot_hex"
+# Quote the value so the macro expands to a string literal in $readmemh, and
+# target sources_1 explicitly: after the constrs_1 add_files above,
+# current_fileset is constrs_1 and a define there never reaches xvlog.
+# NOTE: verilog_define is a single list property -- setting it again
+# REPLACES the list, so all defines go in ONE call on sources_1.
+set_property verilog_define [list {SYNTHESIS=1} BOOT_HEX_FILE=\"$boot_hex\"] [get_filesets sources_1]
+
+
 # ---- SystemVerilog ----
 set_property file_type SystemVerilog [get_files *.sv]
-
-# ---- Synthesis settings ----
-# Enable Verilog 2005 + SystemVerilog
-set_property verilog_define {SYNTHESIS=1} [current_fileset]
 
 puts "INFO: Project created at $proj_dir"
 puts "INFO: Part = $part"
