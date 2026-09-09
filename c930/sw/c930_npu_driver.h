@@ -72,7 +72,7 @@ extern "C" {
 #define NPU_REG_CYCLE_LO    (NPU0_BASE + 0x24)   // R: core cycles (state != S_IDLE), resets on i_start
 #define NPU_REG_DMA_LAST    (NPU0_BASE + 0x28)   // R: latched DMA cycle count, last completed GEMM
 #define NPU_REG_OP_COUNT    (NPU0_BASE + 0x2c)   // R: PE firings (NUM_ROWS*NUM_COLS per S_RUN cycle)
-#define NPU_REG_STALL_CT    (NPU0_BASE + 0x30)   // R: weight-load cycles (S_WLOAD)
+#define NPU_REG_STALL_CT    (NPU0_BASE + 0x30)   // R: weight-load cycles (S_WLOAD + S_PRELOAD)
 #define NPU_REG_DMA_CT      (NPU0_BASE + 0x34)   // R: live DMA busy cycles (phase != P_IDLE)
 #define NPU_REG_QUEUE_STAT  (NPU0_BASE + 0x38)   // R: [3:0] occupancy, [4] full
 #define NPU_REG_QUEUE_MAX   (NPU0_BASE + 0x3c)   // R: compile-time FIFO depth (CMD_QUEUE_DEPTH)
@@ -125,7 +125,9 @@ typedef struct {
     uint32_t core_cycles;  // CYCLE_LO: core cycles for the LAST command
     uint32_t dma_last;     // DMA_LAST: DMA busy cycles, last completed GEMM
     uint32_t ops;          // OP_COUNT: PE firings, last command
-    uint32_t stalls;       // STALL_CT: weight-load cycles, last command
+    uint32_t stalls;       // STALL_CT: weight-load cycles, last command.
+                           //   Covers every K tile, not just the first: expect
+                           //   ~M * ceil(N/NUM_COLS) * ceil(K/NUM_ROWS) * kr*nc.
     uint32_t dma_cycles;   // DMA_CT: live DMA busy cycles (read while busy)
 } npu_drv_stats_t;
 

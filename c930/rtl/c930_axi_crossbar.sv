@@ -10,10 +10,16 @@
 //   M3: CPU1 bus arb (CPU1 I/D caches, via c930_axi_dma_arb)
 //
 // Slaves (address-decoded):
-//   S0: Boot ROM   (0x0000_0000 – 0x0000_03FF, 1 KB, read-only)
-//   S1: DDR        (0x0000_1000 – 0x0000_FFFF, ~60 KB)
-//   S2: MMIO       (0x4000_0000 – 0x4000_FFFF, 64 KB, AXI4-Lite peripherals)
+//   S0: Boot ROM   (0x0001_0000 – 0x0001_03FF, 1 KB, read-only)
+//   S1: DDR        (0x0000_0000 – 0x0000_FFFF, 64 KB)
+//   S2: MMIO       (0x4000_0000 – 0x4000_FFFF, 64 KB) -- SLVERR stub in
+//                  c930_soc_top; peripheral CSRs are reached only through the
+//                  CPU's uncached MMIO bridge, never through this port.
 //   S3: UART       (0x4000_1000 – 0x4000_100F, 16 B)
+//
+// Decode order is DDR, Boot ROM, UART, MMIO, with unmapped addresses routed to
+// the UART port for a SLVERR response.  UART is therefore carved out of the
+// MMIO range rather than shadowed by it.
 //
 // Arbitration: round-robin per channel (read and write independent).
 // When a master wins arbitration, its AXI signals are forwarded to the

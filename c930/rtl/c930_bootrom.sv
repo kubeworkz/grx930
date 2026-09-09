@@ -4,7 +4,9 @@
 // 1 KB read-only Boot ROM. AXI4 full slave interface (read channel only).
 // Initialized from a hex file at synthesis time.
 //
-// Address space: 0x0000_0000 – 0x0000_03FF (1024 bytes)
+// Address space: 0x0001_0000 – 0x0001_03FF (1024 bytes), per BOOT_ROM_BASE in
+// c930_axi_crossbar.sv.  CPU1..CPU3 reset into it at 0x0001_0020/0060/00A0;
+// CPU0 resets to 0x0000_0000 in DDR.
 // Data width: 64 bits (8 bytes per beat, 128 beats for full ROM)
 // Burst: INCR, configurable length
 //

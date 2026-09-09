@@ -3,9 +3,11 @@
 //
 // Full C930-class SoC integrating:
 //
-//   * riscv_core_top       : CPU0 (RV64IMAC, 5-stage in-order, I/D caches)
-//   * riscv_core_top       : CPU1 (second core, boots at DDR[0x2000])
-//   * c930_npu_top         : NPU (AXI4-Lite CSR + AXI4 full DMA)
+//   * riscv_core_top       : CPU0 (RV64IMAC, 5-stage in-order, I/D caches),
+//                            resets to 0x0000_0000 in DDR
+//   * riscv_core_top (x3)  : CPU1..CPU3, reset into Boot ROM parking loops at
+//                            0x0001_0020 / 0x0001_0060 / 0x0001_00A0
+//   * c930_npu_top (x2)    : NPU0/NPU1 (AXI4-Lite CSR + AXI4 full DMA)
 //   * c930_axi_cache_adapter (x4) : CPU cache-line ports → AXI4 full master
 //   * c930_axi_crossbar    : 4-master × 4-slave AXI4 shared-bus crossbar
 //   * c930_axi_dma_arb     : NPU0+NPU1 DMA merge (M2) and CPU1 I/D merge (M3)
@@ -15,11 +17,23 @@
 //   * c930_uart            : 16550-compatible UART (AXI4-Lite slave)
 //   * c930_mmio_bridge     : CPU uncached MMIO → NPU AXI4-Lite CSR
 //
-// Memory map (byte addressed):
-//   0x0000_0000 .. 0x0000_03FF : Boot ROM (1 KB, read-only)
-//   0x0000_1000 .. 0x0000_FFFF : DDR (code + data + NPU A/B/C buffers)
-//   0x4000_0000 .. 0x4000_003F : NPU MMIO (via MMIO bridge, backward compat)
+// Memory map (byte addressed).  Two decoders, two views -- see
+// doc/c930_architecture.md section 2.
+//
+// AXI4 crossbar (CPU caches, NPU DMA):
+//   0x0000_0000 .. 0x0000_FFFF : DDR (code + data + NPU A/B/C buffers)
+//   0x0001_0000 .. 0x0001_03FF : Boot ROM (1 KB, read-only)
 //   0x4000_1000 .. 0x4000_100F : UART (16550, AXI4-Lite)
+//   0x4000_0000 .. 0x4000_FFFF : MMIO -- SLVERR stub, reaches no peripheral
+//
+// CPU uncached MMIO path (mmio_arb -> mmio_bridge -> the mux below):
+//   0x4000_0000 .. 0x4000_003F : NPU0 CSR (also the mux's DEFAULT target, so
+//                                unclaimed 0x4000_xxxx aliases onto it)
+//   0x4000_0040 .. 0x4000_007F : NPU1 CSR
+//   0x4000_0FF0                : HART_ID (bridge-intercepted)
+//   0x4000_0FF4/8/C            : CORE1/2/3_RELEASE (bridge-intercepted)
+//   0x4000_1000 .. 0x4000_1FFF : UART (16550, AXI4-Lite)
+//   0x4000_4000 .. 0x4000_4FFF : APLIC
 //
 // The CPU's data cache issues uncached MMIO transactions for addresses at or
 // above MMIO_BASE through the existing c930_mmio_bridge. Everything else

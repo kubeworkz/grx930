@@ -55,15 +55,79 @@ GEMM, and writes C back — no CPU data staging required.
 
 ## 2. Memory Map
 
-Flat, byte-addressed, 64-bit addresses (zero-extended from 32-bit):
+Flat, byte-addressed, 64-bit addresses (zero-extended from 32-bit).
 
-| Range | Size | Region | Access |
-|-------|------|--------|--------|
+There are **two independent decoders and they do not see the same map**, which
+is the thing most likely to mislead you here:
+
+- The **AXI4 crossbar** (`c930_axi_crossbar.sv`) decodes for the cached and DMA
+  masters — CPU I/D caches and the NPU DMA arbiter.
+- The **CPU uncached MMIO path** (`c930_mmio_arb.sv` → `c930_mmio_bridge.sv` →
+  the address mux in `c930_soc_top.sv`) decodes for uncached CPU loads and
+  stores, and it is the **only** path that reaches a peripheral register.
+
+### 2.1 AXI4 crossbar — cached and DMA masters
+
+| Range | Size | Slave | Access |
+|-------|------|-------|--------|
 | `0x0000_0000 .. 0x0000_FFFF` | 64 KB | DDR (code + data + NPU A/B/C buffers) | Cached (CPU) / AXI4 (NPU DMA) |
-| `0x4000_0000 .. 0x4000_001F` | 32 B | NPU MMIO control/status | Uncached (CPU MMIO bridge → AXI4-Lite) |
-| `0x4000_0020 .. 0xFFFF_FFFF` | — | Reserved | — |
+| `0x0001_0000 .. 0x0001_03FF` | 1 KB | Boot ROM | Read-only |
+| `0x4000_1000 .. 0x4000_100F` | 16 B | UART | AXI4-Lite |
+| `0x4000_0000 .. 0x4000_FFFF` less the UART window | 64 KB | MMIO stub | Returns SLVERR |
+| anything else | — | routed to the UART port | SLVERR |
 
-### DDR region (0x0000_0000 – 0x0000_FFFF)
+Two things here are easy to get wrong:
+
+- **The crossbar's MMIO slave is a stub.** `mmio_sl_bresp` is hardwired to
+  `2'b11` and `mmio_sl_rdata` to zero. No peripheral register is reachable
+  from the crossbar at all: an NPU DMA descriptor pointing into `0x4000_xxxx`
+  earns an error response, not a CSR access.
+- **UART is decoded before MMIO**, so its 16 bytes are carved out of the MMIO
+  range rather than shadowed by it. Unmapped addresses also land on the UART
+  port, where they take the SLVERR path.
+
+### 2.2 CPU uncached MMIO path — the only route to a peripheral
+
+| Range | Size | Target |
+|-------|------|--------|
+| `0x4000_0000 .. 0x4000_003F` | 64 B | NPU0 CSR |
+| `0x4000_0040 .. 0x4000_007F` | 64 B | NPU1 CSR |
+| `0x4000_0FF0` | 4 B | HART_ID (read-only: the requesting core) |
+| `0x4000_0FF4` | 4 B | CORE1_RELEASE |
+| `0x4000_0FF8` | 4 B | CORE2_RELEASE |
+| `0x4000_0FFC` | 4 B | CORE3_RELEASE |
+| `0x4000_1000 .. 0x4000_1FFF` | 4 KB | UART 16550 |
+| `0x4000_4000 .. 0x4000_4FFF` | 4 KB | APLIC |
+| any other `0x4000_xxxx` | — | falls through to NPU0 CSR — see below |
+
+`HART_ID` and the three `RELEASE` registers are intercepted and answered by
+`c930_mmio_bridge.sv` itself; they never reach the mux downstream.
+
+**NPU0 is the mux's default target, not a decoded range.** The RTL reads
+`w_to_npu0 = ~w_to_uart & ~w_to_npu1 & ~w_to_aplic`, and the NPU CSR file
+decodes only `addr[5:2]`, so every unclaimed address in the aperture aliases
+onto a real NPU0 register at 64-byte granularity — a stray uncached store to
+`0x4000_2000` writes `NPU0.CTRL`. Treat everything outside the table above as
+forbidden rather than as reserved.
+
+Note that the UART is 16 bytes on the crossbar and 4 KB on this path. The two
+decoders are genuinely different and neither is wrong on its own terms, but
+software that assumes one window size will be surprised by the other.
+
+### 2.3 Reset vectors
+
+| Core | Reset PC | Region |
+|------|----------|--------|
+| CPU0 | `0x0000_0000` (`CORE_RESET_PC` default) | DDR |
+| CPU1 | `0x0001_0020` | Boot ROM |
+| CPU2 | `0x0001_0060` | Boot ROM |
+| CPU3 | `0x0001_00A0` | Boot ROM |
+
+CPU0 boots from DDR. The three secondary cores boot into parking loops in the
+Boot ROM and are released by a write to their `CORE*_RELEASE` register, which
+carries the worker entry address.
+
+### 2.4 DDR region (0x0000_0000 – 0x0000_FFFF)
 
 The CPU's data cache and the NPU's AXI4 DMA master both access DDR.
 The cache port has priority over the AXI4 slave port. Byte-addressed,
@@ -307,7 +371,35 @@ where N' = min(N, MAX_N). This is **not** `M×N×K×2` — it depends on the arr
 
 | Bits | Description |
 |------|-------------|
-| [31:0] | Number of cycles the NPU core was in `S_WLOAD` (weight loading, not compute). Resets to 0 when the core receives `i_start`. |
+| [31:0] | Number of cycles the NPU core spent moving weights rather than computing — `S_WLOAD` plus `S_PRELOAD`. Resets to 0 when the core receives `i_start`. |
+
+`S_WLOAD` loads the first K tile's weights into the active bank; every
+subsequent tile is loaded by `S_PRELOAD` into the idle bank. Both move weights
+and neither computes, so both are counted. Exactly:
+
+```
+STALL_COUNT = M × Σ(N tiles) Σ(K tiles) kr × nc
+```
+
+with `kr = min(NUM_ROWS, K - k_base)` and `nc = min(NUM_COLS, N' - n_base)`.
+For full tiles this reduces to
+`M × ceil(N'/NUM_COLS) × ceil(K/NUM_ROWS) × NUM_ROWS × NUM_COLS`; at
+`M=64, N=8, K=256` on the 8×8 array that is 131,072 cycles against a
+`CYCLE_COUNT` near 168,000, so the array computes about 22% of the time.
+
+The three counters close an accounting identity, which is the cheapest way to
+check them:
+
+```
+CYCLE_COUNT = STALL_COUNT + OP_COUNT/(NUM_ROWS × NUM_COLS) + M × Σ(N tiles) nc
+              └ weights ─┘   └──── S_RUN ────┘               └─── S_WRITE ───┘
+```
+
+It holds on all 36 GEMM shapes in `tb/tb_c930_npu.sv`. Counting only `S_WLOAD`,
+it held for the 24 shapes with a single K tile and failed on the other 12 —
+which is why the defect survived: every small test agreed with it. A
+single-K-tile GEMM never enters `S_PRELOAD`, so its `STALL_COUNT` is unchanged
+from earlier builds.
 
 ### DMA_CT (0x34) — Read-only
 
@@ -406,7 +498,7 @@ programming error on the batch.
 | 7 | 0x1C | C_BASE | ADDR_C_BASE | |
 | 8 | 0x20 | PREC | ADDR_PREC | |
 | 9 | 0x24 | CYCLE_COUNT | ADDR_CYCLE_LO | 32-bit free-running |
-| 10 | 0x28 | *(reserved)* | ADDR_CYCLE_HI | Dead code, always reads 0 |
+| 10 | 0x28 | DMA_LAST | ADDR_DMA_LAST | Latched DMA cycle count from the last completed GEMM |
 | 11 | 0x2C | OP_COUNT | ADDR_OP_COUNT | |
 | 12 | 0x30 | STALL_COUNT | ADDR_STALL_CT | |
 | 13 | 0x34 | DMA_CT | ADDR_DMA_CT | |
@@ -873,9 +965,13 @@ The NPU provides three performance counters accessible via MMIO:
 
 | CSR | Address | Description |
 |-----|---------|-------------|
-| CYCLE_COUNT | `0x4000_002C` | Free-running cycles while NPU is busy |
-| OP_COUNT | `0x4000_0030` | Total PE MAC operations (NUM_ROWS × NUM_COLS × cycles) |
-| STALL_COUNT | `0x4000_0034` | Cycles stalled (weight loading) |
+| CYCLE_COUNT | `0x4000_0024` | Free-running cycles while NPU is busy |
+| OP_COUNT | `0x4000_002C` | Total PE MAC operations (NUM_ROWS × NUM_COLS × cycles) |
+| STALL_COUNT | `0x4000_0030` | Weight-movement cycles (`S_WLOAD` + `S_PRELOAD`) |
+
+The three addresses in this table were each one word high; they now match the
+register map in section 12 and `sw/c930_npu_driver.h`, which were both already
+correct.
 
 **TOPS calculation:**
 ```

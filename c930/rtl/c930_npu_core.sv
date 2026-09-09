@@ -205,8 +205,13 @@ module c930_npu_core
       // NUM_ROWS * NUM_COLS = 64 PEs, each doing one MAC per cycle.
       if (state == S_RUN)
         op_cnt <= op_cnt + NUM_ROWS * NUM_COLS;
-      // Count stall cycles (S_WLOAD = weight loading, not compute)
-      if (state == S_WLOAD)
+      // Count weight-movement cycles.  S_WLOAD loads the first K tile's
+      // weights; every later tile arrives through S_PRELOAD.  Counting only
+      // S_WLOAD reported one tile's load per (m, N-tile) pass where the true
+      // figure is ceil(K/NUM_ROWS) of them -- 32x low at K=256, which is the
+      // difference between "the array stalls occasionally" and "the array
+      // spends most of its time loading weights".
+      if (state == S_WLOAD || state == S_PRELOAD)
         stall_cnt <= stall_cnt + 1;
     end
   end
