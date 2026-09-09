@@ -62,6 +62,15 @@ if [ -n "$cur" ] && [ "$cur" != "$MAC" ]; then
     echo "MAC after heal: $cur" >> "$LOG"
 fi
 
+# ---- keep the license MAC guarded for the whole run ------------------------
+# The vSwitch re-asserts eth0's random MAC every few minutes; without the
+# watchdog a license re-check inside a revert window kills the run. The
+# watchdog must be root, so re-enter WSL as root to launch it detached.
+if ! pgrep -f 'mac_watchdo[g]' >/dev/null 2>&1; then
+    echo "starting mac watchdog" >> "$LOG"
+    wsl.exe -u root -e bash -c "setsid nohup bash $REPO/synth_xilinx/mac_watchdog.sh >/dev/null 2>&1 < /dev/null &" >/dev/null 2>&1
+fi
+
 # ---- launch the flow --------------------------------------------------------
 echo "launching flow $(date)" >> "$LOG"
 bash "$REPO/synth_xilinx/run_full_wsl.sh" >> "$LOG" 2>&1
