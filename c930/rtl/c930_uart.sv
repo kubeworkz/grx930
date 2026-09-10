@@ -301,7 +301,15 @@ module c930_uart
         end
         RX_STOP: begin
           rx_baud_cnt <= rx_baud_cnt + 1;
-          if (rx_baud_cnt == 4'd7) begin  // sample mid-stop bit
+          // Sample mid-stop: the RX sample grid is anchored to the detection
+          // tick (T0) with every other bit sampled at cnt==15 (16 ticks per
+          // bit).  cnt==7 fires at T0+144 ticks -- exactly the stop bit's
+          // START edge -- so with any baud-phase offset plus the 2-cycle pin
+          // synchronizer delay the sampled pin can still hold the last data
+          // bit's value and the byte is dropped (observed: 'P' decoded as
+          // shift=0x50 but we=0 forever).  cnt==15 samples T0+152 ticks =
+          // mid-stop+phase, with ~378 cycles of margin to the stop end.
+          if (rx_baud_cnt == 4'd15) begin  // sample mid-stop bit
             if (rx_pin == 1'b1) begin  // valid stop bit
               rx_fifo_we   <= 1'b1;
               rx_fifo_wdata <= rx_shift_reg;
