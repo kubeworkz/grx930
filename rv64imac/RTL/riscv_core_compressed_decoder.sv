@@ -212,6 +212,9 @@ always_comb begin
                         i_compressed_decoder_instr[6:2],
                         2'b01,
                         i_compressed_decoder_instr[9:7],
+                        3'b111,
+                        2'b01,
+                        i_compressed_decoder_instr[9:7],
                         7'b0010011
                    };
                end

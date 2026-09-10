@@ -16,6 +16,23 @@ module riscv_core_hazard_unit
     input logic [4:0] i_hazard_unit_rd_mem,
     input logic [4:0] i_hazard_unit_rd_wb,
 
+    // Instruction PCs by stage (stale-duplicate detection).  An id_ex PC that
+    // matches the if_id PC means the IF/ID pipe holds a STALE COPY of the
+    // instruction in EX -- not a legitimate successor -- which happens when a
+    // cache fill froze the fetch at the instruction's address while it moved
+    // ID->EX (the icache's registered-read LOAD_DONE hold re-presents the
+    // same word, so if_id re-captures it).  The stale copy survives the fill,
+    // re-enters EX, and re-executes the instruction with its own
+    // already-committed result: for a self-referencing load (ld a4,336(a4))
+    // the base becomes the loaded value (-> wild address -> fault -> reboot
+    // loop), for an ALU op (e.g. addi a4,a4,-1) the result is applied twice,
+    // corrupting every downstream computation.  PCs are unique per
+    // instruction, so equality is exactly the duplicate case -- a legitimate
+    // back-to-back identical instruction has a different PC, and the reset
+    // state (both pipes hold PC 0) is excluded by the regwrite_ex gate.
+    input logic [63:0] i_hazard_unit_pc_id,
+    input logic [63:0] i_hazard_unit_pc_ex,
+
     // Control signals inputs
     input logic i_hazard_unit_regwrite_mem,
     input logic i_hazard_unit_regwrite_wb,
@@ -79,6 +96,7 @@ logic load_in_ex;
 logic load_in_mem;
 logic csr_in_ex;
 logic csr_mem_hold;
+logic load_stale_dup;
 
 // One-shot EX->MEM drain for the CSR-read stall. While a CSR-read producer
 // (resultsrc == 2'b11) sits in EX with an ID-stage dependent, flush_ex bubbles
@@ -292,7 +310,20 @@ begin : flush_proc
     o_hazard_unit_flush_ex  = (load_stall_detection && load_in_ex && !mstall_detection && !icache_stall_detection && !dcache_stall_detection && !csr_stall_detection) ||
                               (csr_stall_detection && csr_in_ex && !mstall_detection && !icache_stall_detection && !dcache_stall_detection && !load_stall_detection) ||
                               ((i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_ex) && !mstall_detection && !icache_stall_detection && !dcache_stall_detection && !csr_stall_detection && !load_stall_detection);
-    o_hazard_unit_flush_id  = i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_id;
+    // Stale-duplicate discard: a register-writing instruction in EX whose
+    // id_ex PC matches the if_id PC is duplicated in ID (see the port
+    // comment).  Flush the IF/ID pipe so the duplicate is discarded instead of
+    // freezing in place and re-executing later with the already-committed
+    // result (double-increment for ALU ops, wild address for self-referencing
+    // loads).  Clearing if_id (a bubble) lets the fetch capture the real
+    // successor at the next release edge.  The instruction in id_ex is NOT
+    // touched: it advances EX->MEM as normal (flush_id only clears the IF/ID
+    // pipe).  Gated on regwrite_ex so the reset state (both pipes hold PC 0,
+    // regwrite_ex=0) never triggers it; branches/jumps already get their
+    // stale copy killed by the pcsrc_ex flush when they resolve, and stores
+    // re-execute idempotently (same address, same data).
+    load_stale_dup = i_hazard_unit_regwrite_ex && (i_hazard_unit_pc_id == i_hazard_unit_pc_ex);
+    o_hazard_unit_flush_id  = i_hazard_unit_pcsrc_ex || i_hazard_unit_csr_flush_id || load_stale_dup;
     o_hazard_unit_flush_mem = i_hazard_unit_csr_flush_mem;
     o_hazard_unit_flush_wb  = i_hazard_unit_csr_flush_wb;
 end

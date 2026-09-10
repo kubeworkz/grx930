@@ -39,7 +39,10 @@ logic [AXI_DATA_WIDTH-1 : 0] INSTR_MEM [0:CACHE_DEPTH-1];
 // o_rd_en, so the array is a single-port registered read (the EBR DP16KD
 // pattern). The controller stalls the fetch one cycle on every hit and the
 // word is selected from read_data_reg in the following (LOAD_DONE) cycle.
+// read_data_reg_2 holds the NEXT line (addr+2) for the cross-line (over_f)
+// 32-bit fetch at byte offset 30.
 logic [AXI_DATA_WIDTH-1 : 0] read_data_reg;
+logic [AXI_DATA_WIDTH-1 : 0] read_data_reg_2;
 
 // Initializers keep the array defined before the first reset edge (Icarus
 // X-suppression only; yosys ignores `initial` on memories for BRAM inference).
@@ -71,11 +74,22 @@ end
 // Registered read: captures the addressed line one cycle after o_rd_en. The
 // controller holds the fetch (o_stall) during the read cycle and the core
 // samples o_data_to_core in the following (LOAD_DONE) cycle.
+//
+// A 32-bit fetch at byte offset 30 (addr[4:0]==5'd30, the controller's
+// over_f case: BLOCK_OFFSET==7 && BYTE_OFFSET==2) straddles the 32-byte line
+// boundary: bytes 30..31 come from this line and bytes 32..33 from the NEXT
+// line (addr+2).  The controller checks and fills both lines (s1/s2 and
+// fill_s2); the read must capture BOTH lines so the word select can assemble
+// the cross-line word instead of selecting off the end of the 256-bit line
+// (which produced a garbage instruction and silently corrupted execution).
 always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
-    if (!i_rst_n)
-        read_data_reg <= 'b0;
-    else if (i_rd_en)
-        read_data_reg <= INSTR_MEM [ i_addr_from_core[11 -: INDEX_WIDTH] ];
+    if (!i_rst_n) begin
+        read_data_reg   <= 'b0;
+        read_data_reg_2 <= 'b0;
+    end else if (i_rd_en) begin
+        read_data_reg   <= INSTR_MEM [ i_addr_from_core[11 -: INDEX_WIDTH] ];
+        read_data_reg_2 <= INSTR_MEM [ i_addr_from_core_2[11 -: INDEX_WIDTH] ];
+    end
 end
 
 always_comb begin : READ_WORD_SELECT
@@ -85,6 +99,13 @@ always_comb begin : READ_WORD_SELECT
     // the controller is in LOAD_DONE (i_rd_en already low) and the core
     // samples it. The fetch PC is registered and does not advance until the
     // stall is released, so i_addr_from_core is stable across the pair.
-    o_data_to_core = read_data_reg [ i_addr_from_core[4:0]*8 +: 32 ];
+    if (i_addr_from_core[4:0] == 5'd30)
+        // Cross-line 32-bit fetch: {next_line[15:0], this_line[255:240]} is
+        // exactly bytes 30,31 of this line followed by bytes 0,1 of the next
+        // line (little-endian: byte at addr+2 is the word's bit[15:8], byte
+        // at addr+3 is bit[23:16]).
+        o_data_to_core = {read_data_reg_2[15:0], read_data_reg[255:240]};
+    else
+        o_data_to_core = read_data_reg [ i_addr_from_core[4:0]*8 +: 32 ];
 end
 endmodule
