@@ -32,6 +32,11 @@ export XILINXD_LICENSE_FILE="${HOME}/.Xilinx/Xilinx.lic"
 
 mkdir -p "$BUILD_DIR"
 
+# ---- OOM protection ----
+# Technology Mapping peaks at ~7 GB RSS, which triggers the OOM killer on the
+# 8 GB WSL VM. Protect the vivado process (and all children) from OOM kills.
+echo -1000 > /proc/self/oom_score_adj 2>/dev/null || true
+
 echo "=========================================="
 echo "  C930 Full SoC - Vivado Synthesis"
 echo "  Target: xc7a200tfbg484-1 (Arty A7-200T)"
@@ -51,6 +56,11 @@ fi
 # Step 2: Run synthesis
 echo "[2/3] Running synthesis + implementation..."
 cd "$REPO_DIR"
+# Set OOM protection on the shell so vivado inherits it
+for f in /proc/self/oom_score_adj /proc/$$/oom_score_adj; do
+    echo -1000 > "$f" 2>/dev/null || true
+done
+
 vivado -mode batch -source "$SCRIPT_DIR/run_synth.tcl" \
     -log "$BUILD_DIR/synth_impl.log" \
     -journal "$BUILD_DIR/synth_impl.jou" 2>&1 | tee -a "$LOG_FILE"
