@@ -11,6 +11,13 @@
 # -----------------------------------------------------------------------------
 set -x
 MAC=00:15:5d:c5:ac:f9
+
+# ---- Kernel tuning for Vivado TM ----
+# Vivado TM peaks at ~7 GB RSS on a 7.6 GB WSL VM. Without these,
+# the OOM killer fires and kills vivado, or page allocation fails.
+sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1
+sysctl -w vm.swappiness=100 >/dev/null 2>&1
+sysctl -w vm.zone_reclaim_mode=0 >/dev/null 2>&1
 GW=172.25.32.1
 
 cur=$(cat /sys/class/net/eth0/address 2>/dev/null)
