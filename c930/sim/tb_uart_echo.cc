@@ -1,18 +1,26 @@
 /**
- * tb_uart_echo.cc -- UART echo testbench for the GRX930 single-core SoC
+ * tb_uart_echo.cc -- UART testbench for the GRX930 single-core SoC
  * Verilator model (c930_soc_verilator.sv).
  *
  * Flow:
- *   1. Preload the echo firmware hex into DDR (addr 0) via the TB preload port.
- *   2. Release reset; the RV64IMAC core boots from PC=0 and runs the echo loop.
+ *   1. Preload the firmware hex into DDR (addr 0) via the TB preload port.
+ *   2. Release reset; the RV64IMAC core boots from PC=0 and runs the firmware.
  *   3. Drive i_uart_rxd with real 115200-baud frames (start + 8N1).
  *   4. Sample o_uart_txd at mid-bit to capture the firmware's replies.
  *   5. Verify PING / ECHO / VERSION / UNKNOWN responses.
+ *   6. Verify the GEMM command: 'G' prec M N K.  A/B are preloaded by the TB
+ *      at the firmware's fixed DDR addresses; the NPU result C is streamed
+ *      back over UART and compared against a software reference.
+ *
+ * The echo tests need the echo firmware hex; the GEMM test needs the GEMM
+ * firmware hex (a superset: it answers every echo command too).
  *
  * Build (server):
- *   cd c930 && bash sim/build_grx930_verilator.sh   (after editing the TB var)
- * Run:
+ *   cd c930 && bash sim/build_grx930_verilator.sh
+ * Run (echo firmware):
  *   ./build/verilator_soc/Vc930_soc_verilator firmware_uart_echo_test.hex
+ * Run (GEMM firmware):
+ *   ./build/verilator_soc/Vc930_soc_verilator firmware_uart_gemm_test.hex
  */
 
 #include <cstdio>
@@ -80,7 +88,13 @@ static bool load_firmware_hex(const char *fname) {
     while (fgets(line, sizeof(line), f)) {
         char *tok = strtok(line, " \t\r\n");
         while (tok) {
-            if (tok[0] != '@' && tok[0] != '/' && tok[0] != '#') {
+            if (tok[0] == '@') {
+                // objcopy -O verilog emits each LOAD run prefixed with its
+                // virtual address (@00000000 ...).  The runs are NOT
+                // contiguous (alignment padding between sections), so honor
+                // the address instead of appending to the previous run.
+                addr = (uint32_t)strtoul(tok + 1, nullptr, 16);
+            } else if (tok[0] != '/' && tok[0] != '#') {
                 char *end = nullptr;
                 unsigned long v = strtoul(tok, &end, 16);
                 if (end != tok) {
@@ -182,6 +196,37 @@ static std::string send_and_collect(uint8_t cmd, int nbytes, uint64_t timeout) {
     return got;
 }
 
+// Send a sequence of bytes and collect the reply, listening on TX from the
+// last byte's stop bit onward.  The UART commits each RX byte to the FIFO at
+// its stop check (~8,260 cycles into the 8,640-cycle frame) and the firmware
+// answers as soon as it has consumed the last byte, so the reply's first
+// start edge lands BEFORE the final frame's stop bit completes -- a plain
+// send-then-listen would join mid-reply-frame and decode garbage.
+static std::string send_bytes_collect(const uint8_t *bytes, int nbytes,
+                                      int nreply, uint64_t timeout) {
+    for (int i = 0; i < nbytes; i++) {
+        uint8_t b = bytes[i];
+        top->i_uart_rxd = 0;                      // start bit
+        for (uint64_t t = 0; t < BIT_CYCLES; t++) tick();
+        for (int bit = 0; bit < 8; bit++) {       // 8 data bits, LSB first
+            top->i_uart_rxd = (b >> bit) & 1;
+            for (uint64_t t = 0; t < BIT_CYCLES; t++) tick();
+        }
+        top->i_uart_rxd = 1;                      // stop bit
+        if (i < nbytes - 1) {
+            for (uint64_t t = 0; t < BIT_CYCLES; t++) tick();
+        }
+        // For the last byte, leave the stop bit driving while we listen on TX.
+    }
+    std::string got;
+    for (int i = 0; i < nreply; i++) {
+        uint8_t b;
+        if (!wait_for_tx_byte(&b, timeout)) break;
+        got += (char)b;
+    }
+    return got;
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -192,6 +237,11 @@ int main(int argc, char **argv) {
 
     const char *hexfile = "firmware_uart_echo_test.hex";
     if (argc > 1) hexfile = argv[1];
+
+    // The GEMM command needs a firmware that implements it; the minimal echo
+    // firmware answers every other command but replies "ERR_UNKNOWN_CMD" to
+    // 'G'.  Gate the GEMM test on the image so either firmware can be run.
+    const bool gemm_fw = (strstr(hexfile, "gemm") != nullptr);
 
     top = new Vc930_soc_verilator;
 
@@ -218,7 +268,7 @@ int main(int argc, char **argv) {
         auto rd = [&](uint32_t a) -> uint8_t {
             top->i_tb_rd_addr = a; top->eval(); return top->o_tb_rd_data;
         };
-        printf("[TB] DDR[0..7] = %02x %02x %02x %02x %02x %02x %02x %02x (want 37 81 00 00 ef 00 e0 27)\n",
+        printf("[TB] DDR[0..7] = %02x %02x %02x %02x %02x %02x %02x %02x\n",
                rd(0), rd(1), rd(2), rd(3), rd(4), rd(5), rd(6), rd(7));
     }
 
@@ -304,6 +354,61 @@ int main(int argc, char **argv) {
         printf("  %-32s %s  (got \"%s\")\n", "UNKNOWN -> ERR_UNKNOWN_CMD58E",
                ok ? "PASS" : "FAIL", ok ? "ERR_UNKNOWN_CMD58E" : got.c_str());
         if (!ok) failures++;
+    }
+
+    printf("Test: GEMM 4x4x4 INT8 over UART...\n");
+    {
+        // Fixed DDR buffer addresses -- must match uart_gemm_test.c.
+        static const uint32_t GEMM_A_ADDR = 0x9000;
+        static const uint32_t GEMM_B_ADDR = 0x9400;
+        const int M = 4, N = 4, K = 4;
+        uint8_t A[M * K], B[K * N];
+        int32_t ref[M * N];
+
+        // Signed INT8 operands: values in [-8, 7].  Max |product sum| = 4*64
+        // = 256, far inside int32, so the comparison is exact.
+        for (int i = 0; i < M * K; i++) A[i] = (uint8_t)(int8_t)(((i * 3 + 1) & 0xF) - 8);
+        for (int i = 0; i < K * N; i++) B[i] = (uint8_t)(int8_t)(((i * 5 + 2) & 0xF) - 8);
+        for (int m = 0; m < M; m++) {
+            for (int n = 0; n < N; n++) {
+                int32_t s = 0;
+                for (int k = 0; k < K; k++)
+                    s += (int32_t)(int8_t)A[m * K + k] * (int32_t)(int8_t)B[k * N + n];
+                ref[m * N + n] = s;
+            }
+        }
+
+        // Preload A and B into DDR at the firmware's fixed addresses.
+        for (int i = 0; i < M * K; i++) preload_byte(GEMM_A_ADDR + i, A[i]);
+        for (int i = 0; i < K * N; i++) preload_byte(GEMM_B_ADDR + i, B[i]);
+
+        // 'G' prec(0=INT8) M N K, then C (M*N*4 bytes little-endian) + 'A'.
+        uint8_t cmd[5] = { 'G', 0, (uint8_t)M, (uint8_t)N, (uint8_t)K };
+        std::string got = send_bytes_collect(cmd, 5, M * N * 4 + 1, BIT_CYCLES * 200);
+
+        if (!gemm_fw) {
+            printf("  %-32s SKIP  (load the GEMM firmware hex to run this)\n",
+                   "GEMM 4x4x4 INT8 -> C over UART");
+        } else {
+            bool ok = (got.size() == (size_t)(M * N * 4 + 1) && got.back() == 'A');
+            if (ok) {
+                for (int i = 0; i < M * N && ok; i++) {
+                    uint32_t v = (uint32_t)(uint8_t)got[i * 4 + 0]
+                               | ((uint32_t)(uint8_t)got[i * 4 + 1] << 8)
+                               | ((uint32_t)(uint8_t)got[i * 4 + 2] << 16)
+                               | ((uint32_t)(uint8_t)got[i * 4 + 3] << 24);
+                    if ((int32_t)v != ref[i]) {
+                        printf("    C[%d] mismatch: got %d want %d\n", i, (int32_t)v, ref[i]);
+                        ok = false;
+                    }
+                }
+            } else {
+                printf("    reply len=%zu (want %d), ack=%02x\n", got.size(),
+                       M * N * 4 + 1, got.empty() ? 0 : (uint8_t)got.back());
+            }
+            printf("  %-32s %s\n", "GEMM 4x4x4 INT8 -> C over UART", ok ? "PASS" : "FAIL");
+            if (!ok) failures++;
+        }
     }
 
     // 4. Summary

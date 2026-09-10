@@ -182,8 +182,15 @@ always_comb begin
            C_ARTH_LOGIC : begin
                unique case (i_compressed_decoder_instr[11:10])
                2'b00 : begin // --SRLI
+                    // RV64C: the shamt is 6 bits -- {instr[12], instr[6:2]}.
+                    // Emitting only instr[6:2] left shamt[5] permanently 0,
+                    // so any c.srli with a shift >= 32 silently shifted by
+                    // (shamt & 31) instead (e.g. `c.srli a1,32` became a
+                    // no-op).  That corrupted the C-streaming loop bound in
+                    // the GEMM firmware and hung the core.
                     o_compressed_decoder_instr = {
-                        7'b0000000,
+                        6'b000000,
+                        i_compressed_decoder_instr[12],
                         i_compressed_decoder_instr[6:2],
                         2'b01,
                         i_compressed_decoder_instr[9:7],
@@ -194,8 +201,10 @@ always_comb begin
                    };
                end
                2'b01 : begin // --SRAI
+                    // RV64C: the shamt is 6 bits -- {instr[12], instr[6:2]}.
                     o_compressed_decoder_instr = {
-                        7'b0100000,
+                        6'b010000,
+                        i_compressed_decoder_instr[12],
                         i_compressed_decoder_instr[6:2],
                         2'b01,
                         i_compressed_decoder_instr[9:7],
@@ -362,8 +371,10 @@ always_comb begin
        Q2 : begin
             unique case (i_compressed_decoder_instr[15:13])
                C_SLLI : begin
+                    // RV64C: the shamt is 6 bits -- {instr[12], instr[6:2]}.
                     o_compressed_decoder_instr = {
-                        7'b0,
+                        6'b0,
+                        i_compressed_decoder_instr[12],
                         i_compressed_decoder_instr[6:2],
                         i_compressed_decoder_instr[11:7],
                         3'b001,
