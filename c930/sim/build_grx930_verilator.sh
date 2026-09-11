@@ -62,7 +62,7 @@ echo "[grx930] Verilating c930_soc_verilator ..."
   -Wall -Wno-DECLFILENAME -Wno-fatal \
   -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-PINMISSING -Wno-UNOPTFLAT -Wno-WIDTH -Wno-CASEX \
-  --public-flat-rw --threads 1 --Mdir "$BUILD_DIR" \
+  --threads 1 --Mdir "$BUILD_DIR" \
   -I../rv64imac/RTL \
   --top-module c930_soc_verilator \
   sim/c930_soc_verilator.sv \

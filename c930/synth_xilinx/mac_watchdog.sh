@@ -61,6 +61,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         ip link set dummy0 address "$MAC" 2>/dev/null
         ip link set dummy0 up 2>/dev/null
     fi
+    # OOM protection: protect vivado from the kernel OOM killer.
+    # TM peaks at ~7 GB RSS on an 8 GB VM; without this the kernel
+    # kills vivado before swap absorbs the pressure.
+    for pid in $(pgrep vivado 2>/dev/null); do
+        echo -1000 > /proc/$pid/oom_score_adj 2>/dev/null
+    done
     sleep 2
 done
 echo "=== mac watchdog exiting $(date) ===" >> "$LOG"

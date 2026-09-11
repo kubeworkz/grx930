@@ -40,6 +40,13 @@ trap 'rm -f "$STAMP"' EXIT
 
 echo "=== retry driver tick $(date) ===" >> "$LOG"
 
+# ---- OOM protection ----
+# Vivado TM peaks at ~7 GB RSS; protect this process and all children
+# from the Linux OOM killer (8 GB WSL VM is tight).
+for f in /proc/self/oom_score_adj /proc/$$/oom_score_adj; do
+    echo -1000 > "$f" 2>/dev/null || true
+done
+
 # ---- already complete? ------------------------------------------------------
 if [ -f "$FINAL_DCP" ]; then
     echo "routed checkpoint present -- nothing to do" >> "$LOG"
