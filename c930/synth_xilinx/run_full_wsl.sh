@@ -24,6 +24,11 @@ export XILINXD_LICENSE_FILE="$HOME/.Xilinx/Xilinx.lic"
 
 cd /mnt/c/Users/kubew/grx930/c930 || exit 1
 
+# ---- OOM protection ----
+for f in /proc/self/oom_score_adj /proc/$$/oom_score_adj; do
+    echo -1000 > "$f" 2>/dev/null || true
+done
+
 echo "=== full flow started $(date) ===" >> "$PLOG"
 bash synth_xilinx/create_and_synth.sh >> "$PLOG" 2>&1
 rc=$?
