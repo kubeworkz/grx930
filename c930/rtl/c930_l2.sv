@@ -269,6 +269,7 @@ module c930_l2
       rd_wait_wr     <= 1'b0;
       rd_hit_way     <= '0;
       rd_hit         <= 1'b0;
+      rd_beat        <= '0;   // serve/refill beat counter lives in this block too
     end else begin
       case (rd_state)
         RD_IDLE: begin
@@ -309,6 +310,7 @@ module c930_l2
                   rd_stage[b] <= data_mem[w][rd_set][b];
               end
             rd_state <= RD_HIT_SERVE;
+            rd_beat  <= '0;   // single-writer: serve counter restarts here
           end else begin
             // Miss: pick the round-robin victim.
             rd_way <= victim_cnt[rd_set];
@@ -349,6 +351,7 @@ module c930_l2
             else
               victim_cnt[rd_set] <= victim_cnt[rd_set] + 1'b1;
             rd_state          <= RD_REFILL_R;
+            rd_beat           <= '0;   // refill beat counter resets on AR accept
           end
         end
 
@@ -364,6 +367,7 @@ module c930_l2
               2'd2:    rd_stage[2] <= m_rdata;
               default: rd_stage[3] <= m_rdata;
             endcase
+            rd_beat <= rd_beat + 1'b1;   // advance the refill beat counter
             if (rd_beat == WORDS_PER_LINE-1)
               rd_state <= RD_REFILL_CHK;
           end
@@ -381,14 +385,15 @@ module c930_l2
             if (wr_log_match_idx(rd_addr, rd_seq_floor) >= 0) begin
               rd_wait_wr <= 1'b1;
             end else begin
-              rd_beat  <= '0;             // restart the serve counter
               rd_state <= RD_HIT_SERVE;   // fresh data: serve the staged line
+              rd_beat  <= '0;             // restart the serve counter
             end
           end
         end
 
         RD_HIT_SERVE: begin
           if (s_rvalid && s_rready) begin
+            rd_beat <= rd_beat + 1'b1;   // advance the serve beat counter
             if (s_rlast) rd_state <= RD_ALLOC;
           end
         end
@@ -399,24 +404,6 @@ module c930_l2
 
         default: rd_state <= RD_IDLE;
       endcase
-    end
-  end
-
-  // Serve/refill beat counter (single driver) + registered serve data.
-  // rd_serve_q is latched from rd_stage so the read-output comb block never
-  // reads rd_stage (see declaration note: keeps iverilog fast).
-  always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n)
-      rd_beat <= '0;
-    else begin
-      if (rd_state == RD_LOOKUP)
-        rd_beat <= '0;
-      else if (rd_state == RD_REFILL_AR && m_arready)
-        rd_beat <= '0;
-      else if (rd_state == RD_REFILL_R && m_rvalid && m_rready)
-        rd_beat <= rd_beat + 1'b1;
-      else if (rd_state == RD_HIT_SERVE && s_rvalid && s_rready)
-        rd_beat <= rd_beat + 1'b1;
     end
   end
 
