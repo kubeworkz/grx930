@@ -111,11 +111,17 @@ module c930_mmio_bridge
     end else begin
       done_ff  <= (state == W_B) && (m_axi_bvalid || (wr_rel != 2'd0));
       rdone_ff <= (state == R_R) && (m_axi_rvalid || (rd_target != 3'd0));
-      // Latch each channel handshake as it completes; cleared once the
-      // transaction leaves W_AW_W (see IDLE capture block below).
+      // Latch each channel handshake as it completes; cleared in IDLE before
+      // the next transaction arms.  Single-writer rule: aw_ok/w_ok may only be
+      // assigned in THIS block -- the old IDLE-capture clear here (a second
+      // always_ff driving the same flops) passed iverilog and Vivado synthesis
+      // but is an ERROR: [DRC MDRV-1] multiple-driver violation in opt_design.
       if (state == W_AW_W) begin
         if (m_axi_awready) aw_ok <= 1'b1;
         if (m_axi_wready)  w_ok  <= 1'b1;
+      end else if (state == IDLE) begin
+        aw_ok <= 1'b0;
+        w_ok  <= 1'b0;
       end
     end
   end
@@ -241,8 +247,6 @@ module c930_mmio_bridge
       wr_rel       <= 2'd0;
       rd_target    <= 3'd0;
     end else if (state == IDLE) begin
-      aw_ok <= 1'b0;
-      w_ok  <= 1'b0;
       if (i_mmio_write_valid) begin
         awaddr_r <= i_mmio_write_addr[31:0];
         wdata_r  <= i_mmio_write_data[31:0];
