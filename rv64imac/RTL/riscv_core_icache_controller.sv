@@ -127,8 +127,18 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // IDLE->MEM_REQ transition; MEM_REQ keeps NEXT==MEM_REQ while waiting
         // for the line and must not re-latch a redirected fetch PC).
         if (STATE == IDLE && NEXT == MEM_REQ) begin
-            fill_addr <= s2 ? i_addr_from_core_next_block : i_addr_from_core;
-            fill_s2   <= s2;
+            // Cross-line (over_f) fetch: when BOTH lines miss, fill the
+            // CURRENT line first (its data is what read_data_reg must hold
+            // for the word select).  The old code preferred the NEXT block
+            // whenever s2 was set, so the AXI burst fetched line N+1's data
+            // but wrote it into line N+1's index tagged N+1 -- the current
+            // line stayed invalid, and the cross-line word was assembled
+            // from {next_line[15:0], this_line[255:240]} where this_line was
+            // stale and next_line held the WRONG line's data.  After the
+            // current line fills, the next IDLE sees s1=0 && s2=1 and the
+            // following fill completes the pair correctly.
+            fill_addr <= (s2 && !s1) ? i_addr_from_core_next_block : i_addr_from_core;
+            fill_s2   <= s2 && !s1;
         end
         // Latch the fetch PC served by a hit (IDLE->LOAD_DONE transition).
         // LOAD_DONE compares the live PC against this to decide hold vs

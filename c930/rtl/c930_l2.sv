@@ -475,7 +475,9 @@ module c930_l2
       end
       // Write path: drop the line (wins over a same-cycle alloc: the write
       // is the newer event).
-      if (wr_state == WR_INV && (i_inv_ack & wr_inv_mask) == wr_inv_mask) begin
+      // Only a line that was actually resident is dropped; a miss has no way
+      // or set worth touching (wr_way/wr_set still hold the previous line).
+      if (wr_state == WR_INV && wr_hit && (i_inv_ack & wr_inv_mask) == wr_inv_mask) begin
         valid_mem[wr_way][wr_set] <= 1'b0;
         sharers[wr_way][wr_set]   <= '0;
       end
@@ -541,10 +543,11 @@ module c930_l2
   // WRITE PATH (independent FSM)
   // ===========================================================================
   typedef enum logic [3:0] {
-    WR_IDLE = 4'd0,
-    WR_INV  = 4'd1,
-    WR_FWD  = 4'd2,
-    WR_B    = 4'd3
+    WR_IDLE   = 4'd0,
+    WR_LOOKUP = 4'd4,  // directory lookup for one line of the burst
+    WR_INV    = 4'd1,
+    WR_FWD    = 4'd2,
+    WR_B      = 4'd3
   } wr_state_t;
 
   wr_state_t wr_state;
@@ -558,6 +561,27 @@ module c930_l2
   logic [7:0]             wr_entry;
   logic                   aw_ok;         // AW accepted by the DDR side
 
+  // Multi-line invalidate walk.  A single write burst can span many 32-byte
+  // lines, and EVERY line it overwrites must have its L1 sharers invalidated
+  // (and the L2 copy dropped).  Clearing only the line containing awaddr
+  // leaves every L1 holding a stale copy of the rest of the burst, so a
+  // DMA write-back of a multi-line buffer reads back as the PREVIOUS
+  // buffer's contents in the CPU.
+  logic [7:0]             wr_nlines;      // 32B lines touched by this burst
+  logic [7:0]             wr_line_idx;    // line currently being invalidated
+  logic [ADDR_WIDTH-1:0]  wr_cur_line;    // 32B-aligned address of that line
+  logic                   wr_hit;         // that line was resident in the L2
+  logic [7:0]             wr_nlines_c;
+  logic [31:0]            wr_bytes_c, wr_off_end_c;
+
+  always_comb begin
+    // Bytes covered by the burst, from the incoming AW (awsize is in bytes as
+    // a log2, so 1<<awsize is the beat size; beats = awlen+1).
+    wr_bytes_c   = (32'd1 << s_awsize) * ({24'b0, s_awlen} + 32'd1);
+    wr_off_end_c = {27'b0, s_awaddr[OFF_BITS-1:0]} + wr_bytes_c - 32'd1;
+    wr_nlines_c  = wr_off_end_c[OFF_BITS+7:OFF_BITS] + 8'd1;
+  end
+
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       wr_state  <= WR_IDLE;
@@ -567,6 +591,10 @@ module c930_l2
       wr_inv_mask <= '0;
       wr_entry  <= '0;
       aw_ok     <= 1'b0;
+      wr_nlines   <= 8'd1;
+      wr_line_idx <= 8'd0;
+      wr_cur_line <= '0;
+      wr_hit      <= 1'b0;
       // Drop any in-flight write-log entries (see reset-flush note above).
       for (int e = 0; e < WR_LOG_DEPTH; e++) begin
         wr_log_valid[e] <= 1'b0;
@@ -587,31 +615,52 @@ module c930_l2
             wr_log_done[wr_log_head]  <= 1'b0;
             wr_log_valid[wr_log_head] <= 1'b1;
             wr_entry    <= wr_log_head;
-            // Evaluate the hit from the INCOMING address, not the captured
-            // wr_set/wr_tag (those only update this cycle, so they still hold
-            // the previous transaction's values -> a stale hit check).
-            begin
-              logic hit;
-              hit = 1'b0;
-              for (int w = 0; w < NUM_WAYS; w++)
-                if (valid_mem[w][s_awaddr[OFF_BITS +: SET_BITS]] &&
-                    tag_mem[w][s_awaddr[OFF_BITS +: SET_BITS]] == s_awaddr[ADDR_WIDTH-1 -: TAG_BITS]) begin
-                  hit      = 1'b1;
-                  wr_way   <= w[WAY_BITS-1:0];
-                  wr_inv_mask <= inv_mask_of_sharers(sharers[w][s_awaddr[OFF_BITS +: SET_BITS]]);
-                end
-              if (hit) wr_state <= WR_INV;
-              else begin
-                wr_inv_mask <= '0;
-                wr_state    <= WR_FWD;
-              end
-            end
+            // Walk every 32B line of the burst, starting at the first one.
+            // The directory lookup happens in WR_LOOKUP (next cycle), off the
+            // registered wr_cur_line, so it can never read a stale wr_set/
+            // wr_tag from the previous transaction.
+            wr_nlines   <= wr_nlines_c;
+            wr_line_idx <= 8'd0;
+            wr_cur_line <= {s_awaddr[ADDR_WIDTH-1:OFF_BITS], {OFF_BITS{1'b0}}};
+            wr_state    <= WR_LOOKUP;
           end
         end
 
+        // Directory lookup for the line in wr_cur_line.  Registers the hit,
+        // way and sharer mask; WR_INV then holds the invalidations until the
+        // L1s ack and drops the L2 copy.
+        WR_LOOKUP: begin
+          begin
+            logic hit;
+            hit = 1'b0;
+            wr_hit      <= 1'b0;
+            wr_inv_mask <= '0;
+            for (int w = 0; w < NUM_WAYS; w++)
+              if (valid_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] &&
+                  tag_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] == wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS]) begin
+                hit         = 1'b1;
+                wr_hit      <= 1'b1;
+                wr_way      <= w[WAY_BITS-1:0];
+                wr_set      <= wr_cur_line[OFF_BITS +: SET_BITS];
+                wr_tag      <= wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS];
+                wr_inv_mask <= inv_mask_of_sharers(sharers[w][wr_cur_line[OFF_BITS +: SET_BITS]]);
+              end
+          end
+          wr_state <= WR_INV;
+        end
+
         WR_INV: begin
-          if ((i_inv_ack & wr_inv_mask) == wr_inv_mask)
-            wr_state <= WR_FWD;
+          // A miss has an empty mask, so this completes immediately and only
+          // advances to the next line -- no L2 line is dropped for a miss.
+          if ((i_inv_ack & wr_inv_mask) == wr_inv_mask) begin
+            if (wr_line_idx + 8'd1 < wr_nlines) begin
+              wr_line_idx <= wr_line_idx + 8'd1;
+              wr_cur_line <= wr_cur_line + LINE_BYTES;
+              wr_state    <= WR_LOOKUP;
+            end else begin
+              wr_state <= WR_FWD;
+            end
+          end
         end
 
         WR_FWD: begin
@@ -697,7 +746,7 @@ module c930_l2
     end
     if (wr_state == WR_INV) begin
       inv_valid_c = inv_valid_c | wr_inv_mask;
-      inv_addr_c  = {wr_addr[ADDR_WIDTH-1:OFF_BITS], {OFF_BITS{1'b0}}};
+      inv_addr_c  = wr_cur_line;   // the line currently being invalidated
     end
   end
   assign o_inv_valid = inv_valid_c;

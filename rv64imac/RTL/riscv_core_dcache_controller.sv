@@ -124,13 +124,27 @@ enum logic [3:0] {
     // for non-idempotent ones (the NPU CSR START bit -> duplicate GEMM).
     // MMIO_WR_RETIRE releases the pipe (o_stall=0, valid deasserted) and
     // waits for the store to actually leave MEM before draining.
-    MMIO_WR_RETIRE = 4'b1001
+    MMIO_WR_RETIRE = 4'b1001,
+    // Mirrors MMIO_WR_RETIRE for MMIO READS.  On the done cycle o_stall drops
+    // so the serviced load advances MEM->WB; if the WB stage is held at that
+    // edge (e.g. an I-cache fill asserting stall_wb via the hazard unit), the
+    // load STAYS in MEM.  MMIO_DRAIN then freezes the pipe with the same load
+    // still in MEM, and IDLE re-issues it as a brand-new MMIO read -- a
+    // duplicate read that pops the RX FIFO twice and returns stale data
+    // (observed: the first ECHO data byte read came back as 0x00, the
+    // STATUS/empty value).  MMIO_RD_RETIRE releases the pipe and waits for
+    // the load to actually leave MEM before draining.
+    MMIO_RD_RETIRE = 4'b1010
 } STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
 
   // Address of the MMIO store currently being retired (latched when its write
   // completes), so MMIO_WR_RETIRE can tell whether the MEM stage still holds
   // the same store or has advanced to a new access.
   logic [ADDR_WIDTH-1 : 0] mmio_wr_addr_r;
+  // Address of the MMIO load currently being retired (latched when its read
+  // completes), so MMIO_RD_RETIRE can tell whether the MEM stage still holds
+  // the same load or has advanced to a new access.
+  logic [ADDR_WIDTH-1 : 0] mmio_rd_addr_r;
 // Initializers keep the combinational FSM/tag/reservation logic defined before
 // the first reset edge (Icarus would otherwise cascade X through the cache).
 initial begin
@@ -187,6 +201,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         RES_SET_SIZE <= 0;
         amo_sc_serviced <= 0;
         mmio_wr_addr_r <= 0;
+        mmio_rd_addr_r <= 0;
         pending_inv <= 1'b0;
         STATE <= IDLE;
     end
@@ -204,6 +219,10 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // when the store leaves the MEM stage.
         if ((STATE == MMIO_WRITE) && i_mmio_write_done)
             mmio_wr_addr_r <= i_addr_from_core;
+        // Same for an MMIO load (MMIO_RD_RETIRE): the serviced address, so
+        // the retire state can tell when the load has left MEM.
+        if ((STATE == MMIO_READ) && i_mmio_read_done)
+            mmio_rd_addr_r <= i_addr_from_core;
         STATE <= NEXT ;
         VALID_RES <= NEXT_VALID_RES;
         RES_SET <= NEXT_RES_SET;
@@ -613,7 +632,9 @@ case (STATE)
         if (i_mmio_read_done) begin
             o_mmio_read_req = 0;
             o_stall = 0;
-            NEXT = MMIO_DRAIN;
+            // The load must actually leave MEM before IDLE services the next
+            // access -- see MMIO_RD_RETIRE.
+            NEXT = MMIO_RD_RETIRE;
         end
 
                end 
@@ -690,6 +711,57 @@ case (STATE)
             // I-cache fill on the done cycle).  Keep the request deasserted
             // and wait for it to retire.
             NEXT = MMIO_WR_RETIRE;
+        end
+
+               end
+
+      // Let the completed MMIO LOAD retire from the pipeline (mirror of
+      // MMIO_WR_RETIRE).  The read itself is DONE; we only need the load to
+      // advance MEM->WB so the dcache does not re-issue it.  With o_stall
+      // released the pipe advances the moment the WB stage is free.  The
+      // read data mux stays selected (o_mmio_read_sel=1) so the load samples
+      // the bridge's still-valid response when it leaves MEM.  We hold the
+      // request deasserted and wait until the MEM stage no longer holds THIS
+      // load (i_read drops or the address changes), then drain so IDLE
+      // services the next access.  Without this state, a load held in MEM by
+      // a concurrent I-cache fill is re-issued by IDLE as a duplicate MMIO
+      // read -- a second RX_DATA read that pops the UART FIFO again and
+      // returns stale/empty data (observed as the first ECHO data byte
+      // coming back 0x00).
+      MMIO_RD_RETIRE : begin
+
+        o_rd_en = 0;
+        o_wr_en = 0;
+        o_block_replace = 0;
+        o_stall = 0;                     // release the pipe so the load retires
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_req = 0;
+        update_en = 0;
+        o_amo_wr = 0;
+
+        o_mem_write_data = i_data_from_core;
+        o_mem_write_address = i_addr_from_core;
+        o_mem_write_valid = 0;
+
+        o_mmio_read_req      = 0;
+        o_mmio_read_sel      = 1;   // keep the MMIO data on the core mux
+        o_mmio_read_address  = i_addr_from_core;
+        o_mmio_write_valid   = 0;
+        o_mmio_write_address = i_addr_from_core;
+        o_mmio_write_data    = i_data_from_core;
+        o_mmio_write_strobe  = o_mem_write_strobe;
+
+        if (!i_read || (i_addr_from_core != mmio_rd_addr_r)) begin
+            // Load left MEM (retired, or a new access advanced in).  Freeze
+            // the pipe so the next access stays in MEM for IDLE to service,
+            // then drain one cycle.
+            o_stall = 1;
+            NEXT = MMIO_DRAIN;
+        end else begin
+            // The same load is still in MEM (the pipe was held by an
+            // I-cache fill on the done cycle).  Keep the request deasserted
+            // and wait for it to retire.
+            NEXT = MMIO_RD_RETIRE;
         end
 
                end

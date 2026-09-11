@@ -60,7 +60,6 @@ logic [63:0] if_id_pipe_pc_plus_offset;
 logic [31:0] if_id_pipe_instr;
 logic [63:0] pcf;
 logic [63:0] pc_plus_offset_if;
-logic [63:0] pc_plus_offset_if_reg;  // registered for pcsrc mux carry-chain break
 logic [63:0] mux_to_stg2;
 logic [31:0] instr;
 logic [31:0] c_ext_instr_out;
@@ -273,7 +272,15 @@ riscv_core_mux2x1
 )
 u_riscv_core_mux2x1_stg2
 (
-  .i_mux2x1_in0 (pc_plus_offset_if_reg)
+  // Combinational PC+offset, not the registered pc_plus_offset_if_reg: the
+  // registered value lags one cycle behind if_pipe_pcf_new and is never
+  // corrected on a branch redirect (pcsrc_ex=1), so the first sequential
+  // fetch after ANY taken branch/jump uses the pre-redirect PC+offset and
+  // skips to a stale address (observed as a boot loop at 0x0/0x4/0x8/0xc/0xe
+  // where the jal at 0x4 never reaches startup_c).  d54f0f6 added the
+  // register for a 35.9->35.3 MHz Fmax gain that is not worth the
+  // correctness cost; the combinational path is what passed the 22-case sweep.
+  .i_mux2x1_in0 (pc_plus_offset_if)
   ,.i_mux2x1_in1(mux_to_stg2)
   ,.i_mux2x1_sel(pcsrc_ex)
   ,.o_mux2x1_out(pcf)
@@ -355,17 +362,8 @@ u_riscv_core_64bit_adder_pc_if
   ,  .o_64bit_adder_result(pc_plus_offset_if)
 );
 
-// Register the IF-stage PC+4 adder output for the pcsrc mux.  This breaks the
-// 64-bit carry chain (pcsrc_ex -> mux -> pcf_if pipe) off the WB->EX forward
-// critical path: the mux now starts from a registered value instead of a
-// combinational chain from mem_wb_pipe_resultsrc through the branch unit.
-// The if_id_pipe_pc_plus_offset pipe still uses the combinational value.
-always_ff @(posedge i_riscv_core_clk or negedge i_riscv_core_rst_n) begin
-  if (!i_riscv_core_rst_n)
-    pc_plus_offset_if_reg <= '0;
-  else
-    pc_plus_offset_if_reg <= pc_plus_offset_if;
-end
+// (pc_plus_offset_if_reg removed: the registered sequential-PC for the pcsrc
+// mux is inherently stale across branch redirects -- see the mux comment.)
 
 
 riscv_core_icache_top
@@ -1998,6 +1996,9 @@ u_riscv_core_hazard_unit
     ,.i_hazard_unit_rd_ex         (id_ex_pipe_rd)
     ,.i_hazard_unit_rd_mem        (ex_mem_pipe_rd)
     ,.i_hazard_unit_rd_wb         (mem_wb_pipe_rd)
+    // Stale-duplicate detection (if_id PC == EX PC with a load in EX)
+    ,.i_hazard_unit_pc_id         (if_id_pipe_pc)
+    ,.i_hazard_unit_pc_ex         (id_ex_pipe_pc)
     // Control signals inputs
     ,.i_hazard_unit_regwrite_mem  (ex_mem_pipe_regwrite)
     ,.i_hazard_unit_regwrite_wb   (mem_wb_pipe_regwrite)
