@@ -59,15 +59,15 @@ if pgrep -f "run_full_wsl.sh" >/dev/null 2>&1 || pgrep -x vivado >/dev/null 2>&1
     exit 0
 fi
 
-# ---- heal the license MAC if this boot lost the fix-wsl-mac.sh race --------
+# ---- always run heal_mac.sh (idempotent) ------------------------------------
+# This applies kernel tuning (overcommit_memory, swappiness, etc.) on every
+# tick, and heals the MAC if it drifted. The script checks the MAC internally
+# so calling it when the MAC is already correct is a safe no-op for the heal.
+echo "running heal_mac.sh (kernel tuning + MAC check)" >> "$LOG"
+wsl.exe -u root -e bash "$REPO/synth_xilinx/heal_mac.sh" >> "$LOG" 2>&1
+sleep 1
 cur=$(cat /sys/class/net/eth0/address 2>/dev/null)
-if [ -n "$cur" ] && [ "$cur" != "$MAC" ]; then
-    echo "healing MAC: $cur -> $MAC" >> "$LOG"
-    wsl.exe -u root -e bash "$REPO/synth_xilinx/heal_mac.sh" >> "$LOG" 2>&1
-    sleep 3
-    cur=$(cat /sys/class/net/eth0/address 2>/dev/null)
-    echo "MAC after heal: $cur" >> "$LOG"
-fi
+echo "MAC after heal: $cur" >> "$LOG"
 
 # ---- keep the license MAC guarded for the whole run ------------------------
 # The vSwitch re-asserts eth0's random MAC every few minutes; without the
