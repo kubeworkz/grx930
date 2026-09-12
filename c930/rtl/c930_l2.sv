@@ -161,7 +161,31 @@ module c930_l2
   // ---------------------------------------------------------------------------
   // Storage
   // ---------------------------------------------------------------------------
-  logic [TAG_BITS-1:0]           tag_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
+  // Tag storage: NUM_WAYS independent 2-D distributed-RAM banks (one per
+  // way) exposed through the tag_mem wire alias below.  As flops this was
+  // NUM_WAYS*NUM_SETS*TAG_BITS = 105K registers whose 512:1 read muxes cost
+  // ~200K LUTs (the MUXF7/F8 storm); as LUTRAM it is ~2K LUT-equivalents.
+  // Both reads are asynchronous (rd-hit compare on the incoming s_araddr at
+  // RD_IDLE, wr-hit compare on s_awaddr at WR_IDLE), and the only write is
+  // the RD_ALLOC tag update - so distributed RAM (async read) is the right
+  // primitive.  valid_mem stays in flops: it needs the bulk reset flush and
+  // is only 4x512 bits, and it gates every tag compare, so X-init of the
+  // banks is harmless (no hit until a line is allocated).
+  genvar gt, gs;
+  generate
+    for (gt = 0; gt < NUM_WAYS; gt++) begin : g_tag
+      (* ram_style = "distributed" *)
+      logic [TAG_BITS-1:0] tag_bank [0:NUM_SETS-1];
+      always_ff @(posedge i_clk) begin
+        if (rd_state == RD_ALLOC && rd_way == gt[WAY_BITS-1:0])
+          tag_bank[rd_set] <= rd_tag;
+      end
+    end
+    for (gt = 0; gt < NUM_WAYS; gt++)
+      for (gs = 0; gs < NUM_SETS; gs++)
+        assign tag_mem[gt][gs] = g_tag[gt].tag_bank[gs];
+  endgenerate
+  wire [TAG_BITS-1:0]            tag_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic                          valid_mem  [0:NUM_WAYS-1][0:NUM_SETS-1];
   // Line data storage: one simple-dual-port BRAM per (way, word) - 16 total
   // for the default geometry.  As flops this array alone is
@@ -497,7 +521,8 @@ module c930_l2
         sharers[rd_way][rd_set]   <= '0;
       end
       if (rd_state == RD_ALLOC) begin
-        tag_mem[rd_way][rd_set]   <= rd_tag;
+        // tag_mem written by the g_tag distributed-RAM banks (way-select via
+        // the generate guard); valid/sharers stay here.
         valid_mem[rd_way][rd_set] <= 1'b1;
         sharers[rd_way][rd_set]   <= (1 << rd_src);
         // Line data: written by the g_way/g_word generate banks (one bank
