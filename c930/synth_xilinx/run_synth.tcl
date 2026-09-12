@@ -28,7 +28,19 @@ open_project "$proj_dir/$proj_name.xpr"
 # The routed Fmax is ~68.75 MHz, so a 100 MHz core clock would violate timing
 # on the Arty. CLK_DIV=2 (top-module parameter) keeps the core well under the
 # Fmax and is the exact configuration the bitstream is built with.
-set_property generic {CLK_DIV=2} [current_fileset]
+# NOTE: set_property generic REPLACES the whole list (same footgun as
+# verilog_define, see create_project.tcl).  Read-modify-write so the fit
+# override ENABLE_NPU1=0 set at project creation is not silently dropped --
+# losing it cost a full synthesis run that came out 298% over capacity.
+set cur_generics [get_property generic [current_fileset]]
+set new_generics [list]
+foreach g $cur_generics {
+    if {[lindex [split $g =] 0] ne "CLK_DIV"} { lappend new_generics $g }
+}
+lappend new_generics CLK_DIV=2
+if {[lsearch -exact $new_generics ENABLE_NPU1=0] < 0} { lappend new_generics ENABLE_NPU1=0 }
+set_property generic $new_generics [current_fileset]
+puts "INFO: generics = $new_generics"
 
 # ---- Synthesis (resumable) ----
 set synth_status [get_property STATUS [get_runs synth_1]]
