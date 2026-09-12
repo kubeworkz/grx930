@@ -643,7 +643,7 @@ module c930_l2
                 wr_way      <= w[WAY_BITS-1:0];
                 wr_set      <= wr_cur_line[OFF_BITS +: SET_BITS];
                 wr_tag      <= wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS];
-                wr_inv_mask <= inv_mask_of_sharers(sharers[w][wr_cur_line[OFF_BITS +: SET_BITS]]);
+                wr_inv_mask <= inv_mask_of_sharers(sharers[w][wr_cur_line[OFF_BITS +: SET_BITS]]) & ~inv_port_of_src[wr_id];
               end
           end
           wr_state <= WR_INV;

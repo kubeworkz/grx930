@@ -17,7 +17,8 @@ CFLAGS = -march=rv64imac -mabi=lp64 -O2 -Wall -Wextra \
          -ffunction-sections -fdata-sections \
          -I./include
 
-LDFLAGS = -T linker.ld -nostdlib -nostartfiles -static \
+LINKER_SCRIPT ?= link_sim.ld
+LDFLAGS = -T $(LINKER_SCRIPT) -nostdlib -nostartfiles -static \
           -Wl,--gc-sections
 
 # Target firmware (default: command processor, alternatives: uart_echo_test)

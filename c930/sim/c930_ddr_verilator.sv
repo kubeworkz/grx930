@@ -97,18 +97,18 @@ module c930_ddr
   // ---- Read path: 3-cycle state machine ----
   typedef enum logic [1:0] { RD_IDLE, RD_ADDR, RD_DATA } rd_state_t;
   rd_state_t rd_state;
-  logic [3:0]  rd_line_q;
+  logic [10:0] rd_line_q;
   logic [1:0]  rd_src_q;
   logic [2:0]  rd_wordidx_q;
 
-  wire [3:0] ic_line = i_icache_rd_addr[8:5];
-  wire [3:0] dc_line = i_dcache_rd_addr[8:5];
+  wire [10:0] ic_line = i_icache_rd_addr[15:5];
+  wire [10:0] dc_line = i_dcache_rd_addr[15:5];
 
   // Explicit per-bank read data (no for loops -- Verilator safe)
   logic [31:0] bank0, bank1, bank2, bank3, bank4, bank5, bank6, bank7;
   logic [CACHE_LINE_WIDTH-1:0] rd_line_data;
 
-  wire [8:0] line_base = {rd_line_q, 5'b0};  // line_base = line * 32
+  wire [15:0] line_base = {rd_line_q, 5'b0};  // line_base = line * 32
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -128,7 +128,7 @@ module c930_ddr
             rd_src_q  <= 2'b01;
             rd_state  <= RD_ADDR;
           end else if (r_busy) begin
-            rd_line_q    <= r_waddr[8:5];
+            rd_line_q    <= r_waddr[15:5];
             rd_wordidx_q <= r_waddr[4:2];
             rd_src_q     <= 2'b10;
             rd_state     <= RD_ADDR;
@@ -163,7 +163,7 @@ module c930_ddr
   wire [2:0] dcw_word = i_dcache_wr_addr[4:3];
   wire [2:0] dc_ba = {dcw_word, 1'b0};
   wire [2:0] dc_bb = {dcw_word, 1'b1};
-  wire [3:0] dcw_line = i_dcache_wr_addr[8:5];
+  wire [10:0] dcw_line = i_dcache_wr_addr[15:5];
   wire       dc_wr = i_dcache_wr_valid;
   wire [2:0] ax_bank = w_waddr[4:2];
   wire       ax_conf = dc_wr && (ax_bank == dc_ba || ax_bank == dc_bb);
@@ -182,14 +182,14 @@ module c930_ddr
     end
     // AXI write (64-bit)
     if (ax_wr && !dc_wr) begin
-      if (s_axi_wstrb[0]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 0] <= s_axi_wdata[7:0];
-      if (s_axi_wstrb[1]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 1] <= s_axi_wdata[15:8];
-      if (s_axi_wstrb[2]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 2] <= s_axi_wdata[23:16];
-      if (s_axi_wstrb[3]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 3] <= s_axi_wdata[31:24];
-      if (s_axi_wstrb[4]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 32 + 0] <= s_axi_wdata[39:32];
-      if (s_axi_wstrb[5]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 32 + 1] <= s_axi_wdata[47:40];
-      if (s_axi_wstrb[6]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 32 + 2] <= s_axi_wdata[55:48];
-      if (s_axi_wstrb[7]) mem[{w_waddr[8:5], 5'b0} + ax_bank*4 + 32 + 3] <= s_axi_wdata[63:56];
+      if (s_axi_wstrb[0]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 0] <= s_axi_wdata[7:0];
+      if (s_axi_wstrb[1]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 1] <= s_axi_wdata[15:8];
+      if (s_axi_wstrb[2]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 2] <= s_axi_wdata[23:16];
+      if (s_axi_wstrb[3]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 3] <= s_axi_wdata[31:24];
+      if (s_axi_wstrb[4]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 32 + 0] <= s_axi_wdata[39:32];
+      if (s_axi_wstrb[5]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 32 + 1] <= s_axi_wdata[47:40];
+      if (s_axi_wstrb[6]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 32 + 2] <= s_axi_wdata[55:48];
+      if (s_axi_wstrb[7]) mem[{w_waddr[15:5], 5'b0} + ax_bank*4 + 32 + 3] <= s_axi_wdata[63:56];
     end
   end
 
