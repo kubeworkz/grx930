@@ -175,14 +175,37 @@ module c930_l2
   //   * the write FSM never touches data_mem (write-through, no allocate).
   // So the read-issue cycle (RD_IDLE) never overlaps the write cycle
   // (RD_ALLOC) and the mapping is race-free.
-  (* ram_style = "block" *)
-  logic [DATA_WIDTH-1:0]         data_mem   [0:NUM_WAYS-1][0:NUM_SETS-1][0:WORDS_PER_LINE-1];
   // Registered BRAM read outputs: all ways/words of the AR-addressed set are
   // read at AR-accept (RD_IDLE); outputs are stable during RD_LOOKUP, where
   // the registered hit way selects them.  Timing is identical to the
   // pre-BRAM code: the old code read data_mem during the RD_LOOKUP cycle and
   // registered it into rd_stage/rd_serve_q at the same edge at which this
   // pipeline delivers the same value.
+  //
+  // The storage itself is NUM_WAYS*WORDS_PER_LINE independent simple-dual-port
+  // banks (one per (way, word) plane) instead of one 3-D array: Vivado cannot
+  // map a [way][set][word] array to BRAM (Synth 8-11357 "3D-RAM" warning; the
+  // array silently falls back to 524,288 registers), but each 2-D
+  // NUM_SETS x DATA_WIDTH plane infers one RAMB36.  Write priority over read
+  // on the shared clock edge is the standard SDP behaviour; the two events
+  // never coincide anyway (RD_IDLE read issue vs RD_ALLOC write, disjoint
+  // FSM states).
+  logic [DATA_WIDTH-1:0] data_q [0:NUM_WAYS-1][0:WORDS_PER_LINE-1];
+
+  genvar gw, gb;
+  generate
+    for (gw = 0; gw < NUM_WAYS; gw++) begin : g_way
+      for (gb = 0; gb < WORDS_PER_LINE; gb++) begin : g_word
+        (* ram_style = "block" *)
+        logic [DATA_WIDTH-1:0] bank [0:NUM_SETS-1];
+        always_ff @(posedge i_clk) begin
+          if (rd_state == RD_ALLOC && rd_way == gw)
+            bank[rd_set] <= rd_stage[gb];
+          data_q[gw][gb] <= bank[s_araddr[OFF_BITS +: SET_BITS]];  // read port: next-cycle RD_LOOKUP data
+        end
+      end
+    end
+  endgenerate
   logic [NUM_SRC-1:0]            sharers    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic [WAY_BITS-1:0]           victim_cnt [0:NUM_SETS-1];
 
@@ -275,13 +298,6 @@ module c930_l2
   logic [NUM_WAYS-1:0]    rd_hit_way;
   logic                   rd_hit;
 
-  logic [DATA_WIDTH-1:0] data_q [0:NUM_WAYS-1][0:WORDS_PER_LINE-1];
-
-  always_ff @(posedge i_clk) begin
-    for (int w = 0; w < NUM_WAYS; w++)
-      for (int b = 0; b < WORDS_PER_LINE; b++)
-        data_q[w][b] <= data_mem[w][s_araddr[OFF_BITS +: SET_BITS]][b];
-  end
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -484,8 +500,8 @@ module c930_l2
         tag_mem[rd_way][rd_set]   <= rd_tag;
         valid_mem[rd_way][rd_set] <= 1'b1;
         sharers[rd_way][rd_set]   <= (1 << rd_src);
-        for (int b = 0; b < WORDS_PER_LINE; b++)
-          data_mem[rd_way][rd_set][b] <= rd_stage[b];
+        // Line data: written by the g_way/g_word generate banks (one bank
+        // captures rd_stage[gb] when rd_way matches its way).
       end
       // Write path: drop the line (wins over a same-cycle alloc: the write
       // is the newer event).

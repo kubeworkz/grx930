@@ -53,6 +53,14 @@ puts "INFO: BOOT_HEX_FILE=$boot_hex"
 # REPLACES the list, so all defines go in ONE call on sources_1.
 set_property verilog_define [list {SYNTHESIS=1} BOOT_HEX_FILE=\"$boot_hex\"] [get_filesets sources_1]
 
+# ---- FPGA fit overrides ----
+# The two-NPU SoC with flop-mapped L2 needs ~548K LUTs (408% of the xc7a200t).
+# ENABLE_NPU1=0 drops the second GEMM tile (-47.5K LUTs, -214 DSPs) so the
+# design fits; the L2 data-array-to-BRAM transform (rtl/c930_l2.sv) is
+# structural in the RTL and needs no switch here.  Simulations keep the
+# default ENABLE_NPU1=1.
+set_property generic [list ENABLE_NPU1=0] [get_filesets sources_1]
+
 
 # ---- SystemVerilog ----
 set_property file_type SystemVerilog [get_files *.sv]

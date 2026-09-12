@@ -57,6 +57,10 @@ module c930_soc_top
   // behavior is identical at any size.
   parameter int L2_NUM_SETS = 512,
   parameter int L2_NUM_WAYS = 4,
+  // FPGA fit: the two-NPU SoC + full L2 needs ~548K LUTs; dropping NPU1 and
+  // mapping the L2 data arrays to BRAM brings it under the xc7a200t budget.
+  // Default 1 preserves the two-NPU simulation config.
+  parameter bit ENABLE_NPU1 = 1,
   // Debug: bypass the L2 (crossbar S1 -> DDR directly).  For isolating
   // boot hangs; normal operation leaves this 0.
   parameter bit BYPASS_L2 = 0,
@@ -1928,9 +1932,12 @@ module c930_soc_top
   );
 
   // =========================================================================
-  // NPU1 (second GEMM tile, same config as NPU0)
+  // NPU1 (second GEMM tile, same config as NPU0)  -- gated by ENABLE_NPU1
   // CSR at 0x4000_0040-0x4000_007F (address decode in MMIO mux below)
+  // When disabled (FPGA fit), the DMA master is parked idle and the
+  // status/irq outputs are held low so nothing floats.
   // =========================================================================
+  generate if (ENABLE_NPU1) begin : g_npu1
   c930_npu_top #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -1992,6 +1999,16 @@ module c930_soc_top
     .o_error       (o_npu1_error),
     .o_irq         (o_npu1_irq)
   );
+  end else begin : g_npu1_off
+    assign npu1_awvalid = 1'b0;
+    assign npu1_wvalid  = 1'b0;
+    assign npu1_arvalid = 1'b0;
+    assign o_npu1_busy  = 1'b0;
+    assign o_npu1_done  = 1'b0;
+    assign o_npu1_error = 1'b0;
+    assign o_npu1_irq   = 1'b0;
+  end
+  endgenerate
 
   // NPU1 doesn't use AXI ID signals — the arbiter drives npu1_bid/npu1_rid
   // as outputs; they're dead-end signals since the NPU has no bid/rid ports.
@@ -2145,7 +2162,7 @@ module c930_soc_top
   // ---- Address decode mux (write side: decodes the write address) ----
   wire w_to_uart  = (mmio_awaddr_raw[31:12] == 20'h40001);
   wire w_to_aplic = (mmio_awaddr_raw[31:12] == 20'h40004);
-  wire w_to_npu1  = (mmio_awaddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
+  wire w_to_npu1  = ENABLE_NPU1 && (mmio_awaddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
   wire w_to_npu0  = ~w_to_uart & ~w_to_npu1 & ~w_to_aplic;  // default: NPU0
 
   // ---- Address decode mux (read side: decodes the READ address) ----
@@ -2155,7 +2172,7 @@ module c930_soc_top
   // which is exactly what happened to the APLIC claim/status reads.
   wire r_to_uart  = (mmio_araddr_raw[31:12] == 20'h40001);
   wire r_to_aplic = (mmio_araddr_raw[31:12] == 20'h40004);
-  wire r_to_npu1  = (mmio_araddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
+  wire r_to_npu1  = ENABLE_NPU1 && (mmio_araddr_raw[31:6]  == 26'h1000001);   // 0x4000_0040-0x4000_007F
   wire r_to_npu0  = ~r_to_uart & ~r_to_npu1 & ~r_to_aplic;  // default: NPU0
 
   // NPU0 CSR (backward compat)
@@ -2169,16 +2186,18 @@ module c930_soc_top
   assign csr_arvalid = mmio_arvalid_raw & r_to_npu0;
   assign csr_rready  = mmio_rready_raw & r_to_npu0;
 
-  // NPU1 CSR
-  assign csr1_awaddr  = mmio_awaddr_raw;
-  assign csr1_awvalid = mmio_awvalid_raw & w_to_npu1;
-  assign csr1_wdata   = mmio_wdata_raw;
-  assign csr1_wstrb   = mmio_wstrb_raw;
-  assign csr1_wvalid  = mmio_wvalid_raw & w_to_npu1;
-  assign csr1_bready  = mmio_bready_raw & w_to_npu1;
-  assign csr1_araddr  = mmio_araddr_raw;
-  assign csr1_arvalid = mmio_arvalid_raw & r_to_npu1;
-  assign csr1_rready  = mmio_rready_raw & r_to_npu1;
+  // NPU1 CSR (only driven when ENABLE_NPU1)
+  if (ENABLE_NPU1) begin : g_csr1
+    assign csr1_awaddr  = mmio_awaddr_raw;
+    assign csr1_awvalid = mmio_awvalid_raw & w_to_npu1;
+    assign csr1_wdata   = mmio_wdata_raw;
+    assign csr1_wstrb   = mmio_wstrb_raw;
+    assign csr1_wvalid  = mmio_wvalid_raw & w_to_npu1;
+    assign csr1_bready  = mmio_bready_raw & w_to_npu1;
+    assign csr1_araddr  = mmio_araddr_raw;
+    assign csr1_arvalid = mmio_arvalid_raw & r_to_npu1;
+    assign csr1_rready  = mmio_rready_raw & r_to_npu1;
+  end
 
   // UART AXI4-Lite signals (active when w_to_uart / r_to_uart)
   assign uart_awaddr  = mmio_awaddr_raw;
