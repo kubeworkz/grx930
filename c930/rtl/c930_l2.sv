@@ -163,7 +163,26 @@ module c930_l2
   // ---------------------------------------------------------------------------
   logic [TAG_BITS-1:0]           tag_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic                          valid_mem  [0:NUM_WAYS-1][0:NUM_SETS-1];
+  // Line data storage: one simple-dual-port BRAM per (way, word) - 16 total
+  // for the default geometry.  As flops this array alone is
+  // NUM_WAYS*NUM_SETS*WORDS_PER_LINE*DATA_WIDTH = 524,288 FFs (4x the
+  // xc7a200t's entire FF budget); as block RAM it is 16 RAMB36s of 365
+  // available.  Access pattern (checked against both FSMs):
+  //   * reads: RD_LOOKUP hit-capture and the RD_HIT_SERVE prime - both consume
+  //     the line addressed by the AR accepted in the previous cycle;
+  //   * write: RD_ALLOC only, one beat-word each, address registered two
+  //     cycles earlier;
+  //   * the write FSM never touches data_mem (write-through, no allocate).
+  // So the read-issue cycle (RD_IDLE) never overlaps the write cycle
+  // (RD_ALLOC) and the mapping is race-free.
+  (* ram_style = "block" *)
   logic [DATA_WIDTH-1:0]         data_mem   [0:NUM_WAYS-1][0:NUM_SETS-1][0:WORDS_PER_LINE-1];
+  // Registered BRAM read outputs: all ways/words of the AR-addressed set are
+  // read at AR-accept (RD_IDLE); outputs are stable during RD_LOOKUP, where
+  // the registered hit way selects them.  Timing is identical to the
+  // pre-BRAM code: the old code read data_mem during the RD_LOOKUP cycle and
+  // registered it into rd_stage/rd_serve_q at the same edge at which this
+  // pipeline delivers the same value.
   logic [NUM_SRC-1:0]            sharers    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic [WAY_BITS-1:0]           victim_cnt [0:NUM_SETS-1];
 
@@ -256,6 +275,14 @@ module c930_l2
   logic [NUM_WAYS-1:0]    rd_hit_way;
   logic                   rd_hit;
 
+  logic [DATA_WIDTH-1:0] data_q [0:NUM_WAYS-1][0:WORDS_PER_LINE-1];
+
+  always_ff @(posedge i_clk) begin
+    for (int w = 0; w < NUM_WAYS; w++)
+      for (int b = 0; b < WORDS_PER_LINE; b++)
+        data_q[w][b] <= data_mem[w][s_araddr[OFF_BITS +: SET_BITS]][b];
+  end
+
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       rd_state       <= RD_IDLE;
@@ -307,7 +334,7 @@ module c930_l2
               if (rd_hit_way[w]) begin
                 rd_way <= w[WAY_BITS-1:0];
                 for (int b = 0; b < WORDS_PER_LINE; b++)
-                  rd_stage[b] <= data_mem[w][rd_set][b];
+                  rd_stage[b] <= data_q[w][b];
               end
             rd_state <= RD_HIT_SERVE;
             rd_beat  <= '0;   // single-writer: serve counter restarts here
@@ -419,7 +446,7 @@ module c930_l2
         // Hit: prime the serve data from the cached line (rd_stage is being
         // rewritten this cycle, so read data_mem directly).
         for (int w = 0; w < NUM_WAYS; w++)
-          if (rd_hit_way[w]) rd_serve_q <= data_mem[w][rd_set][0];
+          if (rd_hit_way[w]) rd_serve_q <= data_q[w][0];
       end
       else if (rd_state == RD_HIT_SERVE && s_rvalid && s_rready && !s_rlast)
         rd_serve_q <= rd_stage[rd_beat + 1];
