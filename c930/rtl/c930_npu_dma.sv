@@ -82,6 +82,9 @@ module c930_npu_dma
   output logic signed [DIN_W-1:0] o_staging_wdata,
 
   output logic                    o_core_start,
+  // 1-cycle pulse: this GEMM is abandoned (DDR timeout or watchdog) and the
+  // core must stop -- see c930_npu_core i_abort.
+  output logic                    o_core_abort,
   input  logic                    i_core_done,
   input  logic                    i_core_error,
   output logic [15:0]             o_c_raddr,
@@ -273,6 +276,7 @@ module c930_npu_dma
       o_wbank       <= 1'b0;
       o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
+      o_core_abort  <= 1'b0;
       launched      <= 1'b0;
       watchdog_cnt    <= 0;
       watchdog_limit  <= 0;
@@ -323,6 +327,7 @@ module c930_npu_dma
         bank_sel_pending <= 1'b0;
       end
       o_core_start  <= 1'b0;
+      o_core_abort  <= 1'b0;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
       m_axi_awvalid <= 1'b0;
@@ -350,6 +355,12 @@ module c930_npu_dma
           m_axi_rready  <= 1'b0;
           pf_state      <= PF_IDLE;
           pf2_state     <= PF2_IDLE;
+          // The core may be mid-GEMM, and under the A-row interlock it may be
+          // waiting in S_AROW for a row this abort guarantees never lands.
+          // Stop it, and disarm the watchdog that was timing it.
+          o_core_abort    <= 1'b1;
+          launched        <= 1'b0;
+          watchdog_active <= 1'b0;
           phase         <= P_IDLE;
         end else begin
           ddr_timeout_cnt <= ddr_timeout_cnt - 1;
@@ -639,6 +650,7 @@ module c930_npu_dma
                        watchdog_limit);
               launched       <= 1'b0;
               watchdog_active <= 1'b0;
+              o_core_abort   <= 1'b1;     // and the core it was timing
               pf_state       <= PF_IDLE;  // stop prefetch
               o_error        <= 1'b1;
               phase          <= P_DONE;

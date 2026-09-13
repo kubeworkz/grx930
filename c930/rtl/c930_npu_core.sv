@@ -53,6 +53,10 @@ module c930_npu_core
   input  logic [15:0]                 i_a_rows_ready,
   input  logic                        i_wbank,    // write bank select from DMA: 0=bank0, 1=bank1
   input  logic                        i_start,  // 1-cycle pulse, sampled in IDLE
+  // 1-cycle pulse from the DMA: it has abandoned this GEMM (DDR timeout or
+  // watchdog), so return to S_IDLE from wherever the FSM is.  Tie low where
+  // there is no DMA.
+  input  logic                        i_abort,
   input  logic [15:0]                 i_dim_m,
   input  logic [15:0]                 i_dim_n,
   input  logic [15:0]                 i_dim_k,
@@ -370,6 +374,12 @@ module c930_npu_core
     end else begin
       o_done <= done_cond;
 
+      // No more A rows will land once the DMA gives up, so S_AROW would wait
+      // forever -- and a core left waiting wakes up when the next GEMM's rows
+      // arrive and computes them into this one.
+      if (i_abort)
+        state <= S_IDLE;
+      else
       case (state)
 
         S_IDLE: begin

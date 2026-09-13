@@ -90,7 +90,7 @@ module c930_npu_top
   logic [31:0] a_base, b_base, c_base;
   logic [2:0]  precision;
 
-  logic                    dma_wen, dma_wsel, core_start;
+  logic                    dma_wen, dma_wsel, core_start, core_abort;
   logic [15:0]             a_rows_ready;
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
@@ -198,6 +198,7 @@ module c930_npu_top
     .o_staging_waddr (staging_waddr),
     .o_staging_wdata (staging_wdata),
     .o_core_start  (core_start),
+    .o_core_abort  (core_abort),
     .i_core_done   (core_done),
     .i_core_error  (core_error),
     .o_c_raddr     (c_raddr),
@@ -251,6 +252,7 @@ module c930_npu_top
     .i_bank_sel (dma_bank_sel),
     .i_wbank    (dma_wbank),
     .i_start    (core_start),
+    .i_abort    (core_abort),
     .i_dim_m    (dim_m),
     .i_dim_n    (dim_n),
     .i_dim_k    (dim_k),
