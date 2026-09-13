@@ -6,12 +6,15 @@
 // The datapath is a weight-stationary systolic array (c930_systolic_array).
 // This controller:
 //   * preloads A and B into small internal buffers (data-plane ports),
-//   * loops over output rows M, N-tiles of NUM_COLS each, and K-tiles of
-//     NUM_ROWS each,
+//   * loops over N-tiles of NUM_COLS each, K-tiles of NUM_ROWS each, and then
+//     output rows M innermost, so each B tile is loaded once and reused by
+//     every row rather than reloaded per row,
 //   * generates the activation skew (row k pulses at cycle k) and the
 //     accumulator skew (column n pulses at cycle n),
 //   * captures the bottom-edge outputs in a staggered window,
-//   * writes the results to the C buffer.
+//   * carries the running K accumulation in the C buffer between K tiles,
+//     restoring it into acc[] before each run so the arithmetic (including
+//     non-associative FP32 addition order) is unchanged.
 //
 // See c930/doc/c930_architecture.md section 5 for the dataflow proof.
 // -----------------------------------------------------------------------------
@@ -128,12 +131,17 @@ module c930_npu_core
 
   // C matrix: inferred as Block RAM when synthesis tool supports it.
   // For MAX_M=8/MAX_N=12 (SoC defaults): 384 bytes, fits in LUTRAM.
-  // For MAX_M=64/MAX_N=8 (200T): 16 KB, maps to RAMB18K blocks.
+  // For MAX_M=64/MAX_N=8 (200T): maps to RAMB18K blocks.
   // Combinational read (OPREG disabled on Xilinx BRAMs) preserves the
   // existing DMA timing — no extra wait states needed.
-  (* ram_style = "block" *) logic signed [31:0] c_mem [0:MAX_M*MAX_N-1];
+  //
+  // Widened from 32 to ACC_W bits.  Under the m-inner loop order the running
+  // K accumulation lives here between K tiles rather than in acc[], and an
+  // INT16 x INT16 reduction over MAX_K=256 needs 39 bits.  Truncation to 32
+  // happens only on readback, exactly where it happened before.
+  (* ram_style = "block" *) logic signed [ACC_W-1:0] c_mem [0:MAX_M*MAX_N-1];
 
-  assign o_c_rdata = c_mem[i_c_raddr];
+  assign o_c_rdata = c_mem[i_c_raddr][31:0];
 
   // Preload A/B: write port always targets the INACTIVE bank (~i_bank_sel).
   // staging_wen has priority — fires during P_STAGING when the core is
@@ -189,7 +197,7 @@ module c930_npu_core
   // localparam state encoding (avoids iverilog's enum-label-in-port quirk)
   localparam logic [2:0] S_IDLE    = 3'd0;
   localparam logic [2:0] S_WLOAD   = 3'd1;
-  localparam logic [2:0] S_PRELOAD = 3'd2;  // preload next tile into inactive bank
+  localparam logic [2:0] S_ACCLD   = 3'd2;  // reload acc[] from C for K tiles > 0
   localparam logic [2:0] S_RUN     = 3'd3;
   localparam logic [2:0] S_WRITE   = 3'd4;
   localparam logic [2:0] S_AROW    = 3'd5;  // wait for the next A row to land
@@ -203,17 +211,15 @@ module c930_npu_core
   int w_r, w_n;     // weight-load row/col counters
   int n_cnt;        // result write counter
 
-  // Double-buffering: bank_sel toggles between 0/1; preload registers
-  // drive weight loading during S_RUN so the next tile's weights are
-  // ready when S_RUN finishes.
+  // Weight bank.  With the m-inner loop order a B tile is loaded once and then
+  // used for every output row, so the K-tile double-buffer that the m-outer
+  // order needed is gone: one bank is loaded and computed with for the whole
+  // (N tile, K tile) pass.  The array's second bank is left unused here; the
+  // DMA still uses i_bank_sel for its own A/B double-buffering across GEMMs.
   logic        bank_sel;           // which weight bank is active for compute
-  logic        preload_en;        // 1 while preloading next tile's weights during S_RUN
-  logic        preload_done;      // 1 when preload for next tile completed
-  int  preload_w_r, preload_w_n;  // preload address counters
-  int  preload_kr;                // kr for the next K tile being preloaded
 
   // Snapshot of i_bank_sel captured at GEMM start.  Used for all B memory
-  // reads (weight loading + preload) so the read bank is stable even if
+  // reads (weight loading) so the read bank is stable even if
   // the DMA's bank_sel toggles mid-GEMM (e.g. bank_sel_pending from a
   // earlier P_STAGING).  Also decouples the B read path from the live
   // i_bank_sel, eliminating a potential combinational timing hazard
@@ -231,6 +237,12 @@ module c930_npu_core
 
   assign n_base      = nt_reg * NUM_COLS;
   assign nc          = (i_dim_n - n_base >= NUM_COLS) ? NUM_COLS : (i_dim_n - n_base);
+
+  // C element addressed by S_ACCLD (read) and S_WRITE (write).  The two states
+  // are mutually exclusive, so c_mem keeps one read port and one write port
+  // and still infers as a simple dual-port BRAM alongside the DMA's readback.
+  localparam int C_AW = $clog2(MAX_M * MAX_N);
+  wire [C_AW-1:0] c_idx = C_AW'(m_reg * i_dim_n + n_base + n_cnt);
   assign num_k_tiles = (i_dim_k + NUM_ROWS - 1) / NUM_ROWS;
   assign num_n_tiles = (i_dim_n + NUM_COLS - 1) / NUM_COLS;
   assign dims_ok     = (i_dim_m >= 1) && (i_dim_m <= MAX_M) &&
@@ -249,8 +261,9 @@ module c930_npu_core
   logic done_cond;
   assign done_cond = (state == S_WRITE) &&
                      (n_cnt  == nc - 1) &&
-                     (nt_reg == num_n_tiles - 1) &&
-                     (m_reg  == i_dim_m - 1);
+                     (m_reg  == i_dim_m - 1) &&
+                     (kt_reg == num_k_tiles - 1) &&
+                     (nt_reg == num_n_tiles - 1);
 
   // ---------------------------------------------------------------------------
   // Performance counters
@@ -283,13 +296,13 @@ module c930_npu_core
       // NUM_ROWS * NUM_COLS = 64 PEs, each doing one MAC per cycle.
       if (state == S_RUN)
         op_cnt <= op_cnt + NUM_ROWS * NUM_COLS;
-      // Count weight-movement cycles.  S_WLOAD loads the first K tile's
-      // weights; every later tile arrives through S_PRELOAD.  Counting only
-      // S_WLOAD reported one tile's load per (m, N-tile) pass where the true
-      // figure is ceil(K/NUM_ROWS) of them -- 32x low at K=256, which is the
-      // difference between "the array stalls occasionally" and "the array
-      // spends most of its time loading weights".
-      if (state == S_WLOAD || state == S_PRELOAD)
+      // Count weight-movement cycles.  Under the m-inner loop order every K
+      // tile is loaded exactly once, in S_WLOAD, so S_WLOAD alone is the whole
+      // figure again -- the S_PRELOAD term the m-outer order needed is gone
+      // with the state.  Also count S_ACCLD: reloading acc[] from C is
+      // accumulator traffic, not compute, and hiding it would overstate the
+      // array's utilisation the same way undercounting weights did.
+      if (state == S_WLOAD || state == S_ACCLD)
         stall_cnt <= stall_cnt + 1;
       // Kept separate from stall_cnt so the accounting identity in
       // doc/c930_architecture.md still decomposes: weight movement and
@@ -362,23 +375,22 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   logic signed [ACC_W*NUM_COLS-1:0] ps_out;   // flat; col c = bits [c*ACC_W +: ACC_W]
 
-  // Weight load mux: during S_WLOAD use main counters, during S_RUN use preload counters
+  // Weight load: S_WLOAD drives the array's write port directly.  The
+  // preload path the m-outer order needed is gone with S_PRELOAD.
   logic        w_load_active;
   logic        w_load_bank;
   logic [$clog2(NUM_ROWS)-1:0] w_load_row;
   logic [$clog2(NUM_COLS)-1:0] w_load_col;
   logic signed [DIN_W-1:0]     w_load_data;
 
-  assign w_load_active = (state == S_WLOAD) || preload_en;
-  assign w_load_bank   = preload_en ? ~bank_sel : bank_sel;
-  assign w_load_row    = preload_en ? preload_w_r[$clog2(NUM_ROWS)-1:0] : w_r[$clog2(NUM_ROWS)-1:0];
-  assign w_load_col    = preload_en ? preload_w_n[$clog2(NUM_COLS)-1:0] : w_n[$clog2(NUM_COLS)-1:0];
+  assign w_load_active = (state == S_WLOAD);
+  assign w_load_bank   = bank_sel;
+  assign w_load_row    = w_r[$clog2(NUM_ROWS)-1:0];
+  assign w_load_col    = w_n[$clog2(NUM_COLS)-1:0];
   // Double-buffered B read: select bank via b_bank_sel (snapshot of
   // i_bank_sel captured at GEMM start, see comment above).
   logic signed [DIN_W-1:0] b_read_data;
-  wire [15:0] b_read_addr = preload_en ?
-    ((kt_reg+1)*NUM_ROWS + preload_w_r)*i_dim_n + n_base + preload_w_n :
-    (k_base_reg + w_r)*i_dim_n + n_base + w_n;
+  wire [15:0] b_read_addr = (k_base_reg + w_r)*i_dim_n + n_base + w_n;
   assign b_read_data = b_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
   assign w_load_data = b_read_data;
 
@@ -410,7 +422,31 @@ module c930_npu_core
   );
 
   // ---------------------------------------------------------------------------
-  // FSM  (double-buffered: preload next K tile during S_RUN)
+  // FSM  (m-inner loop order: for each N tile, for each K tile, load the B
+  // tile once and then sweep every output row against it)
+  //
+  //   for nt:                       N tile
+  //     for kt:                     K tile
+  //       S_WLOAD                   load B[kt][nt] into the array, once
+  //       for m:                    output row  <-- innermost
+  //         S_AROW                  wait if the DMA has not landed A[m] yet
+  //         S_ACCLD                 acc[] <- C[m][nt]  (skipped when kt == 0)
+  //         S_RUN                   accumulate this tile into acc[]
+  //         S_WRITE                 C[m][nt] <- acc[]
+  //
+  // The m-outer order this replaces reloaded the same B tile once per output
+  // row: M * n_tiles * k_tiles weight loads where n_tiles * k_tiles suffice.
+  //
+  // The partial sum still enters the array through i_ps_in exactly as before,
+  // so the arithmetic -- including FP32 addition order, which is not
+  // associative -- is unchanged.  That is what S_ACCLD buys: it restores acc[]
+  // from C before each run instead of letting the accumulator live in
+  // registers across K tiles, which the m-inner order makes impossible.
+  //
+  // Note what this does to the operand supply.  m innermost means the core
+  // walks all M rows of A during the very first K tile, instead of finishing
+  // row 0 entirely before touching row 1.  The DMA's row prefetch now has to
+  // keep up from the first pass -- which is what S_AROW is for.
   // ---------------------------------------------------------------------------
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -418,6 +454,7 @@ module c930_npu_core
       o_done      <= 1'b0;
       o_error     <= 1'b0;
       m_reg       <= 0;
+      m_base      <= 0;
       nt_reg      <= 0;
       kt_reg      <= 0;
       t           <= 0;
@@ -428,11 +465,6 @@ module c930_npu_core
       kr_reg      <= 0;
       bank_sel    <= 1'b0;
       b_bank_sel  <= 1'b0;
-      preload_en  <= 1'b0;
-      preload_done <= 1'b0;
-      preload_w_r <= 0;
-      preload_w_n <= 0;
-      preload_kr  <= 0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
       o_done <= done_cond;
@@ -452,17 +484,15 @@ module c930_npu_core
             end else begin
               o_error    <= 1'b0;
               m_reg      <= 0;
-              m_base     <= 0;  // pre-computed m_reg * i_dim_k
+              m_base     <= 0;
               nt_reg     <= 0;
               kt_reg     <= 0;
               t          <= 0;
               w_r        <= 0;
               w_n        <= 0;
               n_cnt      <= 0;
-              bank_sel    <= i_bank_sel;  // match DMA's active bank for weight loading
-              b_bank_sel  <= i_bank_sel;  // snapshot for stable B reads throughout GEMM
-              preload_en  <= 1'b0;
-              preload_done <= 1'b0;
+              bank_sel   <= i_bank_sel;  // match DMA's active bank for weight loading
+              b_bank_sel <= i_bank_sel;  // snapshot for stable B reads throughout GEMM
               // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)
               k_base_reg <= 0;
               kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
@@ -473,23 +503,23 @@ module c930_npu_core
         end
 
         // Load B[k_base + w_r][n_base + w_n] into PE(w_r, w_n), one per cycle.
-        // Only the nc active columns of this N tile are loaded.
+        // Only the nc active columns and kr active rows of this tile are
+        // loaded.  Entered once per (N tile, K tile), not once per row.
         S_WLOAD: begin
           if ((w_n == nc - 1) && (w_r == kr_reg - 1)) begin
-            // last weight of this tile -- start preloading next K tile
-            w_r   <= 0;
-            w_n   <= 0;
-            t     <= 0;
-            if (kt_reg + 1 < num_k_tiles) begin
-              // Preload next tile's weights into inactive bank
-              preload_en  <= 1'b1;
-              preload_w_r <= 0;
-              preload_w_n <= 0;
-              preload_kr  <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
-                             NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
-              state <= S_PRELOAD;  // run preload before S_RUN
+            w_r    <= 0;
+            w_n    <= 0;
+            t      <= 0;
+            n_cnt  <= 0;
+            m_reg  <= 0;
+            m_base <= 0;
+            if (kt_reg == 0) begin
+              // First K tile: the accumulator starts at zero, so there is
+              // nothing to restore -- this is the m-outer order's behaviour.
+              for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
+              state <= S_RUN;
             end else begin
-              state <= S_RUN;  // last tile, no preload needed
+              state <= S_ACCLD;
             end
           end else if (w_n == nc - 1) begin
             w_n <= 0;
@@ -499,25 +529,21 @@ module c930_npu_core
           end
         end
 
-        // Preload next K tile's weights into inactive bank.
-        // Runs for preload_kr * nc cycles using the same write port as S_WLOAD
-        // but targeting the other bank.
-        S_PRELOAD: begin
-          if ((preload_w_n == nc - 1) && (preload_w_r == preload_kr - 1)) begin
-            // preload done -- start compute
-            preload_en   <= 1'b0;
-            preload_done <= 1'b1;
-            t <= 0;
+        // Restore this row's running partial sums from C, one column per
+        // cycle, so i_ps_in carries the same value it carried when the
+        // accumulator lived in registers.
+        S_ACCLD: begin
+          acc[n_cnt] <= c_mem[c_idx];
+          if (n_cnt == nc - 1) begin
+            n_cnt <= 0;
+            t     <= 0;
             state <= S_RUN;
-          end else if (preload_w_n == nc - 1) begin
-            preload_w_n <= 0;
-            preload_w_r <= preload_w_r + 1;
           end else begin
-            preload_w_n <= preload_w_n + 1;
+            n_cnt <= n_cnt + 1;
           end
         end
 
-        // Run one K tile.  Cycles: NUM_ROWS + NUM_COLS + 2
+        // Run one K tile for one output row.  Cycles: NUM_ROWS + NUM_COLS + 2
         // (All precisions have 2-cycle PE latency: product reg + output reg.)
         // The FP16 accumulator is combinational to preserve cascade timing.
         S_RUN: begin
@@ -527,80 +553,61 @@ module c930_npu_core
           end
 
           if (t == NUM_ROWS + NUM_COLS + 1) begin
-            t <= 0;
-            if (kt_reg == num_k_tiles - 1) begin
-              // all K tiles done for this (row, N tile) -> write results
-              state <= S_WRITE;
-              n_cnt <= 0;
-              preload_en <= 1'b0;  // stop any preload
-            end else begin
-              // next K tile: swap banks (weights were preloaded in S_PRELOAD)
-              kt_reg <= kt_reg + 1;
-              bank_sel <= ~bank_sel;
-              preload_done <= 1'b0;
-              // Update k_base and kr for the new tile
-              k_base_reg <= (kt_reg + 1) * NUM_ROWS;
-              kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
-                             NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
-              w_r <= 0;
-              w_n <= 0;
-              // Start preloading the tile AFTER next (if it exists)
-              if (kt_reg + 2 < num_k_tiles) begin
-                preload_en  <= 1'b1;
-                preload_w_r <= 0;
-                preload_w_n <= 0;
-                preload_kr  <= ((i_dim_k - (kt_reg + 2) * NUM_ROWS) >= NUM_ROWS) ?
-                               NUM_ROWS : (i_dim_k - (kt_reg + 2) * NUM_ROWS);
-                state <= S_PRELOAD;  // preload next-next tile before S_RUN
-              end else begin
-                preload_en <= 1'b0;
-                state <= S_RUN;  // no more tiles to preload, go directly to S_RUN
-              end
-            end
+            t     <= 0;
+            n_cnt <= 0;
+            state <= S_WRITE;
           end else begin
             t <= t + 1;
           end
         end
 
         // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.
-        // For FP16/BF16 modes, acc[n_cnt] is in FP32 format (zero-extended to ACC_W).
-        // For INT8/INT16, acc[n_cnt] is in integer format.
+        // acc[] already holds the running sum through this K tile, so this is
+        // a plain store, not a read-modify-write.
         S_WRITE: begin
-          c_mem[m_reg*i_dim_n + n_base + n_cnt] <= acc[n_cnt][31:0];
+          c_mem[c_idx] <= acc[n_cnt];
           if (n_cnt == nc - 1) begin
             n_cnt <= 0;
-            if (nt_reg == num_n_tiles - 1) begin
-              // last N tile for this row
-              if (m_reg == i_dim_m - 1) begin
-                // o_done is now driven by done_cond (see above)
-                state  <= S_IDLE;
+            if (m_reg != i_dim_m - 1) begin
+              // Next output row, same weights: this is the whole point.
+              m_reg  <= m_reg + 1;
+              m_base <= m_base + i_dim_k;
+              t      <= 0;
+              if (kt_reg == 0)
+                for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
+              // Do not start the next output row until its A row has landed.
+              // Bypassed when it already has, so the interlock costs nothing
+              // on the common path.  Under this loop order the wait is real:
+              // the first K tile walks all M rows while the DMA is still
+              // fetching them.
+              if (arow_free || (m_reg + 1) < i_a_rows_ready)
+                state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
+              else
+                state <= S_AROW;
+            end else begin
+              m_reg  <= 0;
+              m_base <= 0;
+              w_r    <= 0;
+              w_n    <= 0;
+              if (kt_reg != num_k_tiles - 1) begin
+                // Next K tile, same N tile: reload the weight bank.
+                kt_reg     <= kt_reg + 1;
+                k_base_reg <= (kt_reg + 1) * NUM_ROWS;
+                kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
+                               NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
+                state      <= S_WLOAD;
               end else begin
-                m_reg      <= m_reg + 1;
-                m_base     <= (m_reg + 1) * i_dim_k;  // pre-compute for next M-row
-                nt_reg     <= 0;
                 kt_reg     <= 0;
                 k_base_reg <= 0;
                 kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
-                w_r        <= 0;
-                w_n        <= 0;
-                for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-                // Do not start the next output row until its A row has
-                // landed.  Bypass the wait state when it already has, so the
-                // interlock costs nothing on the common path -- entering
-                // S_AROW unconditionally burned one cycle per output row.
-                state      <= (arow_free || (m_reg + 1) < i_a_rows_ready)
-                                ? S_WLOAD : S_AROW;
+                if (nt_reg != num_n_tiles - 1) begin
+                  nt_reg <= nt_reg + 1;
+                  state  <= S_WLOAD;
+                end else begin
+                  // o_done is driven by done_cond (see above)
+                  state <= S_IDLE;
+                end
               end
-            end else begin
-              // next N tile (same row): fresh accumulator
-              nt_reg     <= nt_reg + 1;
-              kt_reg     <= 0;
-              k_base_reg <= 0;
-              kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
-              w_r        <= 0;
-              w_n        <= 0;
-              for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-              state      <= S_WLOAD;
             end
           end else begin
             n_cnt <= n_cnt + 1;
@@ -608,11 +615,12 @@ module c930_npu_core
         end
 
         // Hold until the DMA has unpacked the row this pass needs.  Entered
-        // only on an output-row advance: within a row the operands are already
-        // resident, and N/K tiling never changes the A row.
+        // only on an output-row advance; m_reg has already advanced, so the
+        // test is against the row about to be read.  Resumes into whichever
+        // state the row advance was headed for.
         S_AROW: begin
           if (arow_free || m_reg < i_a_rows_ready)
-            state <= S_WLOAD;
+            state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
         end
 
         default: state <= S_IDLE;
