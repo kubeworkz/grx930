@@ -1,19 +1,13 @@
-/* -----------------------------------------------------------------------------
- * link_sim.ld - linker script for the GRX930 echo firmware under the
- * Verilator SoC simulation.
- *
- * The RV64IMAC core resets with PC = 0 (DDR base).  The Verilator DDR model is
- * 64 KB, so everything must live below 0x10000 -- unlike the real-chip
- * linker.ld which places firmware at 0x80000000.  Stack top at 0x8000 matches
- * the NPU test convention (start.S sets sp).
- * -----------------------------------------------------------------------------
+/* link_sim.ld - linker script for Verilator SoC simulation.
+ * CPU0 resets to PC=0x0 (DDR_BASE in crossbar = 0x0000_0000).
+ * Verilator DDR model is 64 KB byte-addressable.
  */
 OUTPUT_ARCH(riscv)
 ENTRY(_start_text)
 
 MEMORY
 {
-  RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 32K
+  RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 60K
 }
 
 SECTIONS
@@ -21,12 +15,12 @@ SECTIONS
   .text : {
     *(.text.init)
     *(.text)
-    *(.text.*)
+    *(.text.*) 
   } > RAM
 
   .rodata : ALIGN(8) {
     *(.rodata)
-    *(.rodata.*)
+    *(.rodata.*) 
     *(.srodata*)
   } > RAM
 
@@ -48,7 +42,7 @@ SECTIONS
   } > RAM
 
   . = ALIGN(16);
-  _stack_top = 0x8000;   /* 32 KB stack, grows down (matches start.S) */
+  _stack_end = 0xF000;
 
   /DISCARD/ : {
     *(.comment)

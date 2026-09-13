@@ -64,7 +64,7 @@ extern void elf64_print_info(const void *elf_data, size_t elf_size);
 // ============================================================================
 
 // TODO: Replace with your actual UART register addresses
-#define UART_BASE           0x10000000ULL
+#define UART_BASE           0x40001000ULL
 #define UART_TX_REG         (*(volatile uint32_t*)(UART_BASE + 0x00))
 #define UART_RX_REG         (*(volatile uint32_t*)(UART_BASE + 0x04))
 #define UART_STATUS_REG     (*(volatile uint32_t*)(UART_BASE + 0x08))
