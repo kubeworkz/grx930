@@ -364,11 +364,13 @@ module c930_npu_dma
               b_base_r <= i_b_base;
               c_base_r <= i_c_base;
               is_int4     <= (i_precision == 3'd4);
-              // Arm watchdog limit: core compute is O(M * ceil(N/8) * ceil(K/8) * 20).
-              // Use M*N*K*2 + M*N*16 + 256 as a safe upper bound that covers
-              // K-dependent compute, M×N tiling overhead, and DMA round-trips.
-              watchdog_limit <= i_dim_m * i_dim_n * i_dim_k * 2 +
-                                i_dim_m * i_dim_n * 16 + 256;
+              // Arm watchdog limit: core compute is O(M * ceil(N/8) * ceil(K/8) * 74).
+              // HALF-RATE HOP: S_RUN takes 2*(2R+2C) = 64 cycles per tile (was 18),
+              // so the safety margin scales accordingly.  Use M*N*K*8 + M*N*64 + 512
+              // as a safe upper bound covering K-dependent compute, M×N tiling
+              // overhead, and DMA round-trips.
+              watchdog_limit <= i_dim_m * i_dim_n * i_dim_k * 8 +
+                                i_dim_m * i_dim_n * 64 + 512;
               // INT4: nibble-packing means rows share bytes, read all A upfront.
               // INT8/16/FP16/BF16: read first row only, prefetch rest during compute.
               if (i_precision == 3'd4) begin

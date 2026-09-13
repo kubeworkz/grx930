@@ -230,6 +230,13 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   // Systolic-array feed (registered): skew generation
   // ---------------------------------------------------------------------------
+  // HALF-RATE HOP: the PE stream registers update on gated edges (every 2nd
+  // cycle, see c930_tensor_pe `hop`).  The FSM replicates that phase exactly
+  // (same free-running toggle from reset) and runs the S_RUN schedule on hop
+  // edges only: all t== conditions, seed windows and capture offsets keep
+  // their old semantics, with t now counting hops instead of cycles.  S_RUN
+  // therefore takes 2*(NUM_ROWS+NUM_COLS+2) cycles wall-clock; every other
+  // state (weight load, preload, DMA) still runs at full rate.
   // The act/ps_in outputs are registered to break the t[] -> state-decode ->
   // PE FP16-accumulator critical path.  Without registration yosys merges
   // the t==n comparison with the accumulator's combinational cone, creating a
@@ -244,6 +251,18 @@ module c930_npu_core
   logic signed [NUM_ROWS*DIN_W-1:0] act;          // registered -> PE
   logic signed [NUM_COLS*ACC_W-1:0] ps_in;        // registered -> PE
 
+  // Hop-phase replica of the PEs' stream-update phase (toggle every cycle
+  // from reset => identical to the PEs' `hop`).  S_RUN advances on edges
+  // where the old value is 1 -- the same edges on which PE stream registers
+  // load, so seeds presented in one hop window are captured at the next.
+  logic hop_phase;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      hop_phase <= 1'b0;
+    else
+      hop_phase <= ~hop_phase;
+  end
+
   always_comb begin
     act_comb   = '0;
     ps_in_comb = '0;
@@ -251,24 +270,43 @@ module c930_npu_core
     if (state == S_RUN) begin
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
-        if ((t == r) && (r < kr_reg))
+        if ((t == 2*r) && (r < kr_reg))
           act_comb[r*DIN_W +: DIN_W] = i_bank_sel ? a_mem_1[m_base + k_base_reg + r] :
                                                        a_mem_0[m_base + k_base_reg + r];
       end
       // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
       for (int n = 0; n < NUM_COLS; n++) begin
-        if (t == n || t == n + 1)
+        // HALF-RATE HOP: single-window seed.  The pipelined accumulator pairs
+        // i_ps_in and the product from the SAME hop window (both stable across
+        // the window), so unlike the old 2-cycle pulse the seed must span
+        // exactly one window: a second window would re-enter the cascade and
+        // regress the running sum (f(S, 0) = S overwrites the accumulation).
+        // Skewed at 2n: the ps stream travels 2 windows per column (the
+        // accumulator's stage-1 register + the PE's stream register), so
+        // column n's seed must enter 2 windows after column n-1's.
+        if (t == 2*n)
           ps_in_comb[n*ACC_W +: ACC_W] = acc[n];
       end
     end
   end
 
   // Register act/ps_in to break the t[] -> PE critical path.
+  // Hop-gated (HALF-RATE HOP): loading only at the same edges on which the
+  // PEs' hop-gated registers sample guarantees each row's activation and each
+  // column's seed are held stable across a FULL hop window.  A combinational
+  // 1-cycle pulse would fall between the PEs' sample points: their free-running
+  // product registers would still catch row 0, but the hop-gated a_r1 stage --
+  // which carries the activation to columns 1..7 -- would miss it entirely
+  // (observed: column 0 correct, columns 1+ = 0).
+  //   act[r]  : comb pulses during window 2r    -> visible during window 2r+1
+  //   ps_in[n]: comb pulses during window 2n    -> visible during window 2n+1
+  // which is exactly when PE[0][n] multiplies A[0] (window 1+2n), so every
+  // PE[r][n] meets A[r] and column n's partial at window 2r+1+2n.
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       act   <= '0;
       ps_in <= '0;
-    end else begin
+    end else if (hop_phase) begin
       act   <= act_comb;
       ps_in <= ps_in_comb;
     end
@@ -421,16 +459,33 @@ module c930_npu_core
           end
         end
 
-        // Run one K tile.  Cycles: NUM_ROWS + NUM_COLS + 2
-        // (All precisions have 2-cycle PE latency: product reg + output reg.)
-        // The FP16 accumulator is combinational to preserve cascade timing.
+        // Run one K tile.  Cycles: 2*(NUM_ROWS + NUM_COLS + 2)
+        // (All precisions have 2-cycle PE latency: product reg + output reg;
+        // stream registers hop every 2nd cycle, see HALF-RATE HOP above.)
+        // The FP16 accumulator is internally pipelined (stage1/stage2) with
+        // both stages free-running inside one hop window.
         S_RUN: begin
-          // Staggered capture: column (t - NUM_ROWS - 2) finishes at cycle t.
-          if (t >= NUM_ROWS + 2) begin
-            acc[t - NUM_ROWS - 2] <= ps_out[(t - NUM_ROWS - 2)*ACC_W +: ACC_W];
+          // Advance the run schedule only on hop edges (old value 1 -- the
+          // same edges on which the PEs' stream registers load, so seeds
+          // presented during a hop window are captured at the next edge,
+          // exactly matching the old every-cycle behavior in t-space).
+          if (hop_phase) begin
+          // Staggered capture (window algebra, see HALF-RATE HOP above):
+          // real accumulated results emerge at the bottom edge only on ODD
+          // ticks -- a column's value passes through 2 registers per row
+          // (accumulator stage-1 + PE stream reg), so column 0's result
+          // (seeded at t=0, one row of travel after the stage-1 register)
+          // is first visible at t = 2*NUM_ROWS + 1, and each later column
+          // two ticks after the previous one.  Even ticks carry only the
+          // pass-through junk windows, which are never captured.
+          if ((t >= 2*NUM_ROWS + 1) && t[0]) begin
+            acc[(t - 2*NUM_ROWS - 1) / 2] <=
+              ps_out[((t - 2*NUM_ROWS - 1) / 2)*ACC_W +: ACC_W];
           end
 
-          if (t == NUM_ROWS + NUM_COLS + 1) begin
+          // Last capture (column NUM_COLS-1 at t = 2R+2C-1, odd) and the
+          // exit share this edge -- same structure as the pre-hop design.
+          if (t == 2*NUM_ROWS + 2*NUM_COLS - 1) begin
             t <= 0;
             if (kt_reg == num_k_tiles - 1) begin
               // all K tiles done for this (row, N tile) -> write results
@@ -464,6 +519,7 @@ module c930_npu_core
           end else begin
             t <= t + 1;
           end
+          end // hop_phase
         end
 
         // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.

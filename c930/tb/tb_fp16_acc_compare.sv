@@ -22,7 +22,14 @@ module tb_fp16_acc_compare;
   logic [31:0] i_ps, i_prod;
   logic [31:0] o_new, o_old;
 
-  c930_fp16_acc     u_new (.i_clk(1'b0), .i_rst_n(1'b1), .i_ps_in(i_ps),
+  // Pipelined DUT (stage1/stage2): free-running clock with i_hop tied high
+  // (stage1 loads every edge), so a result is valid 2 edges after the inputs
+  // settle.  Inputs change on negedge; sampling 2 edges later gives each
+  // stage a full period to settle.
+  logic clk_tb = 1'b0;
+  always #5 clk_tb = ~clk_tb;
+
+  c930_fp16_acc     u_new (.i_clk(clk_tb), .i_rst_n(1'b1), .i_hop(1'b1), .i_ps_in(i_ps),
                            .i_prod(i_prod), .o_ps_out(o_new));
   c930_fp16_acc_old u_old (.i_clk(1'b0), .i_rst_n(1'b1), .i_ps_in(i_ps),
                            .i_prod(i_prod), .o_ps_out(o_old));
@@ -34,8 +41,11 @@ module tb_fp16_acc_compare;
   // ---- Drive one input pair, return outputs ----
   task automatic drive(input logic [31:0] a, b, output logic [31:0] n, o);
     begin
+      @(negedge clk_tb);
       i_ps   = a;
       i_prod = b;
+      @(posedge clk_tb);   // stage1 captures (ps, prod)
+      @(posedge clk_tb);   // stage2 captures stage1's result
       #1;
       n = o_new;
       o = o_old;

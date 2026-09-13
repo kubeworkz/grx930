@@ -22,6 +22,16 @@
 // column (product reg + output reg = 2-cycle PE latency).
 // -----------------------------------------------------------------------------
 
+// Half-rate systolic hop (2 cycles per PE): the stream registers (o_a_out,
+// o_ps_out) update only on the gated edge (every 2nd cycle, `hop`), while the
+// internal compute cones (multiplier, accumulator) free-run every cycle and
+// have two full cycles to settle.  Both wavefronts (activation left->right,
+// partial sum top->bottom) still advance one PE per gated edge, so they stay
+// locked; the array just runs at half the per-row rate.  This is what lets
+// the FP32 accumulator be internally pipelined (c930_fp16_acc stage1/stage2)
+// without adding stream latency: its stage registers free-run, and only the
+// PE's stream register is gated.
+
 module c930_tensor_pe
 #(
   parameter int DIN_W = 16,  // activation / weight bit width
@@ -67,12 +77,35 @@ module c930_tensor_pe
   logic signed [DIN_W-1:0] w;
   assign w = i_bank_sel ? w_bank[1] : w_bank[0];
 
-  // Activation passthrough (registered, regardless of mode)
+  // ---- Half-rate hop phase ----
+  // Free-running toggle; stream registers update only when hop == 1'b1.
+  // All PEs receive i_clk directly, so all hop toggles across the array are
+  // in lockstep (same reset, same edge) -- the gated edges are global.
+  logic hop;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      hop <= 1'b0;
+    else
+      hop <= ~hop;
+  end
+
+  // Activation path (BOTH registers on the gated edge => the activation
+  // wavefront advances one PE per hop window, matching the partial-sum
+  // stream's 2-deep internal pipeline (acc stage-1 + stream reg).  With a
+  // 1-deep activation path the a-wavefront would outrun the ps-wavefront
+  // and the (activation, partial-sum) pairs would stop meeting at each PE.)
+  logic signed [DIN_W-1:0] a_r1;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      a_r1 <= '0;
+    else if (hop)
+      a_r1 <= i_a_in;
+  end
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
       o_a_out <= '0;
-    else
-      o_a_out <= i_a_in;
+    else if (hop)
+      o_a_out <= a_r1;
   end
 
   // ---- Integer MAC path (INT8/INT16/INT4) ----
@@ -90,6 +123,18 @@ module c930_tensor_pe
 
   logic signed [ACC_W-1:0] int_ps_out;
   assign int_ps_out = i_ps_in + {{(ACC_W-2*DIN_W){int_prod_reg[2*DIN_W-1]}}, int_prod_reg};
+
+  // Register the integer add result, enabled on the hop edge so the INT
+  // stream sees the same one-window lag as the FP stream (identical FSM
+  // constants for both modes).  Settles within the window; the gated stream
+  // register below captures it.
+  logic signed [ACC_W-1:0] int_sum_reg;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n)
+      int_sum_reg <= '0;
+    else if (hop)
+      int_sum_reg <= int_ps_out;
+  end
 
   // ---- FP16/BF16 MAC path ----
   // One shared multiplier: FP16 and BF16 both interpret the 16-bit operand
@@ -112,27 +157,35 @@ module c930_tensor_pe
       fp32_prod_reg <= fp32_prod;
   end
 
-  // FP32 + FP32 -> FP32 accumulator (combinational, from registered product + i_ps_in)
+  // FP32 + FP32 -> FP32 accumulator (internally 2-stage pipelined; stage-1
+  // register enabled on the hop edge so it pairs same-window operands).
   logic [31:0] fp32_ps_out;
   c930_fp16_acc u_fp16_acc (
     .i_clk    (i_clk),
     .i_rst_n  (i_rst_n),
+    .i_hop    (hop),
     .i_ps_in  (i_ps_in[31:0]),   // lower 32 bits of ACC_W partial sum
-    .i_prod   (fp32_prod_reg),   // REGISTERED FP32 product
+    .i_prod   (fp32_prod_reg),   // REGISTERED FP32 product (free-running)
     .o_ps_out (fp32_ps_out)
   );
 
   // ---- Output mux based on precision ----
+  // Stream register: updates ONLY on the gated edge (hop == 1).  This is the
+  // partial-sum stream hop; see the header comment.  Both modes sample a
+  // hop-gated intermediate (int_sum_reg / fp32 stage2 output).
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
       o_ps_out <= '0;
-    else if (i_precision == 3'd2 || i_precision == 3'd3) begin
-      // FP16/BF16 mode: use FP32 accumulator output (zero-extend upper bits)
-      o_ps_out[ACC_W-1:32] <= '0;
-      o_ps_out[31:0]        <= fp32_ps_out;
-    end else begin
-      // INT8/INT16/INT4 mode: use integer MAC output
-      o_ps_out <= int_ps_out;
+    else if (hop) begin
+      if (i_precision == 3'd2 || i_precision == 3'd3) begin
+        // FP16/BF16 mode: use FP32 accumulator output (zero-extend upper bits)
+        o_ps_out[ACC_W-1:32] <= '0;
+        o_ps_out[31:0]        <= fp32_ps_out;
+      end else begin
+        // INT8/INT16/INT4 mode: use integer MAC output (short adder; the
+        // free-running product register already stages it within the window)
+        o_ps_out <= int_sum_reg;
+      end
     end
   end
 

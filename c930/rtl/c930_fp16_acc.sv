@@ -1,18 +1,35 @@
 // -----------------------------------------------------------------------------
 // c930_fp16_acc.sv
 //
-// FP32 + FP32 -> FP32 combinational accumulator for the NPU systolic array.
+// FP32 + FP32 -> FP32 accumulator for the NPU systolic array (FP16/BF16 mode).
 // PE's output register captures the result each cycle.
+//
+// PIPELINED (2-stage internal).  Cycle-boundary behavior is IDENTICAL to the
+// previous fully-combinational version: the PE's output register still
+// captures one result per cycle, o_ps_out(T+1) = g(i_ps_in(T), i_prod(T))
+// with the same combinational function g.  What changed is only how the cone
+// is cut across two register-to-register stages:
+//
+//   stage 1 (combinational, captured into the internal r_* registers):
+//     classify -> exponent sort -> CLA diff -> alignment barrel -> sticky
+//     -> fused DSP48E1 add/sub -> case mux
+//   stage 2 (combinational from the stage-1 registers):
+//     leading-zero count -> normalize barrel -> exponent adjust -> pack
+//
+// The old single-stage cone (align+add+normalize, ~34 logic levels) missed
+// the 50 MHz core_clk budget at 90% device utilization (WNS -4.8 ns on the
+// fp32_prod_reg -> o_ps_out_reg path); splitting it halves both the logic
+// depth and the routing span of each stage.
+//
+// STREAM CONTRACT (do not regress):
+//   The systolic partial-sum stream flows one PE per cycle: o_ps_out must
+//   stay REGISTERED, unconditionally enabled, and must keep mapping
+//   i_ps_in(T) -> o_ps_out(T+1).  Do NOT add stream latency (no clock
+//   enables, no extra stream register), and do not move the stream register
+//   into this module.  Only the internal cone split above is allowed.
 //
 // Avoids part-selects inside always_comb (Icarus Verilog limitation) by using
 // continuous assignments for all output field extraction.
-//
-// NOTE: This module must be PURELY COMBINATIONAL. The systolic array's
-// partial-sum cascade depends on each PE's output being valid within the same
-// cycle as its inputs. A pipeline register inside the accumulator would delay
-// the output by 1 cycle, causing the next row's PE to read stale partial-sum
-// data (NB assignment vs combinational read on the same posedge).
-// The PE's own output register provides sufficient pipeline staging.
 //
 // Area optimization (dual-NPU SoC fit on Arty A7-200T):
 //   The previous implementation computed three speculative 28-bit results
@@ -35,8 +52,12 @@
 
 module c930_fp16_acc
 (
-  input  logic        i_clk,      // unused (combinational), kept for port compat
-  input  logic        i_rst_n,    // unused
+  input  logic        i_clk,      // stage-1 register clock
+  input  logic        i_rst_n,
+  input  logic        i_hop,      // window phase: stage-1 captures only on the
+                                  // gated (hop) edge, matching the PE's stream
+                                  // registers -- free-running stage-1 would
+                                  // sample half-window states and mix windows
   input  logic [31:0] i_ps_in,    // FP32 partial sum from top neighbor
   input  logic [31:0] i_prod,     // FP32 product from FP16 multiplier
   output logic [31:0] o_ps_out    // FP32 partial sum to bottom neighbor
@@ -138,53 +159,80 @@ module c930_fp16_acc
     p_zero     ? s_sign :
                  sign_a;    // A >= B, so the result takes A's sign
 
-  // ---- Leading-zero count for normalization ----
+  // ---- STAGE 1 REGISTER ----
+  // Captures everything stage 2 needs: the raw sum (for LZC + normalize),
+  // the larger exponent (for overflow increment / LZC subtract), the result
+  // sign, and the special-case flags.  Bit-exact by construction: stage 2
+  // recomputes exactly the expressions the old single-stage code applied to
+  // sum_raw_w / exp_a / sum_sign_w / the nan/inf/zero cases.
+  logic        r_sign;
+  logic [7:0]  r_exp_a;
+  logic [27:0] r_sum;
+  logic        r_nan;
+  logic        r_inf;
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      r_sign  <= 1'b0;
+      r_exp_a <= 8'd0;
+      r_sum   <= 28'd0;
+      r_nan   <= 1'b0;
+      r_inf   <= 1'b0;
+    end else if (i_hop) begin
+      r_sign  <= sum_sign_w;
+      r_exp_a <= exp_a;
+      r_sum   <= sum_raw_w;
+      r_nan   <= s_nan || p_nan;
+      r_inf   <= (s_inf || p_inf) && !(s_nan || p_nan);
+    end
+  end
+
+  // ---- STAGE 2: leading-zero count for normalization ----
   wire [4:0] lzc =
-    sum_raw_w[27] ? 5'd0  :
-    sum_raw_w[26] ? 5'd0  :
-    sum_raw_w[25] ? 5'd1  :
-    sum_raw_w[24] ? 5'd2  :
-    sum_raw_w[23] ? 5'd3  :
-    sum_raw_w[22] ? 5'd4  :
-    sum_raw_w[21] ? 5'd5  :
-    sum_raw_w[20] ? 5'd6  :
-    sum_raw_w[19] ? 5'd7  :
-    sum_raw_w[18] ? 5'd8  :
-    sum_raw_w[17] ? 5'd9  :
-    sum_raw_w[16] ? 5'd10 :
-    sum_raw_w[15] ? 5'd11 :
-    sum_raw_w[14] ? 5'd12 :
-    sum_raw_w[13] ? 5'd13 :
-    sum_raw_w[12] ? 5'd14 :
-    sum_raw_w[11] ? 5'd15 :
-    sum_raw_w[10] ? 5'd16 :
-    sum_raw_w[9]  ? 5'd17 :
-    sum_raw_w[8]  ? 5'd18 :
-    sum_raw_w[7]  ? 5'd19 :
-    sum_raw_w[6]  ? 5'd20 :
-    sum_raw_w[5]  ? 5'd21 :
-    sum_raw_w[4]  ? 5'd22 :
-    sum_raw_w[3]  ? 5'd23 :
-    sum_raw_w[2]  ? 5'd24 :
-    sum_raw_w[1]  ? 5'd25 :
-    sum_raw_w[0]  ? 5'd26 :
-                    5'd28;
+    r_sum[27] ? 5'd0  :
+    r_sum[26] ? 5'd0  :
+    r_sum[25] ? 5'd1  :
+    r_sum[24] ? 5'd2  :
+    r_sum[23] ? 5'd3  :
+    r_sum[22] ? 5'd4  :
+    r_sum[21] ? 5'd5  :
+    r_sum[20] ? 5'd6  :
+    r_sum[19] ? 5'd7  :
+    r_sum[18] ? 5'd8  :
+    r_sum[17] ? 5'd9  :
+    r_sum[16] ? 5'd10 :
+    r_sum[15] ? 5'd11 :
+    r_sum[14] ? 5'd12 :
+    r_sum[13] ? 5'd13 :
+    r_sum[12] ? 5'd14 :
+    r_sum[11] ? 5'd15 :
+    r_sum[10] ? 5'd16 :
+    r_sum[9]  ? 5'd17 :
+    r_sum[8]  ? 5'd18 :
+    r_sum[7]  ? 5'd19 :
+    r_sum[6]  ? 5'd20 :
+    r_sum[5]  ? 5'd21 :
+    r_sum[4]  ? 5'd22 :
+    r_sum[3]  ? 5'd23 :
+    r_sum[2]  ? 5'd24 :
+    r_sum[1]  ? 5'd25 :
+    r_sum[0]  ? 5'd26 :
+                5'd28;
 
-  // ---- Normalize: shift so hidden 1 lands at bit 26 ----
-  wire        is_overflow = (lzc == 5'd0) && sum_raw_w[27];
-  wire [27:0] norm_shifted = is_overflow ? (sum_raw_w >> 1) :
-                                             (sum_raw_w << lzc);
+  // ---- STAGE 2: normalize, exponent adjust, pack ----
+  wire        is_overflow = (lzc == 5'd0) && r_sum[27];
+  wire [27:0] norm_shifted = is_overflow ? (r_sum >> 1) :
+                                            (r_sum << lzc);
 
-  // ---- Compute final exponent and mantissa ----
-  wire [7:0] exp_norm = is_overflow ? (exp_a + 8'd1) :
-                         (exp_a > {3'b0, lzc}) ? (exp_a - {3'b0, lzc}) : 8'd0;
+  wire [7:0] exp_norm = is_overflow ? (r_exp_a + 8'd1) :
+                        (r_exp_a > {3'b0, lzc}) ? (r_exp_a - {3'b0, lzc}) : 8'd0;
 
   wire [31:0] result_pre =
-    (s_nan || p_nan)       ? {sum_sign_w, 8'd255, 23'd1} :
-    (s_inf || p_inf)       ? {sum_sign_w, 8'd255, 23'd0} :
-    (sum_raw_w == 28'd0)   ? {sum_sign_w, 8'd0, 23'd0} :
-    (lzc == 5'd28)         ? {sum_sign_w, 8'd0, 23'd0} :
-    {sum_sign_w, exp_norm, norm_shifted[25:3]};
+    r_nan                  ? {r_sign, 8'd255, 23'd1} :
+    r_inf                  ? {r_sign, 8'd255, 23'd0} :
+    (r_sum == 28'd0)       ? {r_sign, 8'd0, 23'd0} :
+    (lzc == 5'd28)         ? {r_sign, 8'd0, 23'd0} :
+    {r_sign, exp_norm, norm_shifted[25:3]};
 
   assign o_ps_out = result_pre;
 
