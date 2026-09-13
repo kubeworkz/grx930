@@ -14,7 +14,7 @@
 # Log to a persistent repo path (/mnt/c): /tmp lives in the VM and is wiped
 # every time Windows tears the utility VM down, destroying the evidence of
 # why an attempt died.
-PLOG=/mnt/c/Users/kubew/grx930/c930/build/vivado/full_flow_console.log
+PLOG=/mnt/c/Users/kubew/grx930-build/c930/build/vivado/full_flow_console.log
 
 source /mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh >/dev/null 2>&1 || {
     echo "ERROR: Vivado settings64.sh not found" >> "$PLOG"
@@ -22,7 +22,7 @@ source /mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh >/dev/null 2>&1 ||
 }
 export XILINXD_LICENSE_FILE="$HOME/.Xilinx/Xilinx.lic"
 
-cd /mnt/c/Users/kubew/grx930/c930 || exit 1
+cd /mnt/c/Users/kubew/grx930-build/c930 || exit 1
 
 # ---- OOM protection ----
 for f in /proc/self/oom_score_adj /proc/$$/oom_score_adj; do

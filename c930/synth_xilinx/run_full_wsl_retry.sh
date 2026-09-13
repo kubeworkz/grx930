@@ -18,7 +18,7 @@
 # is reused, so a VM recycle costs at most the current run.
 # -----------------------------------------------------------------------------
 
-REPO=/mnt/c/Users/kubew/grx930/c930
+REPO=/mnt/c/Users/kubew/grx930-build/c930
 BUILD=$REPO/build/vivado
 LOG=$BUILD/retry.log
 MAC=00:15:5d:c5:ac:f9

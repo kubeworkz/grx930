@@ -9,8 +9,8 @@
 # -----------------------------------------------------------------------------
 MAC=00:15:5d:c5:ac:f9
 GW=172.25.32.1
-FINAL_DCP=/mnt/c/Users/kubew/grx930/c930/build/vivado/c930_artix7.runs/impl_1/c930_soc_top_routed.dcp
-LOG=/mnt/c/Users/kubew/grx930/c930/build/vivado/mac_watchdog.log
+FINAL_DCP=/mnt/c/Users/kubew/grx930-build/c930/build/vivado/c930_artix7.runs/impl_1/c930_soc_top_routed.dcp
+LOG=/mnt/c/Users/kubew/grx930-build/c930/build/vivado/mac_watchdog.log
 DEADLINE=$(( $(date +%s) + 21600 ))   # 6 h cap
 
 echo "=== mac watchdog started $(date) ===" >> "$LOG"
