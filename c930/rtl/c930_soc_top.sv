@@ -130,7 +130,16 @@ module c930_soc_top
             clk_cnt <= clk_cnt + 1'b1;
         end
       end
+`ifdef SYNTHESIS
+      // FPGA: buffer the divided clock with a BUFG.  Left as a plain net,
+      // clk_div drove a 66K-fanout fabric route whose skew (1.8-4 ns) caused
+      // all post-impl hold/recovery violations (WHS -4.039).  BUFG gives the
+      // core domain a balanced low-skew tree.  Sim keeps the plain net so
+      // delta-cycle event ordering stays bit-exact.
+      BUFG u_core_clk_bufg (.I (clk_div), .O (core_clk));
+`else
       assign core_clk = clk_div;
+`endif
 
       always_ff @(posedge core_clk or negedge i_rst_n) begin
         if (!i_rst_n) begin
