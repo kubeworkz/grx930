@@ -23,7 +23,14 @@ module c930_npu_core
   parameter int ACC_W    = 48,    // accumulator width (48 for INT8/INT16)
   parameter int MAX_M    = 64,    // max output rows
   parameter int MAX_K    = 256,   // max reduction length
-  parameter int MAX_N    = 8      // max output cols (tiled over NUM_COLS passes)
+  parameter int MAX_N    = 8,     // max output cols (tiled over NUM_COLS passes)
+  // Elements the wide preload port writes per cycle.  Must be >= the widest
+  // elements-per-beat the DMA drives on that port: AXI_DATA_W/8 = 8 at INT8.
+  // Tied to NUM_ROWS by intent, not by necessity -- the compute path already
+  // reads NUM_ROWS consecutive elements per cycle, so writing the same number
+  // makes a_mem's two ports the same shape, which is what a future banked
+  // a_mem would need.
+  parameter int WR_LANES = 8
 )
 (
   input  logic                        i_clk,
@@ -34,6 +41,27 @@ module c930_npu_core
   input  logic                        i_wsel,   // 0 = A, 1 = B
   input  logic [15:0]                 i_waddr,
   input  logic signed [DIN_W-1:0]     i_wdata,
+
+  // ---- Wide preload port: WR_LANES consecutive elements in one cycle ----
+  // The narrow port above accepts one element per cycle, which made the DMA
+  // eight times slower than its own 64-bit bus: an AXI beat carries 8 INT8
+  // elements and took 8 cycles to drain.  This port drains a beat in one.
+  //
+  // It is affordable because a_mem/b_mem are flop arrays, not block RAM --
+  // the compute path reads NUM_ROWS *unaligned* consecutive elements
+  // combinationally, which no BRAM can do -- so a wide write buys write
+  // enables rather than banking.  It is not free: each element gains a
+  // WR_LANES-way address match.  See doc/c930_architecture.md for the
+  // banked-a_mem follow-on that makes both ports cheap at once.
+  //
+  // INT4 does not use this port: it packs 16 elements per beat and its
+  // A-load is not on the prefetch path, so it stays on the narrow port.
+  input  logic                        i_wwen,
+  input  logic                        i_wwsel,    // 0 = A, 1 = B
+  input  logic                        i_wwbank,
+  input  logic [WR_LANES-1:0]         i_wwmask,   // per-lane enable; tail beats
+  input  logic [15:0]                 i_wwaddr,   // element index of lane 0
+  input  logic [WR_LANES*DIN_W-1:0]   i_wwdata,   // lane l -> [i_wwaddr + l]
 
   // ---- Staging buffer load (from DMA PF2 prefetch) ----
   // Active during P_STAGING: loads prefetched A/B data into a_mem/b_mem
@@ -49,7 +77,14 @@ module c930_npu_core
   // A-row watermark from the DMA: rows 0 .. i_a_rows_ready-1 are present in
   // a_mem.  The DMA loads only row 0 before i_start and streams the rest in
   // during compute, so without this the core can read a row that has not
-  // landed yet and silently compute on zeros.  Tie to i_dim_m to disable.
+  // landed yet and silently compute on zeros.
+  //
+  // Zero means "no watermark, never wait".  A real GEMM cannot report zero:
+  // the DMA has row 0 resident before it pulses i_start, so o_a_rows_ready is
+  // at least 1 throughout.  Making 0 the disable value is what keeps an
+  // unconnected port fail-safe -- every core-only bench that predates this
+  // signal leaves it at 0, and would otherwise sit in S_AROW forever waiting
+  // for a row nobody is going to announce.
   input  logic [15:0]                 i_a_rows_ready,
   input  logic                        i_wbank,    // write bank select from DMA: 0=bank0, 1=bank1
   input  logic                        i_start,  // 1-cycle pulse, sampled in IDLE
@@ -84,6 +119,8 @@ module c930_npu_core
   // Icarus Verilog doesn't support 2D dynamic indexing, so we flatten.
   localparam int A_DEPTH = MAX_M * MAX_K;
   localparam int B_DEPTH = MAX_K * MAX_N;
+  localparam int A_AW    = $clog2(A_DEPTH);
+  localparam int B_AW    = $clog2(B_DEPTH);
   logic signed [DIN_W-1:0] a_mem_0 [0:A_DEPTH-1];
   logic signed [DIN_W-1:0] a_mem_1 [0:A_DEPTH-1];
   logic signed [DIN_W-1:0] b_mem_0 [0:B_DEPTH-1];
@@ -120,6 +157,29 @@ module c930_npu_core
     if (write_b) begin
       if (write_bank) b_mem_1[write_addr] <= write_data;
       else            b_mem_0[write_addr] <= write_data;
+    end
+    // Wide port assigned after the narrow one so that if both ever named the
+    // same element in the same cycle the bulk load would win.  They target
+    // disjoint regions today: the wide port carries A rows 1..M-1 during
+    // compute and the whole of A row 0 / B before it, the narrow port carries
+    // staging and INT4.
+    if (i_wwen) begin
+      for (int l = 0; l < WR_LANES; l++) begin
+        // i_wwmask is what keeps lane l inside the array on a tail beat: the
+        // DMA masks off lanes past the end of the row (or of B), so the
+        // addresses below never run past the last valid element.  Each index
+        // is sized to its own array so the add cannot wrap wider than the
+        // memory it addresses.
+        if (i_wwmask[l]) begin
+          if (!i_wwsel) begin
+            if (i_wwbank) a_mem_1[A_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
+            else          a_mem_0[A_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
+          end else begin
+            if (i_wwbank) b_mem_1[B_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
+            else          b_mem_0[B_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
+          end
+        end
+      end
     end
   end
 
@@ -195,6 +255,9 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   // Performance counters
   // ---------------------------------------------------------------------------
+  // See the i_a_rows_ready port comment: 0 disables the interlock entirely.
+  wire arow_free = (i_a_rows_ready == 16'd0);
+
   logic [31:0] cycle_cnt, op_cnt, stall_cnt, arow_stall_cnt;
   assign o_cycle_count      = cycle_cnt;
   assign o_op_count         = op_cnt;
@@ -525,7 +588,8 @@ module c930_npu_core
                 // landed.  Bypass the wait state when it already has, so the
                 // interlock costs nothing on the common path -- entering
                 // S_AROW unconditionally burned one cycle per output row.
-                state      <= ((m_reg + 1) < i_a_rows_ready) ? S_WLOAD : S_AROW;
+                state      <= (arow_free || (m_reg + 1) < i_a_rows_ready)
+                                ? S_WLOAD : S_AROW;
               end
             end else begin
               // next N tile (same row): fresh accumulator
@@ -547,7 +611,7 @@ module c930_npu_core
         // only on an output-row advance: within a row the operands are already
         // resident, and N/K tiling never changes the A row.
         S_AROW: begin
-          if (m_reg < i_a_rows_ready)
+          if (arow_free || m_reg < i_a_rows_ready)
             state <= S_WLOAD;
         end
 

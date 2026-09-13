@@ -19,7 +19,9 @@ module c930_npu_top
   parameter int ACC_W    = 48,    // 48-bit fixed-point accumulator for FP modes
   parameter int MAX_M    = 64,
   parameter int MAX_K    = 256,
-  parameter int MAX_N    = 8
+  parameter int MAX_N    = 8,
+  // Elements the DMA writes into the core per cycle on the wide preload port.
+  parameter int WR_LANES = 8
 )
 (
   input  logic        i_clk,
@@ -92,6 +94,11 @@ module c930_npu_top
 
   logic                    dma_wen, dma_wsel, core_start, core_abort;
   logic [15:0]             a_rows_ready;
+  // Wide preload path: one AXI beat per cycle instead of one element.
+  logic                          dma_wwen, dma_wwsel, dma_wwbank;
+  logic [WR_LANES-1:0]           dma_wwmask;
+  logic [15:0]                   dma_wwaddr;
+  logic [WR_LANES*DIN_W-1:0]     dma_wwdata;
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
 
@@ -159,9 +166,15 @@ module c930_npu_top
   );
 
   c930_npu_dma #(
+    // DIN_W was never passed here.  The DMA ran its whole data path at its own
+    // default of 16 bits and the scalar o_wdata port truncated on the way out,
+    // which happened to give the right byte.  A packed wide bus has no such
+    // luck: lane l sits at bit l*DIN_W, so the two sides must agree.
+    .DIN_W    (DIN_W),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    .WR_LANES (WR_LANES)
   ) u_dma (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
@@ -188,6 +201,12 @@ module c930_npu_top
     .o_dma_last_count  (dma_last_count),
     .o_bank_sel       (dma_bank_sel),
     .o_a_rows_ready   (a_rows_ready),
+    .o_wwen        (dma_wwen),
+    .o_wwsel       (dma_wwsel),
+    .o_wwbank      (dma_wwbank),
+    .o_wwmask      (dma_wwmask),
+    .o_wwaddr      (dma_wwaddr),
+    .o_wwdata      (dma_wwdata),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
     .o_wbank       (dma_wbank),
@@ -237,7 +256,8 @@ module c930_npu_top
     .ACC_W    (ACC_W),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    .WR_LANES (WR_LANES)
   ) u_core (
     .i_clk      (i_clk),
     .i_rst_n    (i_rst_n),
@@ -263,6 +283,12 @@ module c930_npu_top
     .i_c_raddr  (c_raddr),
     .o_c_rdata  (c_rdata),
     .i_a_rows_ready (a_rows_ready),
+    .i_wwen     (dma_wwen),
+    .i_wwsel    (dma_wwsel),
+    .i_wwbank   (dma_wwbank),
+    .i_wwmask   (dma_wwmask),
+    .i_wwaddr   (dma_wwaddr),
+    .i_wwdata   (dma_wwdata),
     .o_cycle_count (cycle_count),
     .o_op_count    (op_count),
     .o_stall_count (stall_count),
