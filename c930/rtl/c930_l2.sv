@@ -453,7 +453,14 @@ module c930_l2
         valid_mem[rd_way][rd_set] <= 1'b0;
         sharers[rd_way][rd_set]   <= '0;
       end
-      if (rd_state == RD_ALLOC) begin
+      // Install a refilled line.  Only a miss allocates.  A hit reaches
+      // RD_ALLOC too -- every serve ends there -- but its line is already
+      // resident and RD_LOOKUP has already added the reader to its sharers.
+      // Re-installing it replaced the sharer set with this reader alone, so a
+      // later write left every other L1 holding its pre-write copy; and if a
+      // write dropped the line mid-serve, it put the pre-write data back.
+      // tb_l2_coherent T8 and T9 cover both, independent of write timing.
+      if (rd_state == RD_ALLOC && !rd_hit) begin
         tag_mem[rd_way][rd_set]   <= rd_tag;
         valid_mem[rd_way][rd_set] <= 1'b1;
         sharers[rd_way][rd_set]   <= (1 << rd_src);
