@@ -73,7 +73,12 @@ echo "MAC after heal: $cur" >> "$LOG"
 # The vSwitch re-asserts eth0's random MAC every few minutes; without the
 # watchdog a license re-check inside a revert window kills the run. The
 # watchdog must be root, so re-enter WSL as root to launch it detached.
-if ! pgrep -f 'mac_watchdo[g]' >/dev/null 2>&1; then
+# Match only the bash actually running the script: a bare 'mac_watchdog'
+# match also hits an orphaned `wsl.exe ... bash -c "setsid nohup bash
+# .../mac_watchdog.sh ..."` interop stub from an earlier launch (or a
+# `tail -f mac_watchdog.log`), which kept the watchdog from ever starting and
+# left eth0 spoofed after the flow.
+if ! pgrep -f '^([^ ]*/)?bash [^ ]*/mac_watchdo[g]\.sh' >/dev/null 2>&1; then
     echo "starting mac watchdog" >> "$LOG"
     # The trailing sleep keeps the nested wsl.exe session alive long enough
     # for the daemonized child to finish detaching -- without it WSL kills
