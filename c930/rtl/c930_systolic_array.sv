@@ -43,7 +43,11 @@ module c930_systolic_array
   output signed [ACC_W*NUM_COLS-1:0]               o_ps_out,
 
   // Precision control: broadcast to all PEs
-  input  logic [2:0]                               i_precision
+  input  logic [2:0]                               i_precision,
+
+  // Rows inside the current K tile; a disabled row adds nothing in the float
+  // modes (c930_tensor_pe)
+  input  logic [NUM_ROWS-1:0]                      i_row_en
 );
 
   // Horizontal activation buses
@@ -73,7 +77,8 @@ module c930_systolic_array
           .o_a_out    (a_h[r][c+1]),
           .i_ps_in    (ps_v[r][c]),
           .o_ps_out   (ps_v[r+1][c]),
-          .i_precision(i_precision)
+          .i_precision(i_precision),
+          .i_row_en   (i_row_en[r])
         );
       end
     end

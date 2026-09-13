@@ -299,6 +299,12 @@ module c930_npu_core
   assign b_read_data = b_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
   assign w_load_data = b_read_data;
 
+  // Rows of the array that belong to the current K tile.  The rest hold stale
+  // weights, which the float modes must not multiply (c930_tensor_pe).
+  logic [NUM_ROWS-1:0] row_en;
+  always_comb
+    for (int r = 0; r < NUM_ROWS; r++) row_en[r] = (r < kr_reg);
+
   c930_systolic_array #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -316,7 +322,8 @@ module c930_npu_core
     .i_act      (act),
     .i_ps_in    (ps_in),
     .o_ps_out   (ps_out),
-    .i_precision(i_precision)
+    .i_precision(i_precision),
+    .i_row_en   (row_en)
   );
 
   // ---------------------------------------------------------------------------

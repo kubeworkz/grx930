@@ -5,6 +5,7 @@
 #   make sw         compile sw/npu_test.c -> sw/npu_prog.hex
 #   make soc        build + run the end-to-end SoC testbench (tb_c930_soc)
 #   make npu        build + run the standalone NPU testbench (tb_c930_npu)
+#   make npu_float  FP16/BF16 after integer GEMMs on the NPU alone (tb_npu_float_prec)
 #   make hazard     build + run the hazard-unit flush/stall unit test
 #   make wave       simulate the SoC and print the waveform location
 #   make synth      ECP5 synthesis resource/latch report (oss-cad-suite; real design)
@@ -68,7 +69,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu hazard synth synth-fit wave clean bringup tile_test driver_test
+.PHONY: all sw soc soc_full npu npu_float hazard synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -123,6 +124,17 @@ $(OUT_NPU): $(NPU_RTL) tb/tb_c930_npu.sv
 
 npu: $(OUT_NPU)
 	$(VVP) $(OUT_NPU)
+
+# The UART GEMM sweep's case order on c930_npu_top alone: FP16/BF16 right after
+# integer GEMMs, which is where stale weights in rows outside a K tile show up.
+OUT_NPU_FLOAT := $(BUILD_DIR)/tb_npu_float_prec.vvp
+
+$(OUT_NPU_FLOAT): $(NPU_RTL) tb/tb_npu_float_prec.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ $(NPU_RTL) tb/tb_npu_float_prec.sv
+
+npu_float: $(OUT_NPU_FLOAT)
+	$(VVP) $(OUT_NPU_FLOAT)
 
 # ---------------------------------------------------------------------------
 # Hazard-unit unit test (flush deferral under stalls)
