@@ -34,11 +34,20 @@ open_project "$proj_dir/$proj_name.xpr"
 # losing it cost a full synthesis run that came out 298% over capacity.
 set cur_generics [get_property generic [current_fileset]]
 set new_generics [list]
+# FPGA fit geometry: 64 sets shrinks every L2 array 8x (tags 105K -> 13K
+# flops, sharers 33K -> 4K, data 16 -> 2 BRAM banks), bringing the L2 from
+# ~300K LUTs to ~45K; the SoC then fits the xc7a200t at ~70%.  The RTL
+# default stays 512 (simulation capacity).
+set fit_generics [list ENABLE_NPU1=0 L2_NUM_SETS=64]
+set fit_keys      [list ENABLE_NPU1  L2_NUM_SETS]
 foreach g $cur_generics {
-    if {[lindex [split $g =] 0] ne "CLK_DIV"} { lappend new_generics $g }
+    set gk [lindex [split $g =] 0]
+    if {$gk eq "CLK_DIV"} { continue }
+    if {[lsearch -exact $fit_keys $gk] >= 0} { continue }
+    lappend new_generics $g
 }
 lappend new_generics CLK_DIV=2
-if {[lsearch -exact $new_generics ENABLE_NPU1=0] < 0} { lappend new_generics ENABLE_NPU1=0 }
+foreach fg $fit_generics { lappend new_generics $fg }
 set_property generic $new_generics [current_fileset]
 puts "INFO: generics = $new_generics"
 
