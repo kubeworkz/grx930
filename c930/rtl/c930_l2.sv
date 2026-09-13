@@ -9,9 +9,11 @@
 //   * Every L1 line is a clean copy of an L2 line.  The L2 directory records
 //     which L1s hold each line (a 16-bit sharer vector indexed by SOURCE_ID,
 //     see c930_soc_top.sv for the source-id map).
-//   * Read fill (32B line, AXI len==3): allocate in the L2, record the
-//     requesting L1 as a sharer.  Non-fill reads (len<3, e.g. NPU streaming
-//     row reads) bypass the cache and go straight to DDR.
+//   * Read fill (32B line, AXI len==3, from an L1): allocate in the L2, record
+//     the requesting L1 as a sharer.  Every other read bypasses the cache and
+//     goes straight to DDR -- any other length, and any read from a source
+//     with no invalidation port, such as an NPU DMA row or operand read that
+//     happens to be exactly one aligned line long.
 //   * Write: write-through to DDR, NO allocate.  Before the write becomes
 //     visible, every L1 sharer of the line is invalidated (asserted on the
 //     per-L1 invalidation ports until acked).  The L2 copy is dropped.
@@ -292,7 +294,15 @@ module c930_l2
               rd_hit_way <= hitw;
               rd_hit     <= |hitw;
             end
-            if (s_arlen == WORDS_PER_LINE-1 && s_araddr[OFF_BITS-1:0] == '0)
+            // Only an L1 fills: the directory can invalidate an L1 and nobody
+            // else.  Length alone let an NPU read of exactly four beats (a
+            // 32-byte B operand, say) allocate a line with no invalidatable
+            // sharer, evicting a CPU line to do it -- and serve that NPU's
+            // next read from the copy, which is stale the moment anything
+            // writes DDR without passing through here, as a testbench
+            // backdoor preload does.
+            if (s_arlen == WORDS_PER_LINE-1 && s_araddr[OFF_BITS-1:0] == '0 &&
+                inv_port_of_src[s_arid] != '0)
               rd_state <= RD_LOOKUP;
             else
               rd_state <= RD_BYPASS_AR;
