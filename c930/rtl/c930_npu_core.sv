@@ -45,6 +45,12 @@ module c930_npu_core
 
   // ---- Control ----
   input  logic                        i_bank_sel, // bank select from DMA: 0=bank0, 1=bank1 (core reads)
+
+  // A-row watermark from the DMA: rows 0 .. i_a_rows_ready-1 are present in
+  // a_mem.  The DMA loads only row 0 before i_start and streams the rest in
+  // during compute, so without this the core can read a row that has not
+  // landed yet and silently compute on zeros.  Tie to i_dim_m to disable.
+  input  logic [15:0]                 i_a_rows_ready,
   input  logic                        i_wbank,    // write bank select from DMA: 0=bank0, 1=bank1
   input  logic                        i_start,  // 1-cycle pulse, sampled in IDLE
   input  logic [15:0]                 i_dim_m,
@@ -62,7 +68,8 @@ module c930_npu_core
   // ---- Performance counters ----
   output logic [31:0]                 o_cycle_count,  // free-running cycles while busy
   output logic [31:0]                 o_op_count,     // total PE MAC operations
-  output logic [31:0]                 o_stall_count   // cycles stalled (S_WLOAD or stall)
+  output logic [31:0]                 o_stall_count,  // weight-movement cycles
+  output logic [31:0]                 o_arow_stall_count // cycles starved of A rows
 );
 
   // ---------------------------------------------------------------------------
@@ -121,6 +128,7 @@ module c930_npu_core
   localparam logic [2:0] S_PRELOAD = 3'd2;  // preload next tile into inactive bank
   localparam logic [2:0] S_RUN     = 3'd3;
   localparam logic [2:0] S_WRITE   = 3'd4;
+  localparam logic [2:0] S_AROW    = 3'd5;  // wait for the next A row to land
   logic [2:0] state;
 
   int m_reg;        // current output row
@@ -183,23 +191,26 @@ module c930_npu_core
   // ---------------------------------------------------------------------------
   // Performance counters
   // ---------------------------------------------------------------------------
-  logic [31:0] cycle_cnt, op_cnt, stall_cnt;
-  assign o_cycle_count = cycle_cnt;
-  assign o_op_count    = op_cnt;
-  assign o_stall_count = stall_cnt;
+  logic [31:0] cycle_cnt, op_cnt, stall_cnt, arow_stall_cnt;
+  assign o_cycle_count      = cycle_cnt;
+  assign o_op_count         = op_cnt;
+  assign o_stall_count      = stall_cnt;
+  assign o_arow_stall_count = arow_stall_cnt;
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      cycle_cnt <= 32'd0;
-      op_cnt    <= 32'd0;
-      stall_cnt <= 32'd0;
+      cycle_cnt      <= 32'd0;
+      op_cnt         <= 32'd0;
+      stall_cnt      <= 32'd0;
+      arow_stall_cnt <= 32'd0;
     end else begin
       if (state != S_IDLE)
         cycle_cnt <= cycle_cnt + 1;
       if (state == S_IDLE && i_start) begin
-        cycle_cnt <= 32'd0;
-        op_cnt    <= 32'd0;
-        stall_cnt <= 32'd0;
+        cycle_cnt      <= 32'd0;
+        op_cnt         <= 32'd0;
+        stall_cnt      <= 32'd0;
+        arow_stall_cnt <= 32'd0;
       end
       // Count PE MAC operations: all PEs fire each cycle during S_RUN.
       // NUM_ROWS * NUM_COLS = 64 PEs, each doing one MAC per cycle.
@@ -213,6 +224,11 @@ module c930_npu_core
       // spends most of its time loading weights".
       if (state == S_WLOAD || state == S_PRELOAD)
         stall_cnt <= stall_cnt + 1;
+      // Kept separate from stall_cnt so the accounting identity in
+      // doc/c930_architecture.md still decomposes: weight movement and
+      // operand starvation are different problems with different fixes.
+      if (state == S_AROW)
+        arow_stall_cnt <= arow_stall_cnt + 1;
     end
   end
 
@@ -495,7 +511,11 @@ module c930_npu_core
                 w_r        <= 0;
                 w_n        <= 0;
                 for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-                state      <= S_WLOAD;
+                // Do not start the next output row until its A row has
+                // landed.  Bypass the wait state when it already has, so the
+                // interlock costs nothing on the common path -- entering
+                // S_AROW unconditionally burned one cycle per output row.
+                state      <= ((m_reg + 1) < i_a_rows_ready) ? S_WLOAD : S_AROW;
               end
             end else begin
               // next N tile (same row): fresh accumulator
@@ -511,6 +531,14 @@ module c930_npu_core
           end else begin
             n_cnt <= n_cnt + 1;
           end
+        end
+
+        // Hold until the DMA has unpacked the row this pass needs.  Entered
+        // only on an output-row advance: within a row the operands are already
+        // resident, and N/K tiling never changes the A row.
+        S_AROW: begin
+          if (m_reg < i_a_rows_ready)
+            state <= S_WLOAD;
         end
 
         default: state <= S_IDLE;

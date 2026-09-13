@@ -61,6 +61,13 @@ module c930_npu_dma
   output logic [31:0] o_dma_last_count,   // latched cycle count from last completed GEMM
   output logic        o_bank_sel,        // bank select for double-buffered A/B memories
 
+  // A-row watermark: rows 0 .. o_a_rows_ready-1 are fully unpacked into a_mem.
+  // Only row 0 is loaded before o_core_start; rows 1..M-1 arrive during
+  // compute, one element per PF_UNPK cycle, so a core that consumes rows
+  // faster than PF_UNPK produces them would read a_mem before it is written.
+  // Nothing enforced that ordering before this port existed.
+  output logic [15:0] o_a_rows_ready,
+
   // ---- Core data plane + control ----
   output logic                    o_wen,       // preload write enable
   output logic                    o_wsel,      // 0 = A, 1 = B
@@ -151,6 +158,11 @@ module c930_npu_dma
   logic [2:0] wr_sub;
   logic       bank_sel;    // double-buffer bank select: 0=bank0, 1=bank1
   assign o_bank_sel = bank_sel;
+
+  // pf_row is "next row to prefetch", so rows below it are complete.  When
+  // prefetch is disabled (INT4 loads all of A upfront) pf_row is set to dm,
+  // which reports every row ready and never stalls the core.
+  assign o_a_rows_ready = 16'(pf_row);
 
   logic [15:0] dm, dn, dk;
   logic [31:0] a_base_r, b_base_r, c_base_r;

@@ -75,7 +75,13 @@ module c930_npu_top
   output logic        o_busy,
   output logic        o_done,
   output logic        o_error,
-  output logic        o_irq     // pulses on completion
+  output logic        o_irq,    // pulses on completion
+
+  // Cycles the core spent waiting for the DMA to unpack the next A row.
+  // Non-zero means the core is consuming rows faster than PF_UNPK supplies
+  // them.  Not yet in the CSR map -- the NPU register file decodes only
+  // addr[5:2] and all 16 words are assigned.
+  output logic [31:0] o_arow_stall_count
 );
 
   logic        start;
@@ -85,6 +91,7 @@ module c930_npu_top
   logic [2:0]  precision;
 
   logic                    dma_wen, dma_wsel, core_start;
+  logic [15:0]             a_rows_ready;
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
 
@@ -180,6 +187,7 @@ module c930_npu_top
     .o_dma_cycle_count (dma_cycle_count),
     .o_dma_last_count  (dma_last_count),
     .o_bank_sel       (dma_bank_sel),
+    .o_a_rows_ready   (a_rows_ready),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
     .o_wbank       (dma_wbank),
@@ -252,9 +260,11 @@ module c930_npu_top
     .o_error    (core_error),
     .i_c_raddr  (c_raddr),
     .o_c_rdata  (c_rdata),
+    .i_a_rows_ready (a_rows_ready),
     .o_cycle_count (cycle_count),
     .o_op_count    (op_count),
-    .o_stall_count (stall_count)
+    .o_stall_count (stall_count),
+    .o_arow_stall_count (o_arow_stall_count)
   );
 
   assign o_busy  = busy;
