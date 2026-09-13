@@ -151,9 +151,11 @@ hazard: $(OUT_HAZARD)
 # ---------------------------------------------------------------------------
 # Full SoC testbench (core + NPU + DDR + MMIO)
 # ---------------------------------------------------------------------------
-$(OUT_SOC): $(SOC_RTL) $(CORE_RTL) tb/tb_c930_soc.sv $(SW_HEX)
+# c930_soc_top is the full SoC (L2, crossbar, UART, ...), so this bench needs
+# the same source list as soc_full.
+$(OUT_SOC): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_c930_soc.sv $(SW_HEX)
 	@mkdir -p $(BUILD_DIR)
-	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_RTL) tb/tb_c930_soc.sv
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_c930_soc.sv
 
 soc: $(OUT_SOC)
 	$(VVP) $(OUT_SOC)
