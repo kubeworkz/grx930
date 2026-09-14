@@ -294,7 +294,10 @@ module c930_npu_core
   localparam logic [2:0] S_WRITE   = 3'd4;
   localparam logic [2:0] S_AROW    = 3'd5;  // wait for the next A row to land
   localparam logic [2:0] S_ACT     = 3'd6;  // activate the last K tile's sums into C
-  localparam int         ACT_P     = 6;     // c930_npu_act's latency, element to write
+  localparam int         ACT_P     = 7;     // c930_npu_act's latency, element to write
+                                            // (7 since the stage-2 split: root/draw
+                                            // and the k_shot multiply are separate
+                                            // cycles, see c930_npu_act.sv)
   logic [2:0] state;
 
   int m_reg;        // current output row

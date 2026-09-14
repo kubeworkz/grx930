@@ -5,9 +5,7 @@
 // curve, the shot noise its light carries, a per-column detuning, and an
 // optional requantisation standing in for an O-E-O reset, applied to each
 // complete sum on its way into C.  The core feeds acc[j] for j = 0 .. nc-1 on
-// consecutive cycles; each element is written back ACT_P = 7 cycles later
-// (stage 2 is split into 2a: root + draw, and 2b: the k_shot multiply -- the
-// unsplit cone was the post-route critical path).
+// consecutive cycles; each element is written back ACT_P = 6 cycles later.
 //
 // Fixed-point contract.  sim/tb_core_verilator.cc's C reference implements
 // these steps exactly, and gate A2 holds the two to bitwise agreement.  All
@@ -44,7 +42,7 @@
 //
 // Saturations (stage 1, stage 3, stage 6) count as separate events.
 // -----------------------------------------------------------------------------
-module c930_npu_act
+module c930_npu_act_ref
 #(
   parameter int NUM_COLS = 8,
   parameter int ACC_W    = 48,
@@ -161,35 +159,6 @@ module c930_npu_act
   logic [C_AW-1:0]     idx1;
 
   // ---- stage 2: noise scale and draw -----------------------------------------
-  // RETIME (setup closure): the old stage 2 evaluated abs -> isqrt4 ->
-  // k_shot*rt AND xorshift -> byte-sum -> *443 in one combinational cone into
-  // the stage-2 registers -- the post-route critical path (WNS -1.498 at
-  // 50 MHz, path x1_reg -> sig20).  Split into 2a (root + draw) and 2b (the
-  // k_shot multiply).  Functions are unchanged; ACT_P in c930_npu_core goes
-  // 6 -> 7.  The xorshift state still steps once per element at the v1
-  // position, so every element consumes the same draw as before.
-  // isqrt4's top-bit loop (24-deep priority chain) is restructured as a
-  // byte-select tree -- same result, ~4 levels instead of ~24.
-  function automatic logic [4:0] msb24(input logic [23:0] a);
-    // Highest set bit of a nonzero 24-bit value, balanced:
-    // 3-way byte select (range ORs), then an 8-way priority inside the byte.
-    logic [7:0] byte_sel;
-    logic [2:0] byte_idx;
-    logic [2:0] bit_idx;
-    if (a[23:16] != 8'd0) begin
-      byte_sel = a[23:16]; byte_idx = 3'd2;
-    end else if (a[15:8] != 8'd0) begin
-      byte_sel = a[15:8];  byte_idx = 3'd1;
-    end else begin
-      byte_sel = a[7:0];   byte_idx = 3'd0;
-    end
-    bit_idx = byte_sel[7] ? 3'd7 : byte_sel[6] ? 3'd6 :
-              byte_sel[5] ? 3'd5 : byte_sel[4] ? 3'd4 :
-              byte_sel[3] ? 3'd3 : byte_sel[2] ? 3'd2 :
-              byte_sel[1] ? 3'd1 : 3'd0;
-    return {byte_idx, bit_idx};          // 8*byte_idx + bit_idx
-  endfunction
-
   function automatic logic [12:0] isqrt4(input logic [23:0] a);
     logic [4:0]  p;
     logic [3:0]  e;
@@ -199,7 +168,8 @@ module c930_npu_act
     logic [22:0] prod;
     logic [12:0] rn;
     if (a == 24'd0) return 13'd0;
-    p = msb24(a);
+    p = 5'd0;
+    for (int b = 0; b < 24; b++) if (a[b]) p = 5'(b);
     e   = 4'(p >> 1);
     th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
     seg = th[7:6] - 2'd1;
@@ -223,32 +193,19 @@ module c930_npu_act
 
   logic [31:0]        rng, rng_next;
   logic [23:0]        abs1;
-  logic [12:0]        rt2a_c;     // stage 2a: the root (or the constant)
-  logic signed [19:0] gs2a_c;     // stage 2a: the draw, scaled
+  logic [12:0]        rt2_c;
+  logic [28:0]        sig2_c;
+  logic signed [10:0] g2_c;
+  logic signed [19:0] gs2_c;
   always_comb begin
     abs1     = x1[23] ? 24'(-x1) : x1;      // |-2^23| = 2^23 fits unsigned
-    rt2a_c   = noise_const_r ? 13'd4096 : isqrt4(abs1);
+    rt2_c    = noise_const_r ? 13'd4096 : isqrt4(abs1);
+    sig2_c   = k_shot_r * rt2_c;
     rng_next = xorshift32(rng);
     g2_c     = $signed({3'b0, rng_next[31:24]}) + $signed({3'b0, rng_next[23:16]}) +
                $signed({3'b0, rng_next[15:8]})  + $signed({3'b0, rng_next[7:0]}) -
                11'sd510;
-    gs2a_c   = g2_c * 20'sd443;
-  end
-
-  // ---- stage 2a registers ------------------------------------------------------
-  logic                v2a;
-  logic [12:0]         rt2a;
-  logic signed [19:0]  gs2a;
-  logic signed [23:0]  x2a;
-  logic                sat1_2a;
-  logic [CW-1:0]       col2a;
-  logic [C_AW-1:0]     idx2a;
-
-  // ---- stage 2b: the noise scale multiply --------------------------------------
-  logic [28:0]        sig2_c;
-  logic signed [10:0] g2_c;
-  always_comb begin
-    sig2_c   = k_shot_r * rt2a;
+    gs2_c    = g2_c * 20'sd443;
   end
 
   logic                v2;
@@ -360,10 +317,9 @@ module c930_npu_act
   // ---- pipeline registers and counters -------------------------------------------
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      v0 <= 1'b0; v1 <= 1'b0; v2a <= 1'b0; v2 <= 1'b0; v3 <= 1'b0; v4 <= 1'b0; v5 <= 1'b0;
+      v0 <= 1'b0; v1 <= 1'b0; v2 <= 1'b0; v3 <= 1'b0; v4 <= 1'b0; v5 <= 1'b0;
       acc0 <= '0; col0 <= '0; idx0 <= '0;
       x1 <= '0; sat1 <= 1'b0; col1 <= '0; idx1 <= '0;
-      rt2a <= '0; gs2a <= '0; x2a <= '0; sat1_2a <= 1'b0; col2a <= '0; idx2a <= '0;
       x2 <= '0; sig2 <= '0; gs2 <= '0; sat1_2 <= 1'b0; col2 <= '0; idx2 <= '0;
       u3 <= '0; sat3 <= '0; col3 <= '0; idx3 <= '0;
       f4 <= '0; sat4 <= '0; col4 <= '0; idx4 <= '0;
@@ -378,13 +334,8 @@ module c930_npu_act
       v1 <= v0;
       x1 <= x1_c; sat1 <= sat1_c; col1 <= col0; idx1 <= idx0;
 
-      // stage 2a: root and draw
-      v2a <= v1;
-      rt2a <= rt2a_c; gs2a <= gs2a_c; x2a <= x1;
-      sat1_2a <= sat1; col2a <= col1; idx2a <= idx1;
-
-      v2 <= v2a;
-      x2 <= x2a; sig2 <= sig2_c; gs2 <= gs2a; sat1_2 <= sat1_2a; col2 <= col2a; idx2 <= idx2a;
+      v2 <= v1;
+      x2 <= x1; sig2 <= sig2_c; gs2 <= gs2_c; sat1_2 <= sat1; col2 <= col1; idx2 <= idx1;
 
       v3 <= v2;
       u3 <= x3_c ^ 24'h800000;            // + 2^23 on a 24-bit two's-complement value
