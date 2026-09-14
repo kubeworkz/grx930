@@ -70,7 +70,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu npu_float hazard synth synth-fit wave clean bringup tile_test driver_test
+.PHONY: all sw soc soc_full npu npu_float npu_feed hazard synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -136,6 +136,21 @@ $(OUT_NPU_FLOAT): $(NPU_RTL) tb/tb_npu_float_prec.sv
 
 npu_float: $(OUT_NPU_FLOAT)
 	$(VVP) $(OUT_NPU_FLOAT)
+
+# The operand feed at the PTA sweep's shape (grxcp pta_program_plan.md, F0):
+# four queued M=64 N=8 K=256 GEMMs, split by DMA phase.  A measurement, so the
+# gate is that two runs agree byte for byte and every C checks.
+OUT_NPU_FEED := $(BUILD_DIR)/tb_npu_feed.vvp
+
+$(OUT_NPU_FEED): $(NPU_RTL) tb/tb_npu_feed.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ $(NPU_RTL) tb/tb_npu_feed.sv
+
+npu_feed: $(OUT_NPU_FEED)
+	$(VVP) $(OUT_NPU_FEED) > $(BUILD_DIR)/npu_feed_run1.log
+	$(VVP) $(OUT_NPU_FEED) > $(BUILD_DIR)/npu_feed_run2.log
+	cmp $(BUILD_DIR)/npu_feed_run1.log $(BUILD_DIR)/npu_feed_run2.log
+	grep -F -e "[F0]" -e "[PASS]" -e "[WM]" $(BUILD_DIR)/npu_feed_run1.log
 
 # ---------------------------------------------------------------------------
 # Hazard-unit unit test (flush deferral under stalls)
