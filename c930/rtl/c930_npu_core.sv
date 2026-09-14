@@ -111,7 +111,27 @@ module c930_npu_core
   output logic [31:0]                 o_cycle_count,  // free-running cycles while busy
   output logic [31:0]                 o_op_count,     // total PE MAC operations
   output logic [31:0]                 o_stall_count,  // weight-movement cycles
-  output logic [31:0]                 o_arow_stall_count // cycles starved of A rows
+  output logic [31:0]                 o_arow_stall_count, // cycles starved of A rows
+
+  // ---- Activation stage, S_ACT (doc/npu_act_stage_design_note.md) ----
+  // Core-level only: no DMA, CSR or firmware path yet.  Every scalar is
+  // sampled when a start is accepted.  The arithmetic is c930_npu_act's.
+  input  logic                        i_act_en,           // last K tile through S_ACT
+  input  logic                        i_act_requant,      // this GEMM is an O-E-O reset
+  input  logic [3:0]                  i_act_adc_bits,     // B_adc for requantisation, 1..15
+  input  logic [32*NUM_COLS-1:0]      i_act_xs,           // per column: XSCALE * s_j
+  input  logic [5:0]                  i_act_xshift,       // acc -> table domain
+  input  logic [16*NUM_COLS-1:0]      i_act_r,            // per column: 1/s_j, Q4.12
+  input  logic [5:0]                  i_act_yshift,       // table output -> C
+  input  logic [15:0]                 i_act_k_shot,       // Q8.8; 0 disables noise
+  input  logic                        i_act_noise_const,  // constant sigma (amplitude tables)
+  input  logic [31:0]                 i_act_seed,         // xorshift32 seed, nonzero
+  input  logic                        i_act_tbl_wen,      // breakpoint write, idle only
+  input  logic [10:0]                 i_act_tbl_waddr,
+  input  logic signed [23:0]          i_act_tbl_wdata,
+  output logic [31:0]                 o_act_count,        // elements activated
+  output logic [31:0]                 o_act_sat_count,    // saturation events
+  output logic [31:0]                 o_act_cycles        // cycles spent in S_ACT
 );
 
   // ---------------------------------------------------------------------------
@@ -201,6 +221,8 @@ module c930_npu_core
   localparam logic [2:0] S_RUN     = 3'd3;
   localparam logic [2:0] S_WRITE   = 3'd4;
   localparam logic [2:0] S_AROW    = 3'd5;  // wait for the next A row to land
+  localparam logic [2:0] S_ACT     = 3'd6;  // activate the last K tile's sums into C
+  localparam int         ACT_P     = 6;     // c930_npu_act's latency, element to write
   logic [2:0] state;
 
   int m_reg;        // current output row
@@ -210,6 +232,8 @@ module c930_npu_core
   int t;            // cycle counter within a systolic run
   int w_r, w_n;     // weight-load row/col counters
   int n_cnt;        // result write counter
+  int act_t;        // cycle within S_ACT: elements enter at 0 .. nc-1
+  logic act_en_r;   // i_act_en, sampled at start
 
   // Weight bank.  With the m-inner loop order a B tile is loaded once and then
   // used for every output row, so the K-tile double-buffer that the m-outer
@@ -259,11 +283,19 @@ module c930_npu_core
   // only on registered state/counters (not t) breaks this path.
   // ---------------------------------------------------------------------------
   logic done_cond;
-  assign done_cond = (state == S_WRITE) &&
-                     (n_cnt  == nc - 1) &&
-                     (m_reg  == i_dim_m - 1) &&
-                     (kt_reg == num_k_tiles - 1) &&
-                     (nt_reg == num_n_tiles - 1);
+  // With S_ACT enabled the last K tile ends in S_ACT rather than S_WRITE, so
+  // the last write of a GEMM is S_ACT's.
+  wire  last_row_tile = (m_reg  == i_dim_m - 1) &&
+                        (kt_reg == num_k_tiles - 1) &&
+                        (nt_reg == num_n_tiles - 1);
+  assign done_cond = last_row_tile &&
+                     (((state == S_WRITE) && (n_cnt == nc - 1)) ||
+                      ((state == S_ACT)   && (act_t == nc + ACT_P - 1)));
+
+  // End of a row's store, in whichever state stored it (see the advance block
+  // after the FSM case).
+  wire row_done = ((state == S_WRITE) && (n_cnt == nc - 1)) ||
+                  ((state == S_ACT)   && (act_t == nc + ACT_P - 1));
 
   // ---------------------------------------------------------------------------
   // Performance counters
@@ -271,11 +303,12 @@ module c930_npu_core
   // See the i_a_rows_ready port comment: 0 disables the interlock entirely.
   wire arow_free = (i_a_rows_ready == 16'd0);
 
-  logic [31:0] cycle_cnt, op_cnt, stall_cnt, arow_stall_cnt;
+  logic [31:0] cycle_cnt, op_cnt, stall_cnt, arow_stall_cnt, act_cycle_cnt;
   assign o_cycle_count      = cycle_cnt;
   assign o_op_count         = op_cnt;
   assign o_stall_count      = stall_cnt;
   assign o_arow_stall_count = arow_stall_cnt;
+  assign o_act_cycles       = act_cycle_cnt;
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -283,6 +316,7 @@ module c930_npu_core
       op_cnt         <= 32'd0;
       stall_cnt      <= 32'd0;
       arow_stall_cnt <= 32'd0;
+      act_cycle_cnt  <= 32'd0;
     end else begin
       if (state != S_IDLE)
         cycle_cnt <= cycle_cnt + 1;
@@ -291,7 +325,12 @@ module c930_npu_core
         op_cnt         <= 32'd0;
         stall_cnt      <= 32'd0;
         arow_stall_cnt <= 32'd0;
+        act_cycle_cnt  <= 32'd0;
       end
+      // S_ACT is its own term in CYCLE_COUNT's decomposition: without it the
+      // identity in doc/c930_architecture.md cannot close once S_ACT runs.
+      if (state == S_ACT)
+        act_cycle_cnt <= act_cycle_cnt + 1;
       // Count PE MAC operations: all PEs fire each cycle during S_RUN.
       // NUM_ROWS * NUM_COLS = 64 PEs, each doing one MAC per cycle.
       if (state == S_RUN)
@@ -460,6 +499,55 @@ module c930_npu_core
   );
 
   // ---------------------------------------------------------------------------
+  // Activation stage.  S_ACT feeds acc[j], j = 0 .. nc-1, on consecutive cycles
+  // and stores what comes back into C through the same c_mem port S_WRITE uses,
+  // so the DMA reads activated values with no change.  INT8/INT16/INT4 only:
+  // the float modes accumulate normalised FP32, which a table over integer
+  // sums does not describe, so enabling S_ACT with FP16 or BF16 is an error at
+  // start, like an out-of-range dimension.
+  // ---------------------------------------------------------------------------
+  wire act_fp   = i_act_en && (i_precision == 3'd2 || i_precision == 3'd3);
+  wire act_feed = (state == S_ACT) && (act_t < nc);
+  wire [$clog2(NUM_COLS)-1:0] act_col = act_t[$clog2(NUM_COLS)-1:0];
+  wire [C_AW-1:0] act_cidx = C_AW'(m_reg * i_dim_n + n_base + act_t);
+
+  logic                    act_wvalid;
+  logic [C_AW-1:0]         act_widx;
+  logic signed [ACC_W-1:0] act_wdata;
+
+  c930_npu_act #(
+    .NUM_COLS (NUM_COLS),
+    .ACC_W    (ACC_W),
+    .C_AW     (C_AW)
+  ) u_act (
+    .i_clk         (i_clk),
+    .i_rst_n       (i_rst_n),
+    .i_cfg_load    ((state == S_IDLE) && i_start && dims_ok && !act_fp),
+    .i_requant     (i_act_requant),
+    .i_adc_bits    (i_act_adc_bits),
+    .i_xs          (i_act_xs),
+    .i_xshift      (i_act_xshift),
+    .i_r           (i_act_r),
+    .i_yshift      (i_act_yshift),
+    .i_k_shot      (i_act_k_shot),
+    .i_noise_const (i_act_noise_const),
+    .i_seed        (i_act_seed),
+    .i_idle        (state == S_IDLE),
+    .i_tbl_wen     (i_act_tbl_wen),
+    .i_tbl_waddr   (i_act_tbl_waddr),
+    .i_tbl_wdata   (i_act_tbl_wdata),
+    .i_valid       (act_feed),
+    .i_acc         (acc[act_col]),
+    .i_col         (act_col),
+    .i_cidx        (act_cidx),
+    .o_wvalid      (act_wvalid),
+    .o_widx        (act_widx),
+    .o_wdata       (act_wdata),
+    .o_count       (o_act_count),
+    .o_sat_count   (o_act_sat_count)
+  );
+
+  // ---------------------------------------------------------------------------
   // FSM  (m-inner loop order: for each N tile, for each K tile, load the B
   // tile once and then sweep every output row against it)
   //
@@ -499,6 +587,8 @@ module c930_npu_core
       w_r         <= 0;
       w_n         <= 0;
       n_cnt       <= 0;
+      act_t       <= 0;
+      act_en_r    <= 1'b0;
       k_base_reg  <= 0;
       kr_reg      <= 0;
       bank_sel    <= 1'b0;
@@ -512,12 +602,12 @@ module c930_npu_core
       // arrive and computes them into this one.
       if (i_abort)
         state <= S_IDLE;
-      else
+      else begin
       case (state)
 
         S_IDLE: begin
           if (i_start) begin
-            if (!dims_ok) begin
+            if (!dims_ok || act_fp) begin
               o_error <= 1'b1;          // stay IDLE
             end else begin
               o_error    <= 1'b0;
@@ -529,6 +619,8 @@ module c930_npu_core
               w_r        <= 0;
               w_n        <= 0;
               n_cnt      <= 0;
+              act_t      <= 0;
+              act_en_r   <= i_act_en;
               bank_sel   <= i_bank_sel;  // match DMA's active bank for weight loading
               b_bank_sel <= i_bank_sel;  // snapshot for stable B reads throughout GEMM
               // Pre-register first K tile: k_base=0, kr=min(NUM_ROWS, dim_k)
@@ -610,7 +702,10 @@ module c930_npu_core
           if (t == 2*NUM_ROWS + 2*NUM_COLS - 1) begin
             t     <= 0;
             n_cnt <= 0;
-            state <= S_WRITE;
+            act_t <= 0;
+            // Only the last K tile's sums are complete; an earlier tile's are
+            // partial and go to C unactivated, to be restored by S_ACCLD.
+            state <= (act_en_r && kt_reg == num_k_tiles - 1) ? S_ACT : S_WRITE;
           end else begin
             t <= t + 1;
           end
@@ -619,55 +714,23 @@ module c930_npu_core
 
         // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.
         // acc[] already holds the running sum through this K tile, so this is
-        // a plain store, not a read-modify-write.
+        // a plain store, not a read-modify-write.  The row / tile advance at
+        // its end follows the case, shared with S_ACT.
         S_WRITE: begin
           c_mem[c_idx] <= acc[n_cnt];
-          if (n_cnt == nc - 1) begin
-            n_cnt <= 0;
-            if (m_reg != i_dim_m - 1) begin
-              // Next output row, same weights: this is the whole point.
-              m_reg  <= m_reg + 1;
-              m_base <= m_base + i_dim_k;
-              t      <= 0;
-              if (kt_reg == 0)
-                for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
-              // Do not start the next output row until its A row has landed.
-              // Bypassed when it already has, so the interlock costs nothing
-              // on the common path.  Under this loop order the wait is real:
-              // the first K tile walks all M rows while the DMA is still
-              // fetching them.
-              if (arow_free || (m_reg + 1) < i_a_rows_ready)
-                state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
-              else
-                state <= S_AROW;
-            end else begin
-              m_reg  <= 0;
-              m_base <= 0;
-              w_r    <= 0;
-              w_n    <= 0;
-              if (kt_reg != num_k_tiles - 1) begin
-                // Next K tile, same N tile: reload the weight bank.
-                kt_reg     <= kt_reg + 1;
-                k_base_reg <= (kt_reg + 1) * NUM_ROWS;
-                kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
-                               NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
-                state      <= S_WLOAD;
-              end else begin
-                kt_reg     <= 0;
-                k_base_reg <= 0;
-                kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
-                if (nt_reg != num_n_tiles - 1) begin
-                  nt_reg <= nt_reg + 1;
-                  state  <= S_WLOAD;
-                end else begin
-                  // o_done is driven by done_cond (see above)
-                  state <= S_IDLE;
-                end
-              end
-            end
-          end else begin
+          if (n_cnt != nc - 1)
             n_cnt <= n_cnt + 1;
-          end
+        end
+
+        // The last K tile's complete sums, activated on their way into C.
+        // acc[j] enters c930_npu_act on cycle j and its result is written
+        // ACT_P cycles later, so the state lasts nc + ACT_P cycles and ends on
+        // the last write.
+        S_ACT: begin
+          if (act_wvalid)
+            c_mem[act_widx] <= act_wdata;
+          if (act_t != nc + ACT_P - 1)
+            act_t <= act_t + 1;
         end
 
         // Hold until the DMA has unpacked the row this pass needs.  Entered
@@ -681,6 +744,57 @@ module c930_npu_core
 
         default: state <= S_IDLE;
       endcase
+
+      // Row / tile advance at the end of S_WRITE or S_ACT.  One block, so S_ACT
+      // inherits every step in S_WRITE's order -- in particular acc[] is
+      // cleared for the next row only after S_ACT has consumed it, which a
+      // GEMM with a single K tile, its first and last, depends on.
+      if (row_done) begin
+        n_cnt <= 0;
+        act_t <= 0;
+        if (m_reg != i_dim_m - 1) begin
+          // Next output row, same weights: this is the whole point.
+          m_reg  <= m_reg + 1;
+          m_base <= m_base + i_dim_k;
+          t      <= 0;
+          if (kt_reg == 0)
+            for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
+          // Do not start the next output row until its A row has landed.
+          // Bypassed when it already has, so the interlock costs nothing
+          // on the common path.  Under this loop order the wait is real:
+          // the first K tile walks all M rows while the DMA is still
+          // fetching them.
+          if (arow_free || (m_reg + 1) < i_a_rows_ready)
+            state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
+          else
+            state <= S_AROW;
+        end else begin
+          m_reg  <= 0;
+          m_base <= 0;
+          w_r    <= 0;
+          w_n    <= 0;
+          if (kt_reg != num_k_tiles - 1) begin
+            // Next K tile, same N tile: reload the weight bank.
+            kt_reg     <= kt_reg + 1;
+            k_base_reg <= (kt_reg + 1) * NUM_ROWS;
+            kr_reg     <= ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS) ?
+                           NUM_ROWS : (i_dim_k - (kt_reg + 1) * NUM_ROWS);
+            state      <= S_WLOAD;
+          end else begin
+            kt_reg     <= 0;
+            k_base_reg <= 0;
+            kr_reg     <= (i_dim_k >= NUM_ROWS) ? NUM_ROWS : i_dim_k;
+            if (nt_reg != num_n_tiles - 1) begin
+              nt_reg <= nt_reg + 1;
+              state  <= S_WLOAD;
+            end else begin
+              // o_done is driven by done_cond (see above)
+              state <= S_IDLE;
+            end
+          end
+        end
+      end
+      end  // !i_abort
     end
   end
 

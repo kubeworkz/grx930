@@ -292,7 +292,25 @@ module c930_npu_top
     .o_cycle_count (cycle_count),
     .o_op_count    (op_count),
     .o_stall_count (stall_count),
-    .o_arow_stall_count (o_arow_stall_count)
+    .o_arow_stall_count (o_arow_stall_count),
+    // S_ACT is core-level only until its gates are green
+    // (doc/npu_act_stage_design_note.md section 7): off at the top.
+    .i_act_en          (1'b0),
+    .i_act_requant     (1'b0),
+    .i_act_adc_bits    (4'd0),
+    .i_act_xs          ({(32*NUM_COLS){1'b0}}),
+    .i_act_xshift      (6'd0),
+    .i_act_r           ({(16*NUM_COLS){1'b0}}),
+    .i_act_yshift      (6'd0),
+    .i_act_k_shot      (16'd0),
+    .i_act_noise_const (1'b0),
+    .i_act_seed        (32'd0),
+    .i_act_tbl_wen     (1'b0),
+    .i_act_tbl_waddr   (11'd0),
+    .i_act_tbl_wdata   (24'sd0),
+    .o_act_count       (),
+    .o_act_sat_count   (),
+    .o_act_cycles      ()
   );
 
   assign o_busy  = busy;
