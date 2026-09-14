@@ -6,11 +6,21 @@
 #   Usage: ./build_grx930_verilator.sh [clean]
 #
 # Produces: build/verilator_soc/Vc930_soc_verilator
+#
+# F0=1 builds the feed-measurement model instead (grxcp pta_program_plan.md,
+# F0): the NPU at the PTA sweep's shape, 8x8 with MAX_M 64 and MAX_K 256, and
+# the wrapper's F0_FEED_PROBE.  Produces build/verilator_soc_f0/, run as
+#   ./build/verilator_soc_f0/Vc930_soc_verilator firmware_uart_gemm_test.hex f0
 set -e
 
 # Repo root (script lives in c930/sim)
 C930_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$C930_DIR/build/verilator_soc"
+F0_FLAGS=""
+if [ "${F0:-0}" = "1" ]; then
+  BUILD_DIR="$C930_DIR/build/verilator_soc_f0"
+  F0_FLAGS="-GNUM_ROWS=8 -GNUM_COLS=8 -GMAX_M=64 -GMAX_K=256 -DF0_FEED_PROBE"
+fi
 VERILATOR="${VERILATOR:-/home/ubuntu/tools/verilator/bin/verilator}"
 JOBS="${JOBS:-8}"
 
@@ -65,7 +75,7 @@ echo "[grx930] Verilating c930_soc_verilator ..."
   -Wno-PINMISSING -Wno-UNOPTFLAT -Wno-WIDTH -Wno-CASEX \
   --threads 1 --Mdir "$BUILD_DIR" \
   -I../rv64imac/RTL \
-  --top-module c930_soc_verilator \
+  --top-module c930_soc_verilator $F0_FLAGS \
   sim/c930_soc_verilator.sv \
   sim/tb_uart_echo.cc \
   $CORE_RTL $SOC_FULL_RTL \

@@ -23,6 +23,8 @@
  *   ./build/verilator_soc/Vc930_soc_verilator firmware_uart_echo_test.hex
  * Run (GEMM firmware):
  *   ./build/verilator_soc/Vc930_soc_verilator firmware_uart_gemm_test.hex
+ * Run (feed measurement, grxcp pta_program_plan.md F0; build with F0=1):
+ *   ./build/verilator_soc_f0/Vc930_soc_verilator firmware_uart_gemm_test.hex f0
  */
 
 #include <cstdio>
@@ -485,6 +487,56 @@ static bool run_gemm_case(const GemmCase &c, std::string &why) {
 }
 
 // ============================================================================
+// Feed measurement (grxcp pta_program_plan.md, F0)
+// ----------------------------------------------------------------------------
+// Four queued INT8 GEMMs at M=64 N=8 K=256 through the firmware's 'Q' command,
+// all on one operand set at its F0 addresses.  Needs the model built with F0=1:
+// the wrapper's probe prints the feed counters, and this checks C through the
+// DDR backdoor once the batch is done.
+// ============================================================================
+static const uint32_t F0_A_ADDR = 0x8000;   // must match uart_gemm_test.c
+static const uint32_t F0_B_ADDR = 0xC000;
+static const uint32_t F0_C_ADDR = 0xC800;
+
+static bool run_f0(std::string &why) {
+    const int M = 64, N = 8, K = 256, COUNT = 4;
+    std::vector<int> a((size_t)M * K), b((size_t)K * N);
+    for (size_t i = 0; i < a.size(); i++) a[i] = (int)((i * 3 + 1) % 9) - 4;
+    for (size_t i = 0; i < b.size(); i++) b[i] = (int)((i * 5 + 2) % 9) - 4;
+    gemm_pack_operand(F0_A_ADDR, a, 0);
+    gemm_pack_operand(F0_B_ADDR, b, 0);
+    for (int i = 0; i < M * N; i++) {
+        preload_byte(F0_C_ADDR + i * 4 + 0, 0xEF);
+        preload_byte(F0_C_ADDR + i * 4 + 1, 0xBE);
+        preload_byte(F0_C_ADDR + i * 4 + 2, 0xAD);
+        preload_byte(F0_C_ADDR + i * 4 + 3, 0xDE);
+    }
+
+    const uint8_t cmd[7] = { 'Q', 0, (uint8_t)M, (uint8_t)N,
+                             (uint8_t)(K & 0xFF), (uint8_t)(K >> 8), (uint8_t)COUNT };
+    const uint64_t t0 = cycle;
+    std::string got = send_bytes_collect(cmd, 7, 1, 4000000);
+    printf("[TB] F0 batch reply after %lu cycles\n", (unsigned long)(cycle - t0));
+    if (got != "A") {
+        why = got.empty() ? "no reply" : "reply '" + got + "'";
+        return false;
+    }
+
+    int nbad = 0;
+    for (int i = 0; i < M * N; i++) {
+        const int m = i / N, n = i % N;
+        int32_t ref = 0;
+        for (int k = 0; k < K; k++) ref += a[(size_t)m * K + k] * b[(size_t)k * N + n];
+        if ((int32_t)ddr_rd_word(F0_C_ADDR + i * 4) != ref) nbad++;
+    }
+    if (nbad) {
+        why = std::to_string(nbad) + " of " + std::to_string(M * N) + " C elements wrong";
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 static int failures = 0;
@@ -563,6 +615,21 @@ int main(int argc, char **argv) {
         printf("[TB] WARNING: boot banner mismatch (UART bytes != expected)\n");
     } else {
         printf("[TB] boot banner verified\n");
+    }
+
+    // Feed measurement alone: `<hex> f0`.
+    if (argc > 2 && strcmp(argv[2], "f0") == 0) {
+        std::string why;
+        const bool ok = run_f0(why);
+        printf("  %-32s %s  %s\n", "F0 4x GEMM INT8 64x8x256", ok ? "PASS" : "FAIL",
+               why.c_str());
+        if (!ok) failures++;
+        printf("Total cycles: %lu\n", (unsigned long)cycle);
+        if (failures == 0) printf("ALL UART TESTS PASSED\n");
+        else               printf("%d TEST(S) FAILED\n", failures);
+        top->final();
+        delete top;
+        return failures == 0 ? 0 : 1;
     }
 
     // 3. Tests

@@ -22,8 +22,15 @@
  *
  * Fixed DDR buffer addresses (must match the host preload):
  *   A -> 0x9000, B -> 0x9400, C -> 0x9800
- * These live well above the sim firmware (link_sim.ld: RAM 0x0..0x8000,
- * stack top 0x8000) and below the 64 KB DDR model.
+ * These live well above the sim firmware (about 2 KB at 0x0; link_sim.ld puts
+ * the stack top at 0xF000) and below the 64 KB DDR model.
+ *
+ * 'Q' prec M N K_lo K_hi count queues `count` identical GEMMs back to back, all
+ * on one set of buffers sized for the PTA sweep's shape, then replies 'A' once
+ * the batch is done.  It is the feed measurement's command (grxcp
+ * pta_program_plan.md, F0) and needs the NPU built at that shape; the host
+ * reads C back through the DDR backdoor.
+ *   A -> 0x8000 (16 KB), B -> 0xC000, C -> 0xC800
  *
  * Build (sim, Verilator SoC -- core boots at PC=0):
  *   make TARGET=uart_gemm_test ASM_SRCS=start_sim.S \
@@ -62,6 +69,10 @@
 #define NPU_B_BASE      (*(volatile uint32_t*)(NPU0_BASE + 0x18))
 #define NPU_C_BASE      (*(volatile uint32_t*)(NPU0_BASE + 0x1c))
 #define NPU_PREC        (*(volatile uint32_t*)(NPU0_BASE + 0x20))
+#define NPU_QUEUE_STAT  (*(volatile uint32_t*)(NPU0_BASE + 0x38))  // R: [3:0] occupancy [4] full
+
+#define NPU_QUEUE_OCC   0x0F
+#define NPU_QUEUE_FULL  0x10
 
 #define NPU_STATUS_BUSY 0x1
 #define NPU_STATUS_DONE 0x2
@@ -78,6 +89,11 @@
 #define GEMM_MAX_M      8
 #define GEMM_MAX_N      12
 #define GEMM_MAX_K      16
+
+// ---- 'Q' (feed measurement) buffers, sized for M=64 N=8 K=256 ----
+#define F0_A_ADDR       0x8000
+#define F0_B_ADDR       0xC000
+#define F0_C_ADDR       0xC800
 
 // ============================================================================
 // UART driver
@@ -115,6 +131,36 @@ void uart_write_hex8(uint8_t val) {
 // ============================================================================
 // NPU GEMM
 // ============================================================================
+
+// Queue `count` identical GEMMs on the F0 buffers back to back, wait for the
+// whole batch, then ACK 'A' ('E' if the engine flagged an error).  K takes two
+// bytes, because 256 does not fit one.  Completion follows c930_npu_csr.sv's
+// batch contract -- queue occupancy 0 AND BUSY 0 -- since DONE-then-BUSY
+// polling can end inside a dispatch bubble.
+void handle_queue(void) {
+    uint8_t  prec  = uart_read_char();
+    uint8_t  m     = uart_read_char();
+    uint8_t  n     = uart_read_char();
+    uint8_t  k_lo  = uart_read_char();
+    uint8_t  k_hi  = uart_read_char();
+    uint8_t  count = uart_read_char();
+    uint32_t k     = (uint32_t)k_lo | ((uint32_t)k_hi << 8);
+
+    for (uint8_t i = 0; i < count; i++) {
+        // A START against a full FIFO is silently dropped.
+        while (NPU_QUEUE_STAT & NPU_QUEUE_FULL);
+        NPU_DIM_M  = m;
+        NPU_DIM_N  = n;
+        NPU_DIM_K  = k;
+        NPU_A_BASE = F0_A_ADDR;
+        NPU_B_BASE = F0_B_ADDR;
+        NPU_C_BASE = F0_C_ADDR;
+        NPU_PREC   = prec;
+        NPU_CTRL   = NPU_CTRL_START;
+    }
+    while ((NPU_QUEUE_STAT & NPU_QUEUE_OCC) || (NPU_STATUS & NPU_STATUS_BUSY));
+    uart_write_char((NPU_STATUS & NPU_STATUS_ERROR) ? 'E' : 'A');
+}
 
 // Run one GEMM on preloaded A/B buffers.  Returns 0 on success, -1 on bad
 // dims (replies with an error string).  On success replies with C bytes
@@ -164,6 +210,7 @@ void handle_gemm(void) {
 #define CMD_ECHO    'E'
 #define CMD_GEMM    'G'
 #define CMD_PING    'P'
+#define CMD_QUEUE   'Q'
 #define CMD_VERSION 'V'
 
 // Echo back received data + 'A' -- same as the echo firmware, so the shared
@@ -206,6 +253,10 @@ void process_command(void) {
 
         case CMD_PING:
             handle_ping();
+            break;
+
+        case CMD_QUEUE:
+            handle_queue();
             break;
 
         case CMD_VERSION:
