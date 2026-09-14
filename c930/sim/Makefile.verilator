@@ -55,6 +55,7 @@ RTL_SRCS = \
     $(RTL_DIR)/c930_l2.sv \
     $(RTL_DIR)/c930_mmio_arb.sv \
     $(RTL_DIR)/c930_mmio_bridge.sv \
+    $(RTL_DIR)/c930_npu_act.sv \
     $(RTL_DIR)/c930_npu_core.sv \
     $(RTL_DIR)/c930_npu_csr.sv \
     $(RTL_DIR)/c930_npu_dma.sv \

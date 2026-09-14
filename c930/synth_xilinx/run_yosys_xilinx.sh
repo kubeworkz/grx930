@@ -25,7 +25,7 @@ cd "$HERE/.."   # c930/ -- keep all paths relative
 
 # Build the file list dynamically (same as Makefile wildcard)
 CORE_FILES=$(ls ../rv64imac/RTL/*.sv | tr '\n' ' ')
-NPU_FILES="rtl/c930_tensor_pe.sv rtl/c930_systolic_array.sv rtl/c930_npu_core.sv rtl/c930_npu_csr.sv rtl/c930_npu_dma.sv rtl/c930_npu_top.sv rtl/c930_mmio_bridge.sv rtl/c930_soc_top.sv synth/c930_ddr_stub.sv"
+NPU_FILES="rtl/c930_tensor_pe.sv rtl/c930_systolic_array.sv rtl/c930_npu_act.sv rtl/c930_npu_core.sv rtl/c930_npu_csr.sv rtl/c930_npu_dma.sv rtl/c930_npu_top.sv rtl/c930_mmio_bridge.sv rtl/c930_soc_top.sv synth/c930_ddr_stub.sv"
 
 # Generate the Yosys script dynamically
 cat > build/synth_xilinx/run_xilinx.ys <<YSEOF

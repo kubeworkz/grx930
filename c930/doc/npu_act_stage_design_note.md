@@ -1,13 +1,12 @@
 # S_ACT: an activation stage in the c930 NPU
 
-**Status: DESIGN. The table generator is built (§7, step 2); no RTL yet.**
-Core-level only in this phase: new `c930_npu_core` ports, driven directly by
-`sim/tb_core_verilator.cc`. No DMA, CSR or firmware change until the gates in §6
-are green.
+**Status: RTL through gate A2** (§6). `rtl/c930_npu_act.sv` and the S_ACT state
+in `rtl/c930_npu_core.sv`, driven directly by `sim/tb_core_verilator.cc` and tied
+off in `c930_npu_top`. Next is chain mode, gate A3. No DMA, CSR or firmware
+change until A3 has reported.
 **Date:** September 2026
-**Built against:** the loop-interchange core staged in
-`_npu_staging/core_interchange.sv`, which `_npu_staging/land.sh` puts on main —
-not main's current `m`-outer core. §2 is why that matters.
+**Built against:** the loop-interchange core, now on main (§2 is why that
+matters).
 **Companions:** grxcp `docs/designs/pta_tpaqcn_review.md` §4.5–6 (why this
 experiment exists, and its kill criterion); grxcp
 `docs/designs/pta_cpu_integration.md` §3–4 (the CSR plan, the error model, the
@@ -102,10 +101,29 @@ stage 6   c  = requant ? sat(round(y*r_j / LSB_adc), 2^(B-1)) * LSB_adc : y*r_j
 
 At most one multiply per registered stage, P = 6, with the write index
 travelling alongside the data. `nc` elements enter on consecutive cycles, so
-S_ACT lasts `nc + P` cycles per row. The output scale and the table's output full
+S_ACT lasts `nc + P` cycles per row: the element is registered on entry, and
+stage 6 is the `c_mem` write itself. The output scale and the table's output full
 scale are powers of two, so the output scale and `LSB_adc` both cost shifts. The
 detuning's output factor `r_j` is applied before requantisation, because a real
 reset digitises what the unit actually emits.
+
+**The fixed point, as built.** The header of `rtl/c930_npu_act.sv` states the
+contract, and the harness's `act_element()` implements it; gate A2 holds the two
+to bitwise agreement. The choices the stages above leave open:
+
+- `XS[j]` is unsigned, and the stage-1 product is the full 48 × 32 bits.
+- `√` is `isqrt4`: a leading-zero count normalises `|x|` to [1, 4), and a
+  four-entry table of `2^11·√1 … 2^11·√4` is interpolated on six fraction
+  bits. It is within about 1.5 % of the true root, and a scale on shot noise
+  needs no more.
+- `g` is the sum of the four bytes of one xorshift32 step, less 510, times 443:
+  that sum has a standard deviation of 147.8, and 443 / 2^16 brings it to
+  0.999. One step per element. So stage 2 carries two small multiplies beside
+  `k_shot · √`: the constant 443, and `isqrt4`'s 10 × 6-bit interpolation.
+- Stage 3 rounds the noise (`+2^23`, then `>>> 24`); the interpolation and the
+  `r_j` product floor; requantisation rounds half up; `YSHIFT` above 32 acts
+  as 32. Stage 1, stage 3 and the 32-bit output saturate independently, and
+  `o_act_sat_count` counts each event.
 
 **The table.** 1024 uniform segments over the signed 24-bit input, 1025 signed
 24-bit breakpoints at `x_i = -2^23 + i·2^14`, in one dual-port BRAM read at `i`
@@ -262,6 +280,8 @@ Each can fail, and each names its ablation, in the style of
 `sim/tb_core_verilator.cc` pass with C, `CYCLE_COUNT`, `OP_COUNT` and
 `STALL_COUNT` identical to the staged core. *Ablation:* route a disabled GEMM
 through S_ACT anyway; the cycle count must move.
+*Met:* the harness's output is byte-identical to the same harness on the core
+without S_ACT. The ablation is A1's cycle check, which sees the move.
 
 **A1 — identity is exact.** `act_identity.hex`, noise off, `s = r = 1`,
 requantisation off, unit scales: C bit-identical to the harness's `cref` at
@@ -271,11 +291,28 @@ below its top segment, `x < 2^23 - 2^14`, and an INT8 sum at `K = 256` reaches
 at most 4,194,304, so no scaling is needed and none can hide an error. The
 generator's self-test checks both facts. *Ablation:* move one breakpoint by one
 LSB; the bench must name the element.
+*Met* at all 14 shapes: C bit-identical, `CYCLE_COUNT` up by exactly
+`M · Nt · 6` (384 at `M=64, N=8, K=256`, on 71,168 in this core-only harness),
+`OP_COUNT` and `STALL_COUNT` unchanged, `o_act_cycles` equal to
+`M · Σ(nc + 6)`. Enabling S_ACT with FP16 or BF16 raises `o_error` at start,
+and the next valid start clears it. The ablation has a direction: the
+interpolation floors, so one LSB *added* to an identity breakpoint is absorbed
+by every input except one exactly on it, while one LSB *taken off* moves both
+neighbouring segments. `--perturb` subtracts, and the bench names each moved
+element with its sum.
 
 **A2 — RTL and C agree bitwise.** A solver-derived curve with noise, detuning
 and requantisation all on, fixed seed, every shape: a C reference added beside
 `cref` matches `o_c_rdata` bit for bit. *Ablation:* change one xorshift shift in
 the RTL; parity must fail on the first activated element.
+*Met* at all 14 shapes on the compound 4 unit's second harmonic, power encoding:
+every element moved off its sum, requantisation on alternate cases, constant σ
+on three, and two cases run hot enough to saturate (7 and 14 events), their
+counts equal to the model's. The ablation (shift 13 → 12) fails
+10 of the 14 shapes. In the other four the changed noise never reaches C: 6-bit
+requantisation, or the flat foot of a second-harmonic power curve, absorbs it —
+so "the first activated element" is too strong a promise for this operating
+point, and the gate is per shape.
 
 **A3 — the measurement, reported rather than gated.** A `--chain` mode in the
 harness runs L layers, feeding each activated C back as the next layer's A
@@ -294,9 +331,8 @@ review §6.2 is evaluated on.
 
 ## 7. Order
 
-1. **Land the interchange.** `_npu_staging/land.sh` has to run first, because
-   S_ACT edits that core's FSM. main has also diverged from `origin/main`, four
-   commits each way; reconcile that before landing anything on top.
+1. ~~**Land the interchange.**~~ **Done**, on main, with main reconciled first.
+   Landing it also fixed two float bugs and a DMA abort bug; see the commits.
 2. ~~**Table generator.**~~ **Done:** `c930/sim/act_table_gen.py`, standard
    library only. It ports the RK4 coupled-mode integrator from grxcp's
    `pta_tpaqcn_measured.py`, adding a complex path for phase mismatch, so the
@@ -309,7 +345,9 @@ review §6.2 is evaluated on.
    design point, the knee, the interpolation error, and `i_act_k_shot` against
    photon count, with the error-over-σ check. `--compare-seg-bits` reproduces
    the segment-count evidence in §3.
-3. **RTL and C reference**, through gates A0, A1 and A2, in that order.
+3. ~~**RTL and C reference**, through gates A0, A1 and A2, in that order.~~
+   **Done:** `rtl/c930_npu_act.sv`, the S_ACT state, and `--act identity` and
+   `--act full` in `sim/tb_core_verilator.cc`.
 4. **Chain mode**, A3.
 5. **Only then** the CSR mapping, the snapshot bit and firmware.
 

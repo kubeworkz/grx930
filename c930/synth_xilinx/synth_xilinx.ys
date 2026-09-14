@@ -39,6 +39,7 @@ read_verilog -sv ../rv64imac/RTL/riscv_core_rf.sv
 read_verilog -sv ../rv64imac/RTL/riscv_core_top.sv
 read_verilog -sv rtl/c930_tensor_pe.sv
 read_verilog -sv rtl/c930_systolic_array.sv
+read_verilog -sv rtl/c930_npu_act.sv
 read_verilog -sv rtl/c930_npu_core.sv
 read_verilog -sv rtl/c930_npu_csr.sv
 read_verilog -sv rtl/c930_npu_dma.sv
