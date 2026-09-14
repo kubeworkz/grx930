@@ -200,6 +200,7 @@ module c930_ddr
       r_beat <= '0;
     end else begin
       if (s_axi_arvalid && s_axi_arready && !r_busy) begin
+        $display("[DDR-TRACE] %0t AXI-RD addr=0x%016h", $time, s_axi_araddr);
         r_addr <= s_axi_araddr;
         r_len  <= s_axi_arlen;
         r_beat <= 8'd0;
@@ -237,6 +238,7 @@ module c930_ddr
       w_beat  <= '0;
     end else begin
       if (s_axi_awvalid && s_axi_awready && !w_busy) begin
+        $display("[DDR-WR] %0t AXI-WR addr=0x%016h", $time, s_axi_awaddr);
         w_addr <= s_axi_awaddr;
         w_len  <= s_axi_awlen;
         w_beat <= 8'd0;

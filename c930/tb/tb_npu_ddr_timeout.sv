@@ -4,6 +4,9 @@
 // Verifies the DDR read timeout watchdog:
 //   * Test 1: Normal GEMMs complete without triggering DDR timeout
 //   * Test 2: DDR model that never responds → o_error fires within 1024 cycles
+//   * Test 3: a GEMM after that timeout completes without error
+//   * Test 4: a DDR timeout with the core mid-GEMM, then a GEMM whose C is
+//             checked against a reference
 // ---------------------------------------------------------------------------
 module tb_npu_ddr_timeout;
 
@@ -121,6 +124,16 @@ module tb_npu_ddr_timeout;
       if (b_valid && m_axi_bready) b_valid <= 0;
     end
   end
+
+
+  // TEST 4: hang the DDR from a chosen read on.  Each accepted AR counts down
+  // hang_after_ars; the read that takes it to zero is the first never served.
+  int hang_after_ars = 0;
+  always @(posedge clk)
+    if (hang_after_ars > 0 && m_axi_arvalid && m_axi_arready && !r_busy) begin
+      hang_after_ars = hang_after_ars - 1;
+      if (hang_after_ars == 0) ddr_hang = 1;
+    end
 
   // --- AXI-Lite CSR access ---
   localparam ADDR_CTRL       = 32'h00;
@@ -297,6 +310,63 @@ module tb_npu_ddr_timeout;
         errors_total = errors_total + 1;
       end
       $display("  Recovery GEMM completed in %0d cycles: PASS", dma_cycles);
+    end
+
+    // -----------------------------------------------------------------
+    // TEST 4: DDR timeout after launch, then a GEMM that must be right
+    //
+    // Serve A row 0 and B, then hang the row prefetch.  The core launches,
+    // finishes what row 0 allows and waits for row 1; the DMA's DDR timeout
+    // fires with the core mid-GEMM.  A core left waiting wakes up when the
+    // next GEMM's rows land and computes them into the abandoned one, so the
+    // check is on the next GEMM's C, not on o_error.
+    // -----------------------------------------------------------------
+    $display("\n[TEST 4] DDR timeout mid-GEMM, then a verified GEMM");
+    begin : test4
+      int dma_cycles, bad, m, n, k;
+      logic [31:0] got;
+      int ref_sum;
+      ddr_hang = 0;
+      // TEST 3's wait_done can return before its GEMM goes busy; let it drain
+      // so its reads do not spend this test's countdown.
+      repeat (2000) @(posedge clk);
+      hang_after_ars = 3;            // A row 0, B, then the first prefetch read hangs
+      fill_gemm(4, 4, 8, 2, 400);
+      submit_gemm(4, 4, 8, 2);
+      repeat (DDR_TIMEOUT + 512) @(posedge clk);
+      hang_after_ars = 0;
+      ddr_hang = 0;
+      repeat (3000) @(posedge clk);
+      axi_read(ADDR_STATUS, status);
+
+      m = 3; n = 3; k = 8;
+      fill_gemm(m, n, k, 3, 500);
+      for (int i = 0; i < m * n * 4; i++) mem8[get_c_base(3) + i] = 8'hEE;
+      submit_gemm(m, n, k, 3);
+      repeat (4) @(posedge clk);
+      wait_done(dma_cycles);
+      repeat (4) @(posedge clk);
+
+      bad = 0;
+      for (int mi = 0; mi < m; mi++)
+        for (int ni = 0; ni < n; ni++) begin
+          ref_sum = 0;
+          for (int ki = 0; ki < k; ki++)
+            ref_sum += $signed(mem8[get_a_base(3) + mi * k + ki]) *
+                       $signed(mem8[get_b_base(3) + ki * n + ni]);
+          got = {mem8[get_c_base(3) + (mi * n + ni) * 4 + 3], mem8[get_c_base(3) + (mi * n + ni) * 4 + 2],
+                 mem8[get_c_base(3) + (mi * n + ni) * 4 + 1], mem8[get_c_base(3) + (mi * n + ni) * 4]};
+          if ($signed(got) != ref_sum) begin
+            if (bad < 3) $display("  C[%0d][%0d] = %0d, expected %0d", mi, ni, $signed(got), ref_sum);
+            bad++;
+          end
+        end
+      if (bad != 0 || o_error) begin
+        $display("  [FAIL] GEMM after a mid-GEMM DDR timeout: %0d/%0d wrong, o_error=%0b",
+                 bad, m * n, o_error);
+        errors_total = errors_total + 1;
+      end else
+        $display("  GEMM after a mid-GEMM DDR timeout verified (%0d cycles): PASS", dma_cycles);
     end
 
     // -----------------------------------------------------------------

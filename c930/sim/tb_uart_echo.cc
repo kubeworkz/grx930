@@ -10,7 +10,9 @@
  *   5. Verify PING / ECHO / VERSION / UNKNOWN responses.
  *   6. Verify the GEMM command: 'G' prec M N K.  A/B are preloaded by the TB
  *      at the firmware's fixed DDR addresses; the NPU result C is streamed
- *      back over UART and compared against a software reference.
+ *      back over UART and compared against a software reference.  The test
+ *      sweeps M/N/K across the NPU's supported ranges (M<=8, N<=12, K<=16)
+ *      and every precision (INT8/INT16/FP16/BF16/INT4).
  *
  * The echo tests need the echo firmware hex; the GEMM test needs the GEMM
  * firmware hex (a superset: it answers every echo command too).
@@ -28,6 +30,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "Vc930_soc_verilator.h"
 #include "verilated.h"
@@ -67,6 +70,22 @@ static void preload_byte(uint32_t addr, uint8_t data) {
     tick();
     top->i_tb_wr_en = 0;
     tick();
+}
+
+// Backdoor DDR read (the SoC's TB readback port).  This sees what the DDR
+// memory array actually holds, bypassing the CPU's caches -- useful for
+// separating "the DMA did not write C" from "the CPU read a stale copy".
+static uint8_t ddr_rd_byte(uint32_t addr) {
+    top->i_tb_rd_addr = addr;
+    top->eval();
+    return top->o_tb_rd_data;
+}
+
+static uint32_t ddr_rd_word(uint32_t addr) {
+    return (uint32_t)ddr_rd_byte(addr)
+         | ((uint32_t)ddr_rd_byte(addr + 1) << 8)
+         | ((uint32_t)ddr_rd_byte(addr + 2) << 16)
+         | ((uint32_t)ddr_rd_byte(addr + 3) << 24);
 }
 
 // Load a firmware hex image into DDR at base 0.  Handles both formats
@@ -228,6 +247,244 @@ static std::string send_bytes_collect(const uint8_t *bytes, int nbytes,
 }
 
 // ============================================================================
+// GEMM case sweep
+// ----------------------------------------------------------------------------
+// The NPU accepts M<=8, N<=12, K<=16 (c930_soc_top MAX_M/MAX_N/MAX_K) and the
+// precisions INT8(0)/INT16(1)/FP16(2)/BF16(3)/INT4(4); C always comes back as
+// a 32-bit result (INT32, or FP32 for the float modes).  Operands are small
+// integers, so every product and partial sum is exactly representable in all
+// five formats and in the FP32 accumulator -- which lets one integer reference
+// check every precision.
+//
+// A and B are packed little-endian at the firmware's fixed addresses
+// (uart_gemm_test.c): one nibble per element for INT4 (low nibble first), one
+// byte for INT8, two bytes for INT16/FP16/BF16.
+// ============================================================================
+static const uint32_t GEMM_A_ADDR = 0x9000;   // must match uart_gemm_test.c
+static const uint32_t GEMM_B_ADDR = 0x9400;
+static const uint32_t GEMM_C_ADDR = 0x9800;
+
+// Pre-fill the C buffer with a sentinel so an element the NPU never writes
+// reads back as 0xDEADBEEF instead of a stale value from an earlier case.
+static void gemm_clear_c(int n_words) {
+    for (int i = 0; i < n_words; i++) {
+        preload_byte(GEMM_C_ADDR + i * 4 + 0, 0xEF);
+        preload_byte(GEMM_C_ADDR + i * 4 + 1, 0xBE);
+        preload_byte(GEMM_C_ADDR + i * 4 + 2, 0xAD);
+        preload_byte(GEMM_C_ADDR + i * 4 + 3, 0xDE);
+    }
+}
+
+struct GemmCase { int prec, m, n, k; };
+
+static const char *prec_name(int p) {
+    switch (p) {
+        case 0: return "INT8";
+        case 1: return "INT16";
+        case 2: return "FP16";
+        case 3: return "BF16";
+        case 4: return "INT4";
+        default: return "?";
+    }
+}
+
+// float -> IEEE binary16 bits.  The operands are exact small integers, so this
+// never needs to round or subnormalise.
+static uint16_t half_bits_from_float(float f) {
+    uint32_t x;
+    memcpy(&x, &f, sizeof x);
+    uint16_t sign = (uint16_t)((x >> 16) & 0x8000u);
+    if ((x & 0x7FFFFFFFu) == 0) return sign;             // +/-0
+    int exp = (int)((x >> 23) & 0xFFu) - 127 + 15;
+    uint32_t man = x & 0x7FFFFFu;
+    if (exp <= 0)  return sign;                          // flush tiny values
+    if (exp >= 31) return (uint16_t)(sign | 0x7C00u);    // inf
+    return (uint16_t)(sign | ((uint32_t)exp << 10) | (man >> 13));
+}
+
+// float -> bfloat16 bits (top half of the FP32 pattern; exact for the small
+// integers used here, which fit bfloat16's 8-bit mantissa).
+static uint16_t bf16_bits_from_float(float f) {
+    uint32_t x;
+    memcpy(&x, &f, sizeof x);
+    return (uint16_t)(x >> 16);
+}
+
+static void gemm_store_elem(uint32_t base, uint32_t idx, int prec, int v) {
+    if (prec == 0) {                       // INT8
+        preload_byte(base + idx, (uint8_t)(int8_t)v);
+        return;
+    }
+    if (prec == 4) return;                 // INT4: nibble-packed in a batch
+    uint16_t u;                            // INT16 / FP16 / BF16
+    if (prec == 1)      u = (uint16_t)(int16_t)v;
+    else if (prec == 2) u = half_bits_from_float((float)v);
+    else                u = bf16_bits_from_float((float)v);
+    preload_byte(base + idx * 2, (uint8_t)(u & 0xFF));
+    preload_byte(base + idx * 2 + 1, (uint8_t)(u >> 8));
+}
+
+// Write one row-major operand of n_elem elements to `base` for `prec`.
+static void gemm_pack_operand(uint32_t base, const std::vector<int> &vals, int prec) {
+    const uint32_t n_elem = (uint32_t)vals.size();
+    if (prec == 4) {
+        for (uint32_t i = 0; i < n_elem; i += 2) {
+            uint8_t lo = (uint8_t)(vals[i] & 0xF);
+            uint8_t hi = (i + 1 < n_elem) ? (uint8_t)(vals[i + 1] & 0xF) : 0;
+            preload_byte(base + i / 2, (uint8_t)(lo | (hi << 4)));
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < n_elem; i++) gemm_store_elem(base, i, prec, vals[i]);
+}
+
+// Run one GEMM case: pack A/B, send 'G' prec M N K, collect C + ACK, compare
+// against the integer reference.  On failure `why` gets a one-line reason.
+static bool run_gemm_case(const GemmCase &c, std::string &why) {
+    const int M = c.m, N = c.n, K = c.k;
+    std::vector<int> a((size_t)M * K), b((size_t)K * N);
+    for (size_t i = 0; i < a.size(); i++) a[i] = (int)((i * 3 + 1) % 9) - 4;  // -4..4
+    for (size_t i = 0; i < b.size(); i++) b[i] = (int)((i * 5 + 2) % 9) - 4;
+
+    gemm_pack_operand(GEMM_A_ADDR, a, c.prec);
+    gemm_pack_operand(GEMM_B_ADDR, b, c.prec);
+    gemm_clear_c(M * N);
+
+    // DEBUG: verify the preloaded operands round-trip through the DDR
+    // backdoor (pack/unpack sanity for the float formats).
+    if (getenv("TB_DEBUG_PACK")) {
+        printf("    [pack] prec=%d A[0..5] ddr:", c.prec);
+        for (int i = 0; i < 6; i++) {
+            uint32_t w = ddr_rd_word(GEMM_A_ADDR + i * (c.prec == 0 || c.prec == 4 ? 1 : 2));
+            printf(" %04x", w & 0xFFFF);
+        }
+        printf("\n    [pack] want  A[0..5]   :");
+        for (int i = 0; i < 6; i++) {
+            int v = a[(size_t)i];
+            uint16_t u = (c.prec == 2) ? half_bits_from_float((float)v)
+                                       : (c.prec == 3) ? bf16_bits_from_float((float)v) : 0;
+            printf(" %04x", u);
+        }
+        printf("\n");
+    }
+
+    uint8_t cmd[5] = { 'G', (uint8_t)c.prec, (uint8_t)M, (uint8_t)N, (uint8_t)K };
+    std::string got = send_bytes_collect(cmd, 5, M * N * 4 + 1, BIT_CYCLES * 400);
+
+    if (got.size() != (size_t)(M * N * 4 + 1)) {
+        char buf[80];
+        snprintf(buf, sizeof buf, "short reply: %zu of %d bytes",
+                 got.size(), M * N * 4 + 1);
+        why = buf;
+        return false;
+    }
+    if (got.back() != 'A') {
+        char buf[80];
+        snprintf(buf, sizeof buf, "bad ACK 0x%02x", (uint8_t)got.back());
+        why = buf;
+        return false;
+    }
+
+    int nbad = 0;
+    char first[3][72];
+    for (int i = 0; i < M * N; i++) {
+        const int m = i / N, n = i % N;
+        int32_t ref = 0;
+        for (int k = 0; k < K; k++) ref += a[(size_t)m * K + k] * b[(size_t)k * N + n];
+        uint32_t raw = (uint32_t)(uint8_t)got[i * 4 + 0]
+                     | ((uint32_t)(uint8_t)got[i * 4 + 1] << 8)
+                     | ((uint32_t)(uint8_t)got[i * 4 + 2] << 16)
+                     | ((uint32_t)(uint8_t)got[i * 4 + 3] << 24);
+        bool ok;
+        if (c.prec == 2 || c.prec == 3) {   // FP16/BF16 -> C is FP32
+            float f;
+            memcpy(&f, &raw, sizeof f);
+            ok = (f == (float)ref);
+        } else {
+            ok = ((int32_t)raw == ref);
+        }
+        if (!ok) {
+            if (nbad < 3) {
+                const char *tag = (raw == 0xDEADBEEFu) ? " [not written]" : "";
+                snprintf(first[nbad], sizeof first[0], "C[%d] got 0x%08x want %d%s",
+                         i, raw, ref, tag);
+            }
+            nbad++;
+        }
+    }
+    if (nbad) {
+        // DIAGNOSTIC: classify each mismatching element.  A row that is correct
+        // in the DDR array but wrong in the CPU's stream means the read path
+        // served a stale copy (cache coherency); a row that is stale in DDR too
+        // means the DMA never wrote it.
+        auto elem_ref = [&](int i) -> int32_t {
+            const int m = i / N, n = i % N;
+            int32_t r = 0;
+            for (int k = 0; k < K; k++) r += a[(size_t)m * K + k] * b[(size_t)k * N + n];
+            return r;
+        };
+        int ddr_bad = 0, ddr_bad_uart_ok = 0;
+        printf("    [diag] case %s %dx%dx%d  M*N=%d\n", prec_name(c.prec), M, N, K, M * N);
+        for (int i = 0; i < M * N; i++) {
+            uint32_t d = ddr_rd_word(GEMM_C_ADDR + i * 4);
+            uint32_t u = (uint32_t)(uint8_t)got[i * 4 + 0]
+                       | ((uint32_t)(uint8_t)got[i * 4 + 1] << 8)
+                       | ((uint32_t)(uint8_t)got[i * 4 + 2] << 16)
+                       | ((uint32_t)(uint8_t)got[i * 4 + 3] << 24);
+            // The reference has no meaning for the float modes (C is FP32 bits)
+            // beyond zero/nonzero, so classify by DDR-vs-UART only there.
+            bool ddr_ok, uart_ok;
+            if (c.prec == 2 || c.prec == 3) {
+                float fd, fu;
+                memcpy(&fd, &d, sizeof fd);
+                memcpy(&fu, &u, sizeof fu);
+                ddr_ok = (fd == (float)elem_ref(i));
+                uart_ok = (fu == (float)elem_ref(i));
+            } else {
+                ddr_ok = ((int32_t)d == elem_ref(i));
+                uart_ok = ((int32_t)u == elem_ref(i));
+            }
+            if (!ddr_ok) { ddr_bad++; if (uart_ok) ddr_bad_uart_ok++; }
+            if (i < 24)
+                printf("    [diag] %2d: ddr=0x%08x(%s) uart=0x%08x(%s) ref=%d\n",
+                       i, d, ddr_ok ? "ok " : "BAD", u, uart_ok ? "ok " : "BAD",
+                       (int)elem_ref(i));
+        }
+        printf("    [diag] ddr wrong %d/%d; uart wrong %d/%d; ddr-wrong-but-uart-ok %d\n",
+               ddr_bad, M * N, nbad, M * N, ddr_bad_uart_ok);
+
+        char idxs[400] = "";
+        size_t p = 0;
+        int shown = 0;
+        for (int i = 0; i < M * N && shown < 48; i++) {
+            const int m = i / N, n = i % N;
+            int32_t ref = 0;
+            for (int k = 0; k < K; k++) ref += a[(size_t)m * K + k] * b[(size_t)k * N + n];
+            uint32_t raw = (uint32_t)(uint8_t)got[i * 4 + 0]
+                         | ((uint32_t)(uint8_t)got[i * 4 + 1] << 8)
+                         | ((uint32_t)(uint8_t)got[i * 4 + 2] << 16)
+                         | ((uint32_t)(uint8_t)got[i * 4 + 3] << 24);
+            bool bad = (c.prec == 2 || c.prec == 3) ? false : ((int32_t)raw != ref);
+            if (c.prec == 2 || c.prec == 3) {
+                float f; memcpy(&f, &raw, sizeof f);
+                bad = !(f == (float)ref);
+            }
+            if (bad) {
+                int w = snprintf(idxs + p, sizeof idxs - p, "%s%d", shown ? "," : "", i);
+                if (w > 0) p += (size_t)w;
+                shown++;
+            }
+        }
+        char buf[640];
+        snprintf(buf, sizeof buf, "%d/%d wrong at [%s%s]; %s",
+                 nbad, M * N, idxs, nbad > shown ? ",..." : "", first[0]);
+        why = buf;
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 static int failures = 0;
@@ -356,59 +613,38 @@ int main(int argc, char **argv) {
         if (!ok) failures++;
     }
 
-    printf("Test: GEMM 4x4x4 INT8 over UART...\n");
-    {
-        // Fixed DDR buffer addresses -- must match uart_gemm_test.c.
-        static const uint32_t GEMM_A_ADDR = 0x9000;
-        static const uint32_t GEMM_B_ADDR = 0x9400;
-        const int M = 4, N = 4, K = 4;
-        uint8_t A[M * K], B[K * N];
-        int32_t ref[M * N];
-
-        // Signed INT8 operands: values in [-8, 7].  Max |product sum| = 4*64
-        // = 256, far inside int32, so the comparison is exact.
-        for (int i = 0; i < M * K; i++) A[i] = (uint8_t)(int8_t)(((i * 3 + 1) & 0xF) - 8);
-        for (int i = 0; i < K * N; i++) B[i] = (uint8_t)(int8_t)(((i * 5 + 2) & 0xF) - 8);
-        for (int m = 0; m < M; m++) {
-            for (int n = 0; n < N; n++) {
-                int32_t s = 0;
-                for (int k = 0; k < K; k++)
-                    s += (int32_t)(int8_t)A[m * K + k] * (int32_t)(int8_t)B[k * N + n];
-                ref[m * N + n] = s;
-            }
-        }
-
-        // Preload A and B into DDR at the firmware's fixed addresses.
-        for (int i = 0; i < M * K; i++) preload_byte(GEMM_A_ADDR + i, A[i]);
-        for (int i = 0; i < K * N; i++) preload_byte(GEMM_B_ADDR + i, B[i]);
-
-        // 'G' prec(0=INT8) M N K, then C (M*N*4 bytes little-endian) + 'A'.
-        uint8_t cmd[5] = { 'G', 0, (uint8_t)M, (uint8_t)N, (uint8_t)K };
-        std::string got = send_bytes_collect(cmd, 5, M * N * 4 + 1, BIT_CYCLES * 200);
-
-        if (!gemm_fw) {
-            printf("  %-32s SKIP  (load the GEMM firmware hex to run this)\n",
-                   "GEMM 4x4x4 INT8 -> C over UART");
-        } else {
-            bool ok = (got.size() == (size_t)(M * N * 4 + 1) && got.back() == 'A');
+    printf("Test: GEMM shape/precision sweep over UART...\n");
+    if (!gemm_fw) {
+        printf("  %-32s SKIP  (load the GEMM firmware hex to run this)\n",
+               "GEMM sweep");
+    } else {
+        // INT8 sweep across the NPU's supported ranges (M<=8, N<=12, K<=16),
+        // then every precision at a small and a mid shape.
+        static const GemmCase CASES[] = {
+            { 0, 1,  1,  1 }, { 0, 1,  1, 16 }, { 0, 1, 12,  8 }, { 0, 2,  3,  5 },
+            { 0, 4,  4,  4 }, { 0, 5,  7,  9 }, { 0, 8,  1,  4 }, { 0, 8,  4,  1 },
+            { 0, 8, 12, 16 }, { 0, 3,  9, 11 },
+            { 1, 4,  4,  4 }, { 2, 4,  4,  4 }, { 3, 4,  4,  4 }, { 4, 4,  4,  4 },
+            { 1, 2,  3,  5 }, { 2, 2,  3,  5 }, { 3, 2,  3,  5 }, { 4, 2,  3,  5 },
+        };
+        const int ncase = (int)(sizeof CASES / sizeof CASES[0]);
+        int cpass = 0;
+        for (int ci = 0; ci < ncase; ci++) {
+            const GemmCase &c = CASES[ci];
+            std::string why;
+            bool ok = run_gemm_case(c, why);
+            char label[64];
+            snprintf(label, sizeof label, "GEMM %-5s %2dx%2dx%2d",
+                     prec_name(c.prec), c.m, c.n, c.k);
             if (ok) {
-                for (int i = 0; i < M * N && ok; i++) {
-                    uint32_t v = (uint32_t)(uint8_t)got[i * 4 + 0]
-                               | ((uint32_t)(uint8_t)got[i * 4 + 1] << 8)
-                               | ((uint32_t)(uint8_t)got[i * 4 + 2] << 16)
-                               | ((uint32_t)(uint8_t)got[i * 4 + 3] << 24);
-                    if ((int32_t)v != ref[i]) {
-                        printf("    C[%d] mismatch: got %d want %d\n", i, (int32_t)v, ref[i]);
-                        ok = false;
-                    }
-                }
+                printf("  %-32s PASS\n", label);
+                cpass++;
             } else {
-                printf("    reply len=%zu (want %d), ack=%02x\n", got.size(),
-                       M * N * 4 + 1, got.empty() ? 0 : (uint8_t)got.back());
+                printf("  %-32s FAIL  %s\n", label, why.c_str());
+                failures++;
             }
-            printf("  %-32s %s\n", "GEMM 4x4x4 INT8 -> C over UART", ok ? "PASS" : "FAIL");
-            if (!ok) failures++;
         }
+        printf("  %-32s %d/%d cases passed\n", "GEMM sweep total", cpass, ncase);
     }
 
     // 4. Summary

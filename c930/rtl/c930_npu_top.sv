@@ -19,7 +19,9 @@ module c930_npu_top
   parameter int ACC_W    = 48,    // 48-bit fixed-point accumulator for FP modes
   parameter int MAX_M    = 64,
   parameter int MAX_K    = 256,
-  parameter int MAX_N    = 8
+  parameter int MAX_N    = 8,
+  // Elements the DMA writes into the core per cycle on the wide preload port.
+  parameter int WR_LANES = 8
 )
 (
   input  logic        i_clk,
@@ -75,7 +77,13 @@ module c930_npu_top
   output logic        o_busy,
   output logic        o_done,
   output logic        o_error,
-  output logic        o_irq     // pulses on completion
+  output logic        o_irq,    // pulses on completion
+
+  // Cycles the core spent waiting for the DMA to unpack the next A row.
+  // Non-zero means the core is consuming rows faster than PF_UNPK supplies
+  // them.  Not yet in the CSR map -- the NPU register file decodes only
+  // addr[5:2] and all 16 words are assigned.
+  output logic [31:0] o_arow_stall_count
 );
 
   logic        start;
@@ -84,7 +92,13 @@ module c930_npu_top
   logic [31:0] a_base, b_base, c_base;
   logic [2:0]  precision;
 
-  logic                    dma_wen, dma_wsel, core_start;
+  logic                    dma_wen, dma_wsel, core_start, core_abort;
+  logic [15:0]             a_rows_ready;
+  // Wide preload path: one AXI beat per cycle instead of one element.
+  logic                          dma_wwen, dma_wwsel, dma_wwbank;
+  logic [WR_LANES-1:0]           dma_wwmask;
+  logic [15:0]                   dma_wwaddr;
+  logic [WR_LANES*DIN_W-1:0]     dma_wwdata;
   logic [15:0]             dma_waddr;
   logic signed [DIN_W-1:0] dma_wdata;
 
@@ -152,9 +166,15 @@ module c930_npu_top
   );
 
   c930_npu_dma #(
+    // DIN_W was never passed here.  The DMA ran its whole data path at its own
+    // default of 16 bits and the scalar o_wdata port truncated on the way out,
+    // which happened to give the right byte.  A packed wide bus has no such
+    // luck: lane l sits at bit l*DIN_W, so the two sides must agree.
+    .DIN_W    (DIN_W),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    .WR_LANES (WR_LANES)
   ) u_dma (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
@@ -180,6 +200,13 @@ module c930_npu_top
     .o_dma_cycle_count (dma_cycle_count),
     .o_dma_last_count  (dma_last_count),
     .o_bank_sel       (dma_bank_sel),
+    .o_a_rows_ready   (a_rows_ready),
+    .o_wwen        (dma_wwen),
+    .o_wwsel       (dma_wwsel),
+    .o_wwbank      (dma_wwbank),
+    .o_wwmask      (dma_wwmask),
+    .o_wwaddr      (dma_wwaddr),
+    .o_wwdata      (dma_wwdata),
     .o_wen         (dma_wen),
     .o_wsel        (dma_wsel),
     .o_wbank       (dma_wbank),
@@ -190,6 +217,7 @@ module c930_npu_top
     .o_staging_waddr (staging_waddr),
     .o_staging_wdata (staging_wdata),
     .o_core_start  (core_start),
+    .o_core_abort  (core_abort),
     .i_core_done   (core_done),
     .i_core_error  (core_error),
     .o_c_raddr     (c_raddr),
@@ -228,7 +256,8 @@ module c930_npu_top
     .ACC_W    (ACC_W),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    .WR_LANES (WR_LANES)
   ) u_core (
     .i_clk      (i_clk),
     .i_rst_n    (i_rst_n),
@@ -243,6 +272,7 @@ module c930_npu_top
     .i_bank_sel (dma_bank_sel),
     .i_wbank    (dma_wbank),
     .i_start    (core_start),
+    .i_abort    (core_abort),
     .i_dim_m    (dim_m),
     .i_dim_n    (dim_n),
     .i_dim_k    (dim_k),
@@ -252,9 +282,17 @@ module c930_npu_top
     .o_error    (core_error),
     .i_c_raddr  (c_raddr),
     .o_c_rdata  (c_rdata),
+    .i_a_rows_ready (a_rows_ready),
+    .i_wwen     (dma_wwen),
+    .i_wwsel    (dma_wwsel),
+    .i_wwbank   (dma_wwbank),
+    .i_wwmask   (dma_wwmask),
+    .i_wwaddr   (dma_wwaddr),
+    .i_wwdata   (dma_wwdata),
     .o_cycle_count (cycle_count),
     .o_op_count    (op_count),
-    .o_stall_count (stall_count)
+    .o_stall_count (stall_count),
+    .o_arow_stall_count (o_arow_stall_count)
   );
 
   assign o_busy  = busy;

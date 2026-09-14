@@ -148,6 +148,7 @@ module tb_l2_coherent;
   initial begin
     integer i;
     logic [63:0] w0, w1, w2, w3;
+    logic [63:0] r0, r1, r2, r3;
 
     for (i = 0; i < 1024; i++) mem[i] = 64'hA000000000000000 + i;
 
@@ -231,6 +232,45 @@ module tb_l2_coherent;
       errs++;
     end else
       $display("PASS T7 post-invalidate read sees new data");
+
+    // ---- Test 8: a hit must ADD a sharer, not replace the set.  T6 cannot
+    //              prove it on its own: its write arrives in the cycle the
+    //              second read completes, and a write path that samples
+    //              sharers in that cycle passes even when the hit overwrote
+    //              them.  Idle first, so the write sees what the hit left.
+    mem[12] = 64'h1212121212121212;  // 0x60 word 0
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'h60, 4'd0, w0, w1, w2, w3);          // src0: miss -> alloc
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'h60, 4'd1, w0, w1, w2, w3);          // src1: hit -> add sharer
+    repeat (8) @(posedge clk);
+    inv_seen = 8'h00;
+    write_word(64'h60, 64'h3434343434343434, 4'd10);
+    if (!(inv_seen[0] && inv_seen[1])) begin
+      $display("FAIL T8 sharers lost after a hit: expected ports 0,1 got %0h", inv_seen);
+      errs++;
+    end else
+      $display("PASS T8 a hit adds a sharer (ports 0,1 invalidated after idle)");
+
+    // ---- Test 9: a hit served WHILE a write drops the line must not put the
+    //              pre-write copy back.  src1 hits 0x60 as src10 writes it;
+    //              afterwards src4 must refill and see the written word.
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'h60, 4'd0, w0, w1, w2, w3);          // src0: refill after T8
+    fork
+      begin
+        got_first = 0; got_second = 0; got_third = 0;
+        read_line(64'h60, 4'd1, r0, r1, r2, r3);      // src1: hit, serving
+      end
+      write_word(64'h60, 64'h5656565656565656, 4'd10); // src10: drops it mid-serve
+    join
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'h60, 4'd4, w0, w1, w2, w3);
+    if (w0 !== 64'h5656565656565656) begin
+      $display("FAIL T9 a hit racing a write left the pre-write line valid: w0=%0h", w0);
+      errs++;
+    end else
+      $display("PASS T9 a hit racing a write does not resurrect the dropped line");
 
     if (errs == 0)
       $display("ALL L2 TESTS PASSED");

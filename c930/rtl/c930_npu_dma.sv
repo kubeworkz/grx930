@@ -15,9 +15,11 @@
 //   B byte (k*N + n) lives at beat (k*N + n)/4, lane (k*N + n)%4.
 // C is one INT32 per 32-bit beat: beat (m*N + n).
 //
-// Bursts are INCR with 4-byte beats. The R channel is back-pressured while a
-// beat's 8 bytes are unpacked into the core (one byte per cycle), so the read
-// rate is naturally throttled by the unpacking rate.
+// Bursts are INCR with 8-byte beats.  A beat is unpacked into the core through
+// the wide preload port in a single cycle, so the R channel is no longer
+// back-pressured per element: the A-row prefetch holds rready across a burst
+// and streams a row at bus rate.  INT4 (16 elements per beat) is the one
+// exception and still walks a beat one nibble per cycle.
 // -----------------------------------------------------------------------------
 module c930_npu_dma
 #(
@@ -27,7 +29,11 @@ module c930_npu_dma
   parameter int ACC_W      = 48,    // 48-bit fixed-point accumulator
   parameter int MAX_M      = 64,
   parameter int MAX_K      = 256,
-  parameter int MAX_N      = 8
+  parameter int MAX_N      = 8,
+  // Elements written per cycle on the wide preload port.  Must be >=
+  // AXI_DATA_W/8 (the INT8 elements-per-beat) and must match the core's
+  // WR_LANES.
+  parameter int WR_LANES   = 8
 )
 (
   input  logic        i_clk,
@@ -61,12 +67,33 @@ module c930_npu_dma
   output logic [31:0] o_dma_last_count,   // latched cycle count from last completed GEMM
   output logic        o_bank_sel,        // bank select for double-buffered A/B memories
 
+  // A-row watermark: rows 0 .. o_a_rows_ready-1 are fully unpacked into a_mem.
+  // Only row 0 is loaded before o_core_start; rows 1..M-1 arrive during
+  // compute, one element per PF_UNPK cycle, so a core that consumes rows
+  // faster than PF_UNPK produces them would read a_mem before it is written.
+  // Nothing enforced that ordering before this port existed.
+  output logic [15:0] o_a_rows_ready,
+
   // ---- Core data plane + control ----
   output logic                    o_wen,       // preload write enable
   output logic                    o_wsel,      // 0 = A, 1 = B
   output logic                    o_wbank,     // which bank to write: 0=bank0, 1=bank1
   output logic [15:0]             o_waddr,
   output logic signed [DIN_W-1:0] o_wdata,
+
+  // ---- Wide preload port: one AXI beat per cycle ----
+  // The narrow port above writes one element per cycle.  A 64-bit beat holds
+  // 8 INT8 elements, so draining it took 8 cycles plus one to accept the
+  // beat: the DMA ran at 1/9 of its own bus.  This port drains a beat in the
+  // cycle after it is accepted, with m_axi_rready held high across the burst.
+  // INT4 stays on the narrow port (16 elements per beat, and its A-load is
+  // not on the prefetch path).
+  output logic                        o_wwen,
+  output logic                        o_wwsel,   // 0 = A, 1 = B
+  output logic                        o_wwbank,
+  output logic [WR_LANES-1:0]         o_wwmask,  // per-lane enable; tail beats
+  output logic [15:0]                 o_wwaddr,  // element index of lane 0
+  output logic [WR_LANES*DIN_W-1:0]   o_wwdata,
 
   // ---- Staging buffer load (PF2 prefetch → core a_mem/b_mem) ----
   output logic                    o_staging_wen,    // staging write enable
@@ -75,6 +102,9 @@ module c930_npu_dma
   output logic signed [DIN_W-1:0] o_staging_wdata,
 
   output logic                    o_core_start,
+  // 1-cycle pulse: this GEMM is abandoned (DDR timeout or watchdog) and the
+  // core must stop -- see c930_npu_core i_abort.
+  output logic                    o_core_abort,
   input  logic                    i_core_done,
   input  logic                    i_core_error,
   output logic [15:0]             o_c_raddr,
@@ -119,6 +149,40 @@ module c930_npu_dma
   localparam int BYTES_PER_BEAT = AXI_DATA_W / 8;   // 8
   localparam [2:0] BEAT_SIZE    = $clog2(BYTES_PER_BEAT);  // 3 -> 8 bytes/beat
 
+  // ---------------------------------------------------------------------------
+  // Beat unpacking, in one place
+  // ---------------------------------------------------------------------------
+  // There were three copies of the element-at-a-time unpack loop (the A/B
+  // load, and the A-row prefetch duplicated into P_LAUNCH and P_WRITE_C), each
+  // with its own sign-extension expression.  Three copies of the same
+  // arithmetic is three chances for them to drift.  These two functions are
+  // now the only place a beat is decomposed.
+  localparam int LANES8  = AXI_DATA_W / 8;    // INT8 elements per beat  (8)
+  localparam int LANES16 = AXI_DATA_W / 16;   // INT16 elements per beat (4)
+
+  // Expand one beat into WR_LANES sign-extended DIN_W elements, lane 0 first.
+  // byte_elems selects INT8 (1 byte per element) over INT16/FP16/BF16.
+  // Lanes past the beat's element count are zero and are masked off anyway.
+  function automatic logic [WR_LANES*DIN_W-1:0] beat_lanes
+      (input logic [AXI_DATA_W-1:0] beat, input logic byte_elems);
+    beat_lanes = '0;
+    if (byte_elems) begin
+      for (int l = 0; l < LANES8; l++)
+        beat_lanes[l*DIN_W +: DIN_W] = {{(DIN_W-8){beat[l*8+7]}}, beat[l*8 +: 8]};
+    end else begin
+      for (int l = 0; l < LANES16; l++)
+        beat_lanes[l*DIN_W +: DIN_W] = beat[l*16 +: 16];
+    end
+  endfunction
+
+  // Enable the low n lanes.  n is how many elements of this beat are still
+  // inside the row (or inside B) -- the last beat of an odd-length row is
+  // partial, and without the mask its dead lanes would write past the end.
+  function automatic logic [WR_LANES-1:0] lane_mask(input int n);
+    for (int l = 0; l < WR_LANES; l++)
+      lane_mask[l] = (l < n);
+  endfunction
+
   // Precision-dependent element size: INT4=0.5 byte, INT8=1 byte, INT16=2 bytes
   logic [3:0] elem_size;   // 1 for INT8, 2 for INT16, 0 for INT4 (special case)
   int  elems_per_beat;     // 16 for INT4, 8 for INT8, 4 for INT16
@@ -152,6 +216,11 @@ module c930_npu_dma
   logic       bank_sel;    // double-buffer bank select: 0=bank0, 1=bank1
   assign o_bank_sel = bank_sel;
 
+  // pf_row is "next row to prefetch", so rows below it are complete.  When
+  // prefetch is disabled (INT4 loads all of A upfront) pf_row is set to dm,
+  // which reports every row ready and never stalls the core.
+  assign o_a_rows_ready = 16'(pf_row);
+
   logic [15:0] dm, dn, dk;
   logic [31:0] a_base_r, b_base_r, c_base_r;
 
@@ -166,11 +235,16 @@ module c930_npu_dma
   int  rd_beats;      // ceil(elem_cnt / BYTES_PER_BEAT) for reads
   int  rd_beat;       // read beats received so far
   int  flat_idx;      // flat element index into the A/B buffer
-  int  unpack_idx;    // 0..BYTES_PER_BEAT-1 within the current beat
+  int  unpack_idx;    // 0..BYTES_PER_BEAT-1 within the current beat (INT4 only)
+  // INT4 walks a beat one nibble per cycle; every other precision drains the
+  // whole beat in a single cycle on the wide port.
+  wire rs_beat_done;
   int  c_idx;         // C element index
   int  c_beat;        // AXI beat counter for C writes
   logic [31:0] c_lo;  // low 32 bits of packed pair
   logic        c_odd; // last beat is odd (wstrb = 0x0F)
+  assign rs_beat_done = is_int4 ? (unpack_idx == elems_per_beat - 1) : 1'b1;
+
   logic [AXI_DATA_W-1:0] rword;
   logic [AXI_DATA_W-1:0] wdata_reg;
   logic wsel_reg;     // 0 = reading A, 1 = reading B
@@ -196,14 +270,21 @@ module c930_npu_dma
   localparam [1:0] PF_IDLE = 2'd0;
   localparam [1:0] PF_AR   = 2'd1;
   localparam [1:0] PF_R    = 2'd2;
-  localparam [1:0] PF_UNPK = 2'd3;
+  // 2'd3 was PF_UNPK, a drain state that spent one cycle per element pushing a
+  // beat through the core's one-element write port.  The wide port empties a
+  // beat in the cycle it is accepted, so there is nothing left to drain.
   logic [1:0] pf_state;
   int  pf_row;           // next row to prefetch (1..dm-1)
   int  pf_flat_idx;      // element index within the row
   int  pf_rd_beat;       // beats received for current prefetch
-  int  pf_unpack_idx;    // byte index within beat
   int  pf_rd_beats;      // total beats per row (computed in P_IDLE)
-  logic [AXI_DATA_W-1:0] pf_rword;  // latched read word for prefetch
+  // The A-row watermark must not advance in the same cycle as the row's last
+  // wide write is issued: o_wwen is registered, so that write lands in a_mem
+  // at the end of the *following* cycle.  Publishing the row as ready any
+  // earlier hands the core an address whose data does not exist yet.  (The
+  // narrow path had the same one-cycle lie; the 18x margin between DMA and
+  // core hid it.)  pf_row_pending defers the increment by exactly one cycle.
+  logic pf_row_pending;
 
   // ---- Next-GEMM registers (captured from CSR FIFO head) ----
   // Loaded when the DMA is idle and a new GEMM is dispatched.
@@ -261,6 +342,7 @@ module c930_npu_dma
       o_wbank       <= 1'b0;
       o_staging_wen <= 1'b0;
       o_core_start  <= 1'b0;
+      o_core_abort  <= 1'b0;
       launched      <= 1'b0;
       watchdog_cnt    <= 0;
       watchdog_limit  <= 0;
@@ -269,6 +351,13 @@ module c930_npu_dma
       ddr_timeout_active <= 1'b0;
       pf_state      <= PF_IDLE;
       pf_row        <= 1;
+      pf_row_pending <= 1'b0;
+      o_wwen        <= 1'b0;
+      o_wwsel       <= 1'b0;
+      o_wwbank      <= 1'b0;
+      o_wwmask      <= '0;
+      o_wwaddr      <= 16'd0;
+      o_wwdata      <= '0;
       pf2_state     <= PF2_IDLE;
       pf2_row       <= 0;
       next_valid    <= 1'b0;
@@ -302,7 +391,17 @@ module c930_npu_dma
       else if (phase != P_IDLE)
         o_dma_cycle_count <= o_dma_cycle_count + 32'd1;
       o_wen         <= 1'b0;
+      o_wwen        <= 1'b0;
       o_wbank       <= bank_sel;  // default: write to active bank (for P_READ_A/B)
+      o_wwbank      <= bank_sel;  // wide port follows the narrow port's bank
+      // Deferred A-row watermark advance.  Placed with the per-cycle defaults
+      // so it fires in whatever phase the row's last beat happened to land in
+      // -- prefetch runs in both P_LAUNCH and P_WRITE_C.  A later assignment
+      // inside the phase case sets pf_row_pending again for the next row.
+      if (pf_row_pending) begin
+        pf_row         <= pf_row + 1;
+        pf_row_pending <= 1'b0;
+      end
       o_staging_wen <= 1'b0;
       // Deferred bank_sel toggle: apply one cycle after staging completes
       // so the last staging write uses the OLD bank_sel (inactive bank).
@@ -311,6 +410,7 @@ module c930_npu_dma
         bank_sel_pending <= 1'b0;
       end
       o_core_start  <= 1'b0;
+      o_core_abort  <= 1'b0;
       m_axi_arvalid <= 1'b0;
       m_axi_rready  <= 1'b0;
       m_axi_awvalid <= 1'b0;
@@ -338,6 +438,12 @@ module c930_npu_dma
           m_axi_rready  <= 1'b0;
           pf_state      <= PF_IDLE;
           pf2_state     <= PF2_IDLE;
+          // The core may be mid-GEMM, and under the A-row interlock it may be
+          // waiting in S_AROW for a row this abort guarantees never lands.
+          // Stop it, and disarm the watchdog that was timing it.
+          o_core_abort    <= 1'b1;
+          launched        <= 1'b0;
+          watchdog_active <= 1'b0;
           phase         <= P_IDLE;
         end else begin
           ddr_timeout_cnt <= ddr_timeout_cnt - 1;
@@ -477,23 +583,33 @@ module c930_npu_dma
             end
 
             RS_UNPACK: begin
-              // Bounds check: only write if we haven't exceeded total elements
-              if (flat_idx < total_elems) begin
-                o_wen   <= 1'b1;
-                o_wsel  <= wsel_reg;
-                o_waddr <= flat_idx[15:0];
-                // INT4: extract 4-bit nibble, sign-extend to 16 bits
-                // INT8: sign-extend 8→16 bits; INT16: direct 16-bit
-                if (is_int4)
+              if (is_int4) begin
+                // INT4 packs 16 elements per beat -- wider than the wide port
+                // -- and its A-load is not on the prefetch path, so it keeps
+                // the one-element-per-cycle path.
+                if (flat_idx < total_elems) begin
+                  o_wen   <= 1'b1;
+                  o_wsel  <= wsel_reg;
+                  o_waddr <= flat_idx[15:0];
                   o_wdata <= {{12{rword[unpack_idx*4+3]}}, rword[unpack_idx*4 +: 4]};
-                else if (elem_size == 3'd1)
-                  o_wdata <= {{8{rword[unpack_idx*8+7]}}, rword[unpack_idx*8 +: 8]};
-                else
-                  o_wdata <= rword[unpack_idx*16 +: 16];
+                end
+                flat_idx   <= flat_idx + 1;
+                unpack_idx <= unpack_idx + 1;
+              end else begin
+                // Whole beat in one cycle.  Two cycles per beat rather than
+                // the prefetch path's one, because RS_R still spends a cycle
+                // latching: this load runs once per GEMM before the core
+                // starts, not once per output row, so the second cycle is not
+                // worth the restructuring the prefetch path needed.
+                o_wwen   <= 1'b1;
+                o_wwsel  <= wsel_reg;
+                o_wwaddr <= flat_idx[15:0];
+                o_wwmask <= lane_mask((total_elems - flat_idx) < elems_per_beat
+                                      ? (total_elems - flat_idx) : elems_per_beat);
+                o_wwdata <= beat_lanes(rword, elem_size == 4'd1);
+                flat_idx <= flat_idx + elems_per_beat;
               end
-              flat_idx   <= flat_idx + 1;
-              unpack_idx <= unpack_idx + 1;
-              if (unpack_idx == elems_per_beat - 1) begin
+              if (rs_beat_done) begin
                 // last byte of this beat
                 if (rd_beat == rd_beats) begin
                   if (wsel_reg) begin
@@ -539,10 +655,12 @@ module c930_npu_dma
           // --- Prefetch sub-state machine (runs in parallel with core) ---
           case (pf_state)
             PF_IDLE: begin
-              if (launched && pf_row < dm) begin
+              // !pf_row_pending: do not start the next row until the previous
+              // row's watermark has actually advanced, or pf_row would still
+              // read as the row just finished and that row would be fetched twice.
+              if (launched && !pf_row_pending && pf_row < dm) begin
                 pf_flat_idx   <= 0;
                 pf_rd_beat    <= 0;
-                pf_unpack_idx <= 0;
                 pf_state      <= PF_AR;
               end
             end
@@ -560,39 +678,31 @@ module c930_npu_dma
             end
             PF_R: begin
               if (m_axi_rvalid && m_axi_rready) begin
-                pf_rword      <= m_axi_rdata;
-                pf_rd_beat    <= pf_rd_beat + 1;
-                pf_unpack_idx <= 0;
-                pf_state      <= PF_UNPK;
+                // One beat in, one wide write out, rready still asserted: the
+                // row streams into a_mem at bus rate.  This used to cost one
+                // accept plus elems_per_beat drain cycles -- 9 cycles per 8
+                // INT8 elements, against a bus offering one beat per cycle.
+                o_wwen   <= 1'b1;
+                o_wwsel  <= 1'b0;                              // A
+                o_wwaddr <= 16'(pf_row * int'(dk) + pf_flat_idx);
+                o_wwmask <= lane_mask((int'(dk) - pf_flat_idx) < elems_per_beat
+                                      ? (int'(dk) - pf_flat_idx) : elems_per_beat);
+                o_wwdata <= beat_lanes(m_axi_rdata, elem_size == 4'd1);
+                pf_flat_idx <= pf_flat_idx + elems_per_beat;
+                pf_rd_beat  <= pf_rd_beat + 1;
+                if (pf_rd_beat + 1 == pf_rd_beats) begin
+                  // Row done.  The watermark advances one cycle from now, when
+                  // this write has retired -- see pf_row_pending.
+                  pf_row_pending <= 1'b1;
+                  pf_state       <= PF_IDLE;
+                end else begin
+                  m_axi_rready <= 1'b1;
+                end
               end else begin
                 m_axi_rready <= 1'b1;
               end
             end
-            PF_UNPK: begin
-              // Bounds check: only write dk elements per row
-              if (pf_flat_idx < dk) begin
-                o_wen   <= 1'b1;
-                o_wsel  <= 1'b0;   // A
-                o_waddr <= pf_row * dk + pf_flat_idx;
-                if (is_int4)
-                  o_wdata <= {{12{pf_rword[pf_unpack_idx*4+3]}}, pf_rword[pf_unpack_idx*4 +: 4]};
-                else if (elem_size == 3'd1)
-                  o_wdata <= {{8{pf_rword[pf_unpack_idx*8+7]}}, pf_rword[pf_unpack_idx*8 +: 8]};
-                else
-                  o_wdata <= pf_rword[pf_unpack_idx*16 +: 16];
-              end
-              pf_flat_idx   <= pf_flat_idx + 1;
-              pf_unpack_idx <= pf_unpack_idx + 1;
-              if (pf_unpack_idx == elems_per_beat - 1) begin
-                if (pf_rd_beat == pf_rd_beats) begin
-                  pf_row   <= pf_row + 1;
-                  pf_state <= PF_IDLE;
-                end else begin
-                  pf_state    <= PF_R;
-                  m_axi_rready <= 1'b1;
-                end
-              end
-            end
+            default: pf_state <= PF_IDLE;
           endcase
 
           // --- Core start / completion + watchdog ---
@@ -629,6 +739,7 @@ module c930_npu_dma
                        watchdog_limit);
               launched       <= 1'b0;
               watchdog_active <= 1'b0;
+              o_core_abort   <= 1'b1;     // and the core it was timing
               pf_state       <= PF_IDLE;  // stop prefetch
               o_error        <= 1'b1;
               phase          <= P_DONE;
@@ -647,10 +758,9 @@ module c930_npu_dma
           // --- Prefetch continues during C write-back ---
           case (pf_state)
             PF_IDLE: begin
-              if (pf_row < dm) begin
+              if (!pf_row_pending && pf_row < dm) begin
                 pf_flat_idx   <= 0;
                 pf_rd_beat    <= 0;
-                pf_unpack_idx <= 0;
                 pf_state      <= PF_AR;
               end
             end
@@ -668,38 +778,31 @@ module c930_npu_dma
             end
             PF_R: begin
               if (m_axi_rvalid && m_axi_rready) begin
-                pf_rword      <= m_axi_rdata;
-                pf_rd_beat    <= pf_rd_beat + 1;
-                pf_unpack_idx <= 0;
-                pf_state      <= PF_UNPK;
+                // One beat in, one wide write out, rready still asserted: the
+                // row streams into a_mem at bus rate.  This used to cost one
+                // accept plus elems_per_beat drain cycles -- 9 cycles per 8
+                // INT8 elements, against a bus offering one beat per cycle.
+                o_wwen   <= 1'b1;
+                o_wwsel  <= 1'b0;                              // A
+                o_wwaddr <= 16'(pf_row * int'(dk) + pf_flat_idx);
+                o_wwmask <= lane_mask((int'(dk) - pf_flat_idx) < elems_per_beat
+                                      ? (int'(dk) - pf_flat_idx) : elems_per_beat);
+                o_wwdata <= beat_lanes(m_axi_rdata, elem_size == 4'd1);
+                pf_flat_idx <= pf_flat_idx + elems_per_beat;
+                pf_rd_beat  <= pf_rd_beat + 1;
+                if (pf_rd_beat + 1 == pf_rd_beats) begin
+                  // Row done.  The watermark advances one cycle from now, when
+                  // this write has retired -- see pf_row_pending.
+                  pf_row_pending <= 1'b1;
+                  pf_state       <= PF_IDLE;
+                end else begin
+                  m_axi_rready <= 1'b1;
+                end
               end else begin
                 m_axi_rready <= 1'b1;
               end
             end
-            PF_UNPK: begin
-              if (pf_flat_idx < dk) begin
-                o_wen   <= 1'b1;
-                o_wsel  <= 1'b0;   // A
-                o_waddr <= pf_row * dk + pf_flat_idx;
-                if (is_int4)
-                  o_wdata <= {{12{pf_rword[pf_unpack_idx*4+3]}}, pf_rword[pf_unpack_idx*4 +: 4]};
-                else if (elem_size == 3'd1)
-                  o_wdata <= {{8{pf_rword[pf_unpack_idx*8+7]}}, pf_rword[pf_unpack_idx*8 +: 8]};
-                else
-                  o_wdata <= pf_rword[pf_unpack_idx*16 +: 16];
-              end
-              pf_flat_idx   <= pf_flat_idx + 1;
-              pf_unpack_idx <= pf_unpack_idx + 1;
-              if (pf_unpack_idx == elems_per_beat - 1) begin
-                if (pf_rd_beat == pf_rd_beats) begin
-                  pf_row   <= pf_row + 1;
-                  pf_state <= PF_IDLE;
-                end else begin
-                  pf_state    <= PF_R;
-                  m_axi_rready <= 1'b1;
-                end
-              end
-            end
+            default: pf_state <= PF_IDLE;
           endcase
 
           // --- Cross-GEMM prefetch (PF2): read next GEMM's A row 0 + B row 0 ---

@@ -58,7 +58,10 @@ module c930_tensor_pe
   output logic signed [ACC_W-1:0]     o_ps_out,
 
   // Precision control: 0=INT8, 1=INT16, 2=FP16, 3=BF16, 4=INT4
-  input  logic [2:0]                  i_precision
+  input  logic [2:0]                  i_precision,
+
+  // 0 when this PE's row lies outside the current K tile (see fp32_prod_reg)
+  input  logic                        i_row_en
 );
 
   // ---- Double-buffered weight registers ----
@@ -148,13 +151,21 @@ module c930_tensor_pe
     .o_result (fp32_prod)
   );
 
-  // Register the FP32 product (breaks multiplier -> accumulator carry chain)
+  // Register the FP32 product (breaks multiplier -> accumulator carry chain).
+  //
+  // A row outside the current K tile keeps whatever weights an earlier GEMM
+  // loaded into it.  In the integer modes its zero activation makes them
+  // harmless, but IEEE multiplication gives 0 x NaN = NaN, and a stale integer
+  // weight such as 0xfffc decodes as a NaN in both FP16 and BF16 -- which then
+  // turns the whole column's sum into NaN.  A disabled row contributes +0
+  // instead: exactly what it contributes holding the zero weights it has after
+  // reset, so results do not depend on what ran before.
   logic [31:0] fp32_prod_reg;
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n)
       fp32_prod_reg <= '0;
     else
-      fp32_prod_reg <= fp32_prod;
+      fp32_prod_reg <= i_row_en ? fp32_prod : 32'h0;
   end
 
   // FP32 + FP32 -> FP32 accumulator (internally 2-stage pipelined; stage-1
