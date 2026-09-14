@@ -144,22 +144,41 @@ module c930_npu_core
   localparam int B_DEPTH = MAX_K * MAX_N;
   localparam int A_AW    = $clog2(A_DEPTH);
   localparam int B_AW    = $clog2(B_DEPTH);
-  logic signed [DIN_W-1:0] a_mem_0 [0:A_DEPTH-1];
-  logic signed [DIN_W-1:0] a_mem_1 [0:A_DEPTH-1];
-  logic signed [DIN_W-1:0] b_mem_0 [0:B_DEPTH-1];
-  logic signed [DIN_W-1:0] b_mem_1 [0:B_DEPTH-1];
+  // ---------------------------------------------------------------------------
+  // SUB-BANKING (synthesis inference fix, functional no-op):
+  // The DMA's wide preload port writes up to WR_LANES(=8) elements per cycle
+  // at consecutive addresses (i_wwaddr + l).  Expressing that directly -- 8
+  // writes to one flat array in one process -- is un-inferable for Vivado
+  // ("multiple writes via different ports in same process"), which used to
+  // fall back to registers: a_mem/b_mem became flop arrays with giant
+  // async-read mux trees (~130K LUTs, the 2026-09-14 192.9% overfit).
+  // Fix: split each bank into WR_LANES sub-arrays by address[2:0].  The 8
+  // wide-port lanes always have distinct addr[2:0] residues, so every
+  // sub-array sees at most ONE write per cycle (narrow port OR its decoded
+  // wide lane) and infers as LUTRAM.  Reads remap to (flat>>3) at sub[flat%8]
+  // -- pure wiring, cycle behavior identical.
+  // ---------------------------------------------------------------------------
+  localparam int A_SUBS   = WR_LANES;
+  localparam int B_SUBS   = WR_LANES;
+  localparam int A_SD     = (A_DEPTH + A_SUBS - 1) / A_SUBS;
+  localparam int B_SD     = (B_DEPTH + B_SUBS - 1) / B_SUBS;
+  logic signed [DIN_W-1:0] a_bank0 [0:A_SUBS-1][0:A_SD-1];
+  logic signed [DIN_W-1:0] a_bank1 [0:A_SUBS-1][0:A_SD-1];
+  logic signed [DIN_W-1:0] b_bank0 [0:B_SUBS-1][0:B_SD-1];
+  logic signed [DIN_W-1:0] b_bank1 [0:B_SUBS-1][0:B_SD-1];
 
-  // C matrix: inferred as Block RAM when synthesis tool supports it.
-  // For MAX_M=8/MAX_N=12 (SoC defaults): 384 bytes, fits in LUTRAM.
-  // For MAX_M=64/MAX_N=8 (200T): maps to RAMB18K blocks.
-  // Combinational read (OPREG disabled on Xilinx BRAMs) preserves the
-  // existing DMA timing — no extra wait states needed.
+  // C matrix: LUTRAM (distributed).  It used to be ram_style="block", but
+  // BRAM reads are synchronous -- S_ACCLD's running-sum restore and the DMA's
+  // C readback both sample c_mem combinationally, and a sync read would add a
+  // cycle to each and desynchronize them.  Distributed RAM keeps every read
+  // asynchronous at any depth; for MAX_M=8/MAX_N=12 (SoC defaults) it is only
+  // 96 x 48 bit anyway.
   //
   // Widened from 32 to ACC_W bits.  Under the m-inner loop order the running
   // K accumulation lives here between K tiles rather than in acc[], and an
   // INT16 x INT16 reduction over MAX_K=256 needs 39 bits.  Truncation to 32
   // happens only on readback, exactly where it happened before.
-  (* ram_style = "block" *) logic signed [ACC_W-1:0] c_mem [0:MAX_M*MAX_N-1];
+  (* ram_style = "distributed" *) logic signed [ACC_W-1:0] c_mem [0:MAX_M*MAX_N-1];
 
   assign o_c_rdata = c_mem[i_c_raddr][31:0];
 
@@ -177,37 +196,90 @@ module c930_npu_core
   wire signed [DIN_W-1:0] write_data = i_staging_wen ? i_staging_wdata : i_wdata;
   wire write_bank = i_staging_wen ? ~i_bank_sel : i_wbank;
 
-  always_ff @(posedge i_clk) begin
-    if (write_a) begin
-      if (write_bank) a_mem_1[write_addr] <= write_data;
-      else            a_mem_0[write_addr] <= write_data;
+  // One always_ff per sub-array: each sees at most one write per cycle, so
+  // Vivado infers LUTRAM with asynchronous reads preserved (flat address f
+  // lives at sub f%WR_LANES, row f/WR_LANES -- pure wiring on the read side).
+  //
+  // Wide-port decode (general, no driver-side alignment assumption): lane l
+  // writes flat address i_wwaddr + l, which belongs to sub (i_wwaddr + l)%8.
+  // Inverting per sub sb, the owning lane is l_own = (sb - i_wwaddr) mod 8.
+  // l_own indexes i_wwmask/i_wwdata through plain muxes -- still a single
+  // write port per sub-array process, which is all inference requires.
+  //
+  // A given sub-array is written by at most one of {narrow, wide} per cycle:
+  // narrow fires only in P_STAGING/P_READ_A/B single-beat states, the wide
+  // port only in the DMA's beat-accept cycle, and the two stream types never
+  // drive the same cycle (same contract the old priority order relied on).
+  localparam int AW_SUB = $clog2(A_SUBS);   // 3 for 8
+  localparam int BW_SUB = $clog2(B_SUBS);
+
+  for (genvar sb = 0; sb < A_SUBS; sb++) begin : g_amem
+    // -- bank 0 --------------------------------------------------------------
+    wire        a0_narrow = write_a && !write_bank
+                            && (16'(write_addr) % 16'(A_SUBS)) == 16'(sb);
+    wire [AW_SUB-1:0] a0_own  = AW_SUB'((16'(sb) - 16'(i_wwaddr)) % 16'(A_SUBS));
+    wire        a0_wide   = i_wwen && !i_wwsel && !i_wwbank && i_wwmask[a0_own];
+    wire [15:0] a0_addr   = a0_narrow ? write_addr
+                                  : 16'(i_wwaddr) + 16'({ {(8-AW_SUB){1'b0}}, a0_own });
+    wire signed [DIN_W-1:0] a0_data = a0_narrow ? write_data
+                                                : i_wwdata[a0_own*DIN_W +: DIN_W];
+    always_ff @(posedge i_clk) if (a0_narrow || a0_wide)
+      a_bank0[sb][a0_addr / A_SUBS] <= a0_data;
+    // -- bank 1 --------------------------------------------------------------
+    wire        a1_narrow = write_a && write_bank
+                            && (16'(write_addr) % 16'(A_SUBS)) == 16'(sb);
+    wire [AW_SUB-1:0] a1_own  = AW_SUB'((16'(sb) - 16'(i_wwaddr)) % 16'(A_SUBS));
+    wire        a1_wide   = i_wwen && !i_wwsel && i_wwbank && i_wwmask[a1_own];
+    wire [15:0] a1_addr   = a1_narrow ? write_addr
+                                  : 16'(i_wwaddr) + 16'({ {(8-AW_SUB){1'b0}}, a1_own });
+    wire signed [DIN_W-1:0] a1_data = a1_narrow ? write_data
+                                                : i_wwdata[a1_own*DIN_W +: DIN_W];
+    always_ff @(posedge i_clk) if (a1_narrow || a1_wide)
+      a_bank1[sb][a1_addr / A_SUBS] <= a1_data;
+  end
+
+  for (genvar sb = 0; sb < B_SUBS; sb++) begin : g_bmem
+    // -- bank 0 --------------------------------------------------------------
+    wire        b0_narrow = write_b && !write_bank
+                            && (16'(write_addr) % 16'(B_SUBS)) == 16'(sb);
+    wire [BW_SUB-1:0] b0_own  = BW_SUB'((16'(sb) - 16'(i_wwaddr)) % 16'(B_SUBS));
+    wire        b0_wide   = i_wwen && i_wwsel && !i_wwbank && i_wwmask[b0_own];
+    wire [15:0] b0_addr   = b0_narrow ? write_addr
+                                  : 16'(i_wwaddr) + 16'({ {(8-BW_SUB){1'b0}}, b0_own });
+    wire signed [DIN_W-1:0] b0_data = b0_narrow ? write_data
+                                                : i_wwdata[b0_own*DIN_W +: DIN_W];
+    always_ff @(posedge i_clk) if (b0_narrow || b0_wide)
+      b_bank0[sb][b0_addr / B_SUBS] <= b0_data;
+    // -- bank 1 --------------------------------------------------------------
+    wire        b1_narrow = write_b && write_bank
+                            && (16'(write_addr) % 16'(B_SUBS)) == 16'(sb);
+    wire [BW_SUB-1:0] b1_own  = BW_SUB'((16'(sb) - 16'(i_wwaddr)) % 16'(B_SUBS));
+    wire        b1_wide   = i_wwen && i_wwsel && i_wwbank && i_wwmask[b1_own];
+    wire [15:0] b1_addr   = b1_narrow ? write_addr
+                                  : 16'(i_wwaddr) + 16'({ {(8-BW_SUB){1'b0}}, b1_own });
+    wire signed [DIN_W-1:0] b1_data = b1_narrow ? write_data
+                                                : i_wwdata[b1_own*DIN_W +: DIN_W];
+    always_ff @(posedge i_clk) if (b1_narrow || b1_wide)
+      b_bank1[sb][b1_addr / B_SUBS] <= b1_data;
+  end
+
+  // Flat read-only mirrors of the sub-banked operand memories, for testbench
+  // backdoor access (tb_big.sv / tb_npu_float_prec.sv read a_mem_0[...] and
+  // friends by hierarchical name, with a variable index).  The gathers use
+  // only constant indices, and nothing in the RTL loads them, so synthesis
+  // prunes them entirely.
+  logic signed [DIN_W-1:0] a_mem_0 [0:A_DEPTH-1];
+  logic signed [DIN_W-1:0] a_mem_1 [0:A_DEPTH-1];
+  logic signed [DIN_W-1:0] b_mem_0 [0:B_DEPTH-1];
+  logic signed [DIN_W-1:0] b_mem_1 [0:B_DEPTH-1];
+  always_comb begin
+    for (int f = 0; f < A_DEPTH; f++) begin
+      a_mem_0[f] = a_bank0[f % A_SUBS][f / A_SUBS];
+      a_mem_1[f] = a_bank1[f % A_SUBS][f / A_SUBS];
     end
-    if (write_b) begin
-      if (write_bank) b_mem_1[write_addr] <= write_data;
-      else            b_mem_0[write_addr] <= write_data;
-    end
-    // Wide port assigned after the narrow one so that if both ever named the
-    // same element in the same cycle the bulk load would win.  They target
-    // disjoint regions today: the wide port carries A rows 1..M-1 during
-    // compute and the whole of A row 0 / B before it, the narrow port carries
-    // staging and INT4.
-    if (i_wwen) begin
-      for (int l = 0; l < WR_LANES; l++) begin
-        // i_wwmask is what keeps lane l inside the array on a tail beat: the
-        // DMA masks off lanes past the end of the row (or of B), so the
-        // addresses below never run past the last valid element.  Each index
-        // is sized to its own array so the add cannot wrap wider than the
-        // memory it addresses.
-        if (i_wwmask[l]) begin
-          if (!i_wwsel) begin
-            if (i_wwbank) a_mem_1[A_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
-            else          a_mem_0[A_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
-          end else begin
-            if (i_wwbank) b_mem_1[B_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
-            else          b_mem_0[B_AW'(i_wwaddr + 16'(l))] <= i_wwdata[l*DIN_W +: DIN_W];
-          end
-        end
-      end
+    for (int f = 0; f < B_DEPTH; f++) begin
+      b_mem_0[f] = b_bank0[f % B_SUBS][f / B_SUBS];
+      b_mem_1[f] = b_bank1[f % B_SUBS][f / B_SUBS];
     end
   end
 
@@ -382,6 +454,7 @@ module c930_npu_core
   // staggered capture shifts by 1.
   // ---------------------------------------------------------------------------
   logic signed [NUM_ROWS*DIN_W-1:0] act_comb;    // combinational
+  int a_act_flat;   // flat a_mem address for the act read (sub-banked, see above)
   logic signed [NUM_COLS*ACC_W-1:0] ps_in_comb;  // combinational
   logic signed [NUM_ROWS*DIN_W-1:0] act;          // registered -> PE
   logic signed [NUM_COLS*ACC_W-1:0] ps_in;        // registered -> PE
@@ -405,9 +478,12 @@ module c930_npu_core
     if (state == S_RUN) begin
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
-        if ((t == 2*r) && (r < kr_reg))
-          act_comb[r*DIN_W +: DIN_W] = i_bank_sel ? a_mem_1[m_base + k_base_reg + r] :
-                                                       a_mem_0[m_base + k_base_reg + r];
+        if ((t == 2*r) && (r < kr_reg)) begin
+          a_act_flat = m_base + k_base_reg + r;
+          act_comb[r*DIN_W +: DIN_W] = i_bank_sel
+            ? a_bank1[a_act_flat % A_SUBS][a_act_flat / A_SUBS]
+            : a_bank0[a_act_flat % A_SUBS][a_act_flat / A_SUBS];
+        end
       end
       // Column n's running accumulator pulses at cycles n and n+1 (skew by n).
       for (int n = 0; n < NUM_COLS; n++) begin
@@ -468,7 +544,9 @@ module c930_npu_core
   // i_bank_sel captured at GEMM start, see comment above).
   logic signed [DIN_W-1:0] b_read_data;
   wire [15:0] b_read_addr = (k_base_reg + w_r)*i_dim_n + n_base + w_n;
-  assign b_read_data = b_bank_sel ? b_mem_1[b_read_addr] : b_mem_0[b_read_addr];
+  wire [B_AW-1:0] b_flat = B_AW'(b_read_addr);
+  assign b_read_data = b_bank_sel ? b_bank1[b_flat % B_SUBS][b_flat / B_SUBS] :
+                                    b_bank0[b_flat % B_SUBS][b_flat / B_SUBS];
   assign w_load_data = b_read_data;
 
   // Rows of the array that belong to the current K tile.  The rest hold stale
@@ -717,7 +795,10 @@ module c930_npu_core
         // a plain store, not a read-modify-write.  The row / tile advance at
         // its end follows the case, shared with S_ACT.
         S_WRITE: begin
-          c_mem[c_idx] <= acc[n_cnt];
+          // c_mem write lives in the dedicated reset-free process at the foot
+          // of this file (a write inside this async-reset process is not
+          // RAM-inferable).  S_WRITE/S_ACT are mutually exclusive, so that
+          // single port serves both.
           if (n_cnt != nc - 1)
             n_cnt <= n_cnt + 1;
         end
@@ -727,8 +808,7 @@ module c930_npu_core
         // ACT_P cycles later, so the state lasts nc + ACT_P cycles and ends on
         // the last write.
         S_ACT: begin
-          if (act_wvalid)
-            c_mem[act_widx] <= act_wdata;
+          // c_mem write lives in the dedicated reset-free process below.
           if (act_t != nc + ACT_P - 1)
             act_t <= act_t + 1;
         end
@@ -796,6 +876,21 @@ module c930_npu_core
       end
       end  // !i_abort
     end
+  end
+
+  // ---------------------------------------------------------------------------
+  // c_mem write port: dedicated, reset-free, one address per cycle.
+  // The FSM always_ff above carries an asynchronous reset; a memory write
+  // inside an async-reset process is not RAM-inferable (Vivado 8-4767:
+  // "RAM is sensitive to asynchronous reset signal").  S_WRITE and S_ACT are
+  // mutually exclusive (act_en_r is fixed for the whole GEMM), so this single
+  // port serves both without conflicts.
+  // ---------------------------------------------------------------------------
+  always_ff @(posedge i_clk) begin
+    if (state == S_WRITE)
+      c_mem[c_idx] <= acc[n_cnt];
+    else if ((state == S_ACT) && act_wvalid)
+      c_mem[act_widx] <= act_wdata;
   end
 
 endmodule
