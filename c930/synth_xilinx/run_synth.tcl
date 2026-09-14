@@ -38,7 +38,11 @@ set new_generics [list]
 # flops, sharers 33K -> 4K, data 16 -> 2 BRAM banks), bringing the L2 from
 # ~300K LUTs to ~45K; the SoC then fits the xc7a200t at ~70%.  The RTL
 # default stays 512 (simulation capacity).
-set fit_generics [list ENABLE_NPU1=0 L2_NUM_SETS=64]
+set fit_generics [list ENABLE_NPU1=0 L2_NUM_SETS=32]
+# L2_NUM_SETS=32: S_ACT + the wide DMA ports grew the SoC past the 200T's
+# 134.6K LUTs (post-inference-fix need: 135,362 -- over by 762).  The L2 tag
+# and sharer arrays scale linearly with set count; 32 sets frees ~7K LUTs
+# with identical coherence behavior (see create_project.tcl note).
 set fit_keys      [list ENABLE_NPU1  L2_NUM_SETS]
 foreach g $cur_generics {
     set gk [lindex [split $g =] 0]
