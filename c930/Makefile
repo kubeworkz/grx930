@@ -55,18 +55,19 @@ NPU_RTL := \
   rtl/c930_npu_dma.sv \
   rtl/c930_npu_top.sv
 
-# PTM-C, phase C0 of grxcp pta_cpu_integration.md.  PTM_C=1 builds every bench
-# with rtl/pta's shim in place of the systolic array, into its own build
-# directory, so the two builds never share an output.  PTM_C_ABLATE_ROW=<r>
-# also moves that row's de-skew one window late, which the NPU benches must
-# catch.
+# PTM-C, phases C0 and C1 of grxcp pta_cpu_integration.md.  PTM_C=1 defines
+# PTM_C, so the core instantiates rtl/pta's tile and its error model in place of
+# the systolic array (doc/pta_error_model_design_note.md), and builds every
+# bench into its own build directory, so the two builds never share an output.
+# PTM_C_ABLATE_ROW=<r> also moves that row's de-skew one window late, which the
+# NPU benches must catch.
 PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv
 NPU_RTL_ARRAY := $(NPU_RTL)
 ifeq ($(PTM_C),1)
-NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv,$(NPU_RTL)) $(PTM_C_RTL) \
-             rtl/pta/c930_systolic_array_ptm_c.sv
+NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv rtl/c930_tensor_pe.sv,$(NPU_RTL)) \
+             $(PTM_C_RTL)
 BUILD_DIR := build/ptm_c$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
-GFLAGS    += $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
+GFLAGS    += -DPTM_C $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
 endif
 
 SOC_RTL := $(NPU_RTL) \

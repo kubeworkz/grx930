@@ -7,9 +7,14 @@
 // full M/N/K sweep is a few seconds rather than an overnight iverilog run.
 //
 //   verilator --cc --exe --build -O3 --top-module c930_npu_core -GMAX_N=12 \
-//     -o tb_core_verilator sim/tb_core_verilator.cc <core RTL>
+//     -CFLAGS -I../sim -o tb_core_verilator \
+//     sim/tb_core_verilator.cc sim/pta_tile_model.c <core RTL>
 //   ./obj_dir/tb_core_verilator            # default case list
 //   ./obj_dir/tb_core_verilator --sweep    # M/N/K sweep, CSV on stdout
+//
+// <core RTL> is the core's list in the Makefile's NPU_RTL, less the CSR, DMA
+// and top.  For a PTM-C build add -DPTM_C and take rtl/pta/c930_fp32_add.sv and
+// rtl/pta/c930_ptm_c.sv in place of the systolic array and its PEs.
 //
 // The activation stage, S_ACT (doc/npu_act_stage_design_note.md section 6):
 //
@@ -35,9 +40,27 @@
 // act_element() is the C reference for c930_npu_act.sv, whose header states
 // the fixed-point contract both implement.  Tables are the $readmemh images
 // c930/sim/act_table_gen.py writes.
+//
+// The PTA error model, phase C1 (doc/pta_error_model_design_note.md section 5).
+// Build the model with -DPTM_C and rtl/pta's tile, link sim/pta_tile_model.c,
+// the C reference, and pass --tile ptm_c to say so.
+//
+//   (default), --tile ptm_c         gate P0: every impairment clear, C exact.
+//   --pta directed                  rounding pinned by hand-computed cases:
+//                                   the activation quantiser and the ADC at
+//                                   half-LSB boundaries and at saturation.
+//   --pta quant|thermal|shot|prog   gates P1-P4: one impairment, or all four;
+//   --pta all                       C and the ADC saturation count must match
+//                                   pta_gemm() bit for bit at every shape.
+//   --pta refuse                    impairments the build cannot model, FP16
+//                                   and BF16 with any impairment, and S > 40
+//                                   raise o_error at start; the next valid
+//                                   start clears it.  A digital-array build
+//                                   refuses every impairment.
 
 #include "Vc930_npu_core.h"
 #include "verilated.h"
+#include "pta_tile_model.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -79,6 +102,14 @@ int rnd(int width) {
     lfsr_state ^= lfsr_state << 5;
     const int span = 1 << width;
     return static_cast<int>(lfsr_state % span) - (span >> 1);
+}
+
+// Zero a port whatever width Verilator gave it: an integer up to 64 bits, a
+// VlWide of 32-bit words beyond.  i_wwdata is WR_LANES * DIN_W bits, so it is
+// 64 bits at DIN_W 8 and 128 at DIN_W 16.
+template <typename T> void zero(T& port) { port = 0; }
+template <std::size_t W> void zero(VlWide<W>& port) {
+    for (std::size_t i = 0; i < W; ++i) port[i] = 0;
 }
 
 void preload(int sel, int addr, int val) {
@@ -234,27 +265,50 @@ void identity_table() {
         act_table[i] = std::min(-0x800000 + (i << 14), 0x7FFFFF);
 }
 
+// ---------------------------------------------------------------------------
+// PTA error model
+// ---------------------------------------------------------------------------
+const pta_cfg PTA_OFF = {};
+
+void apply_pta(const pta_cfg& cfg) {
+    dut->i_pta_impair    = cfg.impair;
+    dut->i_pta_act_bits  = cfg.act_bits;
+    dut->i_pta_w_bits    = cfg.w_bits;
+    dut->i_pta_adc_bits  = cfg.adc_bits;
+    dut->i_pta_adc_shift = cfg.adc_shift;
+    dut->i_pta_seed      = cfg.seed;
+    dut->i_pta_sigma_th  = cfg.sigma_th;
+    dut->i_pta_k_shot    = cfg.k_shot;
+    dut->i_pta_sigma_pr  = cfg.sigma_pr;
+}
+
 struct Result {
     uint32_t cycles, ops, stall;
     uint32_t act_count, act_sats, act_cycles;
     int      model_sats;
-    int      changed;     // elements S_ACT moved off their plain sum
+    int      changed;     // elements S_ACT or the tile moved off their plain sum
+    uint32_t pta_sats;    // o_pta_sat_count
+    long     model_pta_sats;
     bool ok;
 };
 
-Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act) {
+Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
+                const pta_cfg& pta = PTA_OFF,
+                const std::vector<int>* a_in = nullptr,
+                const std::vector<int>* b_in = nullptr) {
     std::vector<int>     a(static_cast<size_t>(M) * K);
     std::vector<int>     b(static_cast<size_t>(K) * N);
     std::vector<int64_t> cref(static_cast<size_t>(M) * N, 0);
 
+    // Operands are generated, or given by a directed case.
     for (int m = 0; m < M; ++m)
         for (int k = 0; k < K; ++k) {
-            a[m * K + k] = rnd(width);
+            a[m * K + k] = a_in ? (*a_in)[m * K + k] : rnd(width);
             preload(0, m * K + k, a[m * K + k]);
         }
     for (int k = 0; k < K; ++k)
         for (int n = 0; n < N; ++n) {
-            b[k * N + n] = rnd(width);
+            b[k * N + n] = b_in ? (*b_in)[k * N + n] : rnd(width);
             preload(1, k * N + n, b[k * N + n]);
         }
     for (int m = 0; m < M; ++m)
@@ -280,6 +334,18 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act)
     }
     apply_act(act);
 
+    // With the tile's error model on, pta_gemm() walks the core's loop order
+    // and says what every C element must be.
+    long model_pta_sats = 0;
+    if (pta.impair) {
+        const pta_tile tile = {NUM_ROWS, NUM_COLS, width, 48};
+        std::vector<int32_t> A(a.begin(), a.end()), B(b.begin(), b.end());
+        std::vector<int64_t> C(cexp.size());
+        model_pta_sats = pta_gemm(&pta, &tile, M, N, K, A.data(), B.data(), C.data());
+        cexp.assign(C.begin(), C.end());
+    }
+    apply_pta(pta);
+
     // A-row watermark: this harness writes all of A up front, so every row is
     // resident.  Zero would work too (the core reads 0 as "no watermark"), but
     // saying M exercises the comparison the DMA path actually drives.
@@ -301,7 +367,7 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act)
 
     Result r{dut->o_cycle_count, dut->o_op_count, dut->o_stall_count,
              dut->o_act_count, dut->o_act_sat_count, dut->o_act_cycles, model_sats,
-             changed, true};
+             changed, dut->o_pta_sat_count, model_pta_sats, true};
 
     int errs = 0;
     for (int m = 0; m < M; ++m)
@@ -312,7 +378,7 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act)
             const int32_t exp = static_cast<int32_t>(cexp[m * N + n] & 0xffffffffll);
             if (got != exp) {
                 if (errs < 5) {
-                    if (act.en)
+                    if (act.en || pta.impair)
                         printf("  [FAIL] C[%d][%d] = %d expected %d (sum %lld)\n",
                                m, n, got, exp, static_cast<long long>(cref[m * N + n]));
                     else
@@ -340,9 +406,10 @@ void reset() {
     dut->i_a_rows_ready = 0;
     dut->i_abort = 0;
     dut->i_wwen = 0; dut->i_wwsel = 0; dut->i_wwbank = 0;
-    dut->i_wwmask = 0; dut->i_wwaddr = 0; dut->i_wwdata = 0;
+    dut->i_wwmask = 0; dut->i_wwaddr = 0; zero(dut->i_wwdata);
     dut->i_act_tbl_wen = 0; dut->i_act_tbl_waddr = 0; dut->i_act_tbl_wdata = 0;
     apply_act(ActCfg{});
+    apply_pta(PTA_OFF);
     for (int i = 0; i < 4; ++i) tick();
     dut->i_rst_n = 1;
     for (int i = 0; i < 2; ++i) tick();
@@ -373,6 +440,46 @@ ActCfg full_cfg(int case_idx) {
     return c;
 }
 
+// Gates P1-P4's operating points.  S sits where an 8-bit ADC spans a K tile's
+// typical sums (about 2^15 at DIN_W 8, 2^31 at 16); every fifth case runs S
+// four bits hotter so the ADC saturates, and one case's seed makes the THERMAL
+// stream's seed ^ K zero, the reload's special case.
+pta_cfg pta_gate_cfg(const std::string& mode, int idx, int dw) {
+    const uint32_t base = dw == 8 ? 8 : 24;
+    const bool     hot  = (idx % 5) == 4;
+    const bool     odd  = (idx % 2) == 1;
+    pta_cfg c = {};
+    c.seed      = (idx == 5) ? 0x9E3779B9u : (0x1234567u ^ (static_cast<uint32_t>(idx) * 0x9E3779B1u));
+    c.adc_shift = hot ? base - 4 : base;
+    if (mode == "quant") {
+        c.impair = PTA_QUANT;
+        switch (idx % 4) {
+        case 0:  c.act_bits = dw - 2; c.w_bits = dw - 2; c.adc_bits = 8; break;
+        case 1:  c.act_bits = 4;      c.w_bits = 4;      c.adc_bits = 6; c.adc_shift += 1; break;
+        case 2:  c.act_bits = 0;      c.w_bits = dw - 1; c.adc_bits = 0; c.adc_shift = 0; break;
+        default: c.act_bits = dw;     c.w_bits = 0;      c.adc_bits = 4; break;
+        }
+    } else if (mode == "thermal") {
+        c.impair   = PTA_THERMAL | (odd ? PTA_QUANT : 0u);
+        c.sigma_th = odd ? 0x0280 : 0x0060;                 // 2.5 or 0.375 LSB
+    } else if (mode == "shot") {
+        c.impair = PTA_SHOT | (odd ? PTA_QUANT : 0u);
+        c.k_shot = odd ? 0x0200 : 0x0040;                   // k = 2.0 or 0.25
+    } else if (mode == "prog") {
+        c.impair   = PTA_PROG_ERR | (odd ? PTA_QUANT : 0u);
+        c.sigma_pr = odd ? 0x0300 : 0x0080;                 // 3.0 or 0.5 weight LSB
+    } else {  // all
+        c.impair   = PTA_QUANT | PTA_THERMAL | PTA_SHOT | PTA_PROG_ERR;
+        c.sigma_th = 0x0180;
+        c.k_shot   = 0x0080;
+        c.sigma_pr = 0x0100;
+    }
+    if (c.impair & PTA_QUANT) {
+        if (mode != "quant") { c.act_bits = dw - 2; c.w_bits = dw - 3; c.adc_bits = 7; }
+    }
+    return c;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -385,6 +492,7 @@ int main(int argc, char** argv) {
     bool sweep = false;
     int  dw    = 8;
     std::string act_mode = "off", table_path;
+    std::string pta_mode = "off", tile = "array";
     int  perturb = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -393,6 +501,20 @@ int main(int argc, char** argv) {
         else if (arg == "--act" && i + 1 < argc) act_mode = argv[++i];
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
         else if (arg == "--perturb" && i + 1 < argc) perturb = std::atoi(argv[++i]);
+        else if (arg == "--pta" && i + 1 < argc) pta_mode = argv[++i];
+        else if (arg == "--tile" && i + 1 < argc) tile = argv[++i];
+    }
+    const bool pta_gate = pta_mode == "quant" || pta_mode == "thermal" || pta_mode == "shot" ||
+                          pta_mode == "prog" || pta_mode == "all";
+    if (!(pta_mode == "off" || pta_gate || pta_mode == "directed" || pta_mode == "refuse") ||
+        !(tile == "array" || tile == "ptm_c")) {
+        fprintf(stderr, "--pta must be off, directed, quant, thermal, shot, prog, all or refuse;"
+                        " --tile array or ptm_c\n");
+        return 2;
+    }
+    if (pta_mode != "off" && pta_mode != "refuse" && tile != "ptm_c") {
+        fprintf(stderr, "--pta %s needs a PTM-C build (--tile ptm_c)\n", pta_mode.c_str());
+        return 2;
     }
     if (act_mode != "off" && act_mode != "identity" && act_mode != "full") {
         fprintf(stderr, "--act must be off, identity or full\n");
@@ -421,7 +543,112 @@ int main(int argc, char** argv) {
         {1, 12, 16},  {8, 9, 16},
     };
 
-    if (act_mode == "identity") {
+    if (pta_mode == "directed") {
+        // The contract's rounding, pinned by values worked out by hand from
+        // doc/pta_error_model_design_note.md section 4 -- not by pta_gemm(),
+        // which run_case then holds the RTL to.  Operands at half-LSB
+        // boundaries either side of zero and at both extremes.
+        const int mx = (1 << (dw - 1)) - 1, mn = -(1 << (dw - 1));
+        const pta_tile tile = {NUM_ROWS, NUM_COLS, dw, 48};
+        struct Directed {
+            const char* what;
+            int M, N, K;
+            std::vector<int> a, b;
+            pta_cfg cfg;
+            std::vector<int64_t> want;
+            long want_sats;
+        };
+        pta_cfg q_act = {};  q_act.impair = PTA_QUANT; q_act.act_bits = dw - 4; q_act.seed = 1;
+        pta_cfg q_w   = {};  q_w.impair   = PTA_QUANT; q_w.w_bits     = dw - 4; q_w.seed   = 1;
+        pta_cfg q_adc = {};  q_adc.impair = PTA_QUANT; q_adc.adc_bits = 4; q_adc.adc_shift = 2;
+        q_adc.seed = 1;
+        const std::vector<Directed> cases_d = {
+            // q(x, D-4): h = 4, so (x + 8) >>> 4, clamped to [-8, 7], times 16
+            {"activation quantiser", 6, 1, 1, {8, 7, -8, -9, mx, mn}, {1}, q_act,
+             {16, 0, 0, -16, mx + 1 - 16, mn}, 0},
+            {"weight quantiser", 1, 6, 1, {1}, {8, 7, -8, -9, mx, mn}, q_w,
+             {16, 0, 0, -16, mx + 1 - 16, mn}, 0},
+            // B_adc 4, S 2: floor((a + 2) / 4), clamped to [-8, 7], times 4
+            {"ADC", 6, 1, 1, {2, 1, -2, -3, mx, mn}, {1}, q_adc,
+             {4, 0, 0, -4, 28, -32}, 2},
+        };
+        for (const auto& d : cases_d) {
+            std::vector<int32_t> A(d.a.begin(), d.a.end()), B(d.b.begin(), d.b.end());
+            std::vector<int64_t> C(static_cast<size_t>(d.M) * d.N);
+            const long sats = pta_gemm(&d.cfg, &tile, d.M, d.N, d.K, A.data(), B.data(), C.data());
+            const bool model_ok = C == d.want && sats == d.want_sats;
+            const Result r = run_case(d.M, d.N, d.K, dw, false, ActCfg{}, d.cfg, &d.a, &d.b);
+            const bool ok = model_ok && r.ok && static_cast<long>(r.pta_sats) == d.want_sats;
+            printf("[PD] %-22s model %s, RTL %s, saturations %u (want %ld)  %s\n", d.what,
+                   model_ok ? "matches hand values" : "DIFFERS from hand values",
+                   r.ok ? "matches model" : "DIFFERS from model", r.pta_sats, d.want_sats,
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        }
+    } else if (pta_gate) {
+        int idx = 0;
+        int moved_cases = 0;
+        for (auto& c : cases) {
+            const pta_cfg cfg = pta_gate_cfg(pta_mode, idx++, dw);
+            const Result r = run_case(c.M, c.N, c.K, dw, false, ActCfg{}, cfg);
+            const bool ok = r.ok && static_cast<long>(r.pta_sats) == r.model_pta_sats;
+            if (r.changed > 0) ++moved_cases;
+            printf("[P-%s] M=%-3d N=%-2d K=%-4d impair=0x%02x bits=%u/%u/%u S=%-2u"
+                   " moved=%-5d sats=%u (model %ld)  %s\n",
+                   pta_mode.c_str(), c.M, c.N, c.K, cfg.impair, cfg.act_bits, cfg.w_bits,
+                   cfg.adc_bits, cfg.adc_shift, r.changed, r.pta_sats, r.model_pta_sats,
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        }
+        // An impairment that moves nothing is not being tested.
+        const bool moved = moved_cases >= 12;
+        printf("[P-%s] %d of 14 shapes moved off their exact sums  %s\n", pta_mode.c_str(),
+               moved_cases, moved ? "PASS" : "FAIL");
+        if (!moved) ++failures;
+    } else if (pta_mode == "refuse") {
+        auto refused = [&](const pta_cfg& cfg, int prec) {
+            apply_pta(cfg);
+            dut->i_precision = prec;
+            dut->i_dim_m = 4; dut->i_dim_n = 4; dut->i_dim_k = 4;
+            dut->i_start = 1; tick();
+            dut->i_start = 0; tick();
+            const bool r = dut->o_error && !dut->o_busy;
+            dut->i_precision = 0;
+            apply_pta(PTA_OFF);
+            return r;
+        };
+        struct Bad { const char* what; uint32_t impair; int prec; uint32_t shift; };
+        std::vector<Bad> bad;
+        if (tile == "ptm_c") {
+            bad = {{"DRIFT, not built", PTA_DRIFT, 0, 8},
+                   {"XTALK, not built", PTA_XTALK, 0, 8},
+                   {"MZM_NL, not built", PTA_MZM_NL, 0, 8},
+                   {"QUANT with FP16", PTA_QUANT, 2, 8},
+                   {"THERMAL with BF16", PTA_THERMAL, 3, 8},
+                   {"QUANT with S = 41", PTA_QUANT, 0, 41}};
+        } else {
+            bad = {{"QUANT, digital array", PTA_QUANT, 0, 8},
+                   {"THERMAL, digital array", PTA_THERMAL, 0, 8},
+                   {"SHOT, digital array", PTA_SHOT, 0, 8},
+                   {"PROG_ERR, digital array", PTA_PROG_ERR, 0, 8}};
+        }
+        for (const auto& b : bad) {
+            pta_cfg cfg = {};
+            cfg.impair = b.impair; cfg.adc_shift = b.shift; cfg.act_bits = dw - 2;
+            cfg.seed = 7;
+            const bool ref = refused(cfg, b.prec);
+            // The next valid start clears the error.  A PTM-C build takes an
+            // impaired GEMM at the boundary shift of 40; the array, an exact one.
+            pta_cfg good = {};
+            if (tile == "ptm_c") { good.impair = PTA_QUANT; good.adc_bits = 8; good.adc_shift = 40; good.seed = 7; }
+            const Result after = run_case(4, 4, 4, dw, false, ActCfg{}, good);
+            const bool ok = ref && after.ok && !dut->o_error;
+            printf("[PR] %-24s %s, then a valid GEMM %s  %s\n", b.what,
+                   ref ? "refused" : "NOT refused", after.ok ? "passes" : "fails",
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        }
+    } else if (act_mode == "identity") {
         // Unit scales, no noise, no detuning, no requantisation: the table is
         // the only thing between acc and C.
         ActCfg id;

@@ -310,7 +310,19 @@ module c930_npu_top
     .i_act_tbl_wdata   (24'sd0),
     .o_act_count       (),
     .o_act_sat_count   (),
-    .o_act_cycles      ()
+    .o_act_cycles      (),
+    // The PTA error model is core-level only until C4 maps it onto the widened
+    // CSR decode (doc/pta_error_model_design_note.md section 3): off at the top.
+    .i_pta_impair      (7'd0),
+    .i_pta_act_bits    (4'd0),
+    .i_pta_w_bits      (4'd0),
+    .i_pta_adc_bits    (4'd0),
+    .i_pta_adc_shift   (6'd0),
+    .i_pta_seed        (32'd0),
+    .i_pta_sigma_th    (16'd0),
+    .i_pta_k_shot      (16'd0),
+    .i_pta_sigma_pr    (16'd0),
+    .o_pta_sat_count   ()
   );
 
   assign o_busy  = busy;
