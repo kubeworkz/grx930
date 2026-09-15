@@ -164,6 +164,19 @@ $(OUT_HAZARD): $(CORE_RTL) tb/tb_hazard_csrflush.sv
 hazard: $(OUT_HAZARD)
 	$(VVP) $(OUT_HAZARD)
 
+# Dual-DUT equivalence gate for the (retimed) forwarding selects: the
+# production unit and the pristine reference module
+# (tb/riscv_core_hazard_unit_ref.sv) see identical randomized stimulus through
+# real riscv_core_pipe instances; all outputs compared every cycle. Any change
+# to forwarding semantics must keep this bit-exact.
+OUT_HAZ_EQ := $(BUILD_DIR)/tb_hazard_equiv.vvp
+$(OUT_HAZ_EQ): $(CORE_RTL) tb/riscv_core_hazard_unit_ref.sv tb/tb_hazard_equiv.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ $(CORE_RTL) tb/riscv_core_hazard_unit_ref.sv tb/tb_hazard_equiv.sv
+
+hazard_equiv: $(OUT_HAZ_EQ)
+	$(VVP) $(OUT_HAZ_EQ)
+
 # ---------------------------------------------------------------------------
 # Full SoC testbench (core + NPU + DDR + MMIO)
 # ---------------------------------------------------------------------------

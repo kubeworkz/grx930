@@ -177,9 +177,22 @@ module tb;
 
     // Case 8: LOAD producer in WB (resultsrc_wb==01) with an EX dependent ->
     // the WB->EX forward MUST still fire (the load-use path is untouched).
+    // The forward select is REGISTERED (retimed off the EX critical path):
+    // it samples the compares on the NEXT pipe contents at each edge, so the
+    // stimulus models the real pipe move -- producer in MEM while the
+    // dependent waits in ID (cycle A), then producer in WB + dependent in EX
+    // (cycle B). The select captured at the A->B edge must select the WB
+    // forward exactly when the dependent occupies EX.
     @(negedge clk);
-    rs1_id = 0; rd_wb = 9; resultsrc_wb = 2'b01; regwrite_wb = 1;
-    rs1_ex = 9;
+    rs1_id = 9; rd_ex = 0; regwrite_ex = 0; resultsrc_ex = 2'b00; // dependent in ID
+    rd_mem = 9; regwrite_mem = 1; resultsrc_mem = 2'b00;          // producer in MEM
+    rd_wb = 0; regwrite_wb = 0; resultsrc_wb = 2'b00;
+    rs1_ex = 0;
+    @(negedge clk);
+    rs1_id = 0;
+    rs1_ex = 9;                                                   // dependent in EX
+    rd_mem = 0; regwrite_mem = 0;                                 // MEM bubble
+    rd_wb = 9; regwrite_wb = 1; resultsrc_wb = 2'b01;             // producer in WB
     #1;
     check("load producer in WB: forwarda fires", forwarda_ex, 2'b01);
     check("load producer in WB: no CSR stall", stall_id, 1'b0);

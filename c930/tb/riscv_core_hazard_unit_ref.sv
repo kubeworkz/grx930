@@ -1,4 +1,4 @@
-module riscv_core_hazard_unit
+module riscv_core_hazard_unit_ref
 (
 
     // Clock / reset (CSR-read stall ex_mem drain pulse: freezes the EX->MEM
@@ -118,84 +118,15 @@ begin
 end
 
 
-//------------------------------Forwarding------------------------------\
-//
-// Forwarding-select retiming (EX critical-path relief):
-//
-// The MEM->EX / WB->EX selects used to be combinational compares of the
-// current pipe contents feeding the EX operand muxes in the same cycle, so
-// the 5-bit compare + its high-fanout select routing sat in front of the
-// operand mux -> ALU -> JALR-target -> misaligned-check -> trap_pc chain
-// (post-impl WNS -0.760 ns, the pipe_rd_ex_mem -> trap_pc_reg family).
-//
-// The selects are now REGISTERED: the identical compare function is
-// evaluated on the NEXT pipe contents and captured at the same edge that
-// advances the pipes. Every compare input is a pipe output whose next state
-// is exactly f(clr, en, D) -- replicated below from the very same flush and
-// stall signals that drive the physical pipes (o_hazard_unit_flush_ex/_stall_ex
-// for the ID/EX pipes, _mem for EX/MEM, _wb for MEM/WB) -- and the D inputs are already ports of this
-// module (rs1_id/rs2_id are the id_ex D fields; rd_ex/regwrite_ex/
-// resultsrc_ex the ex_mem D fields; rd_mem/regwrite_mem/resultsrc_mem the
-// mem_wb D fields). The shadow next-value computation and the physical
-// pipes therefore see identical clr/hold/D in the same delta cycle, so the
-// registered select during cycle t equals the old combinational select
-// during cycle t for EVERY input sequence, including flush+stall
-// combinations that cannot occur (both terms force the same result).
-//
-// Timeline is unchanged: a producer finishing WB in cycle t feeds a
-// dependent's EX mux in cycle t+1, and the dependent enters EX at that same
-// edge -- exactly when the freshly captured select (evaluated on the
-// post-edge pipe contents) goes live. The operand mux reads the registered
-// select concurrently with the producer's data arriving through the
-// registered wb_fwd_data / mem_forward_data buses, so select and data are
-// always consistent.
+//------------------------------Forwarding------------------------------\\
 
-// Next-state of a riscv_core_pipe field: clr -> '0, hold (en_n) -> current,
-// else capture D. Mirrors riscv_core_pipe.sv exactly.
-function automatic logic [4:0] pipe5_next(
-    input logic clr,
-    input logic hold,
-    input logic [4:0] cur,
-    input logic [4:0] nxt
-);
-    pipe5_next = clr ? 5'b00000 : (hold ? cur : nxt);
-endfunction
+always_comb 
+begin : forwarding_proc
 
-logic [4:0] rs1_ex_next;
-logic [4:0] rs2_ex_next;
-logic [4:0] rd_mem_next;
-logic [4:0] rd_wb_next;
-logic       regwrite_mem_next;
-logic       regwrite_wb_next;
-logic [1:0] resultsrc_mem_next;
-logic [1:0] resultsrc_wb_next;
-
-always_comb begin : forwarding_next_state_proc
-    // Shadow next-values of the register fields the compares read. Every
-    // field replicates its physical pipe exactly -- INCLUDING the clr term
-    // (the regwrite/resultsrc pipes clear on their stage flush, just like
-    // the rd/rs pipes; a flushed stage must never forward).
-    rs1_ex_next        = pipe5_next(o_hazard_unit_flush_ex,  o_hazard_unit_stall_ex,  i_hazard_unit_rs1_ex, i_hazard_unit_rs1_id);
-    rs2_ex_next        = pipe5_next(o_hazard_unit_flush_ex,  o_hazard_unit_stall_ex,  i_hazard_unit_rs2_ex, i_hazard_unit_rs2_id);
-    rd_mem_next        = pipe5_next(o_hazard_unit_flush_mem, o_hazard_unit_stall_mem, i_hazard_unit_rd_mem, i_hazard_unit_rd_ex);
-    regwrite_mem_next  = o_hazard_unit_flush_mem  ? 1'b0  : (o_hazard_unit_stall_mem  ? i_hazard_unit_regwrite_mem  : i_hazard_unit_regwrite_ex);
-    resultsrc_mem_next = o_hazard_unit_flush_mem  ? 2'b00 : (o_hazard_unit_stall_mem  ? i_hazard_unit_resultsrc_mem  : i_hazard_unit_resultsrc_ex);
-    rd_wb_next         = pipe5_next(o_hazard_unit_flush_wb,  o_hazard_unit_stall_wb,  i_hazard_unit_rd_wb,  i_hazard_unit_rd_mem);
-    regwrite_wb_next   = o_hazard_unit_flush_wb  ? 1'b0  : (o_hazard_unit_stall_wb  ? i_hazard_unit_regwrite_wb   : i_hazard_unit_regwrite_mem);
-    resultsrc_wb_next  = o_hazard_unit_flush_wb  ? 2'b00 : (o_hazard_unit_stall_wb  ? i_hazard_unit_resultsrc_wb   : i_hazard_unit_resultsrc_mem);
-end
-
-logic [1:0] forwarda_ex_next;
-logic [1:0] forwardb_ex_next;
-
-always_comb begin : forwarding_proc
-    // The compare function is IDENTICAL to the original combinational
-    // version -- only applied to the next pipe contents.
-    //
     // A CSR read (resultsrc == 2'b11) produces its value at WB, not at MEM:
     // its MEM-stage ALU result is unrelated garbage, so the MEM->EX forward
     // must not fire for it. The matching stall (csr_stall_detection below)
-    // holds the dependent in ID until the producer reaches WB, where the
+    // holds the dependent in EX until the producer reaches WB, where the
     // WB->EX forward supplies the CSR read data.
     //
     // The same applies to a read-data producer (resultsrc == 2'b01: load, AMO,
@@ -206,54 +137,38 @@ always_comb begin : forwarding_proc
     // stale MEM forward from firing on the stall-release cycle, when the
     // frozen ex_mem pipe still shows the producer's rd but the value now
     // lives in WB.
-    if ((rs1_ex_next == rd_mem_next) && regwrite_mem_next && (rs1_ex_next != 5'b00000) && (resultsrc_mem_next != 2'b11) && (resultsrc_mem_next != 2'b01))
+    if ((i_hazard_unit_rs1_ex == i_hazard_unit_rd_mem) && i_hazard_unit_regwrite_mem && (i_hazard_unit_rs1_ex != 5'b0) && (i_hazard_unit_resultsrc_mem != 2'b11) && (i_hazard_unit_resultsrc_mem != 2'b01))
     begin
-        forwarda_ex_next = 2'b10;
+        o_hazard_unit_forwarda_ex = 2'b10;
     end
     // The WB->EX forward source (wb_fwd_data in the top) carries only the
     // REGISTERED mem_wb pipes -- never the combinational CSR read data. A
     // dependent on a CSR read is held in ID by the CSR-read stall until the
     // producer's regfile write commits, so it never needs (and never gets) a
     // WB->EX forward for resultsrc==2'b11.
-    else if ((rs1_ex_next == rd_wb_next) && regwrite_wb_next && (rs1_ex_next != 5'b00000) && (resultsrc_wb_next != 2'b11))
+    else if ((i_hazard_unit_rs1_ex == i_hazard_unit_rd_wb) && i_hazard_unit_regwrite_wb && (i_hazard_unit_rs1_ex != 5'b0) && (i_hazard_unit_resultsrc_wb != 2'b11)) 
     begin
-        forwarda_ex_next = 2'b01;
+        o_hazard_unit_forwarda_ex = 2'b01;
     end
-    else
+    else 
     begin
-        forwarda_ex_next = 2'b00;
+        o_hazard_unit_forwarda_ex = 2'b00;
     end
-
+    
     // Forwarding SrcB
-    if ((rs2_ex_next == rd_mem_next) && regwrite_mem_next && (rs2_ex_next != 5'b00000) && (resultsrc_mem_next != 2'b11) && (resultsrc_mem_next != 2'b01))
+    if ((i_hazard_unit_rs2_ex == i_hazard_unit_rd_mem) && i_hazard_unit_regwrite_mem && (i_hazard_unit_rs2_ex != 5'b0) && (i_hazard_unit_resultsrc_mem != 2'b11) && (i_hazard_unit_resultsrc_mem != 2'b01))
     begin
-        forwardb_ex_next = 2'b10;
+        o_hazard_unit_forwardb_ex = 2'b10;
     end
-    else if ((rs2_ex_next == rd_wb_next) && regwrite_wb_next && (rs2_ex_next != 5'b00000) && (resultsrc_wb_next != 2'b11))
+    else if ((i_hazard_unit_rs2_ex == i_hazard_unit_rd_wb) && i_hazard_unit_regwrite_wb && (i_hazard_unit_rs2_ex != 5'b0) && (i_hazard_unit_resultsrc_wb != 2'b11)) 
     begin
-        forwardb_ex_next = 2'b01;
+        o_hazard_unit_forwardb_ex = 2'b01;
     end
-    else
+    else 
     begin
-        forwardb_ex_next = 2'b00;
+        o_hazard_unit_forwardb_ex = 2'b00;
     end
-end
 
-// Registered forwarding selects. Reset mirrors the pipe reset (all pipes
-// hold 0 through reset, so the compares settle at 2'b00; the explicit reset
-// also keeps simulation X-free from the first edge).
-always_ff @(posedge i_hazard_unit_clk or negedge i_hazard_unit_rst_n)
-begin : forwarding_reg_proc
-    if (!i_hazard_unit_rst_n)
-    begin
-        o_hazard_unit_forwarda_ex <= 2'b00;
-        o_hazard_unit_forwardb_ex <= 2'b00;
-    end
-    else
-    begin
-        o_hazard_unit_forwarda_ex <= forwarda_ex_next;
-        o_hazard_unit_forwardb_ex <= forwardb_ex_next;
-    end
 end
 
 //---------------------------------Stall---------------------------------\\
