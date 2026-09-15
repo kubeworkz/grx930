@@ -6,11 +6,15 @@
 #   make soc        build + run the end-to-end SoC testbench (tb_c930_soc)
 #   make npu        build + run the standalone NPU testbench (tb_c930_npu)
 #   make npu_float  FP16/BF16 after integer GEMMs on the NPU alone (tb_npu_float_prec)
+#   make npu_feed   operand-feed measurement at M=64 N=8 K=256, run twice (tb_npu_feed)
+#   make ptm_c_lockstep  PTM-C against the systolic array, cycle for cycle
 #   make hazard     build + run the hazard-unit flush/stall unit test
 #   make wave       simulate the SoC and print the waveform location
 #   make synth      ECP5 synthesis resource/latch report (oss-cad-suite; real design)
 #   make synth-fit   ECP5 synthesis + P&R Fmax (cache-shrunk fit test)
 #   make clean      remove build artifacts and the VCD dump
+#
+#   Add PTM_C=1 to build with PTM-C in place of the systolic array (see below).
 
 IVERILOG ?= iverilog
 VVP      ?= vvp
@@ -51,6 +55,21 @@ NPU_RTL := \
   rtl/c930_npu_dma.sv \
   rtl/c930_npu_top.sv
 
+# PTM-C, phases C0 and C1 of grxcp pta_cpu_integration.md.  PTM_C=1 defines
+# PTM_C, so the core instantiates rtl/pta's tile and its error model in place of
+# the systolic array (doc/pta_error_model_design_note.md), and builds every
+# bench into its own build directory, so the two builds never share an output.
+# PTM_C_ABLATE_ROW=<r> also moves that row's de-skew one window late, which the
+# NPU benches must catch.
+PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv
+NPU_RTL_ARRAY := $(NPU_RTL)
+ifeq ($(PTM_C),1)
+NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv rtl/c930_tensor_pe.sv,$(NPU_RTL)) \
+             $(PTM_C_RTL)
+BUILD_DIR := build/ptm_c$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
+GFLAGS    += -DPTM_C $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
+endif
+
 SOC_RTL := $(NPU_RTL) \
   rtl/c930_ddr.sv \
   rtl/c930_mmio_bridge.sv \
@@ -70,7 +89,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu npu_float npu_feed hazard synth synth-fit wave clean bringup tile_test driver_test
+.PHONY: all sw soc soc_full npu npu_float npu_feed ptm_c_lockstep hazard synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -151,6 +170,20 @@ npu_feed: $(OUT_NPU_FEED)
 	$(VVP) $(OUT_NPU_FEED) > $(BUILD_DIR)/npu_feed_run2.log
 	cmp $(BUILD_DIR)/npu_feed_run1.log $(BUILD_DIR)/npu_feed_run2.log
 	grep -F -e "[F0]" -e "[PASS]" -e "[WM]" $(BUILD_DIR)/npu_feed_run1.log
+
+# PTM-C against the systolic array cycle for cycle, and the float adder it
+# copies against c930_fp16_acc: the unit-level half of phase C0.  Always built
+# from the real array, whatever PTM_C says.  -s names the root: without it
+# iverilog also simulates every module nothing instantiates -- the whole NPU
+# top -- at every step.
+OUT_PTM_LOCK := $(BUILD_DIR)/tb_ptm_c_lockstep.vvp
+
+$(OUT_PTM_LOCK): $(NPU_RTL_ARRAY) $(PTM_C_RTL) tb/tb_ptm_c_lockstep.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -s tb_ptm_c_lockstep -o $@ $(NPU_RTL_ARRAY) $(PTM_C_RTL) tb/tb_ptm_c_lockstep.sv
+
+ptm_c_lockstep: $(OUT_PTM_LOCK)
+	$(VVP) $(OUT_PTM_LOCK)
 
 # ---------------------------------------------------------------------------
 # Hazard-unit unit test (flush deferral under stalls)
