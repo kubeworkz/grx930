@@ -210,6 +210,19 @@ $(OUT_HAZ_EQ): $(CORE_RTL) tb/riscv_core_hazard_unit_ref.sv tb/tb_hazard_equiv.s
 hazard_equiv: $(OUT_HAZ_EQ)
 	$(VVP) $(OUT_HAZ_EQ)
 
+# Dual-DUT equivalence gate for the arbiter B-channel store-and-forward skid:
+# production unit vs pristine reference (tb/c930_axi_dma_arb_ref.sv) under
+# strict 4-phase sequences (per-unit completeness + order/payload exactness)
+# and full-random fuzz (common-prefix equivalence, overflow-window backpressure).
+# Any change to the arbiter's B path must keep this exact.
+OUT_ARB_EQ := $(BUILD_DIR)/tb_arb_bskid_equiv.vvp
+$(OUT_ARB_EQ): $(SOC_FULL_RTL) tb/c930_axi_dma_arb_ref.sv tb/tb_arb_bskid_equiv.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -o $@ rtl/c930_axi_dma_arb.sv tb/c930_axi_dma_arb_ref.sv tb/tb_arb_bskid_equiv.sv
+
+arb_equiv: $(OUT_ARB_EQ)
+	$(VVP) $(OUT_ARB_EQ)
+
 # ---------------------------------------------------------------------------
 # Full SoC testbench (core + NPU + DDR + MMIO)
 # ---------------------------------------------------------------------------

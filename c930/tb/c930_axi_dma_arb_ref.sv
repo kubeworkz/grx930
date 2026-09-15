@@ -12,7 +12,7 @@
 // pass through unchanged -- responses are routed back purely by the
 // registered owner, so no ID remapping is needed.
 // -----------------------------------------------------------------------------
-module c930_axi_dma_arb
+module c930_axi_dma_arb_ref
 #(
   parameter int ADDR_WIDTH = 64,
   parameter int DATA_WIDTH = 64,
@@ -393,65 +393,17 @@ module c930_axi_dma_arb
   assign m2_wready = s_wready && (wr_owner == 2'd2);
   assign m3_wready = s_wready && (wr_owner == 2'd3);
 
-  // Write response channel -- store-and-forward skid.  The original design
-  // muxed s_bvalid/s_bid/s_bresp combinationally through the wr_owner-gated
-  // per-master enables, putting the whole AXI write loop (owner-mux ->
-  // crossbar decode -> slave B response -> owner-mux -> master) on a single
-  // combinational timing arc and stranding a fo=150 routing net.  The skid
-  // instead captures {owner, id, resp} in flops when the slave presents B and
-  // delivers every mX_b* signal from registers: the slave B->master B arc is
-  // broken, and the FSM's B-phase termination moves to the skid catch (only
-  // one transaction is ever outstanding and the slave is in-order, so a
-  // response caught here is unambiguously this transaction's).  B latency
-  // grows by one cycle -- AXI-legal (B has no latency bound).
-  logic              skid_valid;
-  logic [1:0]        skid_owner;
-  logic [ID_WIDTH-1:0] skid_id;
-  logic [1:0]        skid_resp;
+  // Write response channel
+  assign m0_bid    = s_bid;    assign m0_bresp = s_bresp;
+  assign m1_bid    = s_bid;    assign m1_bresp = s_bresp;
+  assign m2_bid    = s_bid;    assign m2_bresp = s_bresp;
+  assign m3_bid    = s_bid;    assign m3_bresp = s_bresp;
 
-  // The skid entry is consumed this cycle when its owner signals bready.
-  wire skid_consume = bready_v[skid_owner];
+  assign m0_bvalid = s_bvalid && (wr_owner == 2'd0);
+  assign m1_bvalid = s_bvalid && (wr_owner == 2'd1);
+  assign m2_bvalid = s_bvalid && (wr_owner == 2'd2);
+  assign m3_bvalid = s_bvalid && (wr_owner == 2'd3);
 
-  always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n) begin
-      skid_valid     <= 1'b0;
-      skid_owner     <= '0;
-      skid_id        <= '0;
-      skid_resp      <= '0;
-    end else begin
-      if (s_bvalid && (!skid_valid || skid_consume)) begin
-        // Catch (empty) or pop-and-push (entry consumed this cycle).
-        skid_valid <= 1'b1;
-        skid_owner <= wr_owner;
-        skid_id    <= s_bid;
-        skid_resp  <= s_bresp;
-      end else if (!s_bvalid && skid_valid && skid_consume) begin
-        // Entry delivered to its master; nothing new from the slave.
-        skid_valid <= 1'b0;
-      end
-      // else: hold (slave stalled or master not ready)
-    end
-  end
-
-  always_comb begin
-    if (skid_valid) begin
-      m0_bid = skid_id;  m0_bresp = skid_resp;
-      m1_bid = skid_id;  m1_bresp = skid_resp;
-      m2_bid = skid_id;  m2_bresp = skid_resp;
-      m3_bid = skid_id;  m3_bresp = skid_resp;
-    end else begin
-      m0_bid = s_bid;    m0_bresp = s_bresp;
-      m1_bid = s_bid;    m1_bresp = s_bresp;
-      m2_bid = s_bid;    m2_bresp = s_bresp;
-      m3_bid = s_bid;    m3_bresp = s_bresp;
-    end
-  end
-
-  assign m0_bvalid = skid_valid && (skid_owner == 2'd0);
-  assign m1_bvalid = skid_valid && (skid_owner == 2'd1);
-  assign m2_bvalid = skid_valid && (skid_owner == 2'd2);
-  assign m3_bvalid = skid_valid && (skid_owner == 2'd3);
-
-  assign s_bready = !skid_valid || skid_consume;
+  assign s_bready = bready_v[wr_owner];
 
 endmodule
