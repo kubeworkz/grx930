@@ -36,7 +36,7 @@ add_files -norecurse "[file dirname [info script]]/../rtl/c930_bootrom.sv"
 # AXI crossbar + cache adapter + UART (already included via glob above)
 
 # ---- Constraints ----
-add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/xc7a200t_clock.xdc"
+add_files -fileset constrs_1 -norecurse "[file dirname [info script]]/xc7a200t_nexys_video.xdc"
 
 # ---- Top module ----
 set_property top c930_soc_top [current_fileset]
