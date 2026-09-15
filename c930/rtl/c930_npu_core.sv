@@ -131,7 +131,23 @@ module c930_npu_core
   input  logic signed [23:0]          i_act_tbl_wdata,
   output logic [31:0]                 o_act_count,        // elements activated
   output logic [31:0]                 o_act_sat_count,    // saturation events
-  output logic [31:0]                 o_act_cycles        // cycles spent in S_ACT
+  output logic [31:0]                 o_act_cycles,       // cycles spent in S_ACT
+
+  // ---- PTA error model, phase C1 (doc/pta_error_model_design_note.md) ----
+  // Core-level only, like S_ACT's ports: sampled when a start is accepted and
+  // modelled only when the core is built with PTM-C (PTM_C defined).  A start
+  // is refused -- o_error, stay idle -- if it sets a bit this build cannot
+  // model, sets any bit with FP16 or BF16, or sets any bit with a shift above 40.
+  input  logic [6:0]                  i_pta_impair,       // QUANT THERMAL SHOT DRIFT XTALK MZM_NL PROG_ERR
+  input  logic [3:0]                  i_pta_act_bits,     // B_a, 0 = unquantised
+  input  logic [3:0]                  i_pta_w_bits,       // B_w, 0 = unquantised
+  input  logic [3:0]                  i_pta_adc_bits,     // B_adc, 0 = no ADC quantisation
+  input  logic [5:0]                  i_pta_adc_shift,    // S: LSB_adc = 2^S, 0..40
+  input  logic [31:0]                 i_pta_seed,         // every generator, reloaded per GEMM
+  input  logic [15:0]                 i_pta_sigma_th,     // thermal sigma, Q8.8 ADC LSB
+  input  logic [15:0]                 i_pta_k_shot,       // shot coefficient k, Q8.8
+  input  logic [15:0]                 i_pta_sigma_pr,     // programming-error sigma, Q8.8 weight LSB
+  output logic [31:0]                 o_pta_sat_count     // ADC saturations, captured elements
 );
 
   // ---------------------------------------------------------------------------
@@ -350,6 +366,27 @@ module c930_npu_core
 
   assign o_busy = (state != S_IDLE);
 
+  // PTA impairments this build can model (doc/pta_error_model_design_note.md
+  // section 2): the digital array models none, so asking it for any would
+  // silently return exact results under an analog label.
+`ifdef PTM_C
+  localparam logic [6:0] PTA_BUILT = 7'b100_0111;   // PROG_ERR, SHOT, THERMAL, QUANT
+`else
+  localparam logic [6:0] PTA_BUILT = 7'b000_0000;
+`endif
+  wire pta_any = (i_pta_impair != 7'd0);
+  wire pta_bad = pta_any &&
+                 (((i_pta_impair & ~PTA_BUILT) != 7'd0) ||
+                  (i_precision == 3'd2) || (i_precision == 3'd3) ||
+                  (i_pta_adc_shift > 6'd40));
+
+  // S_ACT refuses the float modes too (see the activation stage below).
+  wire act_fp   = i_act_en && (i_precision == 3'd2 || i_precision == 3'd3);
+
+  // The cycle a start is accepted: S_ACT and the tile sample their
+  // configuration here.
+  wire start_ok = (state == S_IDLE) && i_start && dims_ok && !act_fp && !pta_bad;
+
   // ---------------------------------------------------------------------------
   // o_done: separated from FSM always_ff to break t[25] critical path.
   // yosys shares FSM state-decode logic between state_next (which uses t)
@@ -558,6 +595,59 @@ module c930_npu_core
   always_comb
     for (int r = 0; r < NUM_ROWS; r++) row_en[r] = (r < kr_reg);
 
+`ifdef PTM_C
+  // PTM-C in place of the array (grxcp pta_cpu_integration.md section 4.1),
+  // with the error model of doc/pta_error_model_design_note.md.  The tile
+  // draws only for results the core captures: column n is captured on the hop
+  // edge that ends t = 2*NUM_ROWS + 1 + 2n (see S_RUN), from the shot the tile
+  // registered one hop edge earlier, so the window with t = 2*NUM_ROWS + 2n
+  // names column n.  Columns at or past nc are never written to C and draw
+  // nothing.
+`ifdef PTM_C_ABLATE_ROW
+  localparam int PTM_ABLATE_ROW = `PTM_C_ABLATE_ROW;
+`else
+  localparam int PTM_ABLATE_ROW = -1;
+`endif
+  localparam int PTA_CW = $clog2(NUM_COLS);
+  wire              pta_shot     = (state == S_RUN) && (t >= 2*NUM_ROWS) && !t[0] &&
+                                   (((t - 2*NUM_ROWS) >>> 1) < nc);
+  wire [PTA_CW-1:0] pta_shot_col = PTA_CW'((t - 2*NUM_ROWS) >>> 1);
+
+  c930_ptm_c #(
+    .NUM_ROWS   (NUM_ROWS),
+    .NUM_COLS   (NUM_COLS),
+    .DIN_W      (DIN_W),
+    .ACC_W      (ACC_W),
+    .ABLATE_ROW (PTM_ABLATE_ROW)
+  ) u_array (
+    .i_clk           (i_clk),
+    .i_rst_n         (i_rst_n),
+    .i_wen           (w_load_active),
+    .i_wbank         (w_load_bank),
+    .i_wrow          (w_load_row),
+    .i_wcol          (w_load_col),
+    .i_wdata         (w_load_data),
+    .i_bank_sel      (bank_sel),
+    .i_act           (act),
+    .i_ps_in         (ps_in),
+    .o_ps_out        (ps_out),
+    .i_precision     (i_precision),
+    .i_row_en        (row_en),
+    .i_pta_cfg_load  (start_ok),
+    .i_pta_impair    (i_pta_impair),
+    .i_pta_act_bits  (i_pta_act_bits),
+    .i_pta_w_bits    (i_pta_w_bits),
+    .i_pta_adc_bits  (i_pta_adc_bits),
+    .i_pta_adc_shift (i_pta_adc_shift),
+    .i_pta_seed      (i_pta_seed),
+    .i_pta_sigma_th  (i_pta_sigma_th),
+    .i_pta_k_shot    (i_pta_k_shot),
+    .i_pta_sigma_pr  (i_pta_sigma_pr),
+    .i_pta_shot      (pta_shot),
+    .i_pta_shot_col  (pta_shot_col),
+    .o_pta_sat_count (o_pta_sat_count)
+  );
+`else
   c930_systolic_array #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -579,6 +669,9 @@ module c930_npu_core
     .i_row_en   (row_en)
   );
 
+  assign o_pta_sat_count = 32'd0;
+`endif
+
   // ---------------------------------------------------------------------------
   // Activation stage.  S_ACT feeds acc[j], j = 0 .. nc-1, on consecutive cycles
   // and stores what comes back into C through the same c_mem port S_WRITE uses,
@@ -587,7 +680,6 @@ module c930_npu_core
   // sums does not describe, so enabling S_ACT with FP16 or BF16 is an error at
   // start, like an out-of-range dimension.
   // ---------------------------------------------------------------------------
-  wire act_fp   = i_act_en && (i_precision == 3'd2 || i_precision == 3'd3);
   wire act_feed = (state == S_ACT) && (act_t < nc);
   wire [$clog2(NUM_COLS)-1:0] act_col = act_t[$clog2(NUM_COLS)-1:0];
   wire [C_AW-1:0] act_cidx = C_AW'(m_reg * i_dim_n + n_base + act_t);
@@ -603,7 +695,7 @@ module c930_npu_core
   ) u_act (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
-    .i_cfg_load    ((state == S_IDLE) && i_start && dims_ok && !act_fp),
+    .i_cfg_load    (start_ok),
     .i_requant     (i_act_requant),
     .i_adc_bits    (i_act_adc_bits),
     .i_xs          (i_act_xs),
@@ -688,7 +780,7 @@ module c930_npu_core
 
         S_IDLE: begin
           if (i_start) begin
-            if (!dims_ok || act_fp) begin
+            if (!dims_ok || act_fp || pta_bad) begin
               o_error <= 1'b1;          // stay IDLE
             end else begin
               o_error    <= 1'b0;

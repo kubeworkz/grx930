@@ -19,6 +19,8 @@
 //
 // Inputs change only on hop edges, as the core changes them.  Weights and the
 // bank select change only between episodes, as the core's S_WLOAD does.
+// The error model's ports are tied off: this is C0's exactness, which C1 must
+// keep with every impairment clear.
 //
 //   make ptm_c_lockstep
 // -----------------------------------------------------------------------------
@@ -138,6 +140,12 @@ module tb_ptm_c_lockstep;
   logic signed [CB*ACC_W-1:0] ps_b;
   logic [RB-1:0]              row_en_b;
 
+  // Every PTM-C instance: error model off, no shots named.
+  `define PTA_OFF .i_pta_cfg_load(1'b0), .i_pta_impair(7'd0), .i_pta_act_bits(4'd0), \
+    .i_pta_w_bits(4'd0), .i_pta_adc_bits(4'd0), .i_pta_adc_shift(6'd0), .i_pta_seed(32'd0), \
+    .i_pta_sigma_th(16'd0), .i_pta_k_shot(16'd0), .i_pta_sigma_pr(16'd0), .i_pta_shot(1'b0), \
+    .i_pta_shot_col('0), .o_pta_sat_count()
+
   wire signed [CA*ACC_W-1:0] out_arr_a, out_ptm_a, out_abl_a;
   wire signed [CB*ACC_W-1:0] out_arr_b, out_ptm_b;
 
@@ -149,12 +157,14 @@ module tb_ptm_c_lockstep;
   c930_ptm_c #(.NUM_ROWS(RA), .NUM_COLS(CA), .DIN_W(DA), .ACC_W(ACC_W)) u_ptm_a (
     .i_clk(clk), .i_rst_n(rst_n), .i_wen(wen_a), .i_wbank(wbank_a), .i_wrow(wrow_a),
     .i_wcol(wcol_a), .i_wdata(wdata_a), .i_bank_sel(bank_sel_a), .i_act(act_a),
-    .i_ps_in(ps_a), .o_ps_out(out_ptm_a), .i_precision(prec_a), .i_row_en(row_en_a));
+    .i_ps_in(ps_a), .o_ps_out(out_ptm_a), .i_precision(prec_a), .i_row_en(row_en_a),
+    `PTA_OFF);
 
   c930_ptm_c #(.NUM_ROWS(RA), .NUM_COLS(CA), .DIN_W(DA), .ACC_W(ACC_W), .ABLATE_ROW(3)) u_abl_a (
     .i_clk(clk), .i_rst_n(rst_n), .i_wen(wen_a), .i_wbank(wbank_a), .i_wrow(wrow_a),
     .i_wcol(wcol_a), .i_wdata(wdata_a), .i_bank_sel(bank_sel_a), .i_act(act_a),
-    .i_ps_in(ps_a), .o_ps_out(out_abl_a), .i_precision(prec_a), .i_row_en(row_en_a));
+    .i_ps_in(ps_a), .o_ps_out(out_abl_a), .i_precision(prec_a), .i_row_en(row_en_a),
+    `PTA_OFF);
 
   c930_systolic_array #(.NUM_ROWS(RB), .NUM_COLS(CB), .DIN_W(DB), .ACC_W(ACC_W)) u_arr_b (
     .i_clk(clk), .i_rst_n(rst_n), .i_wen(wen_b), .i_wbank(wbank_b), .i_wrow(wrow_b),
@@ -164,7 +174,8 @@ module tb_ptm_c_lockstep;
   c930_ptm_c #(.NUM_ROWS(RB), .NUM_COLS(CB), .DIN_W(DB), .ACC_W(ACC_W)) u_ptm_b (
     .i_clk(clk), .i_rst_n(rst_n), .i_wen(wen_b), .i_wbank(wbank_b), .i_wrow(wrow_b),
     .i_wcol(wcol_b), .i_wdata(wdata_b), .i_bank_sel(bank_sel_b), .i_act(act_b),
-    .i_ps_in(ps_b), .o_ps_out(out_ptm_b), .i_precision(prec_b), .i_row_en(row_en_b));
+    .i_ps_in(ps_b), .o_ps_out(out_ptm_b), .i_precision(prec_b), .i_row_en(row_en_b),
+    `PTA_OFF);
 
   // ---- Streaming: new operands at every hop edge, held for the window ----
   logic streaming = 1'b0;
