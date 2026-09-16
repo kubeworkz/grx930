@@ -36,17 +36,28 @@
 // sim/tb_core_verilator.cc holds the two to bitwise agreement).  Integer
 // columns only: the core refuses an impairment with a float precision.
 //
-//   at a start      sample the configuration; each xorshift32 stream loads
-//                   seed ^ K (K itself if that is zero)
+//   at a start      sample the configuration; the THERMAL, SHOT and PROG_ERR
+//                   xorshift32 streams load seed ^ K (K itself if that is zero)
+//   model reset     idle only: every drift offset and the drift clock return
+//                   to zero, and the DRIFT stream loads seed ^ K.  Drift is
+//                   device state, so nothing else resets it
 //   weight write    PROG_ERR stream steps; e = (sigma_pr*gs + 2^15) >>> 16,
 //                   stored beside the weight (Q.8, weight LSB)
+//   shot start      i_pta_shot_start marks each shot's first window (one core
+//                   run).  In a GEMM with DRIFT set the drift clock counts it;
+//                   on reaching 2^k it restarts, and every cell of both banks
+//                   steps, bank, then row, then column:
+//                     d = clamp(d + ((sigma_d*gs + 2^15) >>> 16), +-d_max)
 //   captured shot   i_pta_shot names the column the core captures from this
 //                   window's shot; THERMAL and SHOT streams step on its hop
 //                   edge, and that column alone is evaluated with the new
 //                   draws (no other column's value this window is read):
 //     xa   = QUANT ? q(a, B_a) : a
-//     wa   = ((QUANT ? q(w, B_w) : w) << 8) + (PROG_ERR ? e : 0)
-//     y    = sum xa * wa                          Q.8, tile units
+//     wa_r = ((QUANT ? q(w_r, B_w) : w_r) << 8) + (PROG_ERR ? e_r : 0)
+//            + (DRIFT ? d_r : 0)                  Q.8, weight LSB
+//     wx_r = wa_r + (XTALK ? (chi * (wa_(r-1) + wa_(r+1)) + 2^7) >>> 8 : 0)
+//            a neighbour outside the tile or the K tile (i_row_en) is zero
+//     y    = sum xa_r * wx_r                      Q.8, tile units
 //     rt   = isqrt4(min(|y| >>> S, 2^23))         Q.4, ADC LSB
 //     n_th = (sigma_th * gs_th + 2^15) >>> 16      Q.8, ADC LSB
 //     n_sh = (k_shot * rt * gs_sh + 2^19) >>> 20   Q.8, ADC LSB
@@ -59,7 +70,9 @@
 //
 // Ablations, each of which parity must catch: ABLATE_ROW moves one row's
 // de-skew a window late (C0); PTM_C_ABLATE_XORSHIFT changes xorshift32's first
-// shift from 13 to 12; PTM_C_ABLATE_QROUND drops the quantiser's rounding term.
+// shift from 13 to 12; PTM_C_ABLATE_QROUND drops the quantiser's rounding term;
+// PTM_C_ABLATE_DRIFT clears drift at every GEMM start; PTM_C_ABLATE_XTALK
+// couples rows outside the K tile.
 // -----------------------------------------------------------------------------
 
 module c930_ptm_c
@@ -102,6 +115,12 @@ module c930_ptm_c
   input  logic [15:0]                              i_pta_sigma_th,
   input  logic [15:0]                              i_pta_k_shot,
   input  logic [15:0]                              i_pta_sigma_pr,
+  input  logic [15:0]                              i_pta_drift_sigma,  // drift step sigma, Q8.8 weight LSB
+  input  logic [4:0]                               i_pta_drift_log2,   // log2 shots per drift step
+  input  logic [15:0]                              i_pta_drift_max,    // drift clamp, Q8.8 weight LSB
+  input  logic [7:0]                               i_pta_xtalk,        // chi, Q0.8
+  input  logic                                     i_pta_model_rst,    // drift back to zero (idle only)
+  input  logic                                     i_pta_shot_start, // this window starts a shot
   input  logic                                     i_pta_shot,       // this window's shot is captured
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_shot_col,   // ... for this column
   output logic [31:0]                              o_pta_sat_count
@@ -117,11 +136,14 @@ module c930_ptm_c
   localparam int IMP_QUANT   = 0;
   localparam int IMP_THERMAL = 1;
   localparam int IMP_SHOT    = 2;
+  localparam int IMP_DRIFT   = 3;
+  localparam int IMP_XTALK   = 4;
   localparam int IMP_PROG    = 6;
 
   localparam logic [31:0] K_THERMAL = 32'h9E3779B9;
   localparam logic [31:0] K_SHOT    = 32'h3C6EF372;
   localparam logic [31:0] K_PROG    = 32'hDAA66D2B;
+  localparam logic [31:0] K_DRIFT   = 32'h78DDE6E4;
 
   // ---- Arithmetic helpers: the contract's, shared with sim/pta_tile_model.c ----
   function automatic logic [31:0] xorshift32(input logic [31:0] s);
@@ -219,6 +241,9 @@ module c930_ptm_c
   logic [3:0]  abits_r, wbits_r, adcbits_r;
   logic [5:0]  shift_r;
   logic [15:0] sigma_th_r, k_shot_r, sigma_pr_r;
+  logic [15:0] dsig_r, dmax_r;
+  logic [4:0]  dlog2_r;
+  logic [7:0]  chi_r;
   logic [31:0] rng_th, rng_sh, rng_pr;
   logic [31:0] rng_th_next, rng_sh_next, rng_pr_next;
   logic signed [19:0] gs_th, gs_sh, gs_pr;
@@ -280,6 +305,10 @@ module c930_ptm_c
       sigma_th_r <= '0;
       k_shot_r   <= '0;
       sigma_pr_r <= '0;
+      dsig_r     <= '0;
+      dlog2_r    <= '0;
+      dmax_r     <= '0;
+      chi_r      <= '0;
       rng_th     <= K_THERMAL;
       rng_sh     <= K_SHOT;
       rng_pr     <= K_PROG;
@@ -292,6 +321,10 @@ module c930_ptm_c
       sigma_th_r <= i_pta_sigma_th;
       k_shot_r   <= i_pta_k_shot;
       sigma_pr_r <= i_pta_sigma_pr;
+      dsig_r     <= i_pta_drift_sigma;
+      dlog2_r    <= i_pta_drift_log2;
+      dmax_r     <= i_pta_drift_max;
+      chi_r      <= i_pta_xtalk;
       rng_th     <= stream_seed(i_pta_seed, K_THERMAL);
       rng_sh     <= stream_seed(i_pta_seed, K_SHOT);
       rng_pr     <= stream_seed(i_pta_seed, K_PROG);
@@ -375,6 +408,95 @@ module c930_ptm_c
     end
   endgenerate
 
+  // ---- Drift: device state, stepped on the drift clock ----
+  // Every physical cell of both banks drifts, written or not; a weight write
+  // leaves its cell's drift alone.  Only a model reset clears it.
+  logic signed [16:0] d_bank0 [0:R-1][0:C-1];     // Q8.8 weight LSB
+  logic signed [16:0] d_bank1 [0:R-1][0:C-1];
+  logic [31:0]        rng_dr;
+  logic [31:0]        dcnt;                       // shots counted since the last step
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin : b_drift
+    logic [31:0]        ds;
+    logic signed [36:0] dp;
+    logic signed [20:0] dstep;
+    logic signed [21:0] dnew, dlim;
+    if (!i_rst_n) begin
+      for (int r = 0; r < R; r++)
+        for (int c = 0; c < C; c++) begin
+          d_bank0[r][c] <= '0;
+          d_bank1[r][c] <= '0;
+        end
+      rng_dr <= K_DRIFT;
+      dcnt   <= 32'd0;
+`ifdef PTM_C_ABLATE_DRIFT
+    end else if (i_pta_model_rst || i_pta_cfg_load) begin
+`else
+    end else if (i_pta_model_rst) begin
+`endif
+      for (int r = 0; r < R; r++)
+        for (int c = 0; c < C; c++) begin
+          d_bank0[r][c] <= '0;
+          d_bank1[r][c] <= '0;
+        end
+      rng_dr <= stream_seed(i_pta_seed, K_DRIFT);
+      dcnt   <= 32'd0;
+    end else if (hop && i_pta_shot_start && impair_r[IMP_DRIFT]) begin
+      if (dcnt + 32'd1 >= (32'd1 << dlog2_r)) begin
+        dcnt <= 32'd0;
+        ds   = rng_dr;
+        dlim = $signed({6'd0, dmax_r});
+        for (int b = 0; b < 2; b++)
+          for (int r = 0; r < R; r++)
+            for (int c = 0; c < C; c++) begin
+              ds    = xorshift32(ds);
+              dp    = $signed({21'd0, dsig_r}) * 37'(gauss(ds));
+              dstep = 21'((dp + 37'sd32768) >>> 16);
+              dnew  = 22'((b == 0) ? d_bank0[r][c] : d_bank1[r][c]) + 22'(dstep);
+              if (dnew > dlim)  dnew = dlim;
+              if (dnew < -dlim) dnew = -dlim;
+              if (b == 0) d_bank0[r][c] <= 17'(dnew);
+              else        d_bank1[r][c] <= 17'(dnew);
+            end
+        rng_dr <= ds;
+      end else begin
+        dcnt <= dcnt + 32'd1;
+      end
+    end
+  end
+
+  // Row r's analog weight in column c, Q.8 weight LSB: the DAC's level plus the
+  // programming error and the drift the configuration turns on.
+  function automatic logic signed [63:0] analog_w(input int r, input int c);
+    logic signed [DIN_W-1:0] w;
+    logic signed [19:0]      e;
+    logic signed [16:0]      d;
+    logic signed [63:0]      wq;
+    w  = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
+    e  = i_bank_sel ? e_bank1[r][c] : e_bank0[r][c];
+    d  = i_bank_sel ? d_bank1[r][c] : d_bank0[r][c];
+    wq = impair_r[IMP_QUANT] ? 64'(quant(int'(w), int'(wbits_r))) : 64'(w);
+    return wq * 64'sd256 + (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0)
+                         + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0);
+  endfunction
+
+  // Row r's weight as its input sees it.  With XTALK, the input's light also
+  // passes the rows either side in the same column's bank; a row outside the
+  // tile or outside the K tile holds no weight for it.
+  function automatic logic signed [63:0] coupled_w(input int r, input int c);
+    logic signed [63:0] nb;
+    if (!impair_r[IMP_XTALK]) return analog_w(r, c);
+    nb = 64'sd0;
+`ifdef PTM_C_ABLATE_XTALK
+    if (r > 0)     nb = nb + analog_w(r - 1, c);
+    if (r < R - 1) nb = nb + analog_w(r + 1, c);
+`else
+    if (r > 0     && i_row_en[r - 1]) nb = nb + analog_w(r - 1, c);
+    if (r < R - 1 && i_row_en[r + 1]) nb = nb + analog_w(r + 1, c);
+`endif
+    return analog_w(r, c) + (($signed({56'd0, chi_r}) * nb + 64'sd128) >>> 8);
+  endfunction
+
   // ---- The shot, integer columns ----
   // One column's registered value and whether its ADC clamped.  With modelled
   // clear it is the array's exact sum; set, it is the error model of the header.
@@ -385,8 +507,7 @@ module c930_ptm_c
   function automatic logic [ACC_W:0] int_column(input int c, input logic modelled);
     logic signed [ACC_W-1:0] seed;
     logic signed [DIN_W-1:0] a, w;
-    logic signed [19:0]      e;
-    logic signed [63:0]      y, xa, wa;
+    logic signed [63:0]      y, xa;
     logic        [63:0]      ay, v;
     logic        [12:0]      rt;
     logic        [28:0]      krt;
@@ -402,15 +523,12 @@ module c930_ptm_c
     for (int r = 0; r < R; r++) begin
       tap = 2*(R - r) + 2*c - 1 + ((r == ABLATE_ROW) ? 1 : 0);
       a   = act_h[r][tap];
-      w   = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
       if (!modelled) begin
+        w = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
         y = y + 64'(a) * 64'(w);
       end else begin
-        e  = i_bank_sel ? e_bank1[r][c] : e_bank0[r][c];
         xa = impair_r[IMP_QUANT] ? 64'(quant(int'(a), int'(abits_r))) : 64'(a);
-        wa = (impair_r[IMP_QUANT] ? 64'(quant(int'(w), int'(wbits_r))) : 64'(w)) * 64'sd256 +
-             (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0);
-        y  = y + xa * wa;                            // Q.8, tile units
+        y  = y + xa * coupled_w(r, c);               // Q.8, tile units
       end
     end
     if (!modelled)

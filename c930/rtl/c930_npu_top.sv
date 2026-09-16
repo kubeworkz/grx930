@@ -322,6 +322,11 @@ module c930_npu_top
     .i_pta_sigma_th    (16'd0),
     .i_pta_k_shot      (16'd0),
     .i_pta_sigma_pr    (16'd0),
+    .i_pta_drift_sigma (16'd0),
+    .i_pta_drift_log2  (5'd0),
+    .i_pta_drift_max   (16'd0),
+    .i_pta_xtalk       (8'd0),
+    .i_pta_model_rst   (1'b0),
     .o_pta_sat_count   ()
   );
 

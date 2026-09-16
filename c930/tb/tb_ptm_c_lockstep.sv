@@ -143,7 +143,9 @@ module tb_ptm_c_lockstep;
   // Every PTM-C instance: error model off, no shots named.
   `define PTA_OFF .i_pta_cfg_load(1'b0), .i_pta_impair(7'd0), .i_pta_act_bits(4'd0), \
     .i_pta_w_bits(4'd0), .i_pta_adc_bits(4'd0), .i_pta_adc_shift(6'd0), .i_pta_seed(32'd0), \
-    .i_pta_sigma_th(16'd0), .i_pta_k_shot(16'd0), .i_pta_sigma_pr(16'd0), .i_pta_shot(1'b0), \
+    .i_pta_sigma_th(16'd0), .i_pta_k_shot(16'd0), .i_pta_sigma_pr(16'd0), \
+    .i_pta_drift_sigma(16'd0), .i_pta_drift_log2(5'd0), .i_pta_drift_max(16'd0), \
+    .i_pta_xtalk(8'd0), .i_pta_model_rst(1'b0), .i_pta_shot_start(1'b0), .i_pta_shot(1'b0), \
     .i_pta_shot_col('0), .o_pta_sat_count()
 
   wire signed [CA*ACC_W-1:0] out_arr_a, out_ptm_a, out_abl_a;
