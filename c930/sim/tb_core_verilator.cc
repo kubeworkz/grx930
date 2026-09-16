@@ -46,12 +46,19 @@
 // the C reference, and pass --tile ptm_c to say so.
 //
 //   (default), --tile ptm_c         gate P0: every impairment clear, C exact.
-//   --pta directed                  rounding pinned by hand-computed cases:
-//                                   the activation quantiser and the ADC at
-//                                   half-LSB boundaries and at saturation.
-//   --pta quant|thermal|shot|prog   gates P1-P4: one impairment, or all four;
-//   --pta all                       C and the ADC saturation count must match
+//   --pta directed                  semantics pinned by hand-computed cases:
+//                                   the quantisers and the ADC at half-LSB
+//                                   boundaries and at saturation; crosstalk,
+//                                   and a stale row outside the K tile that
+//                                   must not couple; drift from a model reset,
+//                                   at its bound, held, and reset again.
+//   --pta quant|thermal|shot|prog   gates P1-P6: one impairment, or all six;
+//   --pta drift|xtalk|all           C and the ADC saturation count must match
 //                                   pta_gemm() bit for bit at every shape.
+//                                   Drift runs its 14 GEMMs on one device,
+//                                   with a GEMM that holds drift, a model
+//                                   reset pulsed while busy (ignored) and one
+//                                   while idle.
 //   --pta refuse                    impairments the build cannot model, FP16
 //                                   and BF16 with any impairment, and S > 40
 //                                   raise o_error at start; the next valid
@@ -280,6 +287,39 @@ void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_sigma_th  = cfg.sigma_th;
     dut->i_pta_k_shot    = cfg.k_shot;
     dut->i_pta_sigma_pr  = cfg.sigma_pr;
+    dut->i_pta_drift_sigma = cfg.drift_sigma;
+    dut->i_pta_drift_log2  = cfg.drift_log2;
+    dut->i_pta_drift_max   = cfg.drift_max;
+    dut->i_pta_xtalk       = cfg.xtalk;
+}
+
+// The modelled device.  Drift outlives a GEMM, so the model's state does too,
+// from one run_case to the next, exactly as the RTL's.
+pta_device g_dev = {};
+
+// A model reset, in the RTL and the model together.  Only while idle.
+void model_reset(uint32_t seed) {
+    dut->i_pta_seed      = seed;
+    dut->i_pta_model_rst = 1;
+    tick();
+    dut->i_pta_model_rst = 0;
+    pta_model_reset(&g_dev, seed);
+}
+
+// When set, the next run_case pulses a model reset this many cycles after its
+// start, while the core is busy.  The core must ignore it, so the model does
+// not reset either.
+long g_busy_rst_at = -1;
+
+// C as the RTL reads it back.
+std::vector<int32_t> read_c(int M, int N) {
+    std::vector<int32_t> c(static_cast<size_t>(M) * N);
+    for (int i = 0; i < M * N; ++i) {
+        dut->i_c_raddr = i;
+        dut->eval();
+        c[i] = static_cast<int32_t>(dut->o_c_rdata);
+    }
+    return c;
 }
 
 struct Result {
@@ -341,7 +381,7 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
         const pta_tile tile = {NUM_ROWS, NUM_COLS, width, 48};
         std::vector<int32_t> A(a.begin(), a.end()), B(b.begin(), b.end());
         std::vector<int64_t> C(cexp.size());
-        model_pta_sats = pta_gemm(&pta, &tile, M, N, K, A.data(), B.data(), C.data());
+        model_pta_sats = pta_gemm(&pta, &tile, &g_dev, 0, M, N, K, A.data(), B.data(), C.data());
         cexp.assign(C.begin(), C.end());
     }
     apply_pta(pta);
@@ -356,9 +396,13 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
 
     uint64_t guard = 0;
     while (!dut->o_done) {
+        const bool pulse = g_busy_rst_at >= 0 && guard == static_cast<uint64_t>(g_busy_rst_at);
+        if (pulse) { dut->i_pta_seed = 0xDEADBEEFu; dut->i_pta_model_rst = 1; }
         tick();
+        if (pulse) { dut->i_pta_model_rst = 0; dut->i_pta_seed = pta.seed; }
         if (++guard > 50'000'000ull) { fprintf(stderr, "timeout\n"); exit(2); }
     }
+    g_busy_rst_at = -1;
     tick();
 
     int changed = 0;
@@ -410,6 +454,7 @@ void reset() {
     dut->i_act_tbl_wen = 0; dut->i_act_tbl_waddr = 0; dut->i_act_tbl_wdata = 0;
     apply_act(ActCfg{});
     apply_pta(PTA_OFF);
+    dut->i_pta_model_rst = 0;
     for (int i = 0; i < 4; ++i) tick();
     dut->i_rst_n = 1;
     for (int i = 0; i < 2; ++i) tick();
@@ -440,10 +485,11 @@ ActCfg full_cfg(int case_idx) {
     return c;
 }
 
-// Gates P1-P4's operating points.  S sits where an 8-bit ADC spans a K tile's
+// Gates P1-P6's operating points.  S sits where an 8-bit ADC spans a K tile's
 // typical sums (about 2^15 at DIN_W 8, 2^31 at 16); every fifth case runs S
 // four bits hotter so the ADC saturates, and one case's seed makes the THERMAL
-// stream's seed ^ K zero, the reload's special case.
+// stream's seed ^ K zero, the reload's special case.  Drift steps every 1, 2, 4
+// or 8 shots, and its fifth-case clamp is tight enough to bind.
 pta_cfg pta_gate_cfg(const std::string& mode, int idx, int dw) {
     const uint32_t base = dw == 8 ? 8 : 24;
     const bool     hot  = (idx % 5) == 4;
@@ -468,11 +514,28 @@ pta_cfg pta_gate_cfg(const std::string& mode, int idx, int dw) {
     } else if (mode == "prog") {
         c.impair   = PTA_PROG_ERR | (odd ? PTA_QUANT : 0u);
         c.sigma_pr = odd ? 0x0300 : 0x0080;                 // 3.0 or 0.5 weight LSB
+    } else if (mode == "drift") {
+        c.impair      = PTA_DRIFT | (odd ? (PTA_QUANT | PTA_PROG_ERR) : 0u);
+        c.sigma_pr    = 0x0100;
+        c.drift_sigma = odd ? 0x0200 : 0x0080;              // 2.0 or 0.5 weight LSB a step
+        c.drift_log2  = static_cast<uint32_t>(idx % 4);
+        c.drift_max   = hot ? 0x0100 : 0x0600;              // 1 or 6 weight LSB
+        if (idx == 4) c.impair = PTA_QUANT | PTA_PROG_ERR;  // drift held: not applied, not stepped
+    } else if (mode == "xtalk") {
+        c.impair      = PTA_XTALK | (odd ? (PTA_QUANT | PTA_DRIFT) : 0u);
+        c.xtalk       = odd ? 0x60 : 0x20;                  // chi 0.375 or 0.125
+        c.drift_sigma = 0x0100;
+        c.drift_log2  = 2;
+        c.drift_max   = 0x0400;
     } else {  // all
-        c.impair   = PTA_QUANT | PTA_THERMAL | PTA_SHOT | PTA_PROG_ERR;
-        c.sigma_th = 0x0180;
-        c.k_shot   = 0x0080;
-        c.sigma_pr = 0x0100;
+        c.impair      = PTA_QUANT | PTA_THERMAL | PTA_SHOT | PTA_DRIFT | PTA_XTALK | PTA_PROG_ERR;
+        c.sigma_th    = 0x0180;
+        c.k_shot      = 0x0080;
+        c.sigma_pr    = 0x0100;
+        c.drift_sigma = 0x0100;
+        c.drift_log2  = 1;
+        c.drift_max   = 0x0400;
+        c.xtalk       = 0x40;
     }
     if (c.impair & PTA_QUANT) {
         if (mode != "quant") { c.act_bits = dw - 2; c.w_bits = dw - 3; c.adc_bits = 7; }
@@ -505,11 +568,12 @@ int main(int argc, char** argv) {
         else if (arg == "--tile" && i + 1 < argc) tile = argv[++i];
     }
     const bool pta_gate = pta_mode == "quant" || pta_mode == "thermal" || pta_mode == "shot" ||
-                          pta_mode == "prog" || pta_mode == "all";
+                          pta_mode == "prog" || pta_mode == "drift" || pta_mode == "xtalk" ||
+                          pta_mode == "all";
     if (!(pta_mode == "off" || pta_gate || pta_mode == "directed" || pta_mode == "refuse") ||
         !(tile == "array" || tile == "ptm_c")) {
-        fprintf(stderr, "--pta must be off, directed, quant, thermal, shot, prog, all or refuse;"
-                        " --tile array or ptm_c\n");
+        fprintf(stderr, "--pta must be off, directed, quant, thermal, shot, prog, drift, xtalk,"
+                        " all or refuse; --tile array or ptm_c\n");
         return 2;
     }
     if (pta_mode != "off" && pta_mode != "refuse" && tile != "ptm_c") {
@@ -526,6 +590,10 @@ int main(int argc, char** argv) {
     }
 
     reset();
+    {
+        const pta_tile t = {NUM_ROWS, NUM_COLS, dw, 48};
+        if (pta_device_init(&g_dev, &t) != 0) { fprintf(stderr, "out of memory\n"); return 2; }
+    }
 
     if (act_mode != "off") {
         if (table_path.empty()) identity_table();
@@ -575,7 +643,8 @@ int main(int argc, char** argv) {
         for (const auto& d : cases_d) {
             std::vector<int32_t> A(d.a.begin(), d.a.end()), B(d.b.begin(), d.b.end());
             std::vector<int64_t> C(static_cast<size_t>(d.M) * d.N);
-            const long sats = pta_gemm(&d.cfg, &tile, d.M, d.N, d.K, A.data(), B.data(), C.data());
+            const long sats = pta_gemm(&d.cfg, &tile, &g_dev, 0, d.M, d.N, d.K, A.data(), B.data(),
+                                       C.data());
             const bool model_ok = C == d.want && sats == d.want_sats;
             const Result r = run_case(d.M, d.N, d.K, dw, false, ActCfg{}, d.cfg, &d.a, &d.b);
             const bool ok = model_ok && r.ok && static_cast<long>(r.pta_sats) == d.want_sats;
@@ -585,10 +654,85 @@ int main(int argc, char** argv) {
                    ok ? "PASS" : "FAIL");
             if (!ok) ++failures;
         }
+
+        // Crosstalk at chi = 0.5, two rows with weights 10 and 20 and
+        // activations 1: row 0's input sees 10 + 0.5*20 = 20 and row 1's
+        // 20 + 0.5*10 = 25, so C = 45 where the exact sum is 30.
+        pta_cfg xt = {};
+        xt.impair = PTA_XTALK; xt.xtalk = 0x80; xt.seed = 1;
+        const std::vector<int> xa = {1, 1}, xb = {10, 20};
+        auto xtalk_case = [&](const char* what) {
+            std::vector<int32_t> A(xa.begin(), xa.end()), B(xb.begin(), xb.end());
+            std::vector<int64_t> C(1);
+            pta_gemm(&xt, &tile, &g_dev, 0, 1, 1, 2, A.data(), B.data(), C.data());
+            const Result r = run_case(1, 1, 2, dw, false, ActCfg{}, xt, &xa, &xb);
+            const bool ok = C[0] == 45 && r.ok;
+            printf("[PD] %-22s model C = %lld (want 45), RTL %s  %s\n", what,
+                   static_cast<long long>(C[0]), r.ok ? "matches model" : "DIFFERS from model",
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        };
+        xtalk_case("crosstalk");
+        // Leave 100 in row 2 from a K = 3 GEMM, then repeat.  Row 2 lies
+        // outside the K tile, so it must not couple: if it did, row 1 would see
+        // 20 + 0.5*(10 + 100) = 75 and C would be 95.
+        {
+            const std::vector<int> a3 = {0, 0, 0}, b3 = {10, 20, 100};
+            const Result r3 = run_case(1, 1, 3, dw, false, ActCfg{}, xt, &a3, &b3);
+            if (!r3.ok) ++failures;
+        }
+        xtalk_case("crosstalk, stale row");
+
+        // Drift, on one shape: weight 0 and activation 1 everywhere, so each
+        // result is its cell's drift, rounded to a weight LSB.
+        const int dM = 16, dN = 8, dK = 1;
+        const std::vector<int> da(static_cast<size_t>(dM) * dK, 1), db(static_cast<size_t>(dK) * dN, 0);
+        pta_cfg dr = {};
+        dr.impair = PTA_DRIFT; dr.seed = 3;
+        dr.drift_sigma = 0xFFFF;      // 256 weight LSB a step
+        dr.drift_max   = 0x0100;      // clamp at 1 weight LSB
+        auto drift_case = [&](const char* what, int log2, uint32_t sigma,
+                              int want_nonzero_min, int want_nonzero_max,
+                              const std::vector<int32_t>* same_as) {
+            dr.drift_log2 = log2; dr.drift_sigma = sigma;
+            const Result r = run_case(dM, dN, dK, dw, false, ActCfg{}, dr, &da, &db);
+            const std::vector<int32_t> c = read_c(dM, dN);
+            int nonzero = 0, out_of_bound = 0;
+            for (int32_t v : c) { if (v != 0) ++nonzero; if (v < -1 || v > 1) ++out_of_bound; }
+            // Held drift: every shot sees the drift the last GEMM ended with,
+            // so every row equals that GEMM's last row.
+            bool held = true;
+            if (same_as)
+                for (int m = 0; m < dM; ++m)
+                    for (int n = 0; n < dN; ++n)
+                        if (c[m * dN + n] != (*same_as)[n]) held = false;
+            const bool ok = r.ok && out_of_bound == 0 && held &&
+                            nonzero >= want_nonzero_min && nonzero <= want_nonzero_max;
+            printf("[PD] %-22s RTL %s, %d of %d results off zero, %d past the bound%s  %s\n", what,
+                   r.ok ? "matches model" : "DIFFERS from model", nonzero, dM * dN, out_of_bound,
+                   same_as ? (held ? ", unchanged" : ", CHANGED") : "", ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+            return c;
+        };
+        model_reset(0x0D1F7u);
+        // From a reset, drift is zero until its clock first fills: 16 shots, a
+        // step every 32.
+        drift_case("drift, before a step", 5, 0xFFFF, 0, 0, nullptr);
+        // A step every shot at 256 LSB: nearly every cell pinned at +-1 LSB.
+        const std::vector<int32_t> pinned = drift_case("drift, at its bound", 0, 0xFFFF,
+                                                       dM * dN * 9 / 10, dM * dN, nullptr);
+        const std::vector<int32_t> last(pinned.end() - dN, pinned.end());
+        // Sigma 0: the clock and the generator still run, but nothing moves.
+        drift_case("drift, held", 0, 0, dM * dN * 9 / 10, dM * dN, &last);
+        model_reset(0x0D1F7u);
+        drift_case("drift, after a reset", 5, 0xFFFF, 0, 0, nullptr);
     } else if (pta_gate) {
         int idx = 0;
         int moved_cases = 0;
+        model_reset(0x5EED0001u);
         for (auto& c : cases) {
+            if (pta_mode == "drift" && idx == 6) g_busy_rst_at = 40;          // ignored
+            if (pta_mode == "drift" && idx == 9) model_reset(0x5EED0009u);    // honoured
             const pta_cfg cfg = pta_gate_cfg(pta_mode, idx++, dw);
             const Result r = run_case(c.M, c.N, c.K, dw, false, ActCfg{}, cfg);
             const bool ok = r.ok && static_cast<long>(r.pta_sats) == r.model_pta_sats;
@@ -620,17 +764,19 @@ int main(int argc, char** argv) {
         struct Bad { const char* what; uint32_t impair; int prec; uint32_t shift; };
         std::vector<Bad> bad;
         if (tile == "ptm_c") {
-            bad = {{"DRIFT, not built", PTA_DRIFT, 0, 8},
-                   {"XTALK, not built", PTA_XTALK, 0, 8},
-                   {"MZM_NL, not built", PTA_MZM_NL, 0, 8},
+            bad = {{"MZM_NL, not built", PTA_MZM_NL, 0, 8},
                    {"QUANT with FP16", PTA_QUANT, 2, 8},
                    {"THERMAL with BF16", PTA_THERMAL, 3, 8},
+                   {"DRIFT with FP16", PTA_DRIFT, 2, 8},
+                   {"XTALK with BF16", PTA_XTALK, 3, 8},
                    {"QUANT with S = 41", PTA_QUANT, 0, 41}};
         } else {
             bad = {{"QUANT, digital array", PTA_QUANT, 0, 8},
                    {"THERMAL, digital array", PTA_THERMAL, 0, 8},
                    {"SHOT, digital array", PTA_SHOT, 0, 8},
-                   {"PROG_ERR, digital array", PTA_PROG_ERR, 0, 8}};
+                   {"PROG_ERR, digital array", PTA_PROG_ERR, 0, 8},
+                   {"DRIFT, digital array", PTA_DRIFT, 0, 8},
+                   {"XTALK, digital array", PTA_XTALK, 0, 8}};
         }
         for (const auto& b : bad) {
             pta_cfg cfg = {};
@@ -727,6 +873,7 @@ int main(int argc, char** argv) {
 
     dut->final();
     delete dut;
+    pta_device_free(&g_dev);
 
     if (!sweep)
         printf(failures ? "[core] %d FAILURES\n" : "[core] all cases passed\n", failures);

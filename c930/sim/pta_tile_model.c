@@ -14,6 +14,7 @@
 #define K_THERMAL 0x9E3779B9u
 #define K_SHOT    0x3C6EF372u
 #define K_PROG    0xDAA66D2Bu
+#define K_DRIFT   0x78DDE6E4u
 
 /* floor(x / 2^s), for 0 <= s <= 62 */
 static int64_t asr64(int64_t x, int s)
@@ -84,6 +85,65 @@ static uint32_t stream_seed(uint32_t seed, uint32_t k)
     return (seed ^ k) == 0 ? k : (seed ^ k);
 }
 
+/* One Gaussian step of sigma (Q8.8) from a stream: (sigma * gs + 2^15) >>> 16. */
+static int64_t gauss_step(uint32_t *s, uint32_t sigma)
+{
+    *s = pta_xorshift32(*s);
+    return asr64((int64_t)sigma * pta_gauss(*s) + 32768, 16);
+}
+
+int pta_device_init(pta_device *dev, const pta_tile *tile)
+{
+    const size_t n = (size_t)tile->rows * (size_t)tile->cols;
+    dev->rows     = tile->rows;
+    dev->cols     = tile->cols;
+    dev->drift[0] = (int32_t *)calloc(n, sizeof *dev->drift[0]);
+    dev->drift[1] = (int32_t *)calloc(n, sizeof *dev->drift[1]);
+    dev->rng      = K_DRIFT;
+    dev->count    = 0;
+    if (!dev->drift[0] || !dev->drift[1]) {
+        pta_device_free(dev);
+        return -1;
+    }
+    return 0;
+}
+
+void pta_device_free(pta_device *dev)
+{
+    free(dev->drift[0]);
+    free(dev->drift[1]);
+    dev->drift[0] = dev->drift[1] = NULL;
+}
+
+void pta_model_reset(pta_device *dev, uint32_t seed)
+{
+    int b, i;
+    for (b = 0; b < 2; ++b)
+        for (i = 0; i < dev->rows * dev->cols; ++i)
+            dev->drift[b][i] = 0;
+    dev->rng   = stream_seed(seed, K_DRIFT);
+    dev->count = 0;
+}
+
+void pta_shot_start(pta_device *dev, const pta_cfg *cfg)
+{
+    const int64_t lim = (int64_t)cfg->drift_max;
+    int b, i;
+    if ((uint64_t)dev->count + 1u < (1ull << cfg->drift_log2)) {
+        ++dev->count;
+        return;
+    }
+    dev->count = 0;
+    /* bank, then row, then column: row-major storage is that order */
+    for (b = 0; b < 2; ++b)
+        for (i = 0; i < dev->rows * dev->cols; ++i) {
+            int64_t d = (int64_t)dev->drift[b][i] + gauss_step(&dev->rng, cfg->drift_sigma);
+            if (d > lim)  d = lim;
+            if (d < -lim) d = -lim;
+            dev->drift[b][i] = (int32_t)d;
+        }
+}
+
 void pta_start(pta_streams *st, uint32_t seed)
 {
     st->thermal = stream_seed(seed, K_THERMAL);
@@ -93,12 +153,17 @@ void pta_start(pta_streams *st, uint32_t seed)
 
 int32_t pta_weight_write(pta_streams *st, const pta_cfg *cfg)
 {
-    st->prog = pta_xorshift32(st->prog);
-    return (int32_t)asr64((int64_t)cfg->sigma_pr * pta_gauss(st->prog) + 32768, 16);
+    return (int32_t)gauss_step(&st->prog, cfg->sigma_pr);
+}
+
+int64_t pta_analog_weight(const pta_cfg *cfg, int din_w, int32_t w, int32_t e, int32_t d)
+{
+    const int64_t wq = (cfg->impair & PTA_QUANT) ? pta_quant(w, cfg->w_bits, din_w) : w;
+    return wq * 256 + ((cfg->impair & PTA_PROG_ERR) ? e : 0) + ((cfg->impair & PTA_DRIFT) ? d : 0);
 }
 
 int64_t pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
-                    const int32_t *a, const int32_t *w, const int32_t *e, int *sat)
+                    const int32_t *a, const int64_t *wa, int kr, int *sat)
 {
     const int quant = (cfg->impair & PTA_QUANT) != 0;
     const int S     = (int)cfg->adc_shift;
@@ -110,9 +175,17 @@ int64_t pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
 
     for (r = 0; r < tile->rows; ++r) {
         const int64_t xa = quant ? pta_quant(a[r], cfg->act_bits, tile->din_w) : a[r];
-        const int64_t wq = quant ? pta_quant(w[r], cfg->w_bits, tile->din_w) : w[r];
-        const int64_t wa = wq * 256 + ((cfg->impair & PTA_PROG_ERR) ? e[r] : 0);
-        y += xa * wa;                                       /* Q.8, tile units */
+        int64_t wx = wa[r];
+        if (cfg->impair & PTA_XTALK) {
+            /* the input's light also passes the neighbouring rows' rings */
+            int64_t nb = 0;
+            if (r > 0 && r - 1 < kr)
+                nb += wa[r - 1];
+            if (r < tile->rows - 1 && r + 1 < kr)
+                nb += wa[r + 1];
+            wx += asr64((int64_t)cfg->xtalk * nb + 128, 8);
+        }
+        y += xa * wx;                                       /* Q.8, tile units */
     }
 
     st->thermal = pta_xorshift32(st->thermal);
@@ -149,25 +222,26 @@ int64_t pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
     return sext((uint64_t)out, tile->acc_w);
 }
 
-long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, int M, int N, int K,
-              const int32_t *A, const int32_t *B, int64_t *C)
+long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int bank,
+              int M, int N, int K, const int32_t *A, const int32_t *B, int64_t *C)
 {
     const int R  = tile->rows;
     const int NC = tile->cols;
     pta_streams st;
-    int32_t *w, *e, *a, *wc, *ec;
+    int32_t *w, *e, *a;
+    int64_t *wa;
     long sats = 0;
     int i, n_base, k_base, m, n, r;
 
-    if (M < 1 || N < 1 || K < 1 || R < 1 || NC < 1 || tile->acc_w < 2 || tile->acc_w > 64)
+    if (M < 1 || N < 1 || K < 1 || R < 1 || NC < 1 || tile->acc_w < 2 || tile->acc_w > 64 ||
+        bank < 0 || bank > 1 || dev->rows != R || dev->cols != NC)
         return -1;
     w  = (int32_t *)calloc((size_t)R * (size_t)NC, sizeof *w);
     e  = (int32_t *)calloc((size_t)R * (size_t)NC, sizeof *e);
     a  = (int32_t *)calloc((size_t)R, sizeof *a);
-    wc = (int32_t *)calloc((size_t)R, sizeof *wc);
-    ec = (int32_t *)calloc((size_t)R, sizeof *ec);
-    if (!w || !e || !a || !wc || !ec) {
-        free(w); free(e); free(a); free(wc); free(ec);
+    wa = (int64_t *)calloc((size_t)R, sizeof *wa);
+    if (!w || !e || !a || !wa) {
+        free(w); free(e); free(a); free(wa);
         return -1;
     }
 
@@ -186,19 +260,20 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, int M, int N, int K,
                     e[r * NC + n] = pta_weight_write(&st, cfg);
                 }
             for (m = 0; m < M; ++m) {
-                /* Rows past the K tile carry no activation, so their stale
-                 * weights multiply zero, as in the RTL. */
+                /* One shot.  Rows past the K tile carry no activation, and no
+                 * weight for crosstalk, so their stale values never matter. */
+                if (cfg->impair & PTA_DRIFT)
+                    pta_shot_start(dev, cfg);
                 for (r = 0; r < R; ++r)
                     a[r] = (r < kr) ? A[m * K + k_base + r] : 0;
                 for (n = 0; n < nc; ++n) {
                     int sat;
                     int64_t out;
                     int64_t *cell = &C[m * N + n_base + n];
-                    for (r = 0; r < R; ++r) {
-                        wc[r] = w[r * NC + n];
-                        ec[r] = e[r * NC + n];
-                    }
-                    out   = pta_element(&st, cfg, tile, a, wc, ec, &sat);
+                    for (r = 0; r < R; ++r)
+                        wa[r] = pta_analog_weight(cfg, tile->din_w, w[r * NC + n], e[r * NC + n],
+                                                  dev->drift[bank][r * NC + n]);
+                    out   = pta_element(&st, cfg, tile, a, wa, kr, &sat);
                     *cell = sext((uint64_t)*cell + (uint64_t)out, tile->acc_w);
                     sats += sat;
                 }
@@ -206,6 +281,6 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, int M, int N, int K,
         }
     }
 
-    free(w); free(e); free(a); free(wc); free(ec);
+    free(w); free(e); free(a); free(wa);
     return sats;
 }
