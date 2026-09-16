@@ -155,7 +155,7 @@ module c930_ptm_c
 `endif
     v = v ^ (v >> 17);
     v = v ^ (v << 5);
-    return v;
+    xorshift32 = v;
   endfunction
 
   // (sum of the four bytes - 510) * 443: about N(0, 1) * 2^16
@@ -163,11 +163,11 @@ module c930_ptm_c
     logic signed [10:0] g;
     g = $signed({3'b0, s[31:24]}) + $signed({3'b0, s[23:16]}) +
         $signed({3'b0, s[15:8]})  + $signed({3'b0, s[7:0]}) - 11'sd510;
-    return g * 20'sd443;
+    gauss = g * 20'sd443;
   endfunction
 
   function automatic logic [31:0] stream_seed(input logic [31:0] seed, input logic [31:0] k);
-    return ((seed ^ k) == 32'd0) ? k : (seed ^ k);
+    stream_seed = ((seed ^ k) == 32'd0) ? k : (seed ^ k);
   endfunction
 
   // c930_npu_act's isqrt4, unchanged: a leading-zero count and a four-entry
@@ -187,7 +187,7 @@ module c930_ptm_c
               byte_sel[5] ? 3'd5 : byte_sel[4] ? 3'd4 :
               byte_sel[3] ? 3'd3 : byte_sel[2] ? 3'd2 :
               byte_sel[1] ? 3'd1 : 3'd0;
-    return {byte_idx, bit_idx};
+    msb24 = {byte_idx, bit_idx};
   endfunction
 
   function automatic logic [12:0] isqrt4(input logic [23:0] a);
@@ -198,36 +198,42 @@ module c930_ptm_c
     logic [12:0] lo, hi;
     logic [22:0] prod;
     logic [12:0] rn;
-    if (a == 24'd0) return 13'd0;
-    p   = msb24(a);
-    e   = 4'(p >> 1);
-    th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
-    seg = th[7:6] - 2'd1;
-    case (seg)
-      2'd0:    begin lo = 13'd2048; hi = 13'd2896; end
-      2'd1:    begin lo = 13'd2896; hi = 13'd3547; end
-      default: begin lo = 13'd3547; hi = 13'd4096; end
-    endcase
-    prod = 23'(hi - lo) * 23'(th[5:0]);
-    rn   = lo + 13'(prod >> 6);
-    return rn >> (4'd11 - e);
+    if (a == 24'd0) begin
+      isqrt4 = 13'd0;
+    end else begin
+      p   = msb24(a);
+      e   = 4'(p >> 1);
+      th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
+      seg = th[7:6] - 2'd1;
+      case (seg)
+        2'd0:    begin lo = 13'd2048; hi = 13'd2896; end
+        2'd1:    begin lo = 13'd2896; hi = 13'd3547; end
+        default: begin lo = 13'd3547; hi = 13'd4096; end
+      endcase
+      prod = 23'(hi - lo) * 23'(th[5:0]);
+      rn   = lo + 13'(prod >> 6);
+      isqrt4 = rn >> (4'd11 - e);
+    end
   endfunction
 
   // q(x, B) over the DIN_W-bit operand range: round half up, saturate.
   function automatic int quant(input int x, input int b);
     int h, v, hi, lo;
-    if (b == 0 || b >= DIN_W) return x;
-    h  = DIN_W - b;
+    if (b == 0 || b >= DIN_W) begin
+      quant = x;
+    end else begin
+      h  = DIN_W - b;
 `ifdef PTM_C_ABLATE_QROUND
-    v  = x >>> h;
+      v  = x >>> h;
 `else
-    v  = (x + (1 << (h - 1))) >>> h;
+      v  = (x + (1 << (h - 1))) >>> h;
 `endif
-    hi = (1 << (b - 1)) - 1;
-    lo = -(1 << (b - 1));
-    if (v > hi) v = hi;
-    if (v < lo) v = lo;
-    return v <<< h;
+      hi = (1 << (b - 1)) - 1;
+      lo = -(1 << (b - 1));
+      if (v > hi) v = hi;
+      if (v < lo) v = lo;
+      quant = v <<< h;
+    end
   endfunction
 
   // ---- Weight banks, written as the array's PEs write theirs ----
@@ -476,8 +482,8 @@ module c930_ptm_c
     e  = i_bank_sel ? e_bank1[r][c] : e_bank0[r][c];
     d  = i_bank_sel ? d_bank1[r][c] : d_bank0[r][c];
     wq = impair_r[IMP_QUANT] ? 64'(quant(int'(w), int'(wbits_r))) : 64'(w);
-    return wq * 64'sd256 + (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0)
-                         + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0);
+    analog_w = wq * 64'sd256 + (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0)
+                              + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0);
   endfunction
 
   // Row r's weight as its input sees it.  With XTALK, the input's light also
@@ -485,16 +491,19 @@ module c930_ptm_c
   // tile or outside the K tile holds no weight for it.
   function automatic logic signed [63:0] coupled_w(input int r, input int c);
     logic signed [63:0] nb;
-    if (!impair_r[IMP_XTALK]) return analog_w(r, c);
-    nb = 64'sd0;
+    if (!impair_r[IMP_XTALK]) begin
+      coupled_w = analog_w(r, c);
+    end else begin
+      nb = 64'sd0;
 `ifdef PTM_C_ABLATE_XTALK
-    if (r > 0)     nb = nb + analog_w(r - 1, c);
-    if (r < R - 1) nb = nb + analog_w(r + 1, c);
+      if (r > 0)     nb = nb + analog_w(r - 1, c);
+      if (r < R - 1) nb = nb + analog_w(r + 1, c);
 `else
-    if (r > 0     && i_row_en[r - 1]) nb = nb + analog_w(r - 1, c);
-    if (r < R - 1 && i_row_en[r + 1]) nb = nb + analog_w(r + 1, c);
+      if (r > 0     && i_row_en[r - 1]) nb = nb + analog_w(r - 1, c);
+      if (r < R - 1 && i_row_en[r + 1]) nb = nb + analog_w(r + 1, c);
 `endif
-    return analog_w(r, c) + (($signed({56'd0, chi_r}) * nb + 64'sd128) >>> 8);
+      coupled_w = analog_w(r, c) + (($signed({56'd0, chi_r}) * nb + 64'sd128) >>> 8);
+    end
   endfunction
 
   // ---- The shot, integer columns ----
@@ -532,7 +541,7 @@ module c930_ptm_c
       end
     end
     if (!modelled)
-      return {1'b0, seed + y[ACC_W-1:0]};
+      int_column = {1'b0, seed + y[ACC_W-1:0]};
 
     s       = int'(shift_r);
     b       = int'(adcbits_r);
@@ -558,7 +567,7 @@ module c930_ptm_c
     end else begin
       outw = (z + 80'sd128) >>> 8;
     end
-    return {clamped, seed + outw[ACC_W-1:0]};
+    int_column = {clamped, seed + outw[ACC_W-1:0]};
   endfunction
 
   // ---- Re-skew: the hop-edge register the array's last PE row would be ----

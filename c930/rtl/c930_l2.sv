@@ -157,7 +157,7 @@ module c930_l2
     m = '0;
     for (int s = 0; s < NUM_SRC; s++)
       if (sharers[s]) m |= inv_port_of_src[s];
-    return m;
+    inv_mask_of_sharers = m;
   endfunction
 
   // ---------------------------------------------------------------------------
@@ -276,27 +276,25 @@ module c930_l2
                                           input logic [7:0] seq_floor);
     for (int e = 0; e < WR_LOG_DEPTH; e++)
       if (wr_log_valid[e] && wr_log_line[e] == line && wr_log_seq[e] >= seq_floor)
-        return e;
-    return -1;
+        wr_log_match_idx = e;
+    wr_log_match_idx = -1;
   endfunction
 
   // ===========================================================================
   // READ PATH (independent FSM)
   // ===========================================================================
-  typedef enum logic [3:0] {
-    RD_IDLE       = 4'd0,
-    RD_LOOKUP     = 4'd1,
-    RD_EVICT_INV  = 4'd2,
-    RD_BYPASS_AR  = 4'd3,
-    RD_BYPASS_R   = 4'd4,
-    RD_REFILL_AR  = 4'd5,
-    RD_REFILL_R   = 4'd6,
-    RD_REFILL_CHK = 4'd7,
-    RD_HIT_SERVE  = 4'd8,
-    RD_ALLOC      = 4'd9
-  } rd_state_t;
+  localparam logic [3:0] RD_IDLE       = 4'd0;
+  localparam logic [3:0] RD_LOOKUP     = 4'd1;
+  localparam logic [3:0] RD_EVICT_INV  = 4'd2;
+  localparam logic [3:0] RD_BYPASS_AR  = 4'd3;
+  localparam logic [3:0] RD_BYPASS_R   = 4'd4;
+  localparam logic [3:0] RD_REFILL_AR  = 4'd5;
+  localparam logic [3:0] RD_REFILL_R   = 4'd6;
+  localparam logic [3:0] RD_REFILL_CHK = 4'd7;
+  localparam logic [3:0] RD_HIT_SERVE  = 4'd8;
+  localparam logic [3:0] RD_ALLOC      = 4'd9;
 
-  rd_state_t rd_state;
+  logic [3:0] rd_state;
   logic [ADDR_WIDTH-1:0]  rd_addr;
   logic [ID_WIDTH-1:0]    rd_id;
   logic [7:0]             rd_len;
@@ -615,15 +613,13 @@ module c930_l2
   // ===========================================================================
   // WRITE PATH (independent FSM)
   // ===========================================================================
-  typedef enum logic [3:0] {
-    WR_IDLE   = 4'd0,
-    WR_LOOKUP = 4'd4,  // directory lookup for one line of the burst
-    WR_INV    = 4'd1,
-    WR_FWD    = 4'd2,
-    WR_B      = 4'd3
-  } wr_state_t;
+  localparam logic [3:0] WR_IDLE   = 4'd0;
+  localparam logic [3:0] WR_LOOKUP = 4'd4;  // directory lookup for one line of the burst
+  localparam logic [3:0] WR_INV    = 4'd1;
+  localparam logic [3:0] WR_FWD    = 4'd2;
+  localparam logic [3:0] WR_B      = 4'd3;
 
-  wr_state_t wr_state;
+  logic [3:0] wr_state;
   logic [ADDR_WIDTH-1:0]  wr_addr;
   logic [ID_WIDTH-1:0]    wr_id;
   logic [7:0]             wr_len;

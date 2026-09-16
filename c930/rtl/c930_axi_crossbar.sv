@@ -302,39 +302,36 @@ module c930_axi_crossbar
   localparam logic [63:0] UART_BASE     = 64'h4000_1000;
   localparam logic [63:0] UART_END      = 64'h4000_100F;
 
-  typedef enum logic [1:0] {
-    SLAVE_BOOT_ROM = 2'd0,
-    SLAVE_DDR      = 2'd1,
-    SLAVE_MMIO     = 2'd2,
-    SLAVE_UART     = 2'd3
-  } slave_idx_t;
+  // Slave index encoding (Yosys-compatible: no typedef enum)
+  localparam logic [1:0] SLAVE_BOOT_ROM = 2'd0;
+  localparam logic [1:0] SLAVE_DDR      = 2'd1;
+  localparam logic [1:0] SLAVE_MMIO     = 2'd2;
+  localparam logic [1:0] SLAVE_UART     = 2'd3;
 
   // Unmapped address placeholder (not a real slave index)
   localparam logic [1:0] SLAVE_UNMAP = 2'b11;  // same encoding as UART, will SLVERR
 
-  function automatic slave_idx_t decode_addr(input logic [63:0] addr);
+  function automatic logic [1:0] decode_addr(input logic [63:0] addr);
     if (addr >= DDR_BASE && addr <= DDR_END)
-      return SLAVE_DDR;
+      decode_addr = SLAVE_DDR;
     else if (addr >= BOOT_ROM_BASE && addr <= BOOT_ROM_END)
-      return SLAVE_BOOT_ROM;
+      decode_addr = SLAVE_BOOT_ROM;
     else if (addr >= UART_BASE && addr <= UART_END)
-      return SLAVE_UART;
+      decode_addr = SLAVE_UART;
     else if (addr >= MMIO_BASE && addr <= MMIO_END)
-      return SLAVE_MMIO;
+      decode_addr = SLAVE_MMIO;
     else
-      return SLAVE_UART;  // unmapped: route to UART (will get SLVERR response)
+      decode_addr = SLAVE_UART;  // unmapped: route to UART (will get SLVERR response)
   endfunction
 
   // =========================================================================
   // Read channel arbitration (round-robin)
   // =========================================================================
-  typedef enum logic [1:0] {
-    R_IDLE    = 2'd0,
-    R_GRANTED = 2'd1,
-    R_DONE    = 2'd2
-  } r_state_t;
+  localparam logic [1:0] R_IDLE    = 2'd0;
+  localparam logic [1:0] R_GRANTED = 2'd1;
+  localparam logic [1:0] R_DONE    = 2'd2;
 
-  r_state_t r_state;
+  logic [1:0] r_state;
   logic [1:0] r_grant;       // which master has read grant
   logic [1:0] r_rr_ptr;      // round-robin pointer
   logic       r_active;       // transaction in progress
@@ -366,7 +363,7 @@ module c930_axi_crossbar
   end
 
   // Read address decode per master
-  slave_idx_t r_slave [3:0];
+  logic [1:0] r_slave [3:0];
   assign r_slave[0] = decode_addr(m0_araddr);
   assign r_slave[1] = decode_addr(m1_araddr);
   assign r_slave[2] = decode_addr(m2_araddr);
@@ -434,13 +431,11 @@ module c930_axi_crossbar
   // =========================================================================
   // Write channel arbitration (round-robin)
   // =========================================================================
-  typedef enum logic [1:0] {
-    W_IDLE    = 2'd0,
-    W_GRANTED = 2'd1,
-    W_DONE    = 2'd2
-  } w_state_t;
+  localparam logic [1:0] W_IDLE    = 2'd0;
+  localparam logic [1:0] W_GRANTED = 2'd1;
+  localparam logic [1:0] W_DONE    = 2'd2;
 
-  w_state_t w_state;
+  logic [1:0] w_state;
   logic [1:0] w_grant;
   logic [1:0] w_rr_ptr;
   logic       w_active;
@@ -470,7 +465,7 @@ module c930_axi_crossbar
     end
   end
 
-  slave_idx_t w_slave [3:0];
+  logic [1:0] w_slave [3:0];
   assign w_slave[0] = decode_addr(m0_awaddr);
   assign w_slave[1] = decode_addr(m1_awaddr);
   assign w_slave[2] = decode_addr(m2_awaddr);
@@ -696,7 +691,7 @@ module c930_axi_crossbar
   // =========================================================================
   // Shared bus → Slave demultiplexing (read)
   // =========================================================================
-  slave_idx_t r_active_slave;
+  logic [1:0] r_active_slave;
   // Combinational: select slave based on current or next grant
   always_comb begin
     if (r_state == R_GRANTED && r_active) begin
@@ -764,7 +759,7 @@ module c930_axi_crossbar
   // =========================================================================
   // Shared bus → Slave demultiplexing (write)
   // =========================================================================
-  slave_idx_t w_active_slave;
+  logic [1:0] w_active_slave;
   always_comb begin
     if (w_state == W_GRANTED && w_active) begin
       case (w_grant)

@@ -187,7 +187,7 @@ module c930_npu_act
               byte_sel[5] ? 3'd5 : byte_sel[4] ? 3'd4 :
               byte_sel[3] ? 3'd3 : byte_sel[2] ? 3'd2 :
               byte_sel[1] ? 3'd1 : 3'd0;
-    return {byte_idx, bit_idx};          // 8*byte_idx + bit_idx
+    msb24 = {byte_idx, bit_idx};          // 8*byte_idx + bit_idx
   endfunction
 
   function automatic logic [12:0] isqrt4(input logic [23:0] a);
@@ -198,19 +198,22 @@ module c930_npu_act
     logic [12:0] lo, hi;
     logic [22:0] prod;
     logic [12:0] rn;
-    if (a == 24'd0) return 13'd0;
-    p = msb24(a);
-    e   = 4'(p >> 1);
-    th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
-    seg = th[7:6] - 2'd1;
-    case (seg)
-      2'd0:    begin lo = 13'd2048; hi = 13'd2896; end
-      2'd1:    begin lo = 13'd2896; hi = 13'd3547; end
-      default: begin lo = 13'd3547; hi = 13'd4096; end
-    endcase
-    prod = 23'(hi - lo) * 23'(th[5:0]);
-    rn   = lo + 13'(prod >> 6);
-    return rn >> (4'd11 - e);
+    if (a == 24'd0) begin
+      isqrt4 = 13'd0;
+    end else begin
+      p = msb24(a);
+      e   = 4'(p >> 1);
+      th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
+      seg = th[7:6] - 2'd1;
+      case (seg)
+        2'd0:    begin lo = 13'd2048; hi = 13'd2896; end
+        2'd1:    begin lo = 13'd2896; hi = 13'd3547; end
+        default: begin lo = 13'd3547; hi = 13'd4096; end
+      endcase
+      prod = 23'(hi - lo) * 23'(th[5:0]);
+      rn   = lo + 13'(prod >> 6);
+      isqrt4 = rn >> (4'd11 - e);
+    end
   endfunction
 
   function automatic logic [31:0] xorshift32(input logic [31:0] s);
@@ -218,7 +221,7 @@ module c930_npu_act
     v = s ^ (s << 13);
     v = v ^ (v >> 17);
     v = v ^ (v << 5);
-    return v;
+    xorshift32 = v;
   endfunction
 
   logic [31:0]        rng, rng_next;
