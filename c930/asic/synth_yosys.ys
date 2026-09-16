@@ -1,0 +1,137 @@
+# synth_yosys.ys — Yosys synthesis script for GRX930 → SKY130
+#
+# Usage:
+#   cd c930/asic
+#   yosys -s synth_yosys.ys 2>&1 | tee synth.log
+#
+# Prerequisites:
+#   - SKY130 PDK installed at $PDK_ROOT (or /usr/local/share/pdk/sky130A)
+#   - Yosys built with SKY130 cell library support
+#
+# Output:
+#   build/c930_soc_synth.v    — gate-level Verilog
+#   build/c930_soc_synth.blif — BLIF netlist
+#   build/c930_soc_synth.json — JSON netlist (for OpenROAD)
+
+# ============================================================
+# Configuration
+# ============================================================
+set TOP c930_soc_top
+set BUILD_DIR build
+
+# SKY130 standard cell library (typical corner, 1.8V, 25°C)
+set LIB "sky130_fd_sc_hd__tt_025C_1v80"
+
+# ============================================================
+# 1. Read RTL
+# ============================================================
+# ASIC wrapper (replaces BUFG, DSP48E1)
+read_verilog -sv sky130_asic_wrapper.sv
+
+# C930 SoC RTL (all .sv files except DDR behavioral model)
+read_verilog -sv ../rtl/c930_aplic.sv
+read_verilog -sv ../rtl/c930_axi_cache_adapter.sv
+read_verilog -sv ../rtl/c930_axi_crossbar.sv
+read_verilog -sv ../rtl/c930_axi_dma_arb.sv
+read_verilog -sv ../rtl/c930_bf16_mul.sv
+read_verilog -sv ../rtl/c930_bootrom.sv
+read_verilog -sv ../rtl/c930_cla_comp.sv
+read_verilog -sv ../rtl/c930_cla_sub.sv
+read_verilog -sv ../rtl/c930_ddr.sv
+read_verilog -sv ../rtl/c930_fp16_acc.sv
+read_verilog -sv ../rtl/c930_fp16_acc_nf.sv
+read_verilog -sv ../rtl/c930_fp16_mul.sv
+read_verilog -sv ../rtl/c930_fp32_acc.sv
+read_verilog -sv ../rtl/c930_fp_mul.sv
+read_verilog -sv ../rtl/c930_fx_acc.sv
+read_verilog -sv ../rtl/c930_l2.sv
+read_verilog -sv ../rtl/c930_mmio_arb.sv
+read_verilog -sv ../rtl/c930_mmio_bridge.sv
+read_verilog -sv ../rtl/c930_npu_act.sv
+read_verilog -sv ../rtl/c930_npu_core.sv
+read_verilog -sv ../rtl/c930_npu_csr.sv
+read_verilog -sv ../rtl/c930_npu_dma.sv
+read_verilog -sv ../rtl/c930_npu_top.sv
+read_verilog -sv ../rtl/c930_systolic_array.sv
+read_verilog -sv ../rtl/c930_tensor_pe.sv
+read_verilog -sv ../rtl/c930_uart.sv
+read_verilog -sv ../rtl/c930_soc_top.sv
+read_verilog -sv ../rtl/pta/c930_fp32_add.sv
+read_verilog -sv ../rtl/pta/c930_ptm_c.sv
+
+# RISC-V CPU core
+read_verilog -sv ../rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_ldextend.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mul_div_ctrl.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mul_in.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mul_out.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_non_restoring.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux4x1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_mux_2to1.sv
+read_verilog -sv ../rv64imac/RTL/riscv_core_64bit_adder.sv
+
+# Caches (use atomic variants for AMO support)
+read_verilog -sv ../rv64imac/RTL/caches/atomic_dcaches/riscv_core_dcache_controller.sv
+read_verilog -sv ../rv64imac/RTL/caches/atomic_dcaches/riscv_core_dcache_memory.sv
+read_verilog -sv ../rv64imac/RTL/caches/atomic_dcaches/riscv_core_dcache_top.sv
+read_verilog -sv ../rv64imac/RTL/caches/atomic_dcaches/riscv_core_amo_alu.sv
+read_verilog -sv ../rv64imac/RTL/caches/atomic_dcaches/riscv_core_mux_2to1.sv
+read_verilog -sv ../rv64imac/RTL/caches/riscv_core_icache_controller.sv
+read_verilog -sv ../rv64imac/RTL/caches/riscv_core_icache_memory.sv
+read_verilog -sv ../rv64imac/RTL/caches/riscv_core_icache_top.sv
+read_verilog -sv ../rv64imac/RTL/caches/riscv_core_ldextend.sv
+
+# Stub DDR for ASIC (BRAM-based 64KB)
+read_verilog -sv ../synth/c930_ddr_stub.sv
+
+# ============================================================
+# 2. Pre-synthesis elaboration
+# ============================================================
+hierarchy -top $TOP -check
+
+# ============================================================
+# 3. Synthesis (generic)
+# ============================================================
+# Flatten hierarchy for Yosys optimization, but preserve module boundaries
+# for the ASIC flow
+synth -top $TOP -flatten
+
+# ============================================================
+# 4. Technology mapping (SKY130)
+# ============================================================
+# Map generic logic to SKY130 standard cells
+# abc handles the actual cell mapping
+abc -liberty $LIB.lib
+
+# ============================================================
+# 5. Clean up
+# ============================================================
+clean
+stat
+
+# ============================================================
+# 6. Output
+# ============================================================
+write_verilog -noattr $BUILD_DIR/c930_soc_synth.v
+write_blif $BUILD_DIR/c930_soc_synth.blif
+write_json $BUILD_DIR/c930_soc_synth.json
+
+puts "SYNTHESIS_COMPLETE"

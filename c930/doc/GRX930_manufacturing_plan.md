@@ -10,7 +10,7 @@
 
 The GRX930 SoC has achieved full timing closure on FPGA (WNS +7.883 ns, Fmax ~121 MHz, 0 DRC errors) and passes 18/18 NPU GEMM sweeps across INT4/INT8/INT16/FP16/BF16. This document defines the path from validated RTL to fabricated silicon.
 
-**Recommended path:** SkyWater SKY130 via Efabless OpenMPW shuttle (~$15K, 14-week turnaround) as a first-silicon validation vehicle, followed by TSMC N28 for production if the shuttle succeeds.
+**Recommended path:** SkyWater SKY130 via Efabless ChipIgnite shuttle ($10K, ≤16 mm², 14-week turnaround) as a first-silicon validation vehicle, followed by TSMC N28 for production if the shuttle succeeds.
 
 **Estimated gate count:** ~1.2–1.5M NAND2-equivalent gates (derived from FPGA utilization)
 **Estimated die area (SKY130):** ~18–22 mm²
@@ -76,7 +76,7 @@ The FPGA design uses 125,735 LUT4s and 67,007 FFs on the xc7a200t. For ASIC esti
 | **Metal layers** | 4 |
 | **SRAM** | High-density bit-cells (130nm DTCO) |
 | **EDA tools** | Open-source (Yosys + OpenROAD + Magic) |
-| **Shuttle** | Efabless OpenMPW ($10K–$30K) |
+| **Shuttle** | Efabless ChipIgnite ($10K, ≤16 mm²) |
 | **Turnaround** | 14–16 weeks |
 | **Die area** | ~18–22 mm² for GRX930 |
 
@@ -132,7 +132,7 @@ Phase 1: SkyWater SKY130 (first silicon)
   ├── ASIC synthesis (Yosys + sky130_std_cell)
   ├── Place & route (OpenROAD)
   ├── Signoff DRC/LVS (Magic + Netgen)
-  ├── Tapeout via Efabless OpenMPW
+  ├── Tapeout via Efabless ChipIgnite
   └── Silicon validation (14–16 weeks)
 
 Phase 2: TSMC N28 (production, conditional on Phase 1 success)
@@ -147,11 +147,13 @@ Phase 2: TSMC N28 (production, conditional on Phase 1 success)
 
 ## 3. Cost Model
 
-### 3.1 SkyWater SKY130 (OpenMPW Shuttle)
+### 3.1 SkyWater SKY130 (Efabless ChipIgnite Shuttle)
+
+**Decision: ChipIgnite $10K tier (≤16 mm²)** — GRX930 is 12.1 mm², which exceeds the free OpenMPW tier (10 mm²) but fits comfortably in ChipIgnite's $10K tier.
 
 | Item | Cost | Notes |
 |------|------|-------|
-| Efabless shuttle fee | $10,000 | Includes GDS, 10 working dies |
+| Efabless ChipIgnite shuttle | $10,000 | ≤16 mm² die, includes GDS, ~20 working dies |
 | EDA tools | $0 | Yosys + OpenROAD + Magic |
 | IP licenses | $0 | SKY130 PDK is open-source |
 | SRAM macros | $0 | Open-source SRAM compiler (OpenRAM) |
@@ -159,6 +161,15 @@ Phase 2: TSMC N28 (production, conditional on Phase 1 success)
 | PCB test fixture | $1,000–$3,000 | Custom test board |
 | Characterization | $2,000–$5,000 | Basic I/O timing, power measurement |
 | **Total (first silicon)** | **$13,500–$20,000** | |
+
+**Area breakdown:**
+| Component | Area |
+|-----------|------|
+| Logic (1.6M gates) | 4.9 mm² |
+| SRAM macros (1.8M bits) | 7.2 mm² |
+| **Total** | **12.1 mm²** |
+| ChipIgnite limit | 16 mm² |
+| **Headroom** | **3.9 mm² (24%)** |
 
 ### 3.2 TSMC N28 (MPW Shuttle)
 
@@ -388,7 +399,7 @@ Week 3:  Signoff
 Week 4:  GDS generation + tapeout
          ├── GDS stream out (Magic)
          ├── Netlist + SPEF + constraints
-         └── Submit to Efabless OpenMPW
+         └── Submit to Efabless ChipIgnite
 Week 5–18: Fabrication + packaging (14 weeks)
 Week 19–20: Silicon validation
          ├── Probe test (wafer sort)
@@ -518,7 +529,7 @@ vvp build/asic/c930_soc.vvp
 
 ---
 
-## Appendix A: OpenMPW Submission Checklist
+## Appendix A: ChipIgnite Submission Checklist
 
 - [ ] GDS file generated (Magic `gds write`)
 - [ ] Netlist in Verilog format (not BLIF)
