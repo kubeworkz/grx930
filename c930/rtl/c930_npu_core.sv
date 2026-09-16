@@ -147,6 +147,13 @@ module c930_npu_core
   input  logic [15:0]                 i_pta_sigma_th,     // thermal sigma, Q8.8 ADC LSB
   input  logic [15:0]                 i_pta_k_shot,       // shot coefficient k, Q8.8
   input  logic [15:0]                 i_pta_sigma_pr,     // programming-error sigma, Q8.8 weight LSB
+  input  logic [15:0]                 i_pta_drift_sigma,  // drift step sigma, Q8.8 weight LSB
+  input  logic [4:0]                  i_pta_drift_log2,   // log2 shots per drift step
+  input  logic [15:0]                 i_pta_drift_max,    // drift clamp, Q8.8 weight LSB
+  input  logic [7:0]                  i_pta_xtalk,        // crosstalk chi, Q0.8
+  // Drift is device state: it persists across GEMMs, and this pulse, honoured
+  // only while idle, returns it to zero and reloads its generator from i_pta_seed.
+  input  logic                        i_pta_model_rst,
   output logic [31:0]                 o_pta_sat_count     // ADC saturations, captured elements
 );
 
@@ -370,7 +377,7 @@ module c930_npu_core
   // section 2): the digital array models none, so asking it for any would
   // silently return exact results under an analog label.
 `ifdef PTM_C
-  localparam logic [6:0] PTA_BUILT = 7'b100_0111;   // PROG_ERR, SHOT, THERMAL, QUANT
+  localparam logic [6:0] PTA_BUILT = 7'b101_1111;   // all but MZM_NL
 `else
   localparam logic [6:0] PTA_BUILT = 7'b000_0000;
 `endif
@@ -602,7 +609,8 @@ module c930_npu_core
   // edge that ends t = 2*NUM_ROWS + 1 + 2n (see S_RUN), from the shot the tile
   // registered one hop edge earlier, so the window with t = 2*NUM_ROWS + 2n
   // names column n.  Columns at or past nc are never written to C and draw
-  // nothing.
+  // nothing.  A shot -- one run of one output row over one K tile -- starts in
+  // the window with t = 0, which is where the drift clock counts it.
 `ifdef PTM_C_ABLATE_ROW
   localparam int PTM_ABLATE_ROW = `PTM_C_ABLATE_ROW;
 `else
@@ -612,6 +620,7 @@ module c930_npu_core
   wire              pta_shot     = (state == S_RUN) && (t >= 2*NUM_ROWS) && !t[0] &&
                                    (((t - 2*NUM_ROWS) >>> 1) < nc);
   wire [PTA_CW-1:0] pta_shot_col = PTA_CW'((t - 2*NUM_ROWS) >>> 1);
+  wire              pta_shot_start = (state == S_RUN) && (t == 0);
 
   c930_ptm_c #(
     .NUM_ROWS   (NUM_ROWS),
@@ -643,6 +652,12 @@ module c930_npu_core
     .i_pta_sigma_th  (i_pta_sigma_th),
     .i_pta_k_shot    (i_pta_k_shot),
     .i_pta_sigma_pr  (i_pta_sigma_pr),
+    .i_pta_drift_sigma (i_pta_drift_sigma),
+    .i_pta_drift_log2  (i_pta_drift_log2),
+    .i_pta_drift_max   (i_pta_drift_max),
+    .i_pta_xtalk       (i_pta_xtalk),
+    .i_pta_model_rst   (i_pta_model_rst && (state == S_IDLE)),
+    .i_pta_shot_start  (pta_shot_start),
     .i_pta_shot      (pta_shot),
     .i_pta_shot_col  (pta_shot_col),
     .o_pta_sat_count (o_pta_sat_count)
