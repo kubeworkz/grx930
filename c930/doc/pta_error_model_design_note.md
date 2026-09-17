@@ -1,6 +1,7 @@
 # PTA C1: the tile's error model
 
-**Status: all six of C1's impairments built and gated (§5), 2026-09-15.**
+**Status: C1 closed, 2026-09-16.** All six impairments are built and gated,
+and gate C1(a) has run: it missed at 3 bits, and the miss is recorded (§5).
 Decisions E1–E4 were settled on 2026-09-14 and E5–E8 on 2026-09-15.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
@@ -294,11 +295,179 @@ over its 14 shapes at `DIN_W` 8 and 16; the C reference is
   the stale-row case, and exactly the three gate shapes whose K tiles are
   partial: K = 1, 13 and 2.
 
+*Re-run on grx930 main 8e49242*, 2026-09-16. That commit turned PTM-C's
+`return` statements into assignments for Yosys. In `int_column`, the early
+return for an unmodelled column became a fall-through, so the modelled path
+overwrote the exact sum with the sum divided by 256, and P0 failed at all 14
+shapes. With the `else` back, P0–P6, the directed cases and the refusals pass
+again at `DIN_W` 8 and 16, and the four ablations fail exactly as before. With
+`PTM_C=1`, `make npu`, `make npu_float` (24/24) and `make ptm_c_lockstep`
+pass, and the row-3 ablation is red.
+
 The CPU document's gate C1(b) names the NPU DPI wrapper. The configuration is
 not on a CSR until C4, so the wrapper cannot reach it yet; the core harness
 carries the parity gate until then, and the wrapper takes it when C4 maps the
-ports. Gate C1(a), the accuracy sweep, runs on the D3 network once every
-impairment is green.
+ports.
+
+### Gate C1(a): the accuracy sweep
+
+**The network** is grxcp's D3, fixed here: a 784-100-10 MLP with ReLU on
+MNIST, trained as Gorsline, Smith and Merkel trained the network of their
+Fig. 3(c) (arXiv:2105.00227, §4). That means Adam at Keras' defaults, softmax
+with cross entropy, batches of 32, and the last 6,000 training images held out.
+Training stops at the first epoch whose held-out accuracy does not rise.
+Weights and biases stay in [−1, 1], and the forward pass rounds the weights to
+B bits. Here that rounding is the contract's `q`, applied to weights held as
+D-bit operands at 2^(D−1) per unit, so a network trained at B bits is exactly
+what the tile holds at `B_w = B`. Biases are added digitally at operand
+precision, since the paper's axis is weight bits.
+
+One step differs from the paper. The contract's quantiser rounds any weight
+inside ±2^(−B) to zero. Glorot's initial weights for this network lie within
+±0.082 in layer 1 and ±0.234 in layer 2, so at B ≤ 3 every initial layer-1
+weight rounds to zero. The hidden layer then starts at exactly zero, where ReLU
+passes no gradient, and only the output biases ever learn. The paper does not
+give its quantiser, and one with no zero level would not stall this way. So
+each network here starts from its seed's network trained at B = D, where only
+the operand grid rounds, and trains on at B bits by the same recipe, with Adam
+restarted. This was settled, and written here, after the criterion below and
+before any network was trained.
+
+`sim/pta_mnist.c` trains and
+evaluates the network, and `sim/pta_mnist.sh` runs everything below. MNIST is
+the four idx files from the CVDF mirror, checked against the MD5s torchvision
+lists.
+
+**How the tile runs it.** Pixels become operands at 2^(D−1) − 1 per unit and
+weights at 2^(D−1). Each layer runs as GEMMs the core accepts — at most 64
+rows, 256 inputs and 8 outputs — so a batch of 64 images takes 54 GEMMs, each
+with its own `PTA_SEED`. Layer 1 uses weight bank 0 and layer 2 bank 1. Every K
+tile is already its own shot and ADC read, so spreading 784 inputs over GEMMs of
+256 changes no arithmetic. The host adds the biases, applies ReLU, and rescales
+the hidden layer to operands by a power of two, set on the first 10,000 training
+images to clip at most 0.01% of activations. `pta_mnist selftest` holds this
+walk to direct integer sums, bit for bit, at `DIN_W` 8 and 16.
+
+**The criterion, fixed on 2026-09-16 before any network was trained.** At
+`DIN_W` 16, five networks are trained per weight width B = 1 … 10, with seeds
+1–5, and each runs the test set through the tile with QUANT at `B_w = B` and
+nothing else. The reference is Fig. 3(c)'s zero-attack curve, read from the
+PDF's vector coordinates: 94.85, 96.41, 97.59, 97.76, 97.67, 97.81, 97.83,
+97.61, 97.81 and 97.73% for B = 1 … 10.
+
+- *Pass:* for every B from 3 to 10, the five-network mean through the tile is
+  within 0.5 points of the curve, and at B = 2 within 1.0 point.
+- B = 1 is reported, not gated. At one bit the contract's quantiser has the
+  levels −1 and 0 only, which is not the paper's one-bit weight, whatever
+  that was.
+- Each network's digital accuracy — the same rounded weights, with
+  floating-point activations — is reported beside the tile's.
+
+*Ablation:* the model built with `PTA_MODEL_ABLATE_QROUND`, the RTL ablation's
+missing rounding term, runs the same networks. Training keeps the contract's
+rounding, so the tile truncates what the networks learned rounded, and the gate
+must fail.
+
+**Reported, not gated.** Five networks are trained at `DIN_W` 8 and
+`B_w = 6`, seeds 1–5, each from its seed's network at B = 8, and each setting
+runs once on each:
+
+- activation bits `B_a` from 2 to 7, alone;
+- ADC bits from 4 to 12, alone. Each layer's `S` is set on 1,000 training
+  images to clip at most 0.01% of K-tile sums;
+- with an 8-bit ADC set that way:
+  - thermal σ from 0.25 to 8 ADC LSB;
+  - shot noise from 100 down to 0.3 photons per ADC LSB (`k = 1/√p`);
+  - programming σ from 0.5 to 8 weight LSB;
+  - crosstalk χ from 1% to 20%;
+- drift at the TFLT and TFLN fits below, after 0.1, 1, 4, 12 and 46 hours.
+  The modelled device is aged by `pta_drift_age()`, which `selftest` holds
+  equal to the shot starts it replaces.
+
+**Drift's settings** answer §7's first question. The shot rate is grxcp's
+EO-res point run flat out: 2,048 shots per 25.6 µs GEMM, or 80 M shots/s. A
+step every 2^31 shots comes every 26.8 s, so the 46-hour test is 6,169 steps.
+Each fit sets the step σ so the RMS drift at 46 hours equals the upper reading
+of `pta_material_scorecard.py`'s bracket, in 8-bit weight LSB (four per 6-bit
+LSB), and clamps at twice that:
+
+| Fit | Swing over 46 h | RMS at 46 h | `PTA_DRIFT` σ | `PTA_DRIFT_MAX` |
+|---|---|---|---|---|
+| TFLT | under 1 dB | 16.9 LSB | 55 (0.21 LSB) | 8,643 (33.8 LSB) |
+| TFLN | 5 dB | 61.4 LSB | 200 (0.78 LSB) | 31,413 (122.7 LSB) |
+
+These are 8-bit units; §7's second question still stands for 16-bit operands.
+
+*Not met*, 2026-09-16. The miss is recorded, and C1 closes on it.
+
+| B | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Tile, mean of five | 89.98 | 95.91 | 96.98 | 97.41 | 97.50 | 97.54 | 97.49 | 97.62 | 97.65 | 97.50 |
+| Fig. 3(c) | 94.85 | 96.41 | 97.59 | 97.76 | 97.67 | 97.81 | 97.83 | 97.61 | 97.81 | 97.73 |
+| Difference | −4.87 | −0.50 | **−0.61** | −0.35 | −0.17 | −0.27 | −0.34 | +0.01 | −0.16 | −0.23 |
+| Ablated | 64.67 | 9.58 | 10.65 | 28.43 | 86.88 | 96.43 | 97.25 | 97.56 | 97.66 | 97.50 |
+
+- At B = 3 the mean is 0.61 points under the curve, outside the 0.5 allowed;
+  its five networks span 96.66–97.21%. Every other gated width is inside its
+  band.
+- The tile is not where the points went. On 48 of the 50 networks the tile's
+  accuracy equals the digital network's exactly. On the other two, both at
+  B = 2, it differs by one image in 10,000, once each way, where the host's
+  integer rescale meets floating point. The shortfall is in the networks: at
+  4 to 10 bits they average 0.22 points under the curve, and at 3 bits 0.61.
+  The paper gives neither its quantiser nor its stopping rule beyond early
+  stopping, so training and a different 3-bit quantiser cannot be told apart
+  here.
+- *Ablation, red:* truncating instead of rounding fails the gate at every width
+  from 2 to 7 — 9.6% at 2 bits, 28% at 4, 96.4% at 6 — and passes from 8 up,
+  where half a step no longer matters.
+
+**Reported results.** At `DIN_W` 8 and `B_w = 6`, with nothing else impaired,
+the tile gives 97.45%, the digital networks' own accuracy. Each figure is a
+mean of five networks, each run on its own seed:
+
+| Bits | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 |
+|---|---|---|---|---|---|---|---|---|---|
+| `B_a` | 22.33 | 93.86 | 96.84 | 97.29 | 97.38 | 97.43 | | | |
+| `B_adc` | | | 92.28 | 96.66 | 97.24 | 97.46 | 97.42 | 97.46 | 97.45 |
+
+With the 8-bit ADC, 97.42% before any noise:
+
+| Thermal σ, ADC LSB | 0.25 | 0.5 | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|---|
+| | 97.42 | 97.36 | 97.16 | 96.21 | 89.97 | 65.23 |
+
+| Shot noise, photons per ADC LSB | 100 | 30 | 10 | 3 | 1 | 0.3 |
+|---|---|---|---|---|---|---|
+| | 97.42 | 97.38 | 97.32 | 96.97 | 96.25 | 91.85 |
+
+| Programming σ, weight LSB | 0.5 | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|---|
+| | 97.44 | 97.38 | 97.37 | 97.15 | 96.27 |
+
+| Crosstalk χ | 1% | 2% | 5% | 10% | 20% |
+|---|---|---|---|---|---|
+| | 97.43 | 97.41 | 97.41 | 97.26 | 96.48 |
+
+| Hours of drift | 0.1 | 1 | 4 | 12 | 46 |
+|---|---|---|---|---|---|
+| TFLT fit | 97.38 | 96.96 | 92.63 | 74.10 | 33.03 |
+| TFLN fit | 96.46 | 75.97 | 40.84 | 16.45 | 10.94 |
+
+- Two activation bits collapse the network. The contract's quantiser is signed
+  and ReLU's outputs are not, so two bits leave a single magnitude level.
+- Without drift, ADC saturations stay under 8 per 100,000 elements, against
+  the 0.01% of training K-tile sums the shifts were set to clip.
+- Drift is the result C3 needs. At TFLT's fit, accuracy holds within half a
+  point for about an hour and is 4.8 points down by 4 hours; at TFLN's, it
+  loses about a point in six minutes. Drift belongs to a cell, and every weight
+  a GEMM loads into that cell carries its offset, so a device's 128 offsets
+  move whole groups of weights together. That is why the five runs spread
+  widely — 84.0–96.6% at TFLT's 4 hours: each is a different device.
+- The first sweep ran all five networks on seed 1, so they shared one drifting
+  device, and TFLT's curve rose between 4 and 12 hours. The results above
+  rerun each network on its own seed; settings without drift moved by at most
+  0.14 points.
 
 ---
 
@@ -307,19 +476,20 @@ impairment is green.
 1. ~~QUANT, THERMAL, SHOT and PROG_ERR, through P0–P4, with the refusals.~~
    **Done** (§5).
 2. ~~DRIFT and XTALK, through P5 and P6.~~ **Done** (§5).
-3. Gate C1(a) on the D3 network, with the drift settings fitted to TFLT and
-   TFLN (§7).
+3. ~~Gate C1(a) on the D3 network, with the drift settings fitted to TFLT and
+   TFLN.~~ **Run, not met at 3 bits, recorded** (§5).
 4. Only then the CSR mapping and firmware (C4).
 
 ---
 
 ## 7. Open questions
 
-1. **Drift's settings.** The CPU document's §4.4 fits `PTA_DRIFT` to TFLT, with
-   TFLN as the stress case, and anchors both to a 46-hour test. Under E5 a fit
-   needs a shot rate — how many shots the emulated tile runs in an hour — which
-   is a statement about the workload, not the device. Gate C1(a) and C3 have to
-   state one.
+1. ~~**Drift's settings.**~~ *Answered in §5*: grxcp's EO-res rate, 80 M
+   shots/s, with the fits in the table there. The CPU document's §4.4 fits
+   `PTA_DRIFT` to TFLT, with TFLN as the stress case, and anchors both to a
+   46-hour test. Under E5 a fit needs a shot rate — how many shots the emulated
+   tile runs in an hour — which is a statement about the workload, not the
+   device.
 2. **Error units at 16-bit operands.** The programming-error and drift σ, and
    the drift clamp, are Q8.8 in weight LSB, so they top out at 256 LSB. That is
    an 8-bit weight's whole range but under 1% of a 16-bit one's, and a drift of
