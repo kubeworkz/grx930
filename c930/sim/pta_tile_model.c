@@ -73,7 +73,11 @@ int32_t pta_quant(int32_t x, uint32_t bits, int din_w)
     if (bits == 0 || (int)bits >= din_w)
         return x;
     h   = din_w - (int)bits;
+#ifdef PTA_MODEL_ABLATE_QROUND
+    v   = asr64((int64_t)x, h);             /* ablation: no rounding term, as the RTL's */
+#else
     v   = asr64((int64_t)x + ((int64_t)1 << (h - 1)), h);
+#endif
     lim = (int64_t)1 << (bits - 1);
     if (v > lim - 1) v = lim - 1;
     if (v < -lim)    v = -lim;
@@ -125,15 +129,11 @@ void pta_model_reset(pta_device *dev, uint32_t seed)
     dev->count = 0;
 }
 
-void pta_shot_start(pta_device *dev, const pta_cfg *cfg)
+/* One drift step: every cell of both banks. */
+static void drift_step(pta_device *dev, const pta_cfg *cfg)
 {
     const int64_t lim = (int64_t)cfg->drift_max;
     int b, i;
-    if ((uint64_t)dev->count + 1u < (1ull << cfg->drift_log2)) {
-        ++dev->count;
-        return;
-    }
-    dev->count = 0;
     /* bank, then row, then column: row-major storage is that order */
     for (b = 0; b < 2; ++b)
         for (i = 0; i < dev->rows * dev->cols; ++i) {
@@ -142,6 +142,24 @@ void pta_shot_start(pta_device *dev, const pta_cfg *cfg)
             if (d < -lim) d = -lim;
             dev->drift[b][i] = (int32_t)d;
         }
+}
+
+void pta_shot_start(pta_device *dev, const pta_cfg *cfg)
+{
+    if ((uint64_t)dev->count + 1u < (1ull << cfg->drift_log2)) {
+        ++dev->count;
+        return;
+    }
+    dev->count = 0;
+    drift_step(dev, cfg);
+}
+
+void pta_drift_age(pta_device *dev, const pta_cfg *cfg, uint64_t steps)
+{
+    /* From a count c, 2^k shot starts step once and return the count to c, so
+     * steps * 2^k of them are these steps with the count untouched. */
+    while (steps-- > 0)
+        drift_step(dev, cfg);
 }
 
 void pta_start(pta_streams *st, uint32_t seed)

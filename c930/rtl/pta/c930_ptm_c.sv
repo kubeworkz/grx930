@@ -540,34 +540,36 @@ module c930_ptm_c
         y  = y + xa * coupled_w(r, c);               // Q.8, tile units
       end
     end
-    if (!modelled)
+    // An unmodelled column is the exact sum; the modelled path must not overwrite it.
+    if (!modelled) begin
       int_column = {1'b0, seed + y[ACC_W-1:0]};
-
-    s       = int'(shift_r);
-    b       = int'(adcbits_r);
-    ay      = y[63] ? 64'(-y) : 64'(y);
-    v       = ay >> s;                               // Q.8, ADC LSB
-    if (v > 64'd8388608) v = 64'd8388608;            // 2^23
-    rt      = isqrt4(v[23:0]);
-    krt     = 29'(k_shot_r) * 29'(rt);
-    sh_prod = $signed({21'd0, krt}) * 50'(gs_sh);
-    n_sh    = 30'((sh_prod + 50'sd524288) >>> 20);
-    nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th) : 31'sd0) +
-              (impair_r[IMP_SHOT]    ? 31'(n_sh) : 31'sd0);
-    z       = 80'(y) + (80'(nsum) <<< s);
-
-    clamped = 1'b0;
-    if (impair_r[IMP_QUANT] && b != 0) begin
-      tq = (z + (80'sd1 <<< (7 + s))) >>> (8 + s);
-      hi = (80'sd1 <<< (b - 1)) - 80'sd1;
-      lo = -(80'sd1 <<< (b - 1));
-      if (tq > hi)      begin tq = hi; clamped = 1'b1; end
-      else if (tq < lo) begin tq = lo; clamped = 1'b1; end
-      outw = tq <<< s;
     end else begin
-      outw = (z + 80'sd128) >>> 8;
+      s       = int'(shift_r);
+      b       = int'(adcbits_r);
+      ay      = y[63] ? 64'(-y) : 64'(y);
+      v       = ay >> s;                               // Q.8, ADC LSB
+      if (v > 64'd8388608) v = 64'd8388608;            // 2^23
+      rt      = isqrt4(v[23:0]);
+      krt     = 29'(k_shot_r) * 29'(rt);
+      sh_prod = $signed({21'd0, krt}) * 50'(gs_sh);
+      n_sh    = 30'((sh_prod + 50'sd524288) >>> 20);
+      nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th) : 31'sd0) +
+                (impair_r[IMP_SHOT]    ? 31'(n_sh) : 31'sd0);
+      z       = 80'(y) + (80'(nsum) <<< s);
+
+      clamped = 1'b0;
+      if (impair_r[IMP_QUANT] && b != 0) begin
+        tq = (z + (80'sd1 <<< (7 + s))) >>> (8 + s);
+        hi = (80'sd1 <<< (b - 1)) - 80'sd1;
+        lo = -(80'sd1 <<< (b - 1));
+        if (tq > hi)      begin tq = hi; clamped = 1'b1; end
+        else if (tq < lo) begin tq = lo; clamped = 1'b1; end
+        outw = tq <<< s;
+      end else begin
+        outw = (z + 80'sd128) >>> 8;
+      end
+      int_column = {clamped, seed + outw[ACC_W-1:0]};
     end
-    int_column = {clamped, seed + outw[ACC_W-1:0]};
   endfunction
 
   // ---- Re-skew: the hop-edge register the array's last PE row would be ----

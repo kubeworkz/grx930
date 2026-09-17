@@ -85,6 +85,11 @@ void     pta_model_reset(pta_device *dev, uint32_t seed);
  * the count reaches 2^drift_log2. */
 void     pta_shot_start(pta_device *dev, const pta_cfg *cfg);
 
+/* Ages the device by `steps` drift steps: the state steps * 2^drift_log2 shot
+ * starts would leave, count included, without running the shots.  A C-only
+ * fast-forward for sweeps over hours of drift; the RTL has no such port. */
+void     pta_drift_age(pta_device *dev, const pta_cfg *cfg, uint64_t steps);
+
 /* A GEMM start: every per-GEMM stream loads seed ^ K, or K if that is zero. */
 void     pta_start(pta_streams *st, uint32_t seed);
 
