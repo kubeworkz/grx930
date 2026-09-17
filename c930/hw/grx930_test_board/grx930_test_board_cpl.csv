@@ -1,0 +1,270 @@
+Design,FileRev,Company,CreatedBy,CreatedDate,Tool,Board,BoardRev
+GRX930_Test_Board,1.0,Kubeworkz,Codebuff,2026-09-17,KiCad 8.0,c930_test_board,1.0
+
+Ref,Val,Package,Layer,PosX,PosY,Rot,Description
+; ============================================================================
+; ACTIVE COMPONENTS (ICs)
+; ============================================================================
+
+; FTDI FT2232H - Dual USB-to-UART/JTAG Bridge
+; Package: LQFP-64 (10mm x 10mm, 0.5mm pitch)
+U1,FT2232H,LQFP-64_10x10mm_P0.5mm,F.Cu,77.50,22.50,0.00,Dual USB-to-UART/JTAG bridge
+
+; TPS562201 - 3.3A Step-Down Converter (1.8V core)
+; Package: SOT-23-6 (2.9mm x 1.6mm)
+U2,TPS562201,SOT-23-6,F.Cu,22.50,22.50,0.00,3.3A buck converter 1.8V
+
+; TPS62162 - 1A Step-Down Converter (3.3V I/O)
+; Package: WSON-8 (3mm x 3mm, 0.5mm pitch)
+U3,TPS62162,WSON-8_3x3mm_P0.5mm,F.Cu,22.50,32.50,0.00,1A buck converter 3.3V
+
+; TPS7A2018 - 200mA LDO (1.8V PLL)
+; Package: SOT-23-5 (2.9mm x 1.6mm)
+U4,TPS7A2018,SOT-23-5,F.Cu,22.50,42.50,0.00,200mA LDO 1.8V PLL
+
+; TPS7A2018 - 200mA LDO (1.8V analog)
+; Package: SOT-23-5 (2.9mm x 1.6mm)
+U5,TPS7A2018,SOT-23-5,F.Cu,22.50,47.50,0.00,200mA LDO 1.8V analog
+
+; SiT8008 - 100 MHz MEMS Oscillator
+; Package: 5032 (5mm x 3.2mm)
+U6,SiT8008,Oscillator_5032,F.Cu,22.50,72.50,0.00,100MHz MEMS oscillator
+
+; SN74LVC1G17 - Single Schmitt-Trigger Buffer
+; Package: SOT-353 (1.6mm x 1.6mm)
+U7,SN74LVC1G17,SOT-353,F.Cu,27.50,72.50,0.00,Schmitt-trigger buffer
+
+; SN74LVC1T45 - Single-Bit Level Shifter
+; Package: SOT-353 (1.6mm x 1.6mm)
+U8,SN74LVC1T45,SOT-353,F.Cu,32.50,72.50,0.00,3.3V to 1.8V level shifter
+
+; TPS3839K43 - Voltage Supervisor (4.3V threshold)
+; Package: SOT-23-5 (2.9mm x 1.6mm)
+U9,TPS3839K43,SOT-23-5,F.Cu,22.50,52.50,0.00,Voltage supervisor POR
+
+; USBLC6-2SC6 - USB ESD Protection
+; Package: SOT-23-6 (2.9mm x 1.6mm)
+U10,USBLC6-2SC6,SOT-23-6,F.Cu,72.50,22.50,0.00,USB ESD protection
+
+; ============================================================================
+; CAPACITORS - 100nF decoupling (0402)
+; ============================================================================
+
+; GRX930 power pin decoupling (32x 100nF)
+C1,100nF,C_0402_1005Metric,F.Cu,42.50,42.50,0.00,GRX930 VDD decoupling
+C2,100nF,C_0402_1005Metric,F.Cu,42.50,47.50,0.00,GRX930 VDD decoupling
+C3,100nF,C_0402_1005Metric,F.Cu,42.50,52.50,0.00,GRX930 VDD decoupling
+C4,100nF,C_0402_1005Metric,F.Cu,42.50,57.50,0.00,GRX930 VDD decoupling
+C5,100nF,C_0402_1005Metric,F.Cu,47.50,42.50,0.00,GRX930 VDD decoupling
+C6,100nF,C_0402_1005Metric,F.Cu,47.50,47.50,0.00,GRX930 VDD decoupling
+C7,100nF,C_0402_1005Metric,F.Cu,47.50,52.50,0.00,GRX930 VDD decoupling
+C8,100nF,C_0402_1005Metric,F.Cu,47.50,57.50,0.00,GRX930 VDD decoupling
+C9,100nF,C_0402_1005Metric,F.Cu,52.50,42.50,0.00,GRX930 VDD decoupling
+C10,100nF,C_0402_1005Metric,F.Cu,52.50,47.50,0.00,GRX930 VDD decoupling
+C11,100nF,C_0402_1005Metric,F.Cu,52.50,52.50,0.00,GRX930 VDD decoupling
+C12,100nF,C_0402_1005Metric,F.Cu,52.50,57.50,0.00,GRX930 VDD decoupling
+C13,100nF,C_0402_1005Metric,F.Cu,57.50,42.50,0.00,GRX930 VDD decoupling
+C14,100nF,C_0402_1005Metric,F.Cu,57.50,47.50,0.00,GRX930 VDD decoupling
+C15,100nF,C_0402_1005Metric,F.Cu,57.50,52.50,0.00,GRX930 VDD decoupling
+C16,100nF,C_0402_1005Metric,F.Cu,57.50,57.50,0.00,GRX930 VDD decoupling
+C17,100nF,C_0402_1005Metric,F.Cu,62.50,42.50,0.00,GRX930 VDD decoupling
+C18,100nF,C_0402_1005Metric,F.Cu,62.50,47.50,0.00,GRX930 VDD decoupling
+C19,100nF,C_0402_1005Metric,F.Cu,62.50,52.50,0.00,GRX930 VDD decoupling
+C20,100nF,C_0402_1005Metric,F.Cu,62.50,57.50,0.00,GRX930 VDD decoupling
+C21,100nF,C_0402_1005Metric,F.Cu,42.50,62.50,0.00,GRX930 VDD decoupling
+C22,100nF,C_0402_1005Metric,F.Cu,47.50,62.50,0.00,GRX930 VDD decoupling
+C23,100nF,C_0402_1005Metric,F.Cu,52.50,62.50,0.00,GRX930 VDD decoupling
+C24,100nF,C_0402_1005Metric,F.Cu,57.50,62.50,0.00,GRX930 VDD decoupling
+C25,100nF,C_0402_1005Metric,F.Cu,62.50,62.50,0.00,GRX930 VDD decoupling
+C26,100nF,C_0402_1005Metric,F.Cu,67.50,42.50,0.00,GRX930 VDD decoupling
+C27,100nF,C_0402_1005Metric,F.Cu,67.50,47.50,0.00,GRX930 VDD decoupling
+C28,100nF,C_0402_1005Metric,F.Cu,67.50,52.50,0.00,GRX930 VDD decoupling
+C29,100nF,C_0402_1005Metric,F.Cu,67.50,57.50,0.00,GRX930 VDD decoupling
+C30,100nF,C_0402_1005Metric,F.Cu,67.50,62.50,0.00,GRX930 VDD decoupling
+C31,100nF,C_0402_1005Metric,F.Cu,72.50,42.50,0.00,GRX930 VDD decoupling
+C32,100nF,C_0402_1005Metric,F.Cu,72.50,47.50,0.00,GRX930 VDD decoupling
+
+; ============================================================================
+; CAPACITORS - 1µF decoupling (0402)
+; ============================================================================
+
+; GRX930 shared VDD decoupling (16x 1µF)
+C33,1uF,C_0402_1005Metric,F.Cu,45.00,45.00,0.00,GRX930 VDD shared
+C34,1uF,C_0402_1005Metric,F.Cu,45.00,55.00,0.00,GRX930 VDD shared
+C35,1uF,C_0402_1005Metric,F.Cu,55.00,45.00,0.00,GRX930 VDD shared
+C36,1uF,C_0402_1005Metric,F.Cu,55.00,55.00,0.00,GRX930 VDD shared
+C37,1uF,C_0402_1005Metric,F.Cu,65.00,45.00,0.00,GRX930 VDD shared
+C38,1uF,C_0402_1005Metric,F.Cu,65.00,55.00,0.00,GRX930 VDD shared
+C39,1uF,C_0402_1005Metric,F.Cu,45.00,65.00,0.00,GRX930 VDD shared
+C40,1uF,C_0402_1005Metric,F.Cu,55.00,65.00,0.00,GRX930 VDD shared
+C41,1uF,C_0402_1005Metric,F.Cu,65.00,65.00,0.00,GRX930 VDD shared
+C42,1uF,C_0402_1005Metric,F.Cu,35.00,45.00,0.00,GRX930 VDD shared
+C43,1uF,C_0402_1005Metric,F.Cu,35.00,55.00,0.00,GRX930 VDD shared
+C44,1uF,C_0402_1005Metric,F.Cu,35.00,65.00,0.00,GRX930 VDD shared
+C45,1uF,C_0402_1005Metric,F.Cu,75.00,45.00,0.00,GRX930 VDD shared
+C46,1uF,C_0402_1005Metric,F.Cu,75.00,55.00,0.00,GRX930 VDD shared
+C47,1uF,C_0402_1005Metric,F.Cu,75.00,65.00,0.00,GRX930 VDD shared
+C48,1uF,C_0402_1005Metric,F.Cu,85.00,55.00,0.00,GRX930 VDD shared
+
+; ============================================================================
+; CAPACITORS - 10µF bulk (0805)
+; ============================================================================
+
+; Bulk decoupling (4x 10µF)
+C49,10uF,C_0805_2012Metric,F.Cu,27.50,27.50,0.00,Bulk 3.3V input
+C50,10uF,C_0805_2012Metric,F.Cu,27.50,37.50,0.00,Bulk 1.8V input
+C51,10uF,C_0805_2012Metric,F.Cu,17.50,27.50,0.00,Bulk USB VBUS
+C52,10uF,C_0805_2012Metric,F.Cu,17.50,37.50,0.00,Bulk USB VBUS
+
+; ============================================================================
+; CAPACITORS - 10nF + 1µF PLL filtering (0402)
+; ============================================================================
+
+; PLL filtering (2x)
+C53,10nF,C_0402_1005Metric,F.Cu,27.50,77.50,0.00,PLL input filter
+C54,1uF,C_0402_1005Metric,F.Cu,32.50,77.50,0.00,PLL input filter
+
+; ============================================================================
+; CAPACITORS - 100µF bulk electrolytic (1206)
+; ============================================================================
+
+; Power input bulk (2x)
+C55,100uF,C_1206_3216Metric,F.Cu,12.50,22.50,0.00,Input bulk capacitor
+C56,100uF,C_1206_3216Metric,F.Cu,12.50,32.50,0.00,Input bulk capacitor
+
+; ============================================================================
+; CAPACITORS - 10nF reset debouncer (0402)
+; ============================================================================
+
+; Reset debounce (2x)
+C57,10nF,C_0402_1005Metric,F.Cu,27.50,82.50,0.00,Reset debounce RC
+C58,10nF,C_0402_1005Metric,F.Cu,32.50,82.50,0.00,Reset debounce RC
+
+; ============================================================================
+; RESISTORS - 10kΩ pull-ups (0402)
+; ============================================================================
+
+; JTAG pull-ups (4x 10kΩ)
+R1,10k,R_0402_1005Metric,F.Cu,77.50,72.50,0.00,JTAG TCK pull-down
+R2,10k,R_0402_1005Metric,F.Cu,82.50,72.50,0.00,JTAG TMS pull-up
+R3,10k,R_0402_1005Metric,F.Cu,87.50,72.50,0.00,JTAG TDI pull-up
+R4,10k,R_0402_1005Metric,F.Cu,77.50,77.50,0.00,JTAG TRST pull-up
+
+; UART pull-ups (2x 10kΩ)
+R5,10k,R_0402_1005Metric,F.Cu,82.50,17.50,0.00,UART TXD pull-up
+R6,10k,R_0402_1005Metric,F.Cu,87.50,17.50,0.00,UART RXD pull-up
+
+; ============================================================================
+; RESISTORS - 1kΩ LED current limiting (0402)
+; ============================================================================
+
+; LED current limiting (4x 1kΩ)
+R7,1k,R_0402_1005Metric,F.Cu,22.50,87.50,0.00,LED1 Green current limit
+R8,1k,R_0402_1005Metric,F.Cu,27.50,87.50,0.00,LED2 Red current limit
+R9,1k,R_0402_1005Metric,F.Cu,32.50,87.50,0.00,LED3 Blue current limit
+R10,1k,R_0402_1005Metric,F.Cu,37.50,87.50,0.00,LED4 Yellow current limit
+
+; ============================================================================
+; RESISTORS - 22Ω USB termination (0402)
+; ============================================================================
+
+; USB series termination (4x 22Ω)
+R11,22,R_0402_1005Metric,F.Cu,72.50,17.50,0.00,USB DP series termination
+R12,22,R_0402_1005Metric,F.Cu,72.50,22.50,0.00,USB DM series termination
+R13,22,R_0402_1005Metric,F.Cu,67.50,17.50,0.00,USB DP series termination
+R14,22,R_0402_1005Metric,F.Cu,67.50,22.50,0.00,USB DM series termination
+
+; ============================================================================
+; RESISTORS - 10kΩ reset debounce (0402)
+; ============================================================================
+
+; Reset debounce RC (2x 10kΩ)
+R15,10k,R_0402_1005Metric,F.Cu,22.50,82.50,0.00,Reset debounce RC
+R16,10k,R_0402_1005Metric,F.Cu,37.50,82.50,0.00,Reset debounce RC
+
+; ============================================================================
+; RESISTORS - 5.1kΩ USB CC pull-down (0402)
+; ============================================================================
+
+; USB CC pull-down (2x 5.1kΩ)
+R17,5.1k,R_0402_1005Metric,F.Cu,82.50,22.50,0.00,USB CC1 pull-down
+R18,5.1k,R_0402_1005Metric,F.Cu,87.50,22.50,0.00,USB CC2 pull-down
+
+; ============================================================================
+; INDUCTORS - Power supply (1210)
+; ============================================================================
+
+; Buck converter inductors
+L1,4.7uH,Inductor_1210_3225Metric,F.Cu,22.50,17.50,0.00,1.8V buck inductor
+L2,2.2uH,Inductor_1210_3225Metric,F.Cu,22.50,27.50,0.00,3.3V buck inductor
+
+; ============================================================================
+; CONNECTORS - Through-hole (mounted on bottom side)
+; ============================================================================
+
+; USB Type-C (J1)
+J1,USB_C,Connector_USB_C,F.Cu,85.00,15.00,0.00,USB Type-C receptacle
+
+; DC Barrel Jack (J2)
+J2,PJ-002AH,Connector_BarrelJack_2.1mm,F.Cu,12.50,15.00,0.00,2.1mm DC barrel jack
+
+; QFN-64 Socket (J3)
+J3,QFN-64_Socket,Socket_QFN-64_9x9mm_P0.4mm,F.Cu,55.00,55.00,0.00,Open-top QFN socket
+
+; JTAG Header (J4) - 2x5 shrouded
+J4,Conn_01x10,Connector_PinHeader_2.54mm,F.Cu,85.00,75.00,0.00,JTAG 2x5 shrouded header
+
+; GPIO Expansion (J5) - 2x20 box header
+J5,Conn_02x20,Connector_PinHeader_2.54mm,F.Cu,5.00,50.00,0.00,GPIO 2x20 expansion
+
+; Logic Analyzer (J6) - 2x10 box header
+J6,Conn_02x10,Connector_PinHeader_2.54mm,F.Cu,95.00,50.00,0.00,Logic analyzer 2x10
+
+; Test Points (J7-J8) - 1x3 pin headers
+J7,TP_3.3V,Connector_PinHeader_2.54mm,F.Cu,10.00,82.50,0.00,3.3V test point
+J8,TP_1.8V,Connector_PinHeader_2.54mm,F.Cu,15.00,82.50,0.00,1.8V test point
+
+; ============================================================================
+; LEDs - 0603
+; ============================================================================
+
+; Status LEDs
+D1,Green,LED_0603_1608Metric,F.Cu,22.50,85.00,0.00,Heartbeat indicator
+D2,Red,LED_0603_1608Metric,F.Cu,27.50,85.00,0.00,Error indicator
+D3,Blue,LED_0603_1608Metric,F.Cu,32.50,85.00,0.00,JTAG active
+D4,Yellow,LED_0603_1608Metric,F.Cu,37.50,85.00,0.00,UART activity
+
+; ============================================================================
+; SWITCHES - Tactile
+; ============================================================================
+
+; Reset Switch
+SW1,PTS645,Switch_Tactile_PTS645,F.Cu,27.50,92.50,0.00,Manual reset switch
+
+; ============================================================================
+; MOUNTING HOLES - Through-hole (not placed by pick-and-place)
+; ============================================================================
+
+; Mounting holes are typically not placed by SMT machine
+; They are drilled during PCB fabrication
+; H1-H4: M3, 3.2mm drill, positioned at board corners
+; H1: (5, 5), H2: (95, 5), H3: (5, 95), H4: (95, 95)
+
+; ============================================================================
+; SUMMARY
+; ============================================================================
+;
+; Total components: 89
+;   ICs: 10
+;   Capacitors: 58 (32x100nF, 16x1µF, 4x10µF, 2x10nF, 2x100µF, 2x10nF)
+;   Resistors: 18 (6x10kΩ, 4x1kΩ, 4x22Ω, 2x10kΩ, 2x5.1kΩ)
+;   Inductors: 2 (1x4.7µH, 1x2.2µH)
+;   Connectors: 8 (USB-C, DC Jack, QFN-64, JTAG, GPIO, LA, 2xTP)
+;   LEDs: 4 (Green, Red, Blue, Yellow)
+;   Switches: 1 (Reset)
+;
+; Assembly side: Top (F.Cu)
+; Bottom side: No components (mounting holes only)
+;
+; ============================================================================
+
