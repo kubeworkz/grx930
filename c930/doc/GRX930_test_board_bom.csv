@@ -1,0 +1,55 @@
+Reference,Part Number,Manufacturer,Description,Quantity,Unit Price (USD),Total (USD),Category,Notes
+U1,FT2232H,FTDI,Dual USB-to-UART/JTAG bridge,1,5.50,5.50,IC,USB interface
+U2,TPS562201,TI,3.3A step-down converter (1.8V),1,2.10,2.10,IC,Core power
+U3,TPS62162,TI,1A step-down converter (3.3V),1,2.80,2.80,IC,IO power
+U4,TPS7A2018,TI,200mA LDO (1.8V low-noise),2,1.20,2.40,IC,PLL and analog supply
+U5,SiT8008,SiTime,100 MHz MEMS oscillator,1,1.80,1.80,IC,Clock source
+U6,SN74LVC1G17,TI,Single Schmitt-trigger buffer,1,0.45,0.45,IC,Clock buffer
+U7,SN74LVC1T45,TI,Single-bit level shifter,1,0.85,0.85,IC,Clock level shift 3.3V to 1.8V
+U8,TPS3839K43,TI,Voltage supervisor (4.3V),1,0.95,0.95,IC,Power-on reset
+U9,USBLC6-2SC6,ST,USB ESD protection,1,0.60,0.60,IC,USB protection
+C1-C32,100nF X7R 0402,Murata,Decoupling capacitor,32,0.01,0.32,Passive,One per VDD pin
+C33-C48,1uF X5R 0402,Murata,Decoupling capacitor,16,0.02,0.32,Passive,Shared between adjacent pins
+C49-C52,10uF X5R 0805,Murata,Bulk decoupling capacitor,4,0.08,0.32,Passive,Bulk decoupling
+C53-C54,10nF+1uF 0402,Murata,PLL filtering capacitor,2,0.03,0.06,Passive,Additional PLL filtering
+C55-C56,100uF 1206,Murata,Electrolytic bulk capacitor,2,0.25,0.50,Passive,Power input bulk
+C57-C58,10nF 0402,Murata,Reset debouncer capacitor,2,0.01,0.02,Passive,Reset RC circuit
+R1-R8,10kOhm 0402,Yageo,Pull-up resistor,8,0.005,0.04,Passive,JTAG and UART pull-ups
+R9-R12,1kOhm 0402,Yageo,LED current limiting resistor,4,0.005,0.02,Passive,LED current limit
+R13-R14,10kOhm 0402,Yageo,Reset debounce resistor,2,0.005,0.01,Passive,Reset RC circuit
+R15-R18,22Ohm 0402,Yageo,USB series termination resistor,4,0.005,0.02,Passive,USB impedance matching
+R19-R20,10kOhm 0402,Yageo,USB CC pull-down resistor,2,0.005,0.01,Passive,USB Type-C CC pins
+L1,4.7uH 1210,Wurth,Inductor for TPS562201,1,0.35,0.35,Passive,1.8V buck converter
+L2,2.2uH 1210,Wurth,Inductor for TPS62162,1,0.30,0.30,Passive,3.3V buck converter
+J1,USB4125,Molex,USB Type-C receptacle,1,1.20,1.20,Connector,USB power and data
+J2,PJ-002AH,CUI,2.1mm DC barrel jack,1,0.35,0.35,Connector,Backup power input
+J3,QFN-64 socket,Enplas,Open-top QFN socket (0.4mm pitch),1,25.00,25.00,Connector,GRX930 package socket
+J4,1x10 shrouded,Samtec,JTAG header (0.1 inch pitch),1,0.50,0.50,Connector,JTAG interface
+J5,2x20 box header,Samtec,GPIO expansion (0.1 inch pitch),1,1.50,1.50,Connector,GPIO and debug
+J6,2x10 box header,Samtec,Logic analyzer (0.1 inch pitch),1,1.00,1.00,Connector,Signal monitoring
+J7-J8,Pin header 1x3,Samtec,Power test points,2,0.10,0.20,Connector,Voltage measurement
+LED1,19-217/GHC-YR1S2/3T,Kingbright,Green LED (0603),1,0.10,0.10,LED,Heartbeat indicator
+LED2,19-217/R6C-AL1M2VY/3T,Kingbright,Red LED (0603),1,0.10,0.10,LED,Error indicator
+LED3,19-217/BHC-ZL1M2VY/3T,Kingbright,Blue LED (0603),1,0.15,0.15,LED,JTAG active
+LED4,19-217/YHC-AL1M2VY/3T,Kingbright,Yellow LED (0603),1,0.10,0.10,LED,UART activity
+SW1,PTS645SK50SMTR92,CKT,Tactile reset switch,1,0.25,0.25,Switch,Manual reset
+SW2,PTS645SK50SMTR92,CKT,Power switch (optional),1,0.25,0.25,Switch,Power control
+PCB,-,JLCPCB,4-layer PCB (100x100mm),1,15.00,15.00,Mechanical,PCB fabrication
+Standoff,M3x10mm,Generic,Brass standoff,4,0.25,1.00,Mechanical,Board mounting
+Screw,M3,Generic,Pan head screw,8,0.10,0.80,Mechanical,Board mounting
+Feet,Rubber,Generic,Adhesive rubber foot,4,0.05,0.20,Mechanical,Non-slip base
+,,,,,,
+Category Subtotals:,,,,,,
+ICs,-,-,Active components,10,-,17.50,-,All integrated circuits
+Passive,-,-,Resistors/capacitors/inductors,81,-,2.05,-,All passive components
+Connectors,-,-,All connectors,10,-,29.75,-,All connectors
+LED/Switch,-,-,Indicators and switches,6,-,0.95,-,LEDs and switches
+Mechanical,-,-,PCB and hardware,-,-,17.00,-,PCB and mounting hardware
+,,,,,,
+Component Subtotal,-,-,-,-,-,67.25,-,Before assembly
+PCB Fabrication (10 boards),-,JLCPCB,-,10,-,150.00,-,Batch of 10 PCBs
+PCB Assembly (1 board),-,JLCPCB,PCB assembly service,1,-,75.00,-,SMT assembly
+,,,,,,
+Total (1 assembled board),-,,-,-,-,292.25,-,Single assembled board
+Contingency (15%),-,-,-,-,-,43.84,-,Price buffer
+Grand Total,-,-,-,-,-,336.09,-,Per assembled board

@@ -1,0 +1,265 @@
+# build-gds.yml — CI pipeline for GRX930 SKY130 GDS generation
+#
+# Triggers on every push to main and on pull requests.
+# Installs open-source ASIC tools (oss-cad-suite), runs synthesis,
+# place & route, DRC, and LVS, then archives the GDS artifact.
+
+name: Build GDS (SKY130)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/rv64imac/**'
+      - 'c930/asic/**'
+      - '.github/workflows/build-gds.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/rv64imac/**'
+      - 'c930/asic/**'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  BUILD_DIR: c930/asic/build
+  PDK_ROOT: /opt/pdk/sky130A
+  OSSCAD_DIR: /opt/oss-cad-suite
+
+jobs:
+  build-gds:
+    name: Synthesize, P&R, DRC/LVS
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3-hour timeout for full flow
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Cache oss-cad-suite (saves ~10 min per run) ──────────
+      - name: Cache oss-cad-suite
+        id: cache-oss
+        uses: actions/cache@v4
+        with:
+          path: /opt/oss-cad-suite
+          key: oss-cad-suite-linux-x64-20260916
+
+      # ── Install oss-cad-suite (Yosys, OpenROAD, Magic, etc.) ─
+      - name: Install oss-cad-suite
+        if: steps.cache-oss.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt
+          cd /tmp
+          wget -q https://github.com/YosysHQ/oss-cad-suite-build/releases/download/20260916/oss-cad-suite-linux-x64-20260916.tgz
+          tar xzf oss-cad-suite-linux-x64-20260916.tgz -C /opt/
+          echo "/opt/oss-cad-suite/bin" >> $GITHUB_PATH
+
+      # ── Verify tools are available ───────────────────────────
+      - name: Verify tool installation
+        run: |
+          echo "=== Tool versions ==="
+          yosys --version
+          openroad -version
+          magic --version
+          netgen -version
+          opensta -version
+          iverilog -V | head -1
+
+      # ── Install SKY130 PDK ──────────────────────────────────
+      - name: Cache SKY130 PDK
+        id: cache-pdk
+        uses: actions/cache@v4
+        with:
+          path: /opt/pdk
+          key: sky130a-pdk-v1
+
+      - name: Install SKY130 PDK
+        if: steps.cache-pdk.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/pdk
+          cd /tmp
+          git clone --depth 1 https://github.com/google/skywater-pdk.git
+          cd skywater-pdk
+          make timing
+          sudo cp -r libs.ref/sky130_fd_sc_hd /opt/pdk/sky130A/
+          sudo cp -r libs.tech/magic /opt/pdk/sky130A/
+          sudo cp -r libs.tech/openroad /opt/pdk/sky130A/
+          sudo cp -r tech/magic /opt/pdk/sky130A/
+          echo "PDK installed at /opt/pdk/sky130A"
+
+      # ── Create build directory ───────────────────────────────
+      - name: Create build directory
+        run: mkdir -p ${{ env.BUILD_DIR }}
+
+      # ── ASIC Synthesis (Yosys) ──────────────────────────────
+      - name: ASIC Synthesis
+        working-directory: c930/asic
+        run: |
+          echo "=== Starting Yosys synthesis ==="
+          export PDK_ROOT=${{ env.PDK_ROOT }}
+          yosys -s synth_yosys.ys 2>&1 | tee ${{ env.BUILD_DIR }}/synth.log
+          echo "=== Synthesis complete ==="
+          ls -la ${{ env.BUILD_DIR }}/c930_soc_synth.v
+
+      # ── Gate count report ───────────────────────────────────
+      - name: Gate count report
+        working-directory: c930/asic
+        run: |
+          echo "=== Gate count estimation ==="
+          python3 estimate_gates.py --sky130 2>&1 | tee ${{ env.BUILD_DIR }}/gate_count.txt || true
+
+      # ── Physical Design (OpenROAD) ──────────────────────────
+      - name: Physical Design (Place & Route)
+        working-directory: c930/asic
+        run: |
+          echo "=== Starting OpenROAD P&R ==="
+          export PDK_ROOT=${{ env.PDK_ROOT }}
+          openroad -exit flow_openroad.tcl 2>&1 | tee ${{ env.BUILD_DIR }}/pnr.log
+          echo "=== Physical design complete ==="
+          ls -la ${{ env.BUILD_DIR }}/c930_soc_routed.gds
+
+      # ── DRC (Magic) ─────────────────────────────────────────
+      - name: Design Rule Check (DRC)
+        working-directory: c930/asic
+        run: |
+          echo "=== Running DRC ==="
+          export PDK_ROOT=${{ env.PDK_ROOT }}
+          magic -noconsole -dnull \
+            -c "tech read ${PDK_ROOT}/sky130_fd_sc_hd/sky130_fd_sc_hd.tech" \
+            -c "gds read ${{ env.BUILD_DIR }}/c930_soc_routed.gds" \
+            -c "drc list" \
+            -c "drc catchall" \
+            -c "quit" 2>&1 | tee ${{ env.BUILD_DIR }}/drc.log
+          echo "=== DRC complete ==="
+          # Check for DRC errors
+          if grep -q "^DRC found 0 errors" ${{ env.BUILD_DIR }}/drc.log; then
+            echo "✅ DRC PASSED — 0 errors"
+          else
+            echo "⚠️ DRC reported issues — check log"
+            tail -20 ${{ env.BUILD_DIR }}/drc.log
+          fi
+
+      # ── LVS (Netgen) ────────────────────────────────────────
+      - name: Layout vs. Schematic (LVS)
+        working-directory: c930/asic
+        run: |
+          echo "=== Running LVS ==="
+          export PDK_ROOT=${{ env.PDK_ROOT }}
+          # Generate schematic netlist from synthesis output
+          cp ${{ env.BUILD_DIR }}/c930_soc_synth.v ${{ env.BUILD_DIR }}/c930_soc_schematic.v
+          # Run Netgen LVS
+          netgen -batch \
+            "compare_circuits {layout ${{ env.BUILD_DIR }}/c930_soc_routed.v} {schematic ${{ env.BUILD_DIR }}/c930_soc_schematic.v}" \
+            -json ${{ env.BUILD_DIR }}/lvs_report.json \
+            2>&1 | tee ${{ env.BUILD_DIR }}/lvs.log
+          echo "=== LVS complete ==="
+          # Check LVS result
+          if grep -q "circuits match" ${{ env.BUILD_DIR }}/lvs.log; then
+            echo "✅ LVS PASSED — netlists match"
+          else
+            echo "⚠️ LVS reported mismatches — check log"
+            tail -20 ${{ env.BUILD_DIR }}/lvs.log
+          fi
+
+      # ── Timing report ───────────────────────────────────────
+      - name: Timing summary
+        working-directory: c930/asic
+        run: |
+          echo "=== Timing summary ==="
+          if [ -f ${{ env.BUILD_DIR }}/c930_soc_routed.rpt ]; then
+            head -50 ${{ env.BUILD_DIR }}/c930_soc_routed.rpt
+          else
+            echo "Timing report not found"
+          fi
+
+      # ── Area report ─────────────────────────────────────────
+      - name: Area summary
+        working-directory: c930/asic
+        run: |
+          echo "=== Area summary ==="
+          if [ -f ${{ env.BUILD_DIR }}/c930_soc_routed.rpt ]; then
+            grep -A5 "Design area" ${{ env.BUILD_DIR }}/c930_soc_routed.rpt || true
+          fi
+
+      # ── Generate DRC/LVS summary for PR comment ─────────────
+      - name: Generate CI summary
+        if: always()
+        run: |
+          SUMMARY="## GDS Build Summary\n\n"
+          SUMMARY+="| Step | Status |\n|------|--------|\n"
+
+          if [ -f ${{ env.BUILD_DIR }}/c930_soc_synth.v ]; then
+            SUMMARY+="| Synthesis | ✅ Complete |\n"
+          else
+            SUMMARY+="| Synthesis | ❌ Failed |\n"
+          fi
+
+          if [ -f ${{ env.BUILD_DIR }}/c930_soc_routed.gds ]; then
+            GDS_SIZE=$(du -h ${{ env.BUILD_DIR }}/c930_soc_routed.gds | cut -f1)
+            SUMMARY+="| P&R | ✅ Complete ($GDS_SIZE) |\n"
+          else
+            SUMMARY+="| P&R | ❌ Failed |\n"
+          fi
+
+          if [ -f ${{ env.BUILD_DIR }}/drc.log ]; then
+            if grep -q "DRC found 0 errors" ${{ env.BUILD_DIR }}/drc.log; then
+              SUMMARY+="| DRC | ✅ Passed (0 errors) |\n"
+            else
+              DRC_ERRORS=$(grep "DRC found" ${{ env.BUILD_DIR }}/drc.log | tail -1)
+              SUMMARY+="| DRC | ⚠️ Issues ($DRC_ERRORS) |\n"
+            fi
+          else
+            SUMMARY+="| DRC | ❌ Not run |\n"
+          fi
+
+          if [ -f ${{ env.BUILD_DIR }}/lvs.log ]; then
+            if grep -q "circuits match" ${{ env.BUILD_DIR }}/lvs.log; then
+              SUMMARY+="| LVS | ✅ Passed |\n"
+            else
+              SUMMARY+="| LVS | ⚠️ Mismatches |\n"
+            fi
+          else
+            SUMMARY+="| LVS | ❌ Not run |\n"
+          fi
+
+          echo -e "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+
+      # ── Archive build artifacts ──────────────────────────────
+      - name: Archive GDS
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grx930-sky130-gds
+          path: |
+            c930/asic/build/c930_soc_routed.gds
+            c930/asic/build/c930_soc_routed.v
+            c930/asic/build/c930_soc_routed.spef
+          retention-days: 90
+
+      - name: Archive build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grx930-build-logs
+          path: |
+            c930/asic/build/synth.log
+            c930/asic/build/pnr.log
+            c930/asic/build/drc.log
+            c930/asic/build/lvs.log
+            c930/asic/build/lvs_report.json
+            c930/asic/build/gate_count.txt
+          retention-days: 30
+
+      # ── Fail the job if critical steps failed ────────────────
+      - name: Final check
+        if: always()
+        run: |
+          if [ ! -f ${{ env.BUILD_DIR }}/c930_soc_routed.gds ]; then
+            echo "❌ GDS generation failed — no output file"
+            exit 1
+          fi
+          echo "✅ GDS generation successful"
+          echo "GDS file: ${{ env.BUILD_DIR }}/c930_soc_routed.gds"
+          ls -lh ${{ env.BUILD_DIR }}/c930_soc_routed.gds

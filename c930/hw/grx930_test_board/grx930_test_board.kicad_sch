@@ -1,0 +1,845 @@
+(kicad_sch
+  (version 20230121)
+  (generator eeschema)
+  (generator_version "8.0")
+  (uuid e63c2131-1c89-416a-8f0a-c2d64f7d41f3)
+  (paper "A2")
+  (title_block
+    (title "GRX930 Prototype Test Board")
+    (date "2026-09-17")
+    (rev "1.0")
+    (comment 1 "GRX930 SoC Test Board for SKY130 Silicon Validation")
+    (comment 2 "UART, JTAG, Power Regulation, Clock Generation")
+    (comment 3 "QFN-64 Package Socket, 4-Layer PCB")
+    (comment 4 "Board Size: 100mm x 100mm")
+  )
+
+  ;; ============================================================
+  ;; SYMBOL LIBRARY DEFINITIONS
+  ;; ============================================================
+  (lib_symbols
+    ;; Power symbols
+    (symbol "power:GND"
+      (power)
+      (pin_names (offset 0))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "#PWR" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "GND" (at 0 3.81 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "GND_0_1"
+        (polyline (pts (xy -0.762 -1.27) (xy 0.762 -1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy -0.508 -1.778) (xy 0.508 -1.778)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy -0.254 -2.286) (xy 0.254 -2.286)) (stroke (width 0) (type default)) (fill (type none)))
+        (pin power_in line (at 0 0 270) (length 1.27) hide (name "GND" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "power:+1V8"
+      (power)
+      (pin_names (offset 0))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "#PWR" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "+1V8" (at 0 3.81 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "+1V8_0_1"
+        (polyline (pts (xy -0.762 1.27) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 0) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 2.54) (xy 0.762 1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (pin power_in line (at 0 0 90) (length 0) hide (name "+1V8" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "power:+3V3"
+      (power)
+      (pin_names (offset 0))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "#PWR" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "+3V3" (at 0 3.81 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "+3V3_0_1"
+        (polyline (pts (xy -0.762 1.27) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 0) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 2.54) (xy 0.762 1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (pin power_in line (at 0 0 90) (length 0) hide (name "+3V3" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "power:+5V"
+      (power)
+      (pin_names (offset 0))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "#PWR" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "+5V" (at 0 3.81 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "+5V_0_1"
+        (polyline (pts (xy -0.762 1.27) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 0) (xy 0 2.54)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 0 2.54) (xy 0.762 1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (pin power_in line (at 0 0 90) (length 0) hide (name "+5V" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "power:PWR_FLAG"
+      (power)
+      (pin_names (offset 0))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "#FLG" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Value" "PWR_FLAG" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "PWR_FLAG_0_1"
+        (pin power_out line (at 0 0 90) (length 0) (name "pwr" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      )
+    )
+
+    ;; Passive components
+    (symbol "Device:R"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Value" "R" (at -2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at -1.778 0 90) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "R_0_1"
+        (rectangle (start -1.016 -2.54) (end 1.016 2.54) (stroke (width 0.254) (type default)) (fill (type none)))
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Device:C"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "C" (at 0.635 2.54 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Value" "C" (at 0.635 -2.54 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "C_0_1"
+        (polyline (pts (xy -2.032 -0.762) (xy 2.032 -0.762)) (stroke (width 0.508) (type default)) (fill (type none)))
+        (polyline (pts (xy -2.032 0.762) (xy 2.032 0.762)) (stroke (width 0.508) (type default)) (fill (type none)))
+        (pin passive line (at 0 3.81 270) (length 3.048) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 3.048) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Device:L"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "L" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Value" "L" (at -2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at -1.778 0 90) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "L_0_1"
+        (arc (start 0 -2.54) (mid 2.54 0) (end 0 2.54) (stroke (width 0) (type default)) (fill (type none)))
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Device:LED"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "D" (at 0 2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "LED" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "LED_0_1"
+        (polyline (pts (xy -1.27 1.27) (xy -1.27 -1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy -1.27 0) (xy 1.27 0)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 1.27 1.27) (xy 1.27 -1.27) (xy -1.27 0) (xy 1.27 1.27)) (stroke (width 0) (type default)) (fill (type none)))
+        (pin passive line (at 0 3.81 270) (length 2.54) (name "K" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Device:SW_Push"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "SW" (at 0 2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "SW_Push" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "SW_Push_0_1"
+        (circle (center 0 0) (radius 1.27) (stroke (width 0) (type default)) (fill (type none)))
+        (pin passive line (at 0 3.81 270) (length 2.54) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 2.54) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+
+    ;; Connectors
+    (symbol "Connector:Conn_01x10_Pin"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "J" (at 2.54 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "Conn_01x10_Pin" (at 2.54 -15.24 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "Conn_01x10_Pin_0_1"
+        (rectangle (start -2.54 12.7) (end 0 -12.7) (stroke (width 0) (type default)) (fill (type background)))
+        (pin passive line (at -5.08 10.16 0) (length 2.54) (name "Pin_1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 7.62 0) (length 2.54) (name "Pin_2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 5.08 0) (length 2.54) (name "Pin_3" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 2.54 0) (length 2.54) (name "Pin_4" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 0 0) (length 2.54) (name "Pin_5" (effects (font (size 1.27 1.27)))) (number "5" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -2.54 0) (length 2.54) (name "Pin_6" (effects (font (size 1.27 1.27)))) (number "6" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -5.08 0) (length 2.54) (name "Pin_7" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -7.62 0) (length 2.54) (name "Pin_8" (effects (font (size 1.27 1.27)))) (number "8" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -10.16 0) (length 2.54) (name "Pin_9" (effects (font (size 1.27 1.27)))) (number "9" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -12.7 0) (length 2.54) (name "Pin_10" (effects (font (size 1.27 1.27)))) (number "10" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Connector:Conn_02x10_Odd_Even"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "J" (at 2.54 12.7 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Value" "Conn_02x10_Odd_Even" (at 2.54 -17.78 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "Conn_02x10_Odd_Even_0_1"
+        (rectangle (start -2.54 15.24) (end 0 -15.24) (stroke (width 0) (type default)) (fill (type background)))
+        (pin passive line (at -5.08 12.7 0) (length 2.54) (name "Pin_1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 10.16 0) (length 2.54) (name "Pin_2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 7.62 0) (length 2.54) (name "Pin_3" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 5.08 0) (length 2.54) (name "Pin_4" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 2.54 0) (length 2.54) (name "Pin_5" (effects (font (size 1.27 1.27)))) (number "5" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 0 0) (length 2.54) (name "Pin_6" (effects (font (size 1.27 1.27)))) (number "6" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -2.54 0) (length 2.54) (name "Pin_7" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -5.08 0) (length 2.54) (name "Pin_8" (effects (font (size 1.27 1.27)))) (number "8" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -7.62 0) (length 2.54) (name "Pin_9" (effects (font (size 1.27 1.27)))) (number "9" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -10.16 0) (length 2.54) (name "Pin_10" (effects (font (size 1.27 1.27)))) (number "10" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -12.7 0) (length 2.54) (name "Pin_11" (effects (font (size 1.27 1.27)))) (number "11" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -15.24 0) (length 2.54) (name "Pin_12" (effects (font (size 1.27 1.27)))) (number "12" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 12.7 180) (length 2.54) (name "Pin_13" (effects (font (size 1.27 1.27)))) (number "13" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 10.16 180) (length 2.54) (name "Pin_14" (effects (font (size 1.27 1.27)))) (number "14" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 7.62 180) (length 2.54) (name "Pin_15" (effects (font (size 1.27 1.27)))) (number "15" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 5.08 180) (length 2.54) (name "Pin_16" (effects (font (size 1.27 1.27)))) (number "16" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 2.54 180) (length 2.54) (name "Pin_17" (effects (font (size 1.27 1.27)))) (number "17" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 0 180) (length 2.54) (name "Pin_18" (effects (font (size 1.27 1.27)))) (number "18" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -2.54 180) (length 2.54) (name "Pin_19" (effects (font (size 1.27 1.27)))) (number "19" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -5.08 180) (length 2.54) (name "Pin_20" (effects (font (size 1.27 1.27)))) (number "20" (effects (font (size 1.27 1.27)))))
+      )
+    )
+    (symbol "Connector:Conn_02x20_Odd_Even"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "J" (at 2.54 25.4 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Value" "Conn_02x20_Odd_Even" (at 2.54 -27.94 0) (effects (font (size 1.27 1.27)) (justify left)))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (symbol "Conn_02x20_Odd_Even_0_1"
+        (rectangle (start -2.54 25.4) (end 0 -25.4) (stroke (width 0) (type default)) (fill (type background)))
+        (pin passive line (at -5.08 22.86 0) (length 2.54) (name "Pin_1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 20.32 0) (length 2.54) (name "Pin_2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 17.78 0) (length 2.54) (name "Pin_3" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 15.24 0) (length 2.54) (name "Pin_4" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 12.7 0) (length 2.54) (name "Pin_5" (effects (font (size 1.27 1.27)))) (number "5" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 10.16 0) (length 2.54) (name "Pin_6" (effects (font (size 1.27 1.27)))) (number "6" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 7.62 0) (length 2.54) (name "Pin_7" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 5.08 0) (length 2.54) (name "Pin_8" (effects (font (size 1.27 1.27)))) (number "8" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 2.54 0) (length 2.54) (name "Pin_9" (effects (font (size 1.27 1.27)))) (number "9" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 0 0) (length 2.54) (name "Pin_10" (effects (font (size 1.27 1.27)))) (number "10" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -2.54 0) (length 2.54) (name "Pin_11" (effects (font (size 1.27 1.27)))) (number "11" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -5.08 0) (length 2.54) (name "Pin_12" (effects (font (size 1.27 1.27)))) (number "12" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -7.62 0) (length 2.54) (name "Pin_13" (effects (font (size 1.27 1.27)))) (number "13" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -10.16 0) (length 2.54) (name "Pin_14" (effects (font (size 1.27 1.27)))) (number "14" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -12.7 0) (length 2.54) (name "Pin_15" (effects (font (size 1.27 1.27)))) (number "15" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -15.24 0) (length 2.54) (name "Pin_16" (effects (font (size 1.27 1.27)))) (number "16" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -17.78 0) (length 2.54) (name "Pin_17" (effects (font (size 1.27 1.27)))) (number "17" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -20.32 0) (length 2.54) (name "Pin_18" (effects (font (size 1.27 1.27)))) (number "18" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -22.86 0) (length 2.54) (name "Pin_19" (effects (font (size 1.27 1.27)))) (number "19" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -5.08 -25.4 0) (length 2.54) (name "Pin_20" (effects (font (size 1.27 1.27)))) (number "20" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 22.86 180) (length 2.54) (name "Pin_21" (effects (font (size 1.27 1.27)))) (number "21" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 20.32 180) (length 2.54) (name "Pin_22" (effects (font (size 1.27 1.27)))) (number "22" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 17.78 180) (length 2.54) (name "Pin_23" (effects (font (size 1.27 1.27)))) (number "23" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 15.24 180) (length 2.54) (name "Pin_24" (effects (font (size 1.27 1.27)))) (number "24" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 12.7 180) (length 2.54) (name "Pin_25" (effects (font (size 1.27 1.27)))) (number "25" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 10.16 180) (length 2.54) (name "Pin_26" (effects (font (size 1.27 1.27)))) (number "26" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 7.62 180) (length 2.54) (name "Pin_27" (effects (font (size 1.27 1.27)))) (number "27" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 5.08 180) (length 2.54) (name "Pin_28" (effects (font (size 1.27 1.27)))) (number "28" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 2.54 180) (length 2.54) (name "Pin_29" (effects (font (size 1.27 1.27)))) (number "29" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 0 180) (length 2.54) (name "Pin_30" (effects (font (size 1.27 1.27)))) (number "30" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -2.54 180) (length 2.54) (name "Pin_31" (effects (font (size 1.27 1.27)))) (number "31" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -5.08 180) (length 2.54) (name "Pin_32" (effects (font (size 1.27 1.27)))) (number "32" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -7.62 180) (length 2.54) (name "Pin_33" (effects (font (size 1.27 1.27)))) (number "33" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -10.16 180) (length 2.54) (name "Pin_34" (effects (font (size 1.27 1.27)))) (number "34" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -12.7 180) (length 2.54) (name "Pin_35" (effects (font (size 1.27 1.27)))) (number "35" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -15.24 180) (length 2.54) (name "Pin_36" (effects (font (size 1.27 1.27)))) (number "36" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -17.78 180) (length 2.54) (name "Pin_37" (effects (font (size 1.27 1.27)))) (number "37" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -20.32 180) (length 2.54) (name "Pin_38" (effects (font (size 1.27 1.27)))) (number "38" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -22.86 180) (length 2.54) (name "Pin_39" (effects (font (size 1.27 1.27)))) (number "39" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 5.08 -25.4 180) (length 2.54) (name "Pin_40" (effects (font (size 1.27 1.27)))) (number "40" (effects (font (size 1.27 1.27)))))
+      )
+    )
+  )
+
+  ;; ============================================================
+  ;; SECTION 1: POWER SUPPLY (Top-Left)
+  ;; ============================================================
+
+  ;; USB Type-C Connector (J1)
+  (symbol
+    (lib_id "power:+5V")
+    (at 100.33 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000001-0000-0000-0000-000000000001)
+    (property "Reference" "#PWR01" (at 100.33 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "+5V" (at 100.33 95.25 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000002-0000-0000-0000-000000000002))
+  )
+
+  ;; DC Barrel Jack (J2)
+  (symbol
+    (lib_id "power:+5V")
+    (at 100.33 127 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000003-0000-0000-0000-000000000003)
+    (property "Reference" "#PWR02" (at 100.33 123.19 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "+5V" (at 100.33 120.65 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000004-0000-0000-0000-000000000004))
+  )
+
+  ;; Input Capacitors
+  (symbol
+    (lib_id "Device:C")
+    (at 114.3 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000005-0000-0000-0000-000000000005)
+    (property "Reference" "C49" (at 116.84 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10uF" (at 116.84 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000006-0000-0000-0000-000000000006))
+    (pin "2" (uuid a1000007-0000-0000-0000-000000000007))
+  )
+
+  ;; 3.3V Buck Converter (U3: TPS62162)
+  (symbol
+    (lib_id "power:+3V3")
+    (at 127 114.3 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000008-0000-0000-0000-000000000008)
+    (property "Reference" "#PWR03" (at 127 110.49 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "+3V3" (at 127 107.95 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000009-0000-0000-0000-000000000009))
+  )
+
+  ;; 1.8V Buck Converter (U2: TPS562201)
+  (symbol
+    (lib_id "power:+1V8")
+    (at 127 139.7 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000010-0000-0000-0000-000000000010)
+    (property "Reference" "#PWR04" (at 127 135.89 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "+1V8" (at 127 133.35 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000011-0000-0000-0000-000000000011))
+  )
+
+  ;; GND symbol
+  (symbol
+    (lib_id "power:GND")
+    (at 114.3 127 180)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000012-0000-0000-0000-000000000012)
+    (property "Reference" "#PWR05" (at 114.3 130.81 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "GND" (at 114.3 133.35 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000013-0000-0000-0000-000000000013))
+  )
+
+  ;; Section label
+  (text
+    (at 114.3 76.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000014-0000-0000-0000-000000000014)
+    "POWER SUPPLY SECTION"
+  )
+  (text
+    (at 114.3 78.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000015-0000-0000-0000-000000000015)
+    "Input: USB-C (5V/3A) or DC Jack (5V/2A)"
+  )
+  (text
+    (at 114.3 81.28 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000016-0000-0000-0000-000000000016)
+    "Rails: 3.3V (1A), 1.8V (1.5A), 1.8V_PLL (100mA)"
+  )
+
+  ;; ============================================================
+  ;; SECTION 2: GRX930 SoC (Center)
+  ;; ============================================================
+
+  ;; GRX930 QFN-64 Socket (J3)
+  (text
+    (at 228.6 76.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000020-0000-0000-0000-000000000020)
+    "GRX930 SoC (QFN-64)"
+  )
+  (text
+    (at 228.6 78.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000021-0000-0000-0000-000000000021)
+    "Open-top QFN socket for easy die replacement"
+  )
+  (text
+    (at 228.6 81.28 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000022-0000-0000-0000-000000000022)
+    "Thermal pad with 8x8 via array to GND plane"
+  )
+
+  ;; Decoupling capacitors for GRX930
+  (symbol
+    (lib_id "Device:C")
+    (at 213.36 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000023-0000-0000-0000-000000000023)
+    (property "Reference" "C1" (at 215.9 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "100nF" (at 215.9 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000024-0000-0000-0000-000000000024))
+    (pin "2" (uuid a1000025-0000-0000-0000-000000000025))
+  )
+  (symbol
+    (lib_id "Device:C")
+    (at 218.44 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000026-0000-0000-0000-000000000026)
+    (property "Reference" "C2" (at 220.98 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "100nF" (at 220.98 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000027-0000-0000-0000-000000000027))
+    (pin "2" (uuid a1000028-0000-0000-0000-000000000028))
+  )
+  (symbol
+    (lib_id "Device:C")
+    (at 223.52 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000029-0000-0000-0000-000000000029)
+    (property "Reference" "C3" (at 226.06 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "100nF" (at 226.06 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000030-0000-0000-0000-000000000030))
+    (pin "2" (uuid a1000031-0000-0000-0000-000000000031))
+  )
+
+  ;; ============================================================
+  ;; SECTION 3: UART INTERFACE (Top-Right)
+  ;; ============================================================
+
+  (text
+    (at 342.9 76.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000040-0000-0000-0000-000000000040)
+    "UART INTERFACE"
+  )
+  (text
+    (at 342.9 78.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000041-0000-0000-0000-000000000041)
+    "FTDI FT2232H Channel A: 115200 baud, 8N1"
+  )
+
+  ;; UART Pull-ups
+  (symbol
+    (lib_id "Device:R")
+    (at 337.82 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000042-0000-0000-0000-000000000042)
+    (property "Reference" "R6" (at 337.82 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10k" (at 337.82 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000043-0000-0000-0000-000000000043))
+    (pin "2" (uuid a1000044-0000-0000-0000-000000000044))
+  )
+  (symbol
+    (lib_id "Device:R")
+    (at 342.9 101.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000045-0000-0000-0000-000000000045)
+    (property "Reference" "R7" (at 342.9 97.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10k" (at 342.9 105.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000046-0000-0000-0000-000000000046))
+    (pin "2" (uuid a1000047-0000-0000-0000-000000000047))
+  )
+
+  ;; ============================================================
+  ;; SECTION 4: JTAG INTERFACE (Bottom-Right)
+  ;; ============================================================
+
+  (text
+    (at 342.9 152.4 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000050-0000-0000-0000-000000000050)
+    "JTAG INTERFACE"
+  )
+  (text
+    (at 342.9 154.94 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000051-0000-0000-0000-000000000051)
+    "FTDI FT2232H Channel B: JTAG debug"
+  )
+
+  ;; JTAG Pull-ups/Pull-downs
+  (symbol
+    (lib_id "Device:R")
+    (at 337.82 177.8 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000052-0000-0000-0000-000000000052)
+    (property "Reference" "R8" (at 337.82 173.99 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10k" (at 337.82 181.61 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000053-0000-0000-0000-000000000053))
+    (pin "2" (uuid a1000054-0000-0000-0000-000000000054))
+  )
+  (symbol
+    (lib_id "Device:R")
+    (at 342.9 177.8 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000055-0000-0000-0000-000000000055)
+    (property "Reference" "R9" (at 342.9 173.99 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "10k" (at 342.9 181.61 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000056-0000-0000-0000-000000000056))
+    (pin "2" (uuid a1000057-0000-0000-0000-000000000057))
+  )
+
+  ;; ============================================================
+  ;; SECTION 5: CLOCK GENERATION (Bottom-Left)
+  ;; ============================================================
+
+  (text
+    (at 114.3 152.4 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000060-0000-0000-0000-000000000060)
+    "CLOCK GENERATION"
+  )
+  (text
+    (at 114.3 154.94 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000061-0000-0000-0000-000000000061)
+    "SiT8008 100 MHz MEMS oscillator"
+  )
+  (text
+    (at 114.3 157.48 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000062-0000-0000-0000-000000000062)
+    "Buffer + level shift to 1.8V for GRX930"
+  )
+
+  ;; ============================================================
+  ;; SECTION 6: EXPANSION HEADERS (Edges)
+  ;; ============================================================
+
+  (text
+    (at 76.2 203.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000070-0000-0000-0000-000000000070)
+    "EXPANSION HEADERS"
+  )
+  (text
+    (at 76.2 205.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000071-0000-0000-0000-000000000071)
+    "J5: GPIO (2x20), J6: Logic Analyzer (2x10)"
+  )
+
+  ;; ============================================================
+  ;; SECTION 7: STATUS INDICATORS (Bottom)
+  ;; ============================================================
+
+  (text
+    (at 228.6 203.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000080-0000-0000-0000-000000000080)
+    "STATUS INDICATORS"
+  )
+  (text
+    (at 228.6 205.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000081-0000-0000-0000-000000000081)
+    "LED1 (Green): Heartbeat, LED2 (Red): Error"
+  )
+  (text
+    (at 228.6 208.28 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000082-0000-0000-0000-000000000082)
+    "LED3 (Blue): JTAG, LED4 (Yellow): UART"
+  )
+
+  ;; Reset Switch
+  (symbol
+    (lib_id "Device:SW_Push")
+    (at 254 215.9 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000083-0000-0000-0000-000000000083)
+    (property "Reference" "SW1" (at 254 212.09 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "RESET" (at 254 219.71 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000084-0000-0000-0000-000000000084))
+    (pin "2" (uuid a1000085-0000-0000-0000-000000000085))
+  )
+
+  ;; LEDs
+  (symbol
+    (lib_id "Device:LED")
+    (at 203.2 215.9 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000086-0000-0000-0000-000000000086)
+    (property "Reference" "D1" (at 203.2 212.09 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "GREEN" (at 203.2 219.71 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000087-0000-0000-0000-000000000087))
+    (pin "2" (uuid a1000088-0000-0000-0000-000000000088))
+  )
+  (symbol
+    (lib_id "Device:LED")
+    (at 213.36 215.9 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000089-0000-0000-0000-000000000089)
+    (property "Reference" "D2" (at 213.36 212.09 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "RED" (at 213.36 219.71 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000090-0000-0000-0000-000000000090))
+    (pin "2" (uuid a1000091-0000-0000-0000-000000000091))
+  )
+  (symbol
+    (lib_id "Device:LED")
+    (at 223.52 215.9 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000092-0000-0000-0000-000000000092)
+    (property "Reference" "D3" (at 223.52 212.09 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "BLUE" (at 223.52 219.71 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000093-0000-0000-0000-000000000093))
+    (pin "2" (uuid a1000094-0000-0000-0000-000000000094))
+  )
+  (symbol
+    (lib_id "Device:LED")
+    (at 233.68 215.9 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000095-0000-0000-0000-000000000095)
+    (property "Reference" "D4" (at 233.68 212.09 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "YELLOW" (at 233.68 219.71 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000096-0000-0000-0000-000000000096))
+    (pin "2" (uuid a1000097-0000-0000-0000-000000000097))
+  )
+
+  ;; LED Current Limiting Resistors
+  (symbol
+    (lib_id "Device:R")
+    (at 203.2 228.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000098-0000-0000-0000-000000000098)
+    (property "Reference" "R10" (at 203.2 224.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "1k" (at 203.2 232.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000099-0000-0000-0000-000000000099))
+    (pin "2" (uuid a1000100-0000-0000-0000-000000000100))
+  )
+  (symbol
+    (lib_id "Device:R")
+    (at 213.36 228.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000101-0000-0000-0000-000000000101)
+    (property "Reference" "R11" (at 213.36 224.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "1k" (at 213.36 232.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000102-0000-0000-0000-000000000102))
+    (pin "2" (uuid a1000103-0000-0000-0000-000000000103))
+  )
+  (symbol
+    (lib_id "Device:R")
+    (at 223.52 228.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000104-0000-0000-0000-000000000104)
+    (property "Reference" "R12" (at 223.52 224.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "1k" (at 223.52 232.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000105-0000-0000-0000-000000000105))
+    (pin "2" (uuid a1000106-0000-0000-0000-000000000106))
+  )
+  (symbol
+    (lib_id "Device:R")
+    (at 233.68 228.6 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid a1000107-0000-0000-0000-000000000107)
+    (property "Reference" "R13" (at 233.68 224.79 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "1k" (at 233.68 232.41 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid a1000108-0000-0000-0000-000000000108))
+    (pin "2" (uuid a1000109-0000-0000-0000-000000000109))
+  )
+
+  ;; ============================================================
+  ;; SECTION 8: TEST POINTS (Top)
+  ;; ============================================================
+
+  (text
+    (at 228.6 203.2 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000110-0000-0000-0000-000000000110)
+    "Test Points: TP1 (3.3V), TP2 (1.8V), TP3 (GND)"
+  )
+
+  ;; ============================================================
+  ;; COMPONENT COUNT SUMMARY
+  ;; ============================================================
+
+  (text
+    (at 381 76.2 0)
+    (effects (font (size 2.54 2.54) bold))
+    (uuid a1000120-0000-0000-0000-000000000120)
+    "COMPONENT SUMMARY"
+  )
+  (text
+    (at 381 78.74 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000121-0000-0000-0000-000000000121)
+    "ICs: U1 (FT2232H), U2 (TPS562201), U3 (TPS62162),"
+  )
+  (text
+    (at 381 81.28 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000122-0000-0000-0000-000000000122)
+    "U4 (TPS7A20x2), U5 (SiT8008), U6 (SN74LVC1G17),"
+  )
+  (text
+    (at 381 83.82 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000123-0000-0000-0000-000000000123)
+    "U7 (SN74LVC1T45), U8 (TPS3839K43), U9 (USBLC6-2SC6)"
+  )
+  (text
+    (at 381 86.36 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000124-0000-0000-0000-000000000124)
+    "Capacitors: 58 total (32x100nF, 16x1uF, 4x10uF, 2x10nF, 2x100uF, 2x10nF)"
+  )
+  (text
+    (at 381 88.9 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000125-0000-0000-0000-000000000125)
+    "Resistors: 20 total (8x10k, 4x1k, 4x22R, 2x10k, 2x10k)"
+  )
+  (text
+    (at 381 91.44 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000126-0000-0000-0000-000000000126)
+    "Inductors: 2 total (1x4.7uH, 1x2.2uH)"
+  )
+  (text
+    (at 381 93.98 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000127-0000-0000-0000-000000000127)
+    "Connectors: 8 total (USB-C, DC Jack, QFN-64, JTAG, GPIO, LA, 2xTP)"
+  )
+  (text
+    (at 381 96.52 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000128-0000-0000-0000-000000000128)
+    "LEDs: 4 total (Green, Red, Blue, Yellow)"
+  )
+  (text
+    (at 381 99.06 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid a1000129-0000-0000-0000-000000000129)
+    "Switches: 1 total (Reset)"
+  )
+
+  ;; ============================================================
+  ;; SHEET INSTANCES
+  ;; ============================================================
+  (sheet_instances
+    (path "/"
+      (page "1")
+    )
+  )
+)
