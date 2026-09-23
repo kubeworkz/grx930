@@ -103,20 +103,76 @@ int pta_device_init(pta_device *dev, const pta_tile *tile)
     dev->cols     = tile->cols;
     dev->drift[0] = (int32_t *)calloc(n, sizeof *dev->drift[0]);
     dev->drift[1] = (int32_t *)calloc(n, sizeof *dev->drift[1]);
+    dev->trim[0]  = (int32_t *)calloc(n, sizeof *dev->trim[0]);
+    dev->trim[1]  = (int32_t *)calloc(n, sizeof *dev->trim[1]);
+    dev->gain     = (int32_t *)calloc((size_t)tile->cols, sizeof *dev->gain);
+    dev->offs     = (int32_t *)calloc((size_t)tile->cols, sizeof *dev->offs);
     dev->rng      = K_DRIFT;
     dev->count    = 0;
-    if (!dev->drift[0] || !dev->drift[1]) {
+    if (!dev->drift[0] || !dev->drift[1] || !dev->trim[0] || !dev->trim[1] ||
+        !dev->gain || !dev->offs) {
         pta_device_free(dev);
         return -1;
     }
+    pta_cal_reset(dev);
     return 0;
+}
+
+void pta_cal_reset(pta_device *dev)
+{
+    int b, i;
+    for (b = 0; b < 2; ++b)
+        for (i = 0; i < dev->rows * dev->cols; ++i)
+            dev->trim[b][i] = 0;
+    for (i = 0; i < dev->cols; ++i) {
+        dev->gain[i] = 256;                      /* unity, Q8.8 */
+        dev->offs[i] = 0;
+    }
+}
+
+int32_t pta_trim_write(pta_device *dev, const pta_cfg *cfg, int bank, int row, int col,
+                       int64_t q88)
+{
+    const int64_t step = (int64_t)cfg->trim_step;
+    const int64_t lim  = (int64_t)cfg->trim_max;
+    int64_t v = q88;
+    if (step > 1) {                              /* the DAC's own resolution */
+        const int64_t half = step / 2;
+        v = v >= 0 ? ((v + half) / step) * step : -(((-v + half) / step) * step);
+    }
+    if (v > lim)  v = lim;
+    if (v < -lim) v = -lim;
+    dev->trim[bank][row * dev->cols + col] = (int32_t)v;
+    return (int32_t)v;
+}
+
+void pta_column_cal(pta_device *dev, int col, int32_t gain_q88, int32_t offs)
+{
+    dev->gain[col] = gain_q88;
+    dev->offs[col] = offs;
+}
+
+int64_t pta_affine(const pta_device *dev, const pta_tile *tile, int col, int64_t out)
+{
+    const int64_t g = dev->gain[col];
+    int64_t v = out;
+    if (g != 256)
+        v = asr64(v * g + 128, 8);
+    v += dev->offs[col];
+    return sext((uint64_t)v, tile->acc_w);
 }
 
 void pta_device_free(pta_device *dev)
 {
     free(dev->drift[0]);
     free(dev->drift[1]);
+    free(dev->trim[0]);
+    free(dev->trim[1]);
+    free(dev->gain);
+    free(dev->offs);
     dev->drift[0] = dev->drift[1] = NULL;
+    dev->trim[0] = dev->trim[1] = NULL;
+    dev->gain = dev->offs = NULL;
 }
 
 void pta_model_reset(pta_device *dev, uint32_t seed)
@@ -178,6 +234,12 @@ int64_t pta_analog_weight(const pta_cfg *cfg, int din_w, int32_t w, int32_t e, i
 {
     const int64_t wq = (cfg->impair & PTA_QUANT) ? pta_quant(w, cfg->w_bits, din_w) : w;
     return wq * 256 + ((cfg->impair & PTA_PROG_ERR) ? e : 0) + ((cfg->impair & PTA_DRIFT) ? d : 0);
+}
+
+int64_t pta_analog_weight_t(const pta_cfg *cfg, int din_w, int32_t w, int32_t e, int32_t d,
+                            int32_t trim)
+{
+    return pta_analog_weight(cfg, din_w, w, e, d) + trim;
 }
 
 int64_t pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
@@ -289,9 +351,14 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int ban
                     int64_t out;
                     int64_t *cell = &C[m * N + n_base + n];
                     for (r = 0; r < R; ++r)
-                        wa[r] = pta_analog_weight(cfg, tile->din_w, w[r * NC + n], e[r * NC + n],
-                                                  dev->drift[bank][r * NC + n]);
-                    out   = pta_element(&st, cfg, tile, a, wa, kr, &sat);
+                        wa[r] = pta_analog_weight_t(cfg, tile->din_w, w[r * NC + n],
+                                                    e[r * NC + n],
+                                                    dev->drift[bank][r * NC + n],
+                                                    dev->trim[bank][r * NC + n]);
+                    /* the affine belongs to the column's receiver, which is
+                     * the tile's column n, not the GEMM's n_base + n */
+                    out   = pta_affine(dev, tile, n,
+                                       pta_element(&st, cfg, tile, a, wa, kr, &sat));
                     *cell = sext((uint64_t)*cell + (uint64_t)out, tile->acc_w);
                     sats += sat;
                 }

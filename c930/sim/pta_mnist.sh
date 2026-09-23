@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -174,6 +174,36 @@ if [ "$what" = joint ] || [ "$what" = all ]; then
     } > "$work/out/joint_settings.txt"
     echo "== X1: every impairment at once, DIN_W 8, B_w 6, five networks each"
     run_settings joint
+fi
+
+# C3(a) of grxcp's board_program_plan.md, through X3's specification: the cell
+# trim, measured.  Every setting runs at version 1 of that plan's 4.3 -- 6
+# activation bits, a 7-bit ADC, thermal 0.25, 30 photons an ADC LSB,
+# programming sigma 1 and 2% crosstalk -- with drift on top, uncalibrated and
+# then calibrated.
+if [ "$what" = calib ] || [ "$what" = all ]; then
+    v1="--abits 6 --adcbits 7 --thermal 0.25 --photons 30 --prog 1 --xtalk 0.02"
+    imp="--impair quant,thermal,shot,prog,xtalk,drift"
+    {
+        echo "--impair quant,thermal,shot,prog,xtalk $v1"
+        for m in tflt tfln; do for h in 1 4 46; do
+            echo "$imp $v1 --drift $m --hours $h"
+            echo "$imp $v1 --drift $m --hours $h --calibrate 16"
+        done; done
+        # a 6-bit weight code's LSB is four of these, so the last two trim
+        # no finer than the code itself
+        for t in 0.25 1 2 4 8; do
+            echo "$imp $v1 --drift tfln --hours 46 --calibrate 16 --trimstep $t"
+        done
+        for h in 0.25 0.5 1 4 46; do
+            echo "$imp $v1 --drift tflt --hours 0 --calibrate 16 --post-hours $h"
+        done
+        for c in 1 4 16; do
+            echo "$imp $v1 --drift tflt --hours 4 --calibrate $c"
+        done
+    } > "$work/out/calib_settings.txt"
+    echo "== C3(a): the cell trim, DIN_W 8, B_w 6, five networks each"
+    run_settings calib
 fi
 
 exit $((gate_status | ablate_status))
