@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -87,6 +87,29 @@ eval_gate() {
     done; done | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
 }
 
+# run_settings TAG: the DIN_W 8 networks, then every setting in
+# out/TAG_settings.txt on each of them, each network on its own seed, and the
+# table that follows
+run_settings() {
+    local tag=$1 setting key s
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while read -r setting; do
+        for s in 1 2 3 4 5; do echo "pta_mnist $tag d8_b6_s$s.net --seed $s $setting"; done
+    done < "$work/out/${tag}_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+    printf '%-92s %7s %7s %7s %9s\n' setting mean min max "sats/elt"
+    while read -r setting; do
+        key=$(echo "$setting" | tr -c 'A-Za-z0-9.,' '_')
+        cat "$work/out/$tag.d"/d8_b6_s*"$key".txt | awk -v name="$setting" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              a = v["acc"] + 0; s += a; n++; if (n == 1 || a < lo) lo = a; if (n == 1 || a > hi) hi = a
+              sat += v["sats"]; el += v["elements"] }
+            END { printf "%-92s %7.2f %7.2f %7.2f %9.2e\n", name, s / n, lo, hi, sat / el }'
+    done < "$work/out/${tag}_settings.txt"
+    cat "$work/nets"/d8_b6_s*.net.log | awk '{ for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+        s += v["digital"]; n++ } END { printf "%-92s %7.2f\n", "digital, same weights", s / n }'
+}
+
 gate_status=0
 ablate_status=0
 if [ "$what" = gate ] || [ "$what" = all ]; then
@@ -110,8 +133,6 @@ if [ "$what" = ablate ] || [ "$what" = all ]; then
 fi
 
 if [ "$what" = sweep ] || [ "$what" = all ]; then
-    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
-    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
     {
         echo "--impair quant"
         for x in 2 3 4 5 6 7; do echo "--impair quant --abits $x"; done
@@ -124,22 +145,35 @@ if [ "$what" = sweep ] || [ "$what" = all ]; then
             echo "--impair quant,drift --adcbits 8 --drift $m --hours $x"
         done; done
     } > "$work/out/sweep_settings.txt"
-    # each network draws its noise and its drifting device from its own seed
-    while read -r setting; do
-        for s in 1 2 3 4 5; do echo "pta_mnist sweep d8_b6_s$s.net --seed $s $setting"; done
-    done < "$work/out/sweep_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
     echo "== reported: DIN_W 8, B_w 6, five networks per setting, each on its own seed (mean, min, max)"
-    printf '%-58s %7s %7s %7s %9s\n' setting mean min max "sats/elt"
-    while read -r setting; do
-        key=$(echo "$setting" | tr -c 'A-Za-z0-9.,' '_')
-        cat "$work/out/sweep.d"/d8_b6_s*"$key".txt | awk -v name="$setting" '
-            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
-              a = v["acc"] + 0; s += a; n++; if (n == 1 || a < lo) lo = a; if (n == 1 || a > hi) hi = a
-              sat += v["sats"]; el += v["elements"]; dig += v["digital"] }
-            END { printf "%-58s %7.2f %7.2f %7.2f %9.2e\n", name, s / n, lo, hi, sat / el }'
-    done < "$work/out/sweep_settings.txt"
-    cat "$work/nets"/d8_b6_s*.net.log | awk '{ for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
-        s += v["digital"]; n++ } END { printf "%-58s %7.2f\n", "digital, same weights", s / n }'
+    run_settings sweep
+fi
+
+# X1 of grxcp's board_program_plan.md: the interface chip's budget, with every
+# impairment on at once instead of one at a time.  v0 is that plan's 4.3 -- 5
+# activation bits, a 6-bit ADC, thermal sigma of one ADC LSB, 3 photons per ADC
+# LSB, programming sigma of 4 weight LSB, 10% crosstalk -- and drift at TFLT's
+# fit, aged to the hour its calibration interval allows.
+if [ "$what" = joint ] || [ "$what" = all ]; then
+    v0_bits="--abits 5 --adcbits 6"
+    v0_noise="--thermal 1 --photons 3 --prog 4 --xtalk 0.1"
+    tight_bits="--abits 6 --adcbits 7"
+    tight_noise="--thermal 0.5 --photons 10 --prog 2 --xtalk 0.05"
+    tighter_noise="--thermal 0.25 --photons 30 --prog 1 --xtalk 0.02"
+    all_but_drift="quant,thermal,shot,prog,xtalk"
+    {
+        echo "--impair quant $v0_bits"
+        echo "--impair $all_but_drift $v0_bits $v0_noise"
+        echo "--impair $all_but_drift,drift $v0_bits $v0_noise --drift tflt --hours 1"
+        echo "--impair $all_but_drift,drift $v0_bits $v0_noise --drift tflt --hours 0.1"
+        echo "--impair $all_but_drift,drift $v0_bits $tight_noise --drift tflt --hours 1"
+        echo "--impair $all_but_drift,drift $tight_bits $v0_noise --drift tflt --hours 1"
+        echo "--impair $all_but_drift,drift $tight_bits $tight_noise --drift tflt --hours 1"
+        echo "--impair $all_but_drift,drift $tight_bits $tighter_noise --drift tflt --hours 1"
+        echo "--impair $all_but_drift,drift $tight_bits $tighter_noise --drift tflt --hours 0.1"
+    } > "$work/out/joint_settings.txt"
+    echo "== X1: every impairment at once, DIN_W 8, B_w 6, five networks each"
+    run_settings joint
 fi
 
 exit $((gate_status | ablate_status))
