@@ -41,6 +41,19 @@
 //   * Never write START while the FIFO is full: START is a one-cycle pulse
 //     and the snapshot push requires FIFO space in that same cycle, so a
 //     submission against a full FIFO is silently dropped.
+//
+// Calibration (i_cal_busy), grxcp pta_cpu_integration.md section 3.2:
+//   The PTA tile calibrates between commands, and while it does the tile is
+//   not available -- but the calibration is not a command, so STATUS.BUSY
+//   stays 0 and keeps its per-command meaning.  That is a third machine state,
+//   and it can invalidate the completion predicate above in either direction:
+//   dispatch a START into a tile that is busy elsewhere, or drop it and leave
+//   occupancy 0 with busy 0, which a correct driver reads as "the batch
+//   finished".  So i_cal_busy widens the "cannot dispatch now" condition
+//   instead of touching BUSY: a START arriving during a calibration is pushed
+//   to the FIFO, occupancy goes non-zero, and occupancy == 0 && busy == 0
+//   correctly reports not-done.  Calibration is visible only through
+//   PTA_STATUS.CAL_BUSY.  tb/tb_npu_cal_queue.sv is the regression.
 // -----------------------------------------------------------------------------
 module c930_npu_csr
 #(
@@ -80,6 +93,9 @@ module c930_npu_csr
   output logic [31:0] o_c_base,
   output logic [2:0]  o_precision,
   input  logic        i_busy,
+  // The PTA tile is calibrating: it cannot take a command, and this is not a
+  // command's BUSY (see the header).  Tie low where there is no PTA tile.
+  input  logic        i_cal_busy,
   input  logic        i_done,
   input  logic        i_error,
 
@@ -206,6 +222,18 @@ module c930_npu_csr
 
   wire start_requested = start_written;
 
+  // Anything that means "the engine cannot take a command now".  The ablation
+  // CAL_GUARD_ABLATE drops calibration from both of these, which is exactly
+  // the regression of pta_cpu_integration.md section 3.2: a START arriving
+  // during a calibration then dispatches into a tile that is not available.
+`ifdef CAL_GUARD_ABLATE
+  wire cannot_dispatch = i_busy;
+  wire cal_blocks      = 1'b0;
+`else
+  wire cannot_dispatch = i_busy || i_cal_busy;
+  wire cal_blocks      = i_cal_busy;
+`endif
+
   // ---------------------------------------------------------------------------
   // Dispatcher FSM
   //
@@ -252,8 +280,12 @@ module c930_npu_csr
 
       case (disp_state)
         D_IDLE: begin
-          // Check for a pending START that arrived while we were dispatching
-          if (pending_start && !fifo_empty) begin
+          // Nothing dispatches into a calibrating tile; the pushes above have
+          // already put the command in the FIFO, and the drain branch below
+          // takes it when the tile comes back.
+          if (cal_blocks) begin
+            // hold
+          end else if (pending_start && !fifo_empty) begin
             // Previous pending_start pushed to FIFO — dispatch from head
             cur_dim_m     <= fifo_head[15:0];
             cur_dim_n     <= fifo_head[31:16];
@@ -357,8 +389,8 @@ module c930_npu_csr
   //  (a) normal START while engine busy or FIFO non-empty, OR
   //  (b) pending_start latched while engine is still busy (the START arrived
   //      in D_WAIT before i_busy went high, so we need to push retroactively)
-  wire do_push = (start_requested && !fifo_full && (i_busy || !fifo_empty)) ||
-                (pending_start && !pending_pushed && !fifo_full && i_busy);
+  wire do_push = (start_requested && !fifo_full && (cannot_dispatch || !fifo_empty)) ||
+                (pending_start && !pending_pushed && !fifo_full && cannot_dispatch);
   wire do_pop  = fifo_pop && !fifo_empty;
 
   // ---------------------------------------------------------------------------

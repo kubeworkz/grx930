@@ -130,6 +130,38 @@ int64_t  pta_affine(const pta_device *dev, const pta_tile *tile, int col, int64_
 void     pta_cal_reset(pta_device *dev);
 
 /*
+ * C3(b): the calibration engine's own reference, rtl/pta/c930_pta_cal.sv's
+ * arithmetic step for step.  A probe amplitude of 1 << amp_log2, averaged over
+ * 1 << reps_log2 repeats, over `passes` auto-ranging passes.  The engine's
+ * restrictions are this reference's too, because they are what let both do the
+ * estimator's division with a shift: the amplitude is a power of two the
+ * activation quantiser leaves alone, and cfg->trim_step is a power of two.
+ */
+typedef struct {
+    uint32_t amp_log2;     /* probe amplitude, 1 << this */
+    uint32_t reps_log2;    /* repeats a pass, 1 << this */
+    uint32_t passes;       /* auto-ranging passes, at least 1 */
+} pta_cal_cfg;
+
+/*
+ * Calibrate one bank against the streams `st`, which run through it as the
+ * RTL's do -- a calibration is not a GEMM start.  Writes every cell's trim,
+ * adds the probe's ADC saturations to *sats and sets *clamped if a trim could
+ * not reach what the estimator asked for (the RTL's DRIFT_ALARM).  Returns the
+ * residual, max |delta| of the last pass in Q.8 weight LSB and capped at 24
+ * bits as PTA_ERR_MAX is, or -1 if the amplitude cannot be read back, which is
+ * the refusal the engine raises PTA_IRQ_STATUS.ERR for.  *found is the same
+ * measure over the FIRST pass, before anything has been corrected: the error
+ * that accumulated since the last calibration, which is what the
+ * drift-predictive scheduler extrapolates and PTA_ERR_FOUND publishes.  A
+ * residual is what a calibration leaves, and one that worked leaves almost
+ * nothing, so it is the wrong thing to extrapolate -- see the engine's header.
+ */
+int64_t  pta_cal_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, int bank,
+                      pta_streams *st, const pta_cal_cfg *cal, long *sats, int *clamped,
+                      int64_t *found);
+
+/*
  * One captured element: tile->rows activations a[] (zero outside the K tile),
  * the column's analog weights wa[] from pta_analog_weight(), and kr, the rows
  * in the K tile, past which a row holds no weight for crosstalk.  Steps the
@@ -150,6 +182,12 @@ int64_t  pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
  */
 long     pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int bank,
                   int M, int N, int K, const int32_t *A, const int32_t *B, int64_t *C);
+
+/* The same GEMM against streams the caller owns, so several can run without
+ * the reload a start does.  pta_gemm() is this after a pta_start(). */
+long     pta_gemm_st(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile, pta_device *dev,
+                     int bank, int M, int N, int K, const int32_t *A, const int32_t *B,
+                     int64_t *C);
 
 #ifdef __cplusplus
 }

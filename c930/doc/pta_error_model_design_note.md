@@ -2,8 +2,10 @@
 
 **Status: C1 closed, 2026-09-16.** All six impairments are built and gated,
 and gate C1(a) has run: it missed at 3 bits, and the miss is recorded (§5).
-**C3's correction entered the C reference on 2026-09-22** (§4, §5): a trim per
-cell and an affine per column, which the RTL does not have yet.
+**C3 is built.** Its correction entered the C reference on 2026-09-22 and the
+RTL on 2026-09-23: a trim per cell and an affine per column in PTM-C, the
+calibration engine and its four schedulers in `rtl/pta/c930_pta_cal.sv`, and the
+`cal_busy` dispatch guard in `rtl/c930_npu_csr.sv` (§4, §5).
 Decisions E1–E4 were settled on 2026-09-14 and E5–E8 on 2026-09-15.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
@@ -219,9 +221,9 @@ Shot noise is taken on the signal before thermal noise, since it belongs to the
 light, not the amplifier. Its root is taken in ADC LSB with eight fraction
 bits, because `isqrt4` of an integer LSB count is too coarse at the low end.
 
-**C3's correction**, in the C reference since 2026-09-22 and not yet in the
-RTL. The error model makes error; C3 takes it away, and the contract has to say
-where the correction enters:
+**C3's correction**, in the C reference since 2026-09-22 and in the RTL since
+2026-09-23. The error model makes error; C3 takes it away, and the contract has
+to say where the correction enters:
 
 ```
 wa_r = ((QUANT ? q(w_rn, B_w) : w_rn) << 8)
@@ -236,9 +238,37 @@ and `offs_n` is in the accumulator's units. Trim zero, gain 256 and offset zero
 are what a device holds out of `pta_device_init()`, and they change nothing —
 which is why C1's gates still pass unaltered.
 
-Calibration measures what to write there, and lives above this contract: the
-host probes with zero weights and one-hot activations, and every column reports
-its cell at once (grxcp's `pta_chiplet_calibration.md`).
+Calibration measures what to write there: a probe with zero weights and one-hot
+activations, where every column reports its cell at once (grxcp's
+`pta_chiplet_calibration.md`). On this core the engine that runs it is
+`rtl/pta/c930_pta_cal.sv`, and the core grants it the tile — `S_CAL` — at a
+point where nothing is in flight.
+
+**What a calibration does to the streams.** It is not a GEMM start, but it needs
+a start's reproducibility, so the THERMAL, SHOT and PROG_ERR streams load once
+at its beginning from a seed of its own and then run through the whole of it,
+every repeat and every pass. Running through is the point: it is what makes one
+repeat differ from the next, which is the only reason averaging them helps.
+Nothing else moves — not the configuration, not the saturation count, and not
+drift, which is device state and goes on accumulating through a probe exactly as
+it would through a GEMM. The seed for calibration `j` is
+`cal_seed ^ (j * 0x9E3779B1)`, with `j` the value of `PTA_CAL_CT` before it
+runs, so no two calibrations draw the same noise and any of them can be
+reproduced from one word.
+
+**What the RTL restricts, and why.** The estimator's one division is by the
+probe amplitude times the repeat count, and the DAC rounds a write to its own
+step. In the RTL all three are powers of two — amplitude `1 << AMP_LOG2`,
+repeats `1 << REPS_LOG2`, step `1 << TRIM_LOG2` — so the division is a shift and
+the rounding is a mask, and the tile carries no divider. A real weight DAC's
+resolution is a power of two anyway. The amplitude also has to survive the
+activation quantiser untouched, since the estimator divides by what the tile
+actually saw, and `q(x, B)` is the identity only on multiples of `2^(DIN_W - B)`
+inside its range; that bounds it to `DIN_W - B_a <= AMP_LOG2 <= DIN_W - 2`.
+Outside those bounds the engine refuses the calibration and raises
+`PTA_IRQ_STATUS.ERR` rather than write trims it cannot read back. The C
+reference carries the general case and agrees with the RTL everywhere the RTL is
+defined.
 
 **What stays exact.** With every bit clear, `out = (y + 2^7) >>> 8` and
 `y = (sum of a_r * w_rn) << 8`, so `out` is the exact integer sum and PTM-C is
@@ -284,6 +314,38 @@ over its 14 shapes at `DIN_W` 8 and 16; the C reference is
 - **Refusals.** MZM_NL, any impairment with FP16 or BF16, and `S` above 40
   raise `o_error` at start, and the next valid start clears it. In a
   digital-array build, every impairment is refused.
+- **P7 — the correction paths** (C3(b)). A trim per cell and an affine per
+  column, written into the RTL's stores and the model's together: C and the
+  saturation count match `pta_gemm()` at every shape. Directed cases pin the
+  DAC's step and clamp and the affine's rounding against values worked out by
+  hand from §4, not from the model. And with every impairment clear a loaded
+  correction must change nothing, which is P0 again with the stores full.
+  *Ablations:* write a trim without the DAC's step; apply the affine before the
+  ADC instead of after. Both fail a directed case.
+- **P8 — the calibration engine** (C3(b)). Drift and programming error
+  accumulate over several GEMMs, the engine calibrates, and every trim it wrote
+  has to be the one `pta_cal_bank()` computed — checked by reading the tile back
+  a cell at a time, where a single disagreement shows, and by the residual
+  `PTA_ERR_MAX` reports. Then its refusals: an amplitude the probe cannot read
+  back is refused with `PTA_IRQ_STATUS.ERR` and no trim written, a START that
+  reaches the core while `CAL_BUSY` is set is reported rather than taken or
+  dropped, a `MODEL_RST` during a calibration is refused, and a trim that cannot
+  reach what the estimator asked for raises `DRIFT_ALARM`. *Ablation:* a probe
+  that keeps the GEMM's ADC range instead of taking its own — which is what
+  C3(a) measured the cost of — and parity fails.
+- **P9 — the schedulers** (C3(b)). Off, periodic, drift-predictive and shadow, on
+  the same GEMM sequence with the same operands and the same A-row arrivals, with
+  the rows arriving slowly enough that the tile waits on them — which is what
+  makes an idle window long enough to hide a calibration in, and is what X2 says
+  the chiplet's link does to the tile anyway. C3's gate: the shadow scheduler
+  costs less wall-clock than the periodic one at the same accuracy, where
+  accuracy is the tile read back a cell at a time with calibration off.
+- **The dispatch guard** (C3(b), `tb/tb_npu_cal_queue.sv`, `make cal_queue`).
+  Three STARTs back to back while `CAL_BUSY` is set: each queues, the occupancy
+  is checked at every step, nothing dispatches into the calibrating tile, and
+  `occupancy == 0 && busy == 0` never reads "finished" with work outstanding.
+  *Ablation:* `CAL_GUARD_ABLATE` drops calibration from the dispatch condition,
+  and the bench fails — a START dispatches into the tile and the queue strands.
 
 *Met*, 2026-09-15, at `DIN_W` 8 and 16:
 
@@ -332,6 +394,71 @@ pass, and the row-3 ablation is red.
 and every affine at identity, P0–P6, the directed cases and the refusals pass
 unchanged at `DIN_W` 8 and 16, and the four ablations are red as before. The
 model gained a path; no result moved.
+
+*Met, C3(b)*, 2026-09-23, at `DIN_W` 8 and 16. The figures below are the 8-bit
+run's; at 16 bits every gate passes, but the read-back that measures a tile has
+to take a range of its own to see a cell at all — at a 16-bit GEMM's ADC shift a
+dozen weight LSB of drift is under one code, which is question 2 of §7 arriving
+in a measurement rather than in an argument:
+
+- P7: the directed cases match the values worked out by hand — a DAC of step 4
+  and clamp 16 turns ±6 into ±8, 5 and 2 into 4, 1 into 0 and ±100 into ±16, and
+  a column of gain 1.5 and offset 7 turns an out of 10 into 22 and −10 into −8 —
+  and at all 14 shapes, with a trim on every cell and an affine on every column,
+  C and the saturation count match `pta_gemm()`. With every impairment clear and
+  both stores loaded, the exact sums are still exact: P0 holds with the
+  correction in place.
+- P8: one calibration of four repeats over three passes takes 7,321 cycles and
+  writes the trims `pta_cal_bank()` computes, cell for cell, with both published
+  numbers matching — 3,584 found and 4,608 left, Q.8 weight LSB. The 14 shapes
+  then match the model again with those trims in place. The refusals hold: an
+  amplitude of `2^(DIN_W−1)` is refused with the error bit set and `PTA_CAL_CT`
+  unmoved, a trim clamped at a quarter of a weight LSB raises `DRIFT_ALARM`
+  exactly where the reference says it should, and a START and a `MODEL_RST` that
+  arrived while `CAL_BUSY` was set were neither taken nor lost — `BUSY` stayed
+  clear and the error bit was raised.
+- P8's recovery: with the programming error off, because no trim can anticipate
+  an error redrawn at every weight write, and drift held still while the probe
+  runs, the tile read back a cell at a time goes from a mean of 408 to **0.00** at
+  the ADC's resolution — 3,328 found, 256 left. With the programming error on the
+  same calibration halves the error and no more, which is the floor the redraw
+  sets rather than the trim's limit.
+- P9: four GEMMs whose A rows arrive every 1,200 cycles against rows that take
+  about 80 cycles to compute, so the tile waits on its operands and an idle
+  window is long enough to hide a calibration in. Every mode ran the same work
+  with the same operands and the same arrivals. The periodic and shadow
+  schedulers each took 4 calibrations and spent the same 8,540 cycles in them,
+  and the difference is entirely in what that cost: 8,792 cycles of wall-clock
+  for the periodic scheduler against 2,198 for the shadow, so 75% of the
+  calibration was free. The shadow left 76.00 per cell, the periodic one 172.00,
+  and an uncalibrated tile 340.00. The drift-predictive scheduler fired twice at
+  the threshold it was given and left 284.00, which is a tuning question rather
+  than a gate.
+- The dispatch guard, `make cal_queue`: 14 checks pass. Three STARTs during a
+  calibration queue at occupancy 1, 2 and 3, nothing dispatches into the tile,
+  and `occupancy == 0 && busy == 0` never reads "finished" with work
+  outstanding.
+- *Ablations, red:* a trim written without the DAC's step gives 24 where 32 is
+  right at five of the eight directed columns, and fails P7 seven times over; the
+  affine applied before the ADC gives 15 where 22 is right and fails fifteen
+  times, which is the directed case and every shape; and a probe that keeps the
+  GEMM's ADC range instead of taking its own — the thing C3(a) measured the cost
+  of — fails P8 eighteen times, writing trims the reference does not.
+  `CAL_GUARD_ABLATE` fails the queue regression, dispatching into the calibrating
+  tile and stranding the queue.
+- With `PTM_C=1`, `make npu`, `make npu_float` (24/24) and `make ptm_c_lockstep`
+  pass, the row-3 ablation is red, and the digital-array build passes both.
+
+*Four things C3(b) found the hard way.* Three are recorded in grxcp's
+`pta_chiplet_calibration.md` §5: the drift-predictive scheduler cannot
+extrapolate a *residual*, because a calibration that worked leaves almost nothing
+and the rate it implies is almost zero; a rate of zero has to count as one unit
+or the scheduler switches itself off for good; and the interval needs a floor,
+because the measurement's own noise does not divide out and a short interval
+therefore reads as a steep rate, which shortens the interval again. The fourth
+was in this RTL rather than in any document: `CAL_BUSY` has to cover the handover
+back to the core as well as the work, or there is exactly one cycle in which a
+dispatcher believes the tile is free and the command it sends is lost.
 
 The CPU document's gate C1(b) names the NPU DPI wrapper. The configuration is
 not on a CSR until C4, so the wrapper cannot reach it yet; the core harness
@@ -507,9 +634,12 @@ With the 8-bit ADC, 97.42% before any noise:
 2. ~~DRIFT and XTALK, through P5 and P6.~~ **Done** (§5).
 3. ~~Gate C1(a) on the D3 network, with the drift settings fitted to TFLT and
    TFLN.~~ **Run, not met at 3 bits, recorded** (§5).
-4. C3's correction: in the C reference and measured (grxcp's board plan, C3(a));
-   the RTL, the calibration FSM and the schedulers follow.
-5. Only then the CSR mapping and firmware (C4).
+4. ~~C3's correction: in the C reference and measured (grxcp's board plan,
+   C3(a)); then the RTL, the calibration engine and the schedulers.~~
+   **Done** (§5, gates P7-P9).
+5. Only then the CSR mapping and firmware (C4), which is what the engine's
+   configuration and its two published errors are still waiting for: they are
+   ports on the core, not registers (grxcp's `pta_chiplet_regmap.md` §4).
 
 ---
 
@@ -528,7 +658,15 @@ With the 8-bit ADC, 97.42% before any noise:
    Before a 16-bit sweep, either the fields widen or the unit becomes a fraction
    of full scale.
 3. **MZM_NL** has a bit but no phase. It is not in C1's list.
-4. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
+4. **The affine has nothing to estimate.** C3(b) built both of C3's correction
+   paths, but this contract has no per-column error for the column loop to find:
+   every impairment is either a cell's or a shot's. So the affine is written from
+   outside, exercised only by P7's directed cases, and the engine's one estimator
+   is the cell trim. Either the contract gains a receiver's gain and offset — a
+   per-column multiplier and addend, drawn once at a model reset, which is what a
+   real receiver has — or the column loop stays a path with no measurement behind
+   it. grxcp's `pta_chiplet_calibration.md` §2 says the same from the other side.
+5. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
    neighbour's crosstalk does not couple on again. An MZI mesh would couple
    along its triangular structure instead (CPU document §8 item 5); that is a
    different matrix, and a hypothesis this program has no ground truth for.

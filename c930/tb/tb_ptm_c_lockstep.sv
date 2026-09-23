@@ -146,7 +146,13 @@ module tb_ptm_c_lockstep;
     .i_pta_sigma_th(16'd0), .i_pta_k_shot(16'd0), .i_pta_sigma_pr(16'd0), \
     .i_pta_drift_sigma(16'd0), .i_pta_drift_log2(5'd0), .i_pta_drift_max(16'd0), \
     .i_pta_xtalk(8'd0), .i_pta_model_rst(1'b0), .i_pta_shot_start(1'b0), .i_pta_shot(1'b0), \
-    .i_pta_shot_col('0), .o_pta_sat_count()
+    .i_pta_shot_col('0), .o_pta_sat_count(), \
+    .i_pta_trim_wen(1'b0), .i_pta_trim_bank(1'b0), .i_pta_trim_row('0), \
+    .i_pta_trim_col('0), .i_pta_trim_data('0), .i_pta_trim_log2(4'd0), \
+    .i_pta_trim_max(16'd0), .o_pta_trim_rdata(), .o_pta_trim_clamped(), \
+    .i_pta_cal_wen(1'b0), .i_pta_cal_col('0), .i_pta_cal_gain(18'sd256), \
+    .i_pta_cal_offs(32'sd0), .i_pta_cal_rst(1'b0), .i_pta_cal_shift_en(1'b0), \
+    .i_pta_cal_shift(6'd0), .i_pta_cal_load(1'b0), .i_pta_cal_seed(32'd0)
 
   wire signed [CA*ACC_W-1:0] out_arr_a, out_ptm_a, out_abl_a;
   wire signed [CB*ACC_W-1:0] out_arr_b, out_ptm_b;
