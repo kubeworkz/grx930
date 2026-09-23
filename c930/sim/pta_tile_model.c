@@ -130,16 +130,24 @@ void pta_cal_reset(pta_device *dev)
     }
 }
 
+/* The DAC's own resolution: round away from zero at the half step.  Shared
+ * with pta_cal_bank(), which needs to know whether a write will clamp. */
+static int64_t trim_round(uint32_t step, int64_t v)
+{
+    const int64_t st = (int64_t)step;
+    int64_t mag;
+    if (st <= 1)
+        return v;
+    mag = v < 0 ? -v : v;
+    mag = ((mag + st / 2) / st) * st;
+    return v < 0 ? -mag : mag;
+}
+
 int32_t pta_trim_write(pta_device *dev, const pta_cfg *cfg, int bank, int row, int col,
                        int64_t q88)
 {
-    const int64_t step = (int64_t)cfg->trim_step;
     const int64_t lim  = (int64_t)cfg->trim_max;
-    int64_t v = q88;
-    if (step > 1) {                              /* the DAC's own resolution */
-        const int64_t half = step / 2;
-        v = v >= 0 ? ((v + half) / step) * step : -(((-v + half) / step) * step);
-    }
+    int64_t v = trim_round(cfg->trim_step, q88);
     if (v > lim)  v = lim;
     if (v < -lim) v = -lim;
     dev->trim[bank][row * dev->cols + col] = (int32_t)v;
@@ -173,6 +181,112 @@ void pta_device_free(pta_device *dev)
     dev->drift[0] = dev->drift[1] = NULL;
     dev->trim[0] = dev->trim[1] = NULL;
     dev->gain = dev->offs = NULL;
+}
+
+/*
+ * rtl/pta/c930_pta_cal.sv's engine, in C.  Every step is the RTL's: the same
+ * probe, the same shot order, the same weight writes into the same streams, the
+ * same estimator, the same auto-ranging.  Gate P8 holds the two to the same
+ * trims, which is only possible because neither reloads a stream here.
+ */
+int64_t pta_cal_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, int bank,
+                     pta_streams *st, const pta_cal_cfg *cal, long *sats, int *clamped,
+                     int64_t *found)
+{
+    const int R    = tile->rows;
+    const int NC   = tile->cols;
+    const int alog = (int)cal->amp_log2;
+    const int rlog = (int)cal->reps_log2;
+    const int quant = (cfg->impair & PTA_QUANT) != 0;
+    /* q(x, B) is the identity on multiples of 2^h inside its range, so the
+     * probe's amplitude has to be one: the engine refuses anything else. */
+    const int h = (quant && cfg->act_bits != 0 && (int)cfg->act_bits < tile->din_w)
+                ? tile->din_w - (int)cfg->act_bits : 0;
+    const int quantised = quant && cfg->adc_bits != 0;
+    const int64_t codes = quantised ? (((int64_t)1 << (cfg->adc_bits - 1)) - 1) : 0;
+    const int32_t amp = (int32_t)1 << alog;
+    int64_t *sum, *wa;
+    int32_t *e, *a;
+    int64_t range, worst = 0, resid = 0;
+    pta_cfg c = *cfg;
+    int pass, rep, r, n, shot, i;
+
+    if (R < 1 || NC < 1 || bank < 0 || bank > 1 || cal->passes < 1 ||
+        dev->rows != R || dev->cols != NC)
+        return -1;
+    if (alog > tile->din_w - 2 || alog < h)
+        return -1;                               /* the engine's own refusal */
+
+    sum = (int64_t *)calloc((size_t)R * (size_t)NC, sizeof *sum);
+    wa  = (int64_t *)calloc((size_t)R, sizeof *wa);
+    e   = (int32_t *)calloc((size_t)R * (size_t)NC, sizeof *e);
+    a   = (int32_t *)calloc((size_t)R, sizeof *a);
+    if (!sum || !wa || !e || !a) {
+        free(sum); free(wa); free(e); free(a);
+        return -1;
+    }
+
+    range = ((int64_t)cfg->trim_max << alog) >> 8;   /* what a trim can hold */
+    for (pass = 0; pass < (int)cal->passes; ++pass) {
+        int s = 0;
+        while (quantised && s < 40 && range > (codes << s))
+            ++s;
+        c.adc_shift = (uint32_t)(quantised ? s : 0);
+        for (i = 0; i < R * NC; ++i)
+            sum[i] = 0;
+        worst = 0;
+        resid = 0;
+        for (rep = 0; rep < (1 << rlog); ++rep) {
+            /* S_WLOAD, every weight of the bank to zero: each write redraws
+             * that cell's programming error, which is what averaging beats. */
+            for (r = 0; r < R; ++r)
+                for (n = 0; n < NC; ++n)
+                    e[r * NC + n] = pta_weight_write(st, cfg);
+            for (shot = 0; shot < R; ++shot) {
+                if (cfg->impair & PTA_DRIFT)
+                    pta_shot_start(dev, cfg);
+                for (r = 0; r < R; ++r)
+                    a[r] = (r == shot) ? amp : 0;
+                for (n = 0; n < NC; ++n) {
+                    int sat;
+                    for (r = 0; r < R; ++r)
+                        wa[r] = pta_analog_weight_t(cfg, tile->din_w, 0, e[r * NC + n],
+                                                    dev->drift[bank][r * NC + n],
+                                                    dev->trim[bank][r * NC + n]);
+                    sum[shot * NC + n] += pta_affine(dev, tile, n,
+                        pta_element(st, &c, tile, a, wa, R, &sat));
+                    if (sats)
+                        *sats += sat;
+                }
+            }
+        }
+        /* The estimator, row major, exactly the order the engine walks. */
+        for (i = 0; i < R * NC; ++i) {
+            const int64_t v    = sum[i];
+            const int64_t mag  = v < 0 ? -v : v;
+            const int64_t q    = (mag << 8) >> (alog + rlog);
+            const int64_t left = mag >> rlog;
+            int64_t req = (int64_t)dev->trim[bank][i] + (v < 0 ? q : -q);
+            if (q > resid)    resid = q;
+            if (left > worst) worst = left;
+            if (req >  2147483647LL) req =  2147483647LL;   /* as the RTL saturates */
+            if (req < -2147483648LL) req = -2147483648LL;
+            if (clamped) {
+                const int64_t rq = trim_round(cfg->trim_step, req);
+                if (rq > (int64_t)cfg->trim_max || rq < -(int64_t)cfg->trim_max)
+                    *clamped = 1;
+            }
+            pta_trim_write(dev, cfg, bank, i / NC, i % NC, req);
+        }
+        if (found && pass == 0)
+            *found = resid > 0xFFFFFF ? 0xFFFFFF : resid;
+        if (!quantised)
+            break;                               /* the probe read it exactly */
+        range = worst * 4 + 8;
+    }
+
+    free(sum); free(wa); free(e); free(a);
+    return resid > 0xFFFFFF ? 0xFFFFFF : resid;  /* PTA_ERR_MAX is 24 bits */
 }
 
 void pta_model_reset(pta_device *dev, uint32_t seed)
@@ -305,9 +419,16 @@ int64_t pta_element(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile,
 long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int bank,
               int M, int N, int K, const int32_t *A, const int32_t *B, int64_t *C)
 {
+    pta_streams st;
+    pta_start(&st, cfg->seed);
+    return pta_gemm_st(&st, cfg, tile, dev, bank, M, N, K, A, B, C);
+}
+
+long pta_gemm_st(pta_streams *st, const pta_cfg *cfg, const pta_tile *tile, pta_device *dev,
+                 int bank, int M, int N, int K, const int32_t *A, const int32_t *B, int64_t *C)
+{
     const int R  = tile->rows;
     const int NC = tile->cols;
-    pta_streams st;
     int32_t *w, *e, *a;
     int64_t *wa;
     long sats = 0;
@@ -325,7 +446,6 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int ban
         return -1;
     }
 
-    pta_start(&st, cfg->seed);
     for (i = 0; i < M * N; ++i)
         C[i] = 0;
 
@@ -337,7 +457,7 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int ban
             for (r = 0; r < kr; ++r)
                 for (n = 0; n < nc; ++n) {
                     w[r * NC + n] = B[(k_base + r) * N + n_base + n];
-                    e[r * NC + n] = pta_weight_write(&st, cfg);
+                    e[r * NC + n] = pta_weight_write(st, cfg);
                 }
             for (m = 0; m < M; ++m) {
                 /* One shot.  Rows past the K tile carry no activation, and no
@@ -358,7 +478,7 @@ long pta_gemm(const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, int ban
                     /* the affine belongs to the column's receiver, which is
                      * the tile's column n, not the GEMM's n_base + n */
                     out   = pta_affine(dev, tile, n,
-                                       pta_element(&st, cfg, tile, a, wa, kr, &sat));
+                                       pta_element(st, cfg, tile, a, wa, kr, &sat));
                     *cell = sext((uint64_t)*cell + (uint64_t)out, tile->acc_w);
                     sats += sat;
                 }

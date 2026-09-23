@@ -29,7 +29,7 @@ module tb_csr_queue;
     .o_start(o_start), .o_dim_m(o_dim_m), .o_dim_n(o_dim_n),
     .o_dim_k(o_dim_k), .o_a_base(o_a_base), .o_b_base(o_b_base),
     .o_c_base(o_c_base), .o_precision(o_precision),
-    .i_busy(i_busy), .i_done(i_done), .i_error(i_error),
+    .i_busy(i_busy), .i_cal_busy(1'b0), .i_done(i_done), .i_error(i_error),
     .i_cycle_count(0), .i_op_count(0), .i_stall_count(0), .i_dma_cycle_count(0)
   );
 
