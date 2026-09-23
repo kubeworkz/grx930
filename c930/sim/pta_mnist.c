@@ -21,6 +21,10 @@
  * doc/pta_error_model_design_note.md section 5 states the gate, and
  * sim/pta_mnist.sh runs it.  C99 and libm, single-threaded.
  *
+ * C3's calibration is here too, on the host's side of the line: a probe GEMM
+ * with zero weights and one-hot activations reads every cell's programming
+ * error and drift at once, and the trim that answers it goes to the DAC.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -521,6 +525,76 @@ static long tile_batch(const host_net *hn, const pta_cfg cfg[2], const pta_tile 
     return sats;
 }
 
+/*
+ * C3's cell calibration, as X3 specifies it: probe with zero weights so that a
+ * cell reports its programming error and its drift alone, and one-hot
+ * activations so that every column reports at once.  `repeats` averages the
+ * draws that do not persist -- programming error is redrawn at every weight
+ * write, while drift stays -- and the trim that goes back is the negative of
+ * what is left.
+ *
+ * The probe reads at the ADC's finest setting: a network's shift is calibrated
+ * for sums thousands of units wide, and a cell's error is a handful.  A real
+ * tile changes range the same way.
+ */
+static void calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, int bank,
+                           uint32_t seed, uint32_t *gemm, int repeats, gemm_buf *g)
+{
+    enum { PASSES = 3 };
+    const int k = tile->rows, n = tile->cols;
+    const int32_t probe = (int32_t)((((int64_t)1 << (tile->din_w - 1)) - 1));
+    const int64_t pa = (cfg->impair & PTA_QUANT)
+                     ? contract_quant(probe, (int)cfg->act_bits, tile->din_w) : probe;
+    const int quantised = (cfg->impair & PTA_QUANT) && cfg->adc_bits != 0;
+    const int64_t codes = quantised ? (((int64_t)1 << (cfg->adc_bits - 1)) - 1) : 0;
+    int64_t sum[64], total[64];
+    int64_t range = pa * (int64_t)cfg->trim_max / 256;   /* cover what a trim can hold */
+    pta_cfg c = *cfg;
+    int r, col, rep, pass, s_probe;
+
+    if (k * n > (int)(sizeof sum / sizeof sum[0]) || pa == 0)
+        return;
+    for (r = 0; r < k * n; ++r)
+        total[r] = 0;
+
+    for (pass = 0; pass < PASSES; ++pass) {
+        int64_t worst = 0;
+        /* The probe picks its own range, as an instrument would: wide enough
+         * for what is left to measure, and no wider. */
+        for (s_probe = 0; quantised && s_probe < 40 && range > (codes << s_probe); ++s_probe)
+            ;
+        c.adc_shift = (uint32_t)(quantised ? s_probe : 0);
+        for (r = 0; r < k * n; ++r)
+            sum[r] = 0;
+        memset(g->B, 0, (size_t)k * n * sizeof g->B[0]);            /* zero weights */
+        for (rep = 0; rep < repeats; ++rep) {
+            memset(g->A, 0, (size_t)k * k * sizeof g->A[0]);
+            for (r = 0; r < k; ++r)
+                g->A[r * k + r] = probe;                            /* one-hot rows */
+            c.seed = gemm_seed(seed, (*gemm)++);
+            if (pta_gemm(&c, tile, dev, bank, k, n, k, g->A, g->B, g->C) < 0)
+                return;
+            for (r = 0; r < k; ++r)
+                for (col = 0; col < n; ++col)
+                    sum[r * n + col] += g->C[r * n + col];
+        }
+        for (r = 0; r < k; ++r)
+            for (col = 0; col < n; ++col) {
+                /* out ~ q_a(probe) * (e + d + trim) / 256, so invert it and
+                 * fold the answer into the trim this cell already holds */
+                const int64_t avg = sum[r * n + col];
+                const int64_t left = avg / repeats;
+                total[r * n + col] += -(avg * 256) / (pa * repeats);
+                total[r * n + col] = pta_trim_write(dev, cfg, bank, r, col, total[r * n + col]);
+                if (left > worst)  worst = left;
+                if (-left > worst) worst = -left;
+            }
+        if (!quantised)
+            break;                      /* nothing to refine: the probe read it exactly */
+        range = worst * 4 + 8;          /* next pass measures what this one left */
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 
 /* The smallest shift s for which round(v / 2^s) <= lim. */
@@ -778,13 +852,15 @@ static int cmd_eval(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
-        "--drift", "--hours", NULL};
+        "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
     const uint32_t seed = (uint32_t)strtoul(opt(argc, argv, "--seed", "1"), NULL, 0);
     const double photons = atof(opt(argc, argv, "--photons", "0"));
     const double hours = atof(opt(argc, argv, "--hours", "0"));
+    const double post_hours = atof(opt(argc, argv, "--post-hours", "0"));
+    const int calibrate = atoi(opt(argc, argv, "--calibrate", "0"));
     dataset tr, te;
     mlp *net = (mlp *)calloc(1, sizeof *net);
     host_net *hn = (host_net *)calloc(1, sizeof *hn);
@@ -795,7 +871,7 @@ static int cmd_eval(int argc, char **argv)
     int32_t a1[MAX_M * N_IN], a2[MAX_M * N_HID];
     int64_t y1[MAX_M * N_HID], y2[MAX_M * N_OUT];
     uint32_t gemm = 0;
-    uint64_t steps = 0;
+    uint64_t steps = 0, post_steps = 0;
     long sats = 0, elements = 0, r;
     int S[2] = {0, 0}, right = 0, base, m, k, o;
 
@@ -820,7 +896,9 @@ static int cmd_eval(int argc, char **argv)
         q88("--thermal", atof(opt(argc, argv, "--thermal", "0")), 65535, &cfg[0].sigma_th) != 0 ||
         q88("--prog", atof(opt(argc, argv, "--prog", "0")), 65535, &cfg[0].sigma_pr) != 0 ||
         q88("--xtalk", atof(opt(argc, argv, "--xtalk", "0")), 255, &cfg[0].xtalk) != 0 ||
-        (photons > 0.0 && q88("--photons", 1.0 / sqrt(photons), 65535, &cfg[0].k_shot) != 0))
+        (photons > 0.0 && q88("--photons", 1.0 / sqrt(photons), 65535, &cfg[0].k_shot) != 0) ||
+        q88("--trimstep", atof(opt(argc, argv, "--trimstep", "0.25")), 65535, &cfg[0].trim_step) != 0 ||
+        q88("--trimmax", atof(opt(argc, argv, "--trimmax", "128")), 1 << 30, &cfg[0].trim_max) != 0)
         return 2;
     if (strcmp(drift, "tflt") == 0 || strcmp(drift, "tfln") == 0) {
         if (net->din != 8) {
@@ -829,6 +907,7 @@ static int cmd_eval(int argc, char **argv)
         }
         drift_fit(&cfg[0], strcmp(drift, "tflt") == 0 ? 1.0 : 5.0);
         steps = hours_to_steps(hours);
+        post_steps = hours_to_steps(post_hours);
     } else if (strcmp(drift, "none") != 0) {
         fprintf(stderr, "pta_mnist: --drift takes none, tflt or tfln\n");
         return 2;
@@ -850,6 +929,12 @@ static int cmd_eval(int argc, char **argv)
     pta_model_reset(&dev, seed);
     if (cfg[0].impair & PTA_DRIFT)
         pta_drift_age(&dev, &cfg[0], steps);
+    if (calibrate > 0) {
+        calibrate_bank(&dev, &cfg[0], &tile, 0, seed ^ 0xCA11B, &gemm, calibrate, g);
+        calibrate_bank(&dev, &cfg[1], &tile, 1, seed ^ 0xCA11B, &gemm, calibrate, g);
+    }
+    if ((cfg[0].impair & PTA_DRIFT) && post_steps)
+        pta_drift_age(&dev, &cfg[0], post_steps);
 
     for (base = 0; base < images; base += MAX_M) {
         const int M = (images - base < MAX_M) ? images - base : MAX_M;
@@ -873,11 +958,13 @@ static int cmd_eval(int argc, char **argv)
 
     printf("din=%d net_wbits=%d net_seed=%d from=%d epochs=%d digital=%.2f impair=0x%02x wbits=%u abits=%u "
            "adcbits=%u S=%d,%d sh=%d thermal=%g photons=%g prog=%g xtalk=%g drift=%s hours=%g "
-           "steps=%llu sigma_d=%u d_max=%u seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld\n",
+           "steps=%llu sigma_d=%u d_max=%u cal=%d trimstep=%g trimmax=%g post_hours=%g "
+           "seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld\n",
            net->din, net->wbits, net->seed, net->from_bits, net->epochs, net->test_acc, cfg[0].impair, cfg[0].w_bits,
            cfg[0].act_bits, cfg[0].adc_bits, S[0], S[1], hn->sh, cfg[0].sigma_th / 256.0, photons,
            cfg[0].sigma_pr / 256.0, cfg[0].xtalk / 256.0, drift, hours, (unsigned long long)steps,
-           cfg[0].drift_sigma, cfg[0].drift_max, seed, images, right, 100.0 * right / images, sats,
+           cfg[0].drift_sigma, cfg[0].drift_max, calibrate, cfg[0].trim_step / 256.0,
+           cfg[0].trim_max / 256.0, post_hours, seed, images, right, 100.0 * right / images, sats,
            elements);
     pta_device_free(&dev);
     return 0;
@@ -1031,6 +1118,10 @@ static void help(void)
            "  --thermal X     thermal sigma, ADC LSB         --photons P  photons per ADC LSB\n"
            "  --prog X        programming sigma, weight LSB  --xtalk X    crosstalk chi\n"
            "  --drift tflt|tfln --hours H   drift fitted at EO-res, aged H hours\n"
+           "  --calibrate M   C3's cell calibration after the ageing, averaging M probes\n"
+           "  --trimstep X    the weight DAC's step below the weight LSB, in weight LSB (0.25)\n"
+           "  --trimmax X     the trim's clamp, in weight LSB (128)\n"
+           "  --post-hours H  age H more hours after calibrating, to see how long it holds\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
 }
 

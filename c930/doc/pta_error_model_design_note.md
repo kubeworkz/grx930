@@ -2,6 +2,8 @@
 
 **Status: C1 closed, 2026-09-16.** All six impairments are built and gated,
 and gate C1(a) has run: it missed at 3 bits, and the miss is recorded (§5).
+**C3's correction entered the C reference on 2026-09-22** (§4, §5): a trim per
+cell and an affine per column, which the RTL does not have yet.
 Decisions E1–E4 were settled on 2026-09-14 and E5–E8 on 2026-09-15.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
@@ -217,10 +219,32 @@ Shot noise is taken on the signal before thermal noise, since it belongs to the
 light, not the amplifier. Its root is taken in ADC LSB with eight fraction
 bits, because `isqrt4` of an integer LSB count is too coarse at the low end.
 
+**C3's correction**, in the C reference since 2026-09-22 and not yet in the
+RTL. The error model makes error; C3 takes it away, and the contract has to say
+where the correction enters:
+
+```
+wa_r = ((QUANT ? q(w_rn, B_w) : w_rn) << 8)
+       + (PROG_ERR ? e_rn : 0) + (DRIFT ? d_rn : 0) + trim_rn      Q.8, weight LSB
+out' = ((out * gain_n + 2^7) >>> 8) + offs_n                       when not identity
+```
+
+`trim_rn` is the weight DAC's, below the weight code's LSB: a write quantises
+it to `trim_step` and clamps it to ±`trim_max`, both Q.8 weight LSB, which is
+what a DAC of finite resolution can hold. `gain_n` is Q8.8 with 256 for unity
+and `offs_n` is in the accumulator's units. Trim zero, gain 256 and offset zero
+are what a device holds out of `pta_device_init()`, and they change nothing —
+which is why C1's gates still pass unaltered.
+
+Calibration measures what to write there, and lives above this contract: the
+host probes with zero weights and one-hot activations, and every column reports
+its cell at once (grxcp's `pta_chiplet_calibration.md`).
+
 **What stays exact.** With every bit clear, `out = (y + 2^7) >>> 8` and
 `y = (sum of a_r * w_rn) << 8`, so `out` is the exact integer sum and PTM-C is
 the array again. QUANT with `B_a`, `B_w` and `B_adc` all zero is also exact, as
-is DRIFT from a model reset until its first step.
+is DRIFT from a model reset until its first step. So is any run whose trim is
+zero and whose affine is identity.
 
 ---
 
@@ -303,6 +327,11 @@ shapes. With the `else` back, P0–P6, the directed cases and the refusals pass
 again at `DIN_W` 8 and 16, and the four ablations fail exactly as before. With
 `PTM_C=1`, `make npu`, `make npu_float` (24/24) and `make ptm_c_lockstep`
 pass, and the row-3 ablation is red.
+
+*Re-run with C3's correction in the model*, 2026-09-22: with every trim zero
+and every affine at identity, P0–P6, the directed cases and the refusals pass
+unchanged at `DIN_W` 8 and 16, and the four ablations are red as before. The
+model gained a path; no result moved.
 
 The CPU document's gate C1(b) names the NPU DPI wrapper. The configuration is
 not on a CSR until C4, so the wrapper cannot reach it yet; the core harness
@@ -478,7 +507,9 @@ With the 8-bit ADC, 97.42% before any noise:
 2. ~~DRIFT and XTALK, through P5 and P6.~~ **Done** (§5).
 3. ~~Gate C1(a) on the D3 network, with the drift settings fitted to TFLT and
    TFLN.~~ **Run, not met at 3 bits, recorded** (§5).
-4. Only then the CSR mapping and firmware (C4).
+4. C3's correction: in the C reference and measured (grxcp's board plan, C3(a));
+   the RTL, the calibration FSM and the schedulers follow.
+5. Only then the CSR mapping and firmware (C4).
 
 ---
 

@@ -46,6 +46,12 @@ typedef struct {
     uint32_t drift_log2;   /* log2 shots per drift step, 0..31 */
     uint32_t drift_max;    /* drift clamp, Q8.8 weight LSB (16 bits) */
     uint32_t xtalk;        /* crosstalk chi, Q0.8 (8 bits) */
+    /* C3's correction, which the error model does not itself produce.  A trim
+     * is the weight DAC's, below the weight code's LSB: trim_step is its step
+     * in Q.8 weight LSB and trim_max its clamp.  Both zero leaves the tile as
+     * C1 built it. */
+    uint32_t trim_step;    /* Q.8 weight LSB, 0 = no trim path */
+    uint32_t trim_max;     /* Q.8 weight LSB */
 } pta_cfg;
 
 /* The core's NUM_ROWS, NUM_COLS, DIN_W and ACC_W. */
@@ -67,6 +73,12 @@ typedef struct {
     int32_t *drift[2];     /* Q8.8 weight LSB, row-major, rows x cols */
     uint32_t rng;
     uint32_t count;        /* shots counted since the last step */
+    /* C3's correction state, host-written and not part of the error model:
+     * a trim per cell, and an affine per column.  pta_device_init() leaves
+     * them at zero and unity, where they change nothing. */
+    int32_t *trim[2];      /* Q.8 weight LSB, as the DAC can hold it */
+    int32_t *gain;         /* per column, Q8.8; 256 is unity */
+    int32_t *offs;         /* per column, in the accumulator's units */
 } pta_device;
 
 uint32_t pta_xorshift32(uint32_t s);
@@ -99,6 +111,23 @@ int32_t  pta_weight_write(pta_streams *st, const pta_cfg *cfg);
 /* A cell's analog weight, Q.8 weight LSB: the DAC's level for w, plus its
  * programming error e and its drift d as the configuration enables them. */
 int64_t  pta_analog_weight(const pta_cfg *cfg, int din_w, int32_t w, int32_t e, int32_t d);
+
+/* The same, with C3's trim added: what the DAC actually holds. */
+int64_t  pta_analog_weight_t(const pta_cfg *cfg, int din_w, int32_t w, int32_t e, int32_t d,
+                             int32_t trim);
+
+/* Write a cell's trim, quantised to cfg->trim_step and clamped to +-trim_max,
+ * as a DAC with bits below the weight code's LSB would hold it.  Returns what
+ * was stored, in Q.8 weight LSB. */
+int32_t  pta_trim_write(pta_device *dev, const pta_cfg *cfg, int bank, int row, int col,
+                        int64_t q88);
+
+/* A column's affine correction: out' = ((out * gain + 128) >> 8) + offs. */
+void     pta_column_cal(pta_device *dev, int col, int32_t gain_q88, int32_t offs);
+int64_t  pta_affine(const pta_device *dev, const pta_tile *tile, int col, int64_t out);
+
+/* Trims to zero, gains to unity, offsets to zero. */
+void     pta_cal_reset(pta_device *dev);
 
 /*
  * One captured element: tile->rows activations a[] (zero outside the K tile),
