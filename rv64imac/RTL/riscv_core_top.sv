@@ -1156,6 +1156,7 @@ u_riscv_core_mul_div
   // the operands settle via the WB->EX forward on the release cycle. (During
   // the load-use stall the id_ex pipe is a bubble, so no M/D issues there.)
   ,.i_mul_div_en         (id_ex_pipe_im_sel) // is_MulE
+  ,.i_mul_div_stall_ex   (hu_stall_ex)
   ,.o_mul_div_result     (m_ext_res)
   ,.o_mul_div_busy       (m_ext_busy)
   ,.o_mul_div_done       (m_ext_done)
