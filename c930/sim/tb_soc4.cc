@@ -5,6 +5,9 @@
 //   (none) / "quad" : mirrors tb_quad_isolated.sv -- preloads the quadcore
 //                     DDR image + operands, boots all 4 harts, waits for
 //                     CPU0 to write the 0xFACEFEED magic to DDR[0x9400].
+//   "pta"           : phase C4(a) -- boots sw/pta_test.c, which configures
+//                     the PTA register block at 0x4000_0100 through MMIO and
+//                     checks seven things, and reports the bitmap it wrote.
 //   "suite"         : mirrors Test 4 of tb_c930_soc_full.sv -- the
 //                     "full-SoC NPU firmware suite": boots CPU0 firmware
 //                     (tb4_phase1_fw.hex) that queues 4 mixed-precision
@@ -69,6 +72,24 @@ static void preload_hex_at(Vc930_soc4_verilator *top, const char *fname,
     }
     fclose(f);
     printf("[TB] loaded %u bytes from %s at DDR[0x%05x]\n", a, fname, base);
+}
+
+// The same, for a file of 32-bit words (one 8-digit token a line, which is what
+// sw/bin2hex.py emits and what the iverilog benches $readmemh into a word
+// array).  The byte-hex reader above is for the Test-4 images, which are bytes.
+static void preload_words_at(Vc930_soc4_verilator *top, const char *fname,
+                             uint32_t base, uint32_t limit_bytes) {
+    FILE *f = fopen(fname, "r");
+    if (!f) { fprintf(stderr, "[TB] cannot open %s\n", fname); exit(2); }
+    uint32_t a = 0;
+    unsigned w;
+    while (a < limit_bytes && fscanf(f, "%8x", &w) == 1) {
+        preload_word(top, base + a, (uint32_t)w);
+        a += 4;
+    }
+    fclose(f);
+    printf("[TB] loaded %u bytes (%u words) from %s at DDR[0x%05x]\n",
+           a, a / 4, fname, base);
 }
 
 static void clock_n(Vc930_soc4_verilator *top, int n) {
@@ -270,6 +291,117 @@ static int run_suite(Vc930_soc4_verilator *top) {
     return 1;
 }
 
+
+// ---------------------------------------------------------------------------
+// PTA mode (phase C4(a)): the PTA register block, driven by firmware.
+//
+// sw/pta_test.c configures the tile through the block at 0x4000_0100 and checks
+// seven things, writing a bitmap to DIAG.  The operands are all ones, so C is K
+// everywhere with nothing impaired and the firmware needs no reference of its
+// own.  This harness supplies them, boots CPU0 and reports what the firmware
+// found -- and insists on which build it is looking at, since a firmware pass
+// would mean nothing otherwise.
+// ---------------------------------------------------------------------------
+static int run_pta(Vc930_soc4_verilator *top) {
+    const int M = 8, N = 8, K = 16;          // 1 N tile, 2 K tiles
+    const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t REC = 0x9430, DIAG = 0x9480, PHASE = 0x9490;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+
+    printf("[TB] 4-core SoC (L2 ACTIVE) -- PTA mode: the register block, "
+           "driven by firmware\n");
+#ifdef PTM_C_BUILD
+    printf("[TB] build: PTM-C, the modelled tile\n");
+#else
+    printf("[TB] build: reported by the firmware (see DIAG bit 8)\n");
+#endif
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("PTA_FW");
+    preload_words_at(top, fw ? fw : "sw/pta_prog.hex", 0x0000, 8192);
+
+    for (int i = 0; i < M * K; i++) preload_byte(top, A + i, 1);
+    for (int i = 0; i < K * N; i++) preload_byte(top, B + i, 1);
+    for (int i = 0; i < M * N; i++) preload_word(top, C + i * 4, 0);
+    preload_word(top, DIMS + 0, (uint32_t)M);
+    preload_word(top, DIMS + 4, (uint32_t)N);
+    preload_word(top, DIMS + 8, (uint32_t)K);
+    preload_word(top, DIMS + 12, 0);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, DIAG, 0);
+    preload_word(top, PHASE, 0);
+
+    printf("[TB] image preloaded, M=%d N=%d K=%d all ones. Booting CPU0.\n",
+           M, N, K);
+    reset_release(top);
+
+    int c = wait_magic(top, DONE, 0xDEADBEEF, 8000000, "pta", 0);
+    uint32_t diag = ddr_word(top, DIAG);
+    uint32_t res  = ddr_word(top, RESULT);
+    if (c < 0) {
+        printf("[TB]   npu_busy=%d npu_done=%d dma_phase=%d csr_disp=%d "
+               "csr_fifo=%d done_latch=%d pc0=0x%08llx\n",
+               (int)top->o_npu0_busy, (int)top->o_npu0_done,
+               (int)top->o_dma0_phase, (int)top->o_csr0_disp,
+               (int)top->o_csr0_fifo, (int)top->o_csr0_done_latch,
+               (unsigned long long)top->o_hart0_pc);
+        printf("[TB] FAIL: timeout, PHASE=%u DIAG=0x%03x\n",
+               ddr_word(top, PHASE), diag);
+        return 1;
+    }
+    printf("[TB] firmware finished in %d cycles: DIAG=0x%03x RESULT=0x%08x\n",
+           c, diag, res);
+    printf("[TB]   shots +%u (want %u), programmings +%u (want %u), C exact %u\n",
+           ddr_word(top, REC + 0), ddr_word(top, REC + 8),
+           ddr_word(top, REC + 4), ddr_word(top, REC + 12),
+           ddr_word(top, REC + 16));
+    printf("[TB]   impaired C all zero %u | guard status 0x%08x occupancy %u\n",
+           ddr_word(top, REC + 20), ddr_word(top, REC + 24),
+           ddr_word(top, REC + 28));
+    printf("[TB]   cal_ct +%u status 0x%08x found %u left %u cal_cyc %u\n",
+           ddr_word(top, REC + 32), ddr_word(top, REC + 36),
+           ddr_word(top, REC + 40), ddr_word(top, REC + 44),
+           ddr_word(top, REC + 48));
+    printf("[TB]   refusal %u, then ran %u\n",
+           ddr_word(top, REC + 52), ddr_word(top, REC + 56));
+
+    static const struct { uint32_t bit; const char *what; } checks[7] = {
+        {0x001, "T1 the decode reads back"},
+        {0x002, "T2 the counters match the shape"},
+        {0x004, "T3 the tile is listening"},
+        {0x008, "T4 a calibration ran"},
+        {0x010, "T5 a START during it queued"},
+        {0x020, "T6 MODEL_RST cleared the correction"},
+        {0x040, "T7 MZM_NL refused, then cleared"},
+    };
+    int fails = 0;
+    for (int i = 0; i < 7; i++) {
+        bool ok = (diag & checks[i].bit) != 0;
+        printf("[TB]   %s %s\n", ok ? "[PASS]" : "[FAIL]", checks[i].what);
+        if (!ok) fails++;
+    }
+    if (res != PASS_MAGIC) { printf("[TB]   [FAIL] RESULT is not PASS\n"); fails++; }
+    // The firmware cannot know which tile it was given; this harness can.
+    bool digital = (diag & 0x100) != 0;
+#ifdef PTM_C_BUILD
+    if (digital) { printf("[TB]   [FAIL] a PTM-C build refused its impairments\n"); fails++; }
+    else printf("[TB]   [PASS] the build has a modelled tile\n");
+#else
+    printf("[TB]   the firmware reports %s\n",
+           digital ? "a digital array, which refused every impairment"
+                   : "a modelled tile");
+#endif
+
+    if (fails) { printf("[TB] FAIL: %d checks\n", fails); return 1; }
+    printf("[TB] PASS: the PTA register block, through MMIO, in %d cycles\n", c);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered for live traces
     Verilated::commandArgs(argc, argv);
@@ -279,6 +411,8 @@ int main(int argc, char **argv) {
     int rc;
     if (mode == "suite")
         rc = run_suite(top);
+    else if (mode == "pta")
+        rc = run_pta(top);
     else
         rc = run_quad(top);
 

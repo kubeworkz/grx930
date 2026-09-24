@@ -611,6 +611,212 @@ module tb_c930_npu;
   endtask
 
   // ---------------------------------------------------------------------------
+  // The PTA register block (phase C4(a))
+  // ---------------------------------------------------------------------------
+  // The block is at byte 0x100 and laid out as the PTA chiplet's own window from
+  // its 0x040 (rtl/c930_npu_csr.sv's header says why not at 0x40: that range is
+  // NPU1's window on the SoC).  Everything here goes through the AXI-Lite slave a
+  // driver uses, and the values are worked out by hand from the contract rather
+  // than read out of a model.
+  localparam logic [31:0] P_CTRL   = 32'h140;
+  localparam logic [31:0] P_STATUS = 32'h144;
+  localparam logic [31:0] P_IMPAIR = 32'h148;
+  localparam logic [31:0] P_BITS   = 32'h14C;
+  localparam logic [31:0] P_SEED   = 32'h150;
+  localparam logic [31:0] P_SIG_PR = 32'h15C;
+  localparam logic [31:0] P_DRIFT  = 32'h160;
+  localparam logic [31:0] P_CALPER = 32'h170;
+  localparam logic [31:0] P_CALTHR = 32'h174;
+  localparam logic [31:0] P_CAL_CT = 32'h178;
+  localparam logic [31:0] P_SHOTCT = 32'h180;
+  localparam logic [31:0] P_WLDCT  = 32'h184;
+  localparam logic [31:0] P_ERRMAX = 32'h18C;
+  localparam logic [31:0] P_GAIN0  = 32'h190;
+  localparam logic [31:0] P_OFFS0  = 32'h1B0;
+  localparam logic [31:0] P_DMAX   = 32'h1D0;
+  localparam logic [31:0] P_CALCFG = 32'h1D4;
+  localparam logic [31:0] P_TRIM   = 32'h1D8;
+  localparam logic [31:0] P_CALSD  = 32'h1DC;
+  localparam logic [31:0] P_ERRFND = 32'h1F0;
+
+  task automatic pta_expect(input string what, input logic [31:0] got, want);
+    if (got !== want)
+      $fatal(1, "[PTA] %s: read %h, expected %h", what, got, want);
+  endtask
+
+  // A GEMM of all-ones operands: C is K everywhere, so what the tile does to it
+  // shows without a reference model.
+  task automatic pta_ones_gemm(input int m, n, k);
+    for (int i = 0; i < m * k; i++) mem_store8(A_BASE + i, 8'h01);
+    for (int i = 0; i < k * n; i++) mem_store8(B_BASE + i, 8'h01);
+    for (int i = 0; i < m * n; i++) mem[(C_BASE >> 2) + i] = 32'h0;
+    run_engine_p(m, n, k, 0, A_BASE, B_BASE, C_BASE);
+  endtask
+
+  function automatic int pta_c_elem(input int idx);
+    pta_c_elem = $signed(mem[(C_BASE >> 2) + idx]);
+  endfunction
+
+  task automatic test_pta_regs();
+    logic [31:0] v, st, shots0, shots1, wload0, wload1;
+    logic [31:0] ct0, ct1, found, left, occ;
+    int m, n, k, moved;
+
+    m = 8; n = 8; k = 16;            // 1 N tile, 2 K tiles: 16 shots, 2 loads
+    $display("[PTA] the register block at 0x100");
+
+    // ---- the decode reads back, and 0x00-0x3C is untouched ----------------
+    axi_write(P_SEED,   32'h12345678);
+    axi_write(P_BITS,   32'h00009756);   // B_a 6, B_w 5, B_adc 7, S 9
+    axi_write(P_DRIFT,  32'h000A0037);   // sigma 0x37, a step every 2^10 shots
+    axi_write(P_CALPER, 32'h00001234);
+    axi_write(P_CALTHR, 32'h00ABCDEF);
+    axi_write(P_CALCFG, 32'h00000626);   // amp 6, reps 2, passes 3, bank 1
+    axi_write(P_TRIM,   32'h20000002);   // DAC step 2^2, clamp 0x2000
+    axi_write(P_GAIN0 + 12, 32'd300);
+    axi_write(P_OFFS0 + 20, 32'hFFFFFFF9);
+    axi_read(P_SEED,   v); pta_expect("SEED",    v, 32'h12345678);
+    axi_read(P_BITS,   v); pta_expect("BITS",    v, 32'h00009756);
+    axi_read(P_DRIFT,  v); pta_expect("DRIFT",   v, 32'h000A0037);
+    axi_read(P_CALPER, v); pta_expect("CAL_PER", v, 32'h00001234);
+    axi_read(P_CALTHR, v); pta_expect("CAL_THR", v, 32'h00ABCDEF);
+    axi_read(P_CALCFG, v); pta_expect("CAL_CFG", v, 32'h00000626);
+    axi_read(P_TRIM,   v); pta_expect("TRIM",    v, 32'h20000002);
+    axi_read(P_GAIN0 + 12, v); pta_expect("GAIN[3]", v, 32'd300);
+    axi_read(P_OFFS0 + 20, v); pta_expect("OFFS[5]", v, 32'hFFFFFFF9);
+    axi_write(32'h08, 32'd7);
+    axi_read(32'h08, v); pta_expect("DIM_M still at 0x08", v, 32'd7);
+    axi_read(32'h3C, v); pta_expect("QUEUE_MAX still at 0x3C", v, 32'd4);
+    $display("[PTA]   [PASS] the decode, and 0x00-0x3C untouched");
+
+    // ---- MODEL_RST clears the correction with the model -------------------
+    axi_write(P_CTRL, 32'h8);
+    axi_read(P_GAIN0 + 12, v); pta_expect("GAIN[3] after MODEL_RST", v, 32'd256);
+    axi_read(P_OFFS0 + 20, v); pta_expect("OFFS[5] after MODEL_RST", v, 32'd0);
+    $display("[PTA]   [PASS] MODEL_RST clears the correction");
+
+    // ---- the two counters, against the shape ------------------------------
+    axi_write(P_IMPAIR, 32'h0);
+    axi_write(P_BITS,   32'h0);
+    axi_read(P_SHOTCT, shots0);
+    axi_read(P_WLDCT,  wload0);
+    pta_ones_gemm(m, n, k);
+    axi_read(P_SHOTCT, shots1);
+    axi_read(P_WLDCT,  wload1);
+    if (pta_c_elem(0) !== k)
+      $fatal(1, "[PTA] unimpaired C[0] = %0d, expected %0d", pta_c_elem(0), k);
+`ifdef PTM_C
+    pta_expect("SHOT_CT advance", shots1 - shots0, 32'd16);
+`else
+    pta_expect("SHOT_CT advance (no modelled tile)", shots1 - shots0, 32'd0);
+`endif
+    pta_expect("WLOAD_CT advance", wload1 - wload0, 32'd2);
+    $display("[PTA]   [PASS] SHOT_CT +%0d, WLOAD_CT +%0d, C exact at %0d",
+             shots1 - shots0, wload1 - wload0, k);
+
+`ifdef PTM_C
+    // ---- the tile is listening -------------------------------------------
+    // A four-bit ADC at S = 8 takes a K tile's y = 2048 to
+    // (2048 + 2^15) >>> 16 = 0, so C goes from K to nothing.  From the
+    // contract, not from the model.
+    axi_write(P_IMPAIR, 32'h01);                 // QUANT
+    axi_write(P_BITS,   32'h00008400);           // B_a 0, B_w 0, B_adc 4, S 8
+    axi_write(P_SEED,   32'h1);
+    pta_ones_gemm(m, n, k);
+    moved = 0;
+    for (int i = 0; i < m * n; i++) if (pta_c_elem(i) !== k) moved++;
+    if (moved != m * n)
+      $fatal(1, "[PTA] impaired C moved in %0d of %0d elements, expected all",
+             moved, m * n);
+    if (pta_c_elem(0) !== 0)
+      $fatal(1, "[PTA] impaired C[0] = %0d, expected 0", pta_c_elem(0));
+    $display("[PTA]   [PASS] IMPAIR and BITS reach the tile: C is 0, was %0d", k);
+
+    // ---- a calibration, and a START during it -----------------------------
+    axi_write(P_IMPAIR, 32'h49);                 // QUANT | DRIFT | PROG_ERR
+    axi_write(P_BITS,   32'h00008756);           // B_a 6, B_w 5, B_adc 7, S 8
+    axi_write(P_SIG_PR, 32'h00000200);
+    axi_write(P_DRIFT,  32'h00000200);           // sigma 2.0, a step every shot
+    axi_write(P_DMAX,   32'h00000C00);
+    axi_write(P_TRIM,   32'h20000002);
+    axi_write(P_CALCFG, 32'h00000306);           // amp 6, reps 1, passes 3, bank 0
+    axi_write(P_CALSD,  32'h00CA11B0);
+    axi_write(P_CALPER, 32'h0);
+    axi_write(P_CTRL,   32'h1);                  // EN, scheduler off
+    pta_ones_gemm(m, n, k);                      // let drift accumulate
+
+    axi_read(P_CAL_CT, ct0);
+    axi_write(P_CTRL, 32'h3);                    // EN | CAL_NOW
+
+    // The tile is calibrating now, so a command written here has to queue:
+    // the guard of grxcp pta_cpu_integration.md 3.2, seen from the bus.
+    axi_write(32'h08, m[31:0]);
+    axi_write(32'h0C, n[31:0]);
+    axi_write(32'h10, k[31:0]);
+    axi_write(32'h00, 32'h1);                    // START, mid-calibration
+    axi_read(P_STATUS, st);
+    if ((st & 32'h1) === 32'h0)
+      $fatal(1, "[PTA] CAL_BUSY clear while a calibration should be running");
+    if ((st & 32'h10) !== 32'h0)
+      $fatal(1, "[PTA] STATUS.BUSY set during a calibration: it is per-command");
+    axi_read(32'h38, occ);
+    if (occ[3:0] !== 4'd1)
+      $fatal(1, "[PTA] the START did not queue: occupancy %0d", occ[3:0]);
+    $display("[PTA]   [PASS] a START during a calibration queued, BUSY clear");
+
+    wait (o_done === 1'b1);                      // the queued GEMM, tile back
+    st = 32'h1;
+    while ((st & 32'h1) !== 32'h0)
+      axi_read(P_STATUS, st);
+    axi_read(P_CAL_CT, ct1);
+    axi_read(P_ERRFND, found);
+    axi_read(P_ERRMAX, left);
+    axi_read(P_STATUS, st);
+    pta_expect("CAL_CT advance", ct1 - ct0, 32'd1);
+    if ((st & 32'h2) === 32'h0)
+      $fatal(1, "[PTA] CAL_VALID clear after a calibration");
+    if ((st & 32'h20) !== 32'h0)
+      $fatal(1, "[PTA] CAL_ERR set after a calibration that should be clean");
+    if (found === 32'd0)
+      $fatal(1, "[PTA] ERR_FOUND is zero: the probe found no drift to correct");
+    $display("[PTA]   [PASS] a calibration ran: found %0d, left %0d, status %h",
+             found, left, st);
+    axi_write(P_CTRL, 32'h0);
+`endif
+
+    // ---- the refusal, and that the next valid start clears it -------------
+    axi_write(P_IMPAIR, 32'h20);                 // MZM_NL: no phase in this build
+    axi_write(32'h14, A_BASE);
+    axi_write(32'h18, B_BASE);
+    axi_write(32'h1C, C_BASE);
+    axi_write(32'h20, 32'h0);
+    axi_write(32'h08, 32'd4);
+    axi_write(32'h0C, 32'd4);
+    axi_write(32'h10, 32'd4);
+    axi_write(32'h00, 32'h1);                    // START
+    // The core refuses at the start, but the DMA is what STATUS.BUSY reports and
+    // it takes the core's error through its own abort path, so wait for the
+    // engine to settle before reading the verdict.
+    moved = 0;
+    v = 32'h1;
+    while ((v & 32'h1) !== 32'h0 && moved < 2000) begin
+      axi_read(32'h04, v);
+      moved++;
+    end
+    if ((v & 32'h4) === 32'h0)
+      $fatal(1, "[PTA] MZM_NL was not refused: STATUS = %h after %0d polls", v, moved);
+    axi_write(P_IMPAIR, 32'h0);
+    axi_write(P_BITS,   32'h0);
+    pta_ones_gemm(4, 4, 4);
+    axi_read(32'h04, v);
+    if ((v & 32'h4) !== 32'h0)
+      $fatal(1, "[PTA] the error did not clear on the next valid start");
+    if (pta_c_elem(0) !== 4)
+      $fatal(1, "[PTA] after the refusal C[0] = %0d, expected 4", pta_c_elem(0));
+    $display("[PTA]   [PASS] MZM_NL refused, and the next valid start cleared it");
+  endtask
+
+  // ---------------------------------------------------------------------------
   // Main
   // ---------------------------------------------------------------------------
   initial begin
@@ -649,6 +855,9 @@ module tb_c930_npu;
 
     // ---- Randomized M/N/K sweep ----
     run_sweep(16);
+
+    // ---- The PTA register block (C4(a)) ----
+    test_pta_regs();
 
     $display("[PASS] all NPU tests passed");
     $finish;

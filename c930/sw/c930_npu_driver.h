@@ -89,6 +89,79 @@ extern "C" {
 #define NPU_QUEUE_OCC_MASK  0xFu
 #define NPU_QUEUE_FULL      0x10u
 
+// ---- PTA register block (C4(a)) ----
+// The block is at NPU0_BASE + 0x100 and is laid out exactly as the PTA
+// chiplet's MMIO window from its own 0x040 (grxcp docs/designs/
+// pta_chiplet_regmap.md section 4), so the offsets below reach a c930 tile and
+// a chiplet with nothing but the base changed.  It is NOT at 0x40: that is
+// NPU1's CSR window on this SoC.  rtl/c930_npu_csr.sv's header has the reasoning
+// and the three places where the block differs from the CPU document's 3.1.
+#define PTA_BASE            (NPU0_BASE + 0x100u)
+
+#define PTA_REG_CTRL        (PTA_BASE + 0x40)   // RW: [0] EN [1] CAL_NOW [3] MODEL_RST [5:4] CAL_SCHED
+#define PTA_REG_STATUS      (PTA_BASE + 0x44)   // R:  see PTA_ST_* below
+#define PTA_REG_IMPAIR      (PTA_BASE + 0x48)   // RW: [6:0] one bit per impairment
+#define PTA_REG_BITS        (PTA_BASE + 0x4c)   // RW: [3:0] B_a [7:4] B_w [11:8] B_adc [17:12] S
+#define PTA_REG_SEED        (PTA_BASE + 0x50)   // RW: every per-GEMM noise stream
+#define PTA_REG_SIGMA_TH    (PTA_BASE + 0x54)   // RW: thermal sigma, Q8.8 ADC LSB
+#define PTA_REG_SIGMA_SH    (PTA_BASE + 0x58)   // RW: shot coefficient k, Q8.8
+#define PTA_REG_SIGMA_PR    (PTA_BASE + 0x5c)   // RW: programming error sigma, Q8.8 weight LSB
+#define PTA_REG_DRIFT       (PTA_BASE + 0x60)   // RW: [15:0] sigma Q8.8, [20:16] log2 shots a step
+#define PTA_REG_XTALK       (PTA_BASE + 0x64)   // RW: [7:0] chi, Q0.8
+#define PTA_REG_TW          (PTA_BASE + 0x68)   // RW: settle after a program, core cycles (C2 tile)
+#define PTA_REG_TS          (PTA_BASE + 0x6c)   // RW: shot + ADC latency, core cycles (C2 tile)
+#define PTA_REG_CAL_PER     (PTA_BASE + 0x70)   // RW: the periodic period, and the floor on the others
+#define PTA_REG_CAL_THR     (PTA_BASE + 0x74)   // RW: predicted error that fires, Q.8 weight LSB
+#define PTA_REG_CAL_CT      (PTA_BASE + 0x78)   // R:  calibrations run
+#define PTA_REG_CAL_CYC     (PTA_BASE + 0x7c)   // R:  cycles spent calibrating, cumulative
+#define PTA_REG_SHOT_CT     (PTA_BASE + 0x80)   // R:  optical shots issued, cumulative
+#define PTA_REG_WLOAD_CT    (PTA_BASE + 0x84)   // R:  weight-bank programmings, cumulative
+#define PTA_REG_SAT_CT      (PTA_BASE + 0x88)   // R:  ADC saturations, this GEMM
+#define PTA_REG_ERR_MAX     (PTA_BASE + 0x8c)   // R:  what the last calibration LEFT, Q.8
+#define PTA_REG_GAIN(j)     (PTA_BASE + 0x90 + 4*(j))   // RW: column gain, Q8.8, 256 unity
+#define PTA_REG_OFFS(j)     (PTA_BASE + 0xb0 + 4*(j))   // RW: column offset, signed
+#define PTA_REG_DRIFT_MAX   (PTA_BASE + 0xd0)   // RW: drift clamp, Q8.8 weight LSB
+#define PTA_REG_CAL_CFG     (PTA_BASE + 0xd4)   // RW: [3:0] amp log2 [7:4] reps log2 [9:8] passes [10] bank
+#define PTA_REG_TRIM        (PTA_BASE + 0xd8)   // RW: [3:0] DAC step log2 Q.8, [31:16] clamp
+#define PTA_REG_CAL_SEED    (PTA_BASE + 0xdc)   // RW: the calibration's noise seed
+#define PTA_REG_ERR_FOUND   (PTA_BASE + 0xf0)   // R:  what the last calibration FOUND, Q.8
+
+// ---- PTA_CTRL bits.  Bit 2, CAL_AUTO in the CPU document, reads zero and
+// ---- does nothing: CAL_SCHED already says whether calibration is automatic.
+#define PTA_CTRL_EN         0x01u
+#define PTA_CTRL_CAL_NOW    0x02u   // write 1: one calibration, as soon as the tile is free
+#define PTA_CTRL_MODEL_RST  0x08u   // write 1: drift to zero AND the correction cleared
+#define PTA_CTRL_SCHED(s)   (((s) & 3u) << 4)
+#define PTA_SCHED_OFF       0u
+#define PTA_SCHED_PERIODIC  1u
+#define PTA_SCHED_PREDICT   2u
+#define PTA_SCHED_SHADOW    3u
+
+// ---- PTA_STATUS bits ----
+#define PTA_ST_CAL_BUSY     0x01u
+#define PTA_ST_CAL_VALID    0x02u
+#define PTA_ST_SAT          0x04u   // this GEMM saturated an ADC (PTA_SAT_CT != 0)
+#define PTA_ST_DRIFT_ALARM  0x08u   // a trim could not reach what the estimator asked
+#define PTA_ST_BUSY         0x10u   // the engine's BUSY, so one read is a snapshot
+#define PTA_ST_CAL_ERR      0x20u   // a refused probe, or a START/MODEL_RST during a cal
+#define PTA_ST_RESID(v)     (((v) >> 8) & 0xFFFFu)   // the same value as PTA_ERR_MAX[15:0]
+
+// ---- PTA_IMPAIR bits (doc/pta_error_model_design_note.md section 4) ----
+#define PTA_IMP_QUANT       0x01u
+#define PTA_IMP_THERMAL     0x02u
+#define PTA_IMP_SHOT        0x04u
+#define PTA_IMP_DRIFT       0x08u
+#define PTA_IMP_XTALK       0x10u
+#define PTA_IMP_MZM_NL      0x20u   // no phase in this build: a start with it is refused
+#define PTA_IMP_PROG_ERR    0x40u
+
+#define PTA_BITS_FIELDS(ba, bw, badc, s) \
+    (((ba) & 0xFu) | (((bw) & 0xFu) << 4) | (((badc) & 0xFu) << 8) | (((s) & 0x3Fu) << 12))
+#define PTA_CAL_CFG_FIELDS(amp, reps, passes, bank) \
+    (((amp) & 0xFu) | (((reps) & 0xFu) << 4) | (((passes) & 3u) << 8) | (((bank) & 1u) << 10))
+#define PTA_TRIM_FIELDS(steplog2, clamp) \
+    (((steplog2) & 0xFu) | (((clamp) & 0xFFFFu) << 16))
+
 // ---- Precision modes (PREC[2:0]) ----
 #define NPU_PREC_INT8   0
 #define NPU_PREC_INT16  1

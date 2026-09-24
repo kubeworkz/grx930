@@ -460,10 +460,12 @@ was in this RTL rather than in any document: `CAL_BUSY` has to cover the handove
 back to the core as well as the work, or there is exactly one cycle in which a
 dispatcher believes the tile is free and the command it sends is lost.
 
-The CPU document's gate C1(b) names the NPU DPI wrapper. The configuration is
-not on a CSR until C4, so the wrapper cannot reach it yet; the core harness
-carries the parity gate until then, and the wrapper takes it when C4 maps the
-ports.
+The CPU document's gate C1(b) names the NPU DPI wrapper. The core harness
+carried the parity gate while the configuration was core-level only; C4(a) put it
+on the CSR — the PTA register block at `0x100`, see `rtl/c930_npu_csr.sv`'s header
+— so the wrapper can reach it now, and `make pta_test PTM_C=1` is firmware doing
+exactly that through MMIO. The parity gate stays in the core harness, which is
+where bit-for-bit comparison against the C reference belongs.
 
 ### Gate C1(a): the accuracy sweep
 
@@ -666,7 +668,15 @@ With the 8-bit ADC, 97.42% before any noise:
    per-column multiplier and addend, drawn once at a model reset, which is what a
    real receiver has — or the column loop stays a path with no measurement behind
    it. grxcp's `pta_chiplet_calibration.md` §2 says the same from the other side.
-5. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
+5. **The firmware path does not run yet.** C4(a) put the block on the CSR and
+   `make npu` checks every bit of it over AXI-Lite, which is where the evidence
+   is. `sw/pta_test.c` is the same seven checks driven by a RISC-V program, and
+   on the Verilator four-core SoC it boots, writes and reads the block, and then
+   stalls forever on a stack store in `run_gemm`'s prologue with the NPU never
+   started. `sw/driver_prog.hex` runs to completion on that same harness, so the
+   harness and the driver library are not it. Until that is found, the register
+   block is verified and the firmware is not.
+6. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
    neighbour's crosstalk does not couple on again. An MZI mesh would couple
    along its triangular structure instead (CPU document §8 item 5); that is a
    different matrix, and a hypothesis this program has no ground truth for.

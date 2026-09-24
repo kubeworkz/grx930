@@ -166,6 +166,7 @@ module c930_npu_core
   input  logic [23:0]                 i_pta_cal_thr,      // PTA_CAL_THR, Q.8 weight LSB
   input  logic [3:0]                  i_pta_cal_amp,      // probe amplitude, 1 << this
   input  logic [3:0]                  i_pta_cal_reps,     // repeats a pass, 1 << this
+  input  logic [1:0]                  i_pta_cal_passes,   // auto-ranging passes; 0 is 1
   input  logic                        i_pta_cal_bank,     // the bank to calibrate
   input  logic [3:0]                  i_pta_trim_log2,    // the weight DAC's step, Q.8
   input  logic [15:0]                 i_pta_trim_max,     // ... and its clamp
@@ -192,6 +193,12 @@ module c930_npu_core
   output logic [31:0]                 o_pta_cal_cyc,      // PTA_CAL_CYC
   output logic [23:0]                 o_pta_err_max,      // PTA_ERR_MAX
   output logic [23:0]                 o_pta_err_found,    // PTA_ERR_FOUND
+  // The two counters PTA_SHOT_CT and PTA_WLOAD_CT read.  Both are cumulative,
+  // as the chiplet's map has them, and not reset per GEMM: they exist so a
+  // reported GEMM time can be decomposed, which needs a difference, and a
+  // difference needs something that does not restart under you.
+  output logic [31:0]                 o_pta_shot_ct,      // optical shots issued
+  output logic [31:0]                 o_pta_wload_ct,     // weight-bank programmings
   // PTA_IRQ_STATUS.ERR: a probe the estimator could not read back, a START
   // that reached the core while CAL_BUSY was set (which the CSR's dispatch
   // guard is there to prevent), or a MODEL_RST during a calibration.
@@ -387,6 +394,9 @@ module c930_npu_core
   logic                             cal_abort_pend;
   logic                             cal_err_q;
   logic                             cal_eng_err;
+  // The shot strobe the tile sees, whoever is driving it.  Zero in a build with
+  // no modelled tile, where there are no shots to count.
+  logic                             tile_shot_start;
 
   int m_reg;        // current output row
   int m_base;       // pre-computed m_reg * i_dim_k (breaks multiply from critical path)
@@ -493,6 +503,9 @@ module c930_npu_core
   wire arow_free = (i_a_rows_ready == 16'd0);
 
   logic [31:0] cycle_cnt, op_cnt, stall_cnt, arow_stall_cnt, act_cycle_cnt;
+  logic [31:0] shot_cnt, wload_cnt;
+  assign o_pta_shot_ct  = shot_cnt;
+  assign o_pta_wload_ct = wload_cnt;
   assign o_cycle_count      = cycle_cnt;
   assign o_op_count         = op_cnt;
   assign o_stall_count      = stall_cnt;
@@ -712,10 +725,24 @@ module c930_npu_core
   localparam int PTM_ABLATE_ROW = -1;
 `endif
   localparam int PTA_CW = $clog2(NUM_COLS);
+
+  // The engine's side of the tile, declared before the instance that reads it:
+  // a net used before its declaration is a one-bit implicit wire under iverilog,
+  // which would make cal_trim_data one bit of a thirty-two bit trim.
+  localparam int PTA_TRIM_W = 32;
+  logic                             cal_trim_wen, cal_trim_bank, cal_trim_clamped;
+  logic [$clog2(NUM_ROWS)-1:0]      cal_trim_row;
+  logic [$clog2(NUM_COLS)-1:0]      cal_trim_col;
+  logic signed [PTA_TRIM_W-1:0]     cal_trim_data, cal_trim_rdata;
+  logic                             cal_shift_en;
+  logic [5:0]                       cal_shift;
+  logic                             cal_load;
+  logic [31:0]                      cal_seed;
   wire              pta_shot     = (state == S_RUN) && (t >= 2*NUM_ROWS) && !t[0] &&
                                    (((t - 2*NUM_ROWS) >>> 1) < nc);
   wire [PTA_CW-1:0] pta_shot_col = PTA_CW'((t - 2*NUM_ROWS) >>> 1);
   wire              pta_shot_start = (state == S_RUN) && (t == 0);
+  assign tile_shot_start = cal_busy ? cal_shot_start : pta_shot_start;
 
   c930_ptm_c #(
     .NUM_ROWS   (NUM_ROWS),
@@ -752,7 +779,7 @@ module c930_npu_core
     .i_pta_drift_max   (i_pta_drift_max),
     .i_pta_xtalk       (i_pta_xtalk),
     .i_pta_model_rst   (i_pta_model_rst && (state == S_IDLE)),
-    .i_pta_shot_start  (cal_busy ? cal_shot_start : pta_shot_start),
+    .i_pta_shot_start  (tile_shot_start),
     .i_pta_shot      (cal_busy ? cal_shot     : pta_shot),
     .i_pta_shot_col  (cal_busy ? cal_shot_col : pta_shot_col),
     .o_pta_sat_count (o_pta_sat_count),
@@ -778,16 +805,6 @@ module c930_npu_core
 
   // The engine.  It owns the probe, the estimator and the schedulers; the core
   // owns only the grant and putting the weights back afterwards.
-  localparam int PTA_TRIM_W = 32;
-  logic                             cal_trim_wen, cal_trim_bank, cal_trim_clamped;
-  logic [$clog2(NUM_ROWS)-1:0]      cal_trim_row;
-  logic [$clog2(NUM_COLS)-1:0]      cal_trim_col;
-  logic signed [PTA_TRIM_W-1:0]     cal_trim_data, cal_trim_rdata;
-  logic                             cal_shift_en;
-  logic [5:0]                       cal_shift;
-  logic                             cal_load;
-  logic [31:0]                      cal_seed;
-
   c930_pta_cal #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -804,6 +821,7 @@ module c930_npu_core
     .i_cal_thr      (i_pta_cal_thr),
     .i_amp_log2     (i_pta_cal_amp),
     .i_reps_log2    (i_pta_cal_reps),
+    .i_passes       (i_pta_cal_passes),
     .i_act_bits     (i_pta_act_bits),
     .i_adc_bits     (i_pta_adc_bits),
     .i_quant        (i_pta_impair[0]),
@@ -884,7 +902,8 @@ module c930_npu_core
   assign cal_shot       = 1'b0;
   assign cal_shot_col   = '0;
   assign cal_bank       = 1'b0;
-  assign cal_eng_err    = 1'b0;
+  assign cal_eng_err     = 1'b0;
+  assign tile_shot_start = 1'b0;
   assign o_pta_cal_busy    = 1'b0;
   assign o_pta_cal_valid   = 1'b0;
   assign o_pta_drift_alarm = 1'b0;
@@ -1254,6 +1273,26 @@ module c930_npu_core
         end
       end
       end  // !i_abort
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // PTA counters, C4(a): what PTA_SHOT_CT and PTA_WLOAD_CT read
+  // ---------------------------------------------------------------------------
+  // A shot is one run of one output row over one K tile, counted from the strobe
+  // the tile actually sees -- so a calibration's probe shots are in here too,
+  // which is what makes this the chiplet map's "optical shots issued" rather
+  // than "shots a GEMM asked for".  A programming is one pass through S_WLOAD:
+  // the quantity PTA_TW's slope multiplies in the section 2.1 model.
+  wire wload_done = (state == S_WLOAD) && (w_n == nc - 1) && (w_r == kr_reg - 1);
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      shot_cnt  <= 32'd0;
+      wload_cnt <= 32'd0;
+    end else begin
+      if (hop_phase && tile_shot_start) shot_cnt  <= shot_cnt + 32'd1;
+      if (wload_done)                   wload_cnt <= wload_cnt + 32'd1;
     end
   end
 

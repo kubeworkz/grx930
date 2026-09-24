@@ -342,7 +342,10 @@ verilate-run: verilate
 VERIL4_TOP   := sim/c930_soc4_verilator.sv
 VERIL4_TB    := sim/tb_soc4.cc
 VERIL4_OUT   := $(BUILD_DIR)/verilator4
-VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal \
+# -DPTM_C is in GFLAGS for iverilog; Verilator takes its own flags, and without
+# this the core compiles its digital-array branch against a file list that has
+# the array filtered out.
+VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal   $(if $(filter 1,$(PTM_C)),-DPTM_C) \
   -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL \
   --top-module c930_soc4_verilator
@@ -358,7 +361,7 @@ verilate-soc4: $(SW_HEX)
 # oss-cad-suite verilator_bin.exe only generates C++; firmware paths are
 # relative, so run from the c930 dir).
 verilate-soc4-run: verilate-soc4
-	@bash synth_xilinx/build_soc4_verilator_wsl.sh run quad
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run quad $(VERIL4_OUT)
 
 # Test-4 firmware images for the suite harness (extracted from the SV TB so
 # the Verilator suite mode and the iverilog full-SoC suite stay in lockstep).
@@ -469,6 +472,46 @@ $(OUT_DRV): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(DRV_SW_HEX)
 
 driver_test: $(OUT_DRV)
 	$(VVP) $(OUT_DRV)
+
+# ---------------------------------------------------------------------------
+# The PTA register block, driven by firmware (phase C4(a))
+#
+# sw/pta_test.c configures the tile through the block at 0x4000_0100 and checks
+# seven things: the decode, the two counters against a GEMM's shape, the tile
+# answering an impairment, a calibration, a START during one, MODEL_RST, and the
+# MZM_NL refusal.  It runs on the Verilator four-core SoC, because that is the
+# only full-SoC harness that finishes at a usable speed -- iverilog manages tens
+# of cycles a second on the L2 + 4 cores, which is what verilate-soc4 exists for.
+#
+#   make pta_fw PTM_C=1     the modelled tile: all seven checks
+#   make pta_fw             the digital array, which refuses every impairment
+#
+# NOT PASSING YET, and the symptom is recorded rather than worked around: the
+# firmware boots, T1's register writes reach the block and PHASE advances to 4,
+# and then CPU0 stalls forever on a plain stack store in run_gemm's prologue
+# (pc0 = 0x50, `sw a5,12(sp)`) with the NPU never started -- npu_busy 0,
+# dma_phase 0, queue empty.  sw/driver_prog.hex runs to completion on the same
+# harness (PTA_FW=sw/driver_prog.hex ./Vc930_soc4_verilator pta), so it is not
+# the harness and not the driver library.  The register block itself is checked
+# over AXI-Lite by `make npu` (tb_c930_npu.sv's test_pta_regs), which is where
+# C4(a)'s evidence is; this is the end-to-end integration and it wants a
+# waveform session, not another guess.
+# ---------------------------------------------------------------------------
+PTA_SW_ELF := sw/pta_test.elf
+PTA_SW_BIN := sw/pta_test.bin
+PTA_SW_HEX := sw/pta_prog.hex
+
+$(PTA_SW_ELF): sw/start.S sw/pta_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib 	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none 	  -o $@ sw/start.S sw/pta_test.c sw/c930_npu_driver.c
+
+$(PTA_SW_BIN): $(PTA_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(PTA_SW_HEX): $(PTA_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(PTA_SW_BIN) $(PTA_SW_HEX)
+
+pta_fw: $(PTA_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT)
 
 # ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)

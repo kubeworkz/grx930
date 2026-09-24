@@ -115,16 +115,36 @@ module c930_npu_top
 
   // FIFO head (next GEMM params for cross-GEMM prefetch)
   logic        fifo_valid;
-  // PTA_STATUS.CAL_BUSY from the core's calibration engine.  The engine is
-  // core-level until C4 maps its registers, so with the PTA configuration tied
-  // off below this is always low -- but the dispatch guard it feeds is wired
-  // now, not later (grxcp pta_cpu_integration.md section 3.2).
+  // PTA_STATUS.CAL_BUSY from the core's calibration engine, and the CSR's
+  // dispatch guard it feeds (grxcp pta_cpu_integration.md section 3.2).
   logic        pta_cal_busy;
+  // ---- The PTA register block's side of the tile (C4(a)) ----
+  logic        pta_cal_en, pta_cal_now, pta_mrst, pta_crst;
+  logic [1:0]  pta_cal_sched, pta_cal_passes;
+  logic [6:0]  pta_impair;
+  logic [3:0]  pta_act_bits, pta_w_bits, pta_adc_bits;
+  logic [5:0]  pta_adc_shift;
+  logic [31:0] pta_seed, pta_tw, pta_ts, pta_cal_per, pta_cal_seed;
+  logic [15:0] pta_sigma_th, pta_k_shot, pta_sigma_pr, pta_drift_sigma, pta_drift_max;
+  logic [4:0]  pta_drift_log2;
+  logic [7:0]  pta_xtalk;
+  logic [23:0] pta_cal_thr;
+  logic [3:0]  pta_cal_amp, pta_cal_reps, pta_trim_log2;
+  logic [15:0] pta_trim_max;
+  logic        pta_cal_bank;
+  logic        pta_aff_wen;
+  logic [$clog2(NUM_COLS)-1:0] pta_aff_col;
+  logic signed [17:0] pta_aff_gain;
+  logic signed [31:0] pta_aff_offs;
+  logic        pta_cal_valid, pta_drift_alarm, pta_cal_err;
+  logic [31:0] pta_cal_ct, pta_cal_cyc, pta_shot_ct, pta_wload_ct, pta_sat_ct;
+  logic [23:0] pta_err_max, pta_err_found;
+
   logic [15:0] fifo_dim_m, fifo_dim_n, fifo_dim_k;
   logic [31:0] fifo_a_base, fifo_b_base, fifo_c_base;
   logic [2:0]  fifo_precision;
 
-  c930_npu_csr u_csr (
+  c930_npu_csr #(.NUM_COLS (NUM_COLS)) u_csr (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
     .s_axi_awaddr  (s_axi_awaddr),
@@ -156,6 +176,51 @@ module c930_npu_top
     .i_cal_busy    (pta_cal_busy),
     .i_done        (done),
     .i_error       (error),
+
+    // ---- The PTA register block (C4(a)) ----
+    .o_pta_cal_en      (pta_cal_en),
+    .o_pta_cal_now     (pta_cal_now),
+    .o_pta_cal_sched   (pta_cal_sched),
+    .o_pta_model_rst   (pta_mrst),
+    .o_pta_cal_rst     (pta_crst),
+    .o_pta_impair      (pta_impair),
+    .o_pta_act_bits    (pta_act_bits),
+    .o_pta_w_bits      (pta_w_bits),
+    .o_pta_adc_bits    (pta_adc_bits),
+    .o_pta_adc_shift   (pta_adc_shift),
+    .o_pta_seed        (pta_seed),
+    .o_pta_sigma_th    (pta_sigma_th),
+    .o_pta_k_shot      (pta_k_shot),
+    .o_pta_sigma_pr    (pta_sigma_pr),
+    .o_pta_drift_sigma (pta_drift_sigma),
+    .o_pta_drift_log2  (pta_drift_log2),
+    .o_pta_drift_max   (pta_drift_max),
+    .o_pta_xtalk       (pta_xtalk),
+    .o_pta_tw          (pta_tw),
+    .o_pta_ts          (pta_ts),
+    .o_pta_cal_per     (pta_cal_per),
+    .o_pta_cal_thr     (pta_cal_thr),
+    .o_pta_cal_amp     (pta_cal_amp),
+    .o_pta_cal_reps    (pta_cal_reps),
+    .o_pta_cal_passes  (pta_cal_passes),
+    .o_pta_cal_bank    (pta_cal_bank),
+    .o_pta_trim_log2   (pta_trim_log2),
+    .o_pta_trim_max    (pta_trim_max),
+    .o_pta_cal_seed    (pta_cal_seed),
+    .o_pta_aff_wen     (pta_aff_wen),
+    .o_pta_aff_col     (pta_aff_col),
+    .o_pta_aff_gain    (pta_aff_gain),
+    .o_pta_aff_offs    (pta_aff_offs),
+    .i_pta_cal_valid   (pta_cal_valid),
+    .i_pta_drift_alarm (pta_drift_alarm),
+    .i_pta_cal_err     (pta_cal_err),
+    .i_pta_cal_ct      (pta_cal_ct),
+    .i_pta_cal_cyc     (pta_cal_cyc),
+    .i_pta_shot_ct     (pta_shot_ct),
+    .i_pta_wload_ct    (pta_wload_ct),
+    .i_pta_sat_count   (pta_sat_ct),
+    .i_pta_err_max     (pta_err_max),
+    .i_pta_err_found   (pta_err_found),
     .i_cycle_count (cycle_count),
     .i_op_count    (op_count),
     .i_stall_count (stall_count),
@@ -317,54 +382,60 @@ module c930_npu_top
     .o_act_count       (),
     .o_act_sat_count   (),
     .o_act_cycles      (),
-    // The PTA error model is core-level only until C4 maps it onto the widened
-    // CSR decode (doc/pta_error_model_design_note.md section 3): off at the top.
-    .i_pta_impair      (7'd0),
-    .i_pta_act_bits    (4'd0),
-    .i_pta_w_bits      (4'd0),
-    .i_pta_adc_bits    (4'd0),
-    .i_pta_adc_shift   (6'd0),
-    .i_pta_seed        (32'd0),
-    .i_pta_sigma_th    (16'd0),
-    .i_pta_k_shot      (16'd0),
-    .i_pta_sigma_pr    (16'd0),
-    .i_pta_drift_sigma (16'd0),
-    .i_pta_drift_log2  (5'd0),
-    .i_pta_drift_max   (16'd0),
-    .i_pta_xtalk       (8'd0),
-    .i_pta_model_rst   (1'b0),
-    .o_pta_sat_count   (),
-    // C3(b)'s calibration engine, likewise core-level until C4: off, but its
-    // CAL_BUSY reaches the CSR's dispatch guard.
-    .i_pta_cal_en      (1'b0),
-    .i_pta_cal_now     (1'b0),
-    .i_pta_cal_sched   (2'd0),
-    .i_pta_cal_per     (32'd0),
-    .i_pta_cal_thr     (24'd0),
-    .i_pta_cal_amp     (4'd0),
-    .i_pta_cal_reps    (4'd0),
-    .i_pta_cal_bank    (1'b0),
-    .i_pta_trim_log2   (4'd0),
-    .i_pta_trim_max    (16'd0),
-    .i_pta_cal_seed    (32'd0),
-    .i_pta_aff_wen     (1'b0),
-    .i_pta_aff_col     ('0),
-    .i_pta_aff_gain    (18'sd256),
-    .i_pta_aff_offs    (32'sd0),
-    .i_pta_cal_rst     (1'b0),
+    // The PTA error model and its calibration engine, on the CSR's register
+    // block since C4(a) (doc/pta_error_model_design_note.md section 3, and the
+    // CSR's own header for where the block sits and why not at 0x40).
+    .i_pta_impair      (pta_impair),
+    .i_pta_act_bits    (pta_act_bits),
+    .i_pta_w_bits      (pta_w_bits),
+    .i_pta_adc_bits    (pta_adc_bits),
+    .i_pta_adc_shift   (pta_adc_shift),
+    .i_pta_seed        (pta_seed),
+    .i_pta_sigma_th    (pta_sigma_th),
+    .i_pta_k_shot      (pta_k_shot),
+    .i_pta_sigma_pr    (pta_sigma_pr),
+    .i_pta_drift_sigma (pta_drift_sigma),
+    .i_pta_drift_log2  (pta_drift_log2),
+    .i_pta_drift_max   (pta_drift_max),
+    .i_pta_xtalk       (pta_xtalk),
+    .i_pta_model_rst   (pta_mrst),
+    .o_pta_sat_count   (pta_sat_ct),
+    .i_pta_cal_en      (pta_cal_en),
+    .i_pta_cal_now     (pta_cal_now),
+    .i_pta_cal_sched   (pta_cal_sched),
+    .i_pta_cal_per     (pta_cal_per),
+    .i_pta_cal_thr     (pta_cal_thr),
+    .i_pta_cal_amp     (pta_cal_amp),
+    .i_pta_cal_reps    (pta_cal_reps),
+    .i_pta_cal_passes  (pta_cal_passes),
+    .i_pta_cal_bank    (pta_cal_bank),
+    .i_pta_trim_log2   (pta_trim_log2),
+    .i_pta_trim_max    (pta_trim_max),
+    .i_pta_cal_seed    (pta_cal_seed),
+    .i_pta_aff_wen     (pta_aff_wen),
+    .i_pta_aff_col     (pta_aff_col),
+    .i_pta_aff_gain    (pta_aff_gain),
+    .i_pta_aff_offs    (pta_aff_offs),
+    .i_pta_cal_rst     (pta_crst),
+    // The host's trim write port has no registers: the map has nowhere to put a
+    // (bank, row, column, value) write, and inventing one is not C4(a)'s to do.
+    // It exists for the parity gate and for a driver that restores a saved
+    // calibration, and it stays tied off here.
     .i_pta_trim_wen    (1'b0),
     .i_pta_trim_bank   (1'b0),
     .i_pta_trim_row    ('0),
     .i_pta_trim_col    ('0),
     .i_pta_trim_data   (32'sd0),
     .o_pta_cal_busy    (pta_cal_busy),
-    .o_pta_cal_valid   (),
-    .o_pta_drift_alarm (),
-    .o_pta_cal_ct      (),
-    .o_pta_cal_cyc     (),
-    .o_pta_err_max     (),
-    .o_pta_err_found   (),
-    .o_pta_cal_err     ()
+    .o_pta_cal_valid   (pta_cal_valid),
+    .o_pta_drift_alarm (pta_drift_alarm),
+    .o_pta_cal_ct      (pta_cal_ct),
+    .o_pta_cal_cyc     (pta_cal_cyc),
+    .o_pta_err_max     (pta_err_max),
+    .o_pta_err_found   (pta_err_found),
+    .o_pta_shot_ct     (pta_shot_ct),
+    .o_pta_wload_ct    (pta_wload_ct),
+    .o_pta_cal_err     (pta_cal_err)
   );
 
   assign o_busy  = busy;

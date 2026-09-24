@@ -92,6 +92,7 @@ Two things here are easy to get wrong:
 |-------|------|--------|
 | `0x4000_0000 .. 0x4000_003F` | 64 B | NPU0 CSR |
 | `0x4000_0040 .. 0x4000_007F` | 64 B | NPU1 CSR |
+| `0x4000_0100 .. 0x4000_01FF` | 256 B | NPU0's PTA register block (C4(a)) |
 | `0x4000_0FF0` | 4 B | HART_ID (read-only: the requesting core) |
 | `0x4000_0FF4` | 4 B | CORE1_RELEASE |
 | `0x4000_0FF8` | 4 B | CORE2_RELEASE |
@@ -99,6 +100,26 @@ Two things here are easy to get wrong:
 | `0x4000_1000 .. 0x4000_1FFF` | 4 KB | UART 16550 |
 | `0x4000_4000 .. 0x4000_4FFF` | 4 KB | APLIC |
 | any other `0x4000_xxxx` | — | falls through to NPU0 CSR — see below |
+
+**The NPU0 CSR decodes a kilobyte, not 64 bytes.** `c930_npu_csr.sv` decodes
+`s_axi_awaddr[9:2]` — 256 words, `0x000`–`0x3FC` — since C4(a) put the PTA
+register block at `0x100`. Its own sixteen registers are unchanged at
+`0x00`–`0x3C`, and the crossbar needed no change: the MMIO slave already covers
+`0x4000_0000`–`0x4000_FFFF`.
+
+The block is at `0x100` and not at `0x40`, where grxcp's
+`pta_cpu_integration.md` §3 proposed it, because `0x40`–`0x7F` is NPU1's window
+in the table above. A block there would have been shadowed by the second NPU
+whenever `ENABLE_NPU1` was set — and by nothing at all when it was clear, which
+is worse, because it would have passed every test that had NPU1 off. Inside the
+block the layout is the PTA chiplet's own (grxcp `pta_chiplet_regmap.md` §4)
+offset by `0x100`, so one driver reaches a c930 tile and a chiplet with the same
+offsets and a different base.
+
+The fall-through in the row above therefore aliases modulo a kilobyte rather
+than modulo 64 bytes: `0x4000_2140` reaches `PTA_CTRL`. Nothing in this SoC
+generates those addresses, and the bridge answers `0x4000_0FF0`–`0x4000_0FFC`
+itself, so they never reach the NPU.
 
 `HART_ID` and the three `RELEASE` registers are intercepted and answered by
 `c930_mmio_bridge.sv` itself; they never reach the mux downstream.

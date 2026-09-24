@@ -343,6 +343,7 @@ struct CalCfg {
     uint32_t thr       = 0;      // PTA_CAL_THR
     uint32_t amp_log2  = 0;      // probe amplitude, 1 << this
     uint32_t reps_log2 = 0;      // repeats a pass, 1 << this
+    uint32_t passes    = 3;      // auto-ranging passes, PTA_CAL_CFG[9:8]
     uint32_t trim_log2 = 0;      // the weight DAC's step, 1 << this, Q.8
     uint32_t trim_max  = 0;      // and its clamp
     uint32_t seed      = 0;
@@ -356,6 +357,7 @@ void apply_cal(const CalCfg& c) {
     dut->i_pta_cal_thr   = c.thr;
     dut->i_pta_cal_amp   = c.amp_log2;
     dut->i_pta_cal_reps  = c.reps_log2;
+    dut->i_pta_cal_passes = c.passes;
     dut->i_pta_cal_bank  = c.bank;
     dut->i_pta_trim_log2 = c.trim_log2;
     dut->i_pta_trim_max  = c.trim_max;
@@ -1139,7 +1141,7 @@ int main(int argc, char** argv) {
         const uint64_t busy = run_cal_now();
         pta_streams st;
         pta_start(&st, cal.seed ^ (j * 0x9E3779B1u));
-        const pta_cal_cfg cc = {cal.amp_log2, cal.reps_log2, 3};
+        const pta_cal_cfg cc = {cal.amp_log2, cal.reps_log2, cal.passes};
         int     clamped = 0;
         long    sats    = 0;
         int64_t found   = -1;
@@ -1252,7 +1254,7 @@ int main(int argc, char** argv) {
             apply_cal(bad);
             const uint32_t ct = dut->o_pta_cal_ct;
             run_cal_now();
-            const pta_cal_cfg bc = {bad.amp_log2, bad.reps_log2, 3};
+            const pta_cal_cfg bc = {bad.amp_log2, bad.reps_log2, bad.passes};
             pta_streams st3;
             pta_start(&st3, bad.seed);
             const int64_t ref = pta_cal_bank(&g_dev, &cfg, &tile, 0, &st3, &bc, nullptr,

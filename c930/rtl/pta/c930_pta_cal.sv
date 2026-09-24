@@ -51,6 +51,7 @@
 // pass left behind:
 //
 //   pass 0    range = pa * trim_max / 256          (what a trim can hold)
+//             i_passes of them, PTA_CAL_CFG[9:8]; zero means one
 //   pass i    range = 4 * worst + 8                (worst = max |sum| / repeats)
 //   shift     the smallest s with range <= (2^(B_adc-1) - 1) << s, 0 .. 40
 //
@@ -102,8 +103,7 @@ module c930_pta_cal
   parameter int DIN_W    = 8,
   parameter int ACC_W    = 48,
   parameter int TRIM_W   = 32,   // the trim as the estimator asks for it
-  parameter int SUM_W    = 56,   // a cell's captures summed over the repeats
-  parameter int PASSES   = 3
+  parameter int SUM_W    = 56    // a cell's captures summed over the repeats
 )
 (
   input  logic                              i_clk,
@@ -117,6 +117,7 @@ module c930_pta_cal
   input  logic [23:0]                       i_cal_thr,     // PTA_CAL_THR, Q.8 weight LSB
   input  logic [3:0]                        i_amp_log2,    // probe amplitude, 1 << this
   input  logic [3:0]                        i_reps_log2,   // repeats a pass, 1 << this
+  input  logic [1:0]                        i_passes,      // auto-ranging passes; 0 is 1
   input  logic [3:0]                        i_act_bits,    // B_a
   input  logic [3:0]                        i_adc_bits,    // B_adc
   input  logic                              i_quant,       // QUANT is on
@@ -221,6 +222,9 @@ module c930_pta_cal
                  ? 5'(DIN_W - int'(i_act_bits)) : 5'd0;
   wire        amp_ok    = (int'(i_amp_log2) <= DIN_W - 2) && (5'(i_amp_log2) >= qh);
   wire        quantised = i_quant && (i_adc_bits != 4'd0);
+  // PTA_CAL_CFG[9:8] is two bits, and one pass is the fewest that means
+  // anything, so zero reads as one.
+  wire [1:0]  passes_eff = (i_passes == 2'd0) ? 2'd1 : i_passes;
   wire [39:0] codes     = quantised ? ((40'd1 << (int'(i_adc_bits) - 1)) - 40'd1) : 40'd0;
 
   // The error predicted after cyc_since cycles, against the threshold: the
@@ -498,7 +502,7 @@ module c930_pta_cal
             if (pass == 2'd0) found <= resid;
             // The next pass measures what this one left behind; with the ADC
             // unquantised there is nothing to refine.
-            if (!quantised || pass == 2'(PASSES - 1)) begin
+            if (!quantised || pass == passes_eff - 2'd1) begin
               cs <= C_END;
             end else begin
               pass    <= pass + 2'd1;
