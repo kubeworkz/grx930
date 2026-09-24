@@ -91,7 +91,7 @@ module tb_bridge_hold;
     .o_a_base     (npu_a_base),
     .o_b_base     (npu_b_base),
     .o_c_base     (npu_c_base),
-    .i_busy       (npu_busy),
+    .i_busy       (npu_busy), .i_cal_busy(1'b0),
     .i_done       (npu_done),
     .i_error      (npu_error)
   );

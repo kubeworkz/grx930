@@ -61,7 +61,7 @@ NPU_RTL := \
 # bench into its own build directory, so the two builds never share an output.
 # PTM_C_ABLATE_ROW=<r> also moves that row's de-skew one window late, which the
 # NPU benches must catch.
-PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv
+PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_pta_cal.sv
 NPU_RTL_ARRAY := $(NPU_RTL)
 ifeq ($(PTM_C),1)
 NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv rtl/c930_tensor_pe.sv,$(NPU_RTL)) \
@@ -184,6 +184,21 @@ $(OUT_PTM_LOCK): $(NPU_RTL_ARRAY) $(PTM_C_RTL) tb/tb_ptm_c_lockstep.sv
 
 ptm_c_lockstep: $(OUT_PTM_LOCK)
 	$(VVP) $(OUT_PTM_LOCK)
+
+# C3(b)'s named regression (grxcp pta_cpu_integration.md section 3.2): a START
+# that arrives while the PTA tile is calibrating must queue -- never dispatch
+# into a tile that is unavailable, and never be dropped, which would leave
+# occupancy 0 and BUSY 0 and tell a driver the batch had finished.  Three back
+# to back with the occupancy checked at each step.  CAL_GUARD_ABLATE=1 drops
+# calibration from the dispatch condition, and the bench must then fail.
+OUT_CAL_QUEUE := $(BUILD_DIR)/tb_npu_cal_queue$(if $(CAL_GUARD_ABLATE),_ablate).vvp
+
+$(OUT_CAL_QUEUE): rtl/c930_npu_csr.sv tb/tb_npu_cal_queue.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) $(if $(CAL_GUARD_ABLATE),-DCAL_GUARD_ABLATE) -s tb_npu_cal_queue -o $@ rtl/c930_npu_csr.sv tb/tb_npu_cal_queue.sv
+
+cal_queue: $(OUT_CAL_QUEUE)
+	$(VVP) $(OUT_CAL_QUEUE)
 
 # ---------------------------------------------------------------------------
 # Hazard-unit unit test (flush deferral under stalls)

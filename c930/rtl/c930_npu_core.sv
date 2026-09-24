@@ -154,7 +154,48 @@ module c930_npu_core
   // Drift is device state: it persists across GEMMs, and this pulse, honoured
   // only while idle, returns it to zero and reloads its generator from i_pta_seed.
   input  logic                        i_pta_model_rst,
-  output logic [31:0]                 o_pta_sat_count     // ADC saturations, captured elements
+  output logic [31:0]                 o_pta_sat_count,    // ADC saturations, captured elements
+
+  // ---- PTA calibration, phase C3(b) (rtl/pta/c930_pta_cal.sv) ----
+  // Core-level like the rest of the PTA ports: the register block is C4's.
+  // The engine runs only in a PTM-C build; elsewhere every output is tied off.
+  input  logic                        i_pta_cal_en,       // PTA_CTRL.EN
+  input  logic                        i_pta_cal_now,      // PTA_CTRL.CAL_NOW, a pulse
+  input  logic [1:0]                  i_pta_cal_sched,    // PTA_CTRL.CAL_SCHED
+  input  logic [31:0]                 i_pta_cal_per,      // PTA_CAL_PER, cycles
+  input  logic [23:0]                 i_pta_cal_thr,      // PTA_CAL_THR, Q.8 weight LSB
+  input  logic [3:0]                  i_pta_cal_amp,      // probe amplitude, 1 << this
+  input  logic [3:0]                  i_pta_cal_reps,     // repeats a pass, 1 << this
+  input  logic                        i_pta_cal_bank,     // the bank to calibrate
+  input  logic [3:0]                  i_pta_trim_log2,    // the weight DAC's step, Q.8
+  input  logic [15:0]                 i_pta_trim_max,     // ... and its clamp
+  input  logic [31:0]                 i_pta_cal_seed,     // the calibration's noise seed
+  // The affine is host-written: the error model has no per-column gain or
+  // offset error, so there is nothing for the engine to estimate (grxcp
+  // pta_chiplet_calibration.md section 8).
+  input  logic                        i_pta_aff_wen,
+  input  logic [$clog2(NUM_COLS)-1:0] i_pta_aff_col,
+  input  logic signed [17:0]          i_pta_aff_gain,     // Q8.8, 256 is unity
+  input  logic signed [31:0]          i_pta_aff_offs,
+  input  logic                        i_pta_cal_rst,      // trims 0, affine identity
+  // A host write of one cell's trim, for the parity gate and for a driver that
+  // restores a saved calibration.  The engine's writes take precedence.
+  input  logic                        i_pta_trim_wen,
+  input  logic                        i_pta_trim_bank,
+  input  logic [$clog2(NUM_ROWS)-1:0] i_pta_trim_row,
+  input  logic [$clog2(NUM_COLS)-1:0] i_pta_trim_col,
+  input  logic signed [31:0]          i_pta_trim_data,
+  output logic                        o_pta_cal_busy,     // PTA_STATUS.CAL_BUSY
+  output logic                        o_pta_cal_valid,    // PTA_STATUS.CAL_VALID
+  output logic                        o_pta_drift_alarm,  // PTA_STATUS.DRIFT_ALARM
+  output logic [31:0]                 o_pta_cal_ct,       // PTA_CAL_CT
+  output logic [31:0]                 o_pta_cal_cyc,      // PTA_CAL_CYC
+  output logic [23:0]                 o_pta_err_max,      // PTA_ERR_MAX
+  output logic [23:0]                 o_pta_err_found,    // PTA_ERR_FOUND
+  // PTA_IRQ_STATUS.ERR: a probe the estimator could not read back, a START
+  // that reached the core while CAL_BUSY was set (which the CSR's dispatch
+  // guard is there to prevent), or a MODEL_RST during a calibration.
+  output logic                        o_pta_cal_err
 );
 
   // ---------------------------------------------------------------------------
@@ -317,11 +358,35 @@ module c930_npu_core
   localparam logic [2:0] S_WRITE   = 3'd4;
   localparam logic [2:0] S_AROW    = 3'd5;  // wait for the next A row to land
   localparam logic [2:0] S_ACT     = 3'd6;  // activate the last K tile's sums into C
+  localparam logic [2:0] S_CAL     = 3'd7;  // the tile is the calibration engine's
   localparam int         ACT_P     = 7;     // c930_npu_act's latency, element to write
                                             // (7 since the stage-2 split: root/draw
                                             // and the k_shot multiply are separate
                                             // cycles, see c930_npu_act.sv)
   logic [2:0] state;
+
+  // ---- The calibration engine's side of the tile (C3(b)) ----
+  // Declared for both builds; in a digital-array build nothing drives them and
+  // every mux below collapses.
+  logic                             cal_busy;      // the engine owns the tile
+  logic                             cal_req;       // ... and would like to
+  logic                             cal_done;
+  logic                             cal_wen;       // its weight zeroing
+  logic [$clog2(NUM_ROWS)-1:0]      cal_wrow;
+  logic [$clog2(NUM_COLS)-1:0]      cal_wcol;
+  logic signed [NUM_ROWS*DIN_W-1:0] cal_act;       // its one-hot stimulus
+  logic                             cal_shot_start;
+  logic                             cal_shot;
+  logic [$clog2(NUM_COLS)-1:0]      cal_shot_col;
+  logic                             cal_bank;
+  // Set while the calibration interrupted a GEMM: the weights it zeroed have
+  // to be reloaded before the GEMM can go on, and o_busy stays high because
+  // the GEMM really is still in flight.
+  logic                             cal_resume;
+  logic [2:0]                       cal_resume_st;
+  logic                             cal_abort_pend;
+  logic                             cal_err_q;
+  logic                             cal_eng_err;
 
   int m_reg;        // current output row
   int m_base;       // pre-computed m_reg * i_dim_k (breaks multiply from critical path)
@@ -371,7 +436,12 @@ module c930_npu_core
                        (i_dim_n >= 1) && (i_dim_n <= MAX_N)  &&
                        (i_dim_k >= 1) && (i_dim_k <= MAX_K);
 
-  assign o_busy = (state != S_IDLE);
+  // A calibration between GEMMs is not a command, so it does not report BUSY:
+  // PTA_STATUS.CAL_BUSY is where it shows, and the CSR's dispatch guard is
+  // what keeps a START out of it (grxcp pta_cpu_integration.md section 3.2).
+  // One that interrupted a GEMM does report BUSY, because that GEMM has not
+  // finished.
+  assign o_busy = (state != S_IDLE) && !((state == S_CAL) && !cal_resume);
 
   // PTA impairments this build can model (doc/pta_error_model_design_note.md
   // section 2): the digital array models none, so asking it for any would
@@ -437,7 +507,7 @@ module c930_npu_core
       arow_stall_cnt <= 32'd0;
       act_cycle_cnt  <= 32'd0;
     end else begin
-      if (state != S_IDLE)
+      if (state != S_IDLE && state != S_CAL)
         cycle_cnt <= cycle_cnt + 1;
       if (state == S_IDLE && i_start) begin
         cycle_cnt      <= 32'd0;
@@ -469,6 +539,22 @@ module c930_npu_core
         arow_stall_cnt <= arow_stall_cnt + 1;
     end
   end
+
+  // ---------------------------------------------------------------------------
+  // Where the tile can be handed to the calibration engine (C3(b))
+  // ---------------------------------------------------------------------------
+  // Idle is between GEMMs.  A starved S_AROW is the memory shadow of grxcp
+  // pta_cpu_integration.md section 5.1 -- a row the DMA has not landed yet, so
+  // the tile is waiting anyway.  A row advance is a boundary where nothing is
+  // in flight but nothing is waiting either, which is what makes the periodic
+  // scheduler pay for itself and the shadow one not: the shadow withdraws its
+  // request outside a window, and a row advance is not one.
+  wire arow_wait      = (state == S_AROW) && !(arow_free || m_reg < i_a_rows_ready);
+  wire cal_take_idle  = cal_req && (state == S_IDLE) && !i_start;
+  wire cal_take_arow  = cal_req && arow_wait;
+  wire cal_take_row   = cal_req && row_done && (m_reg != i_dim_m - 1);
+  wire cal_grant      = cal_take_idle || cal_take_arow || cal_take_row;
+  wire cal_shadow_now = (state == S_IDLE) || arow_wait;
 
   // Registered K-tile helpers: k_base and kr are computed at the START of each
   // K tile (end of the previous tile) and held stable for the whole S_WLOAD +
@@ -522,7 +608,12 @@ module c930_npu_core
     act_comb   = '0;
     ps_in_comb = '0;
 
-    if (state == S_RUN) begin
+    if (cal_busy) begin
+      // The probe's stimulus goes through the same hop-gated registers the
+      // core's own feed uses, so the tile cannot tell the two apart.  Its
+      // seeds are zero: a probe accumulates nothing.
+      act_comb = cal_act;
+    end else if (state == S_RUN) begin
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == 2*r) && (r < kr_reg)) begin
@@ -583,10 +674,12 @@ module c930_npu_core
   logic [$clog2(NUM_COLS)-1:0] w_load_col;
   logic signed [DIN_W-1:0]     w_load_data;
 
-  assign w_load_active = (state == S_WLOAD);
-  assign w_load_bank   = bank_sel;
-  assign w_load_row    = w_r[$clog2(NUM_ROWS)-1:0];
-  assign w_load_col    = w_n[$clog2(NUM_COLS)-1:0];
+  // The calibration zeroes the bank through this same port, which is what
+  // redraws each cell's programming error (rtl/pta/c930_pta_cal.sv).
+  assign w_load_active = (state == S_WLOAD) || cal_wen;
+  assign w_load_bank   = cal_wen ? cal_bank : bank_sel;
+  assign w_load_row    = cal_wen ? cal_wrow : w_r[$clog2(NUM_ROWS)-1:0];
+  assign w_load_col    = cal_wen ? cal_wcol : w_n[$clog2(NUM_COLS)-1:0];
   // Double-buffered B read: select bank via b_bank_sel (snapshot of
   // i_bank_sel captured at GEMM start, see comment above).
   logic signed [DIN_W-1:0] b_read_data;
@@ -594,13 +687,15 @@ module c930_npu_core
   wire [B_AW-1:0] b_flat = B_AW'(b_read_addr);
   assign b_read_data = b_bank_sel ? b_bank1[b_flat % B_SUBS][b_flat / B_SUBS] :
                                     b_bank0[b_flat % B_SUBS][b_flat / B_SUBS];
-  assign w_load_data = b_read_data;
+  assign w_load_data = cal_wen ? '0 : b_read_data;
 
   // Rows of the array that belong to the current K tile.  The rest hold stale
   // weights, which the float modes must not multiply (c930_tensor_pe).
+  // Every row of the tile is in the probe's K tile, so crosstalk couples
+  // across all of them, as it does in a full GEMM tile.
   logic [NUM_ROWS-1:0] row_en;
   always_comb
-    for (int r = 0; r < NUM_ROWS; r++) row_en[r] = (r < kr_reg);
+    for (int r = 0; r < NUM_ROWS; r++) row_en[r] = cal_busy || (r < kr_reg);
 
 `ifdef PTM_C
   // PTM-C in place of the array (grxcp pta_cpu_integration.md section 4.1),
@@ -636,7 +731,7 @@ module c930_npu_core
     .i_wrow          (w_load_row),
     .i_wcol          (w_load_col),
     .i_wdata         (w_load_data),
-    .i_bank_sel      (bank_sel),
+    .i_bank_sel      (cal_busy ? cal_bank : bank_sel),
     .i_act           (act),
     .i_ps_in         (ps_in),
     .o_ps_out        (ps_out),
@@ -657,11 +752,102 @@ module c930_npu_core
     .i_pta_drift_max   (i_pta_drift_max),
     .i_pta_xtalk       (i_pta_xtalk),
     .i_pta_model_rst   (i_pta_model_rst && (state == S_IDLE)),
-    .i_pta_shot_start  (pta_shot_start),
-    .i_pta_shot      (pta_shot),
-    .i_pta_shot_col  (pta_shot_col),
-    .o_pta_sat_count (o_pta_sat_count)
+    .i_pta_shot_start  (cal_busy ? cal_shot_start : pta_shot_start),
+    .i_pta_shot      (cal_busy ? cal_shot     : pta_shot),
+    .i_pta_shot_col  (cal_busy ? cal_shot_col : pta_shot_col),
+    .o_pta_sat_count (o_pta_sat_count),
+    .i_pta_trim_wen     (cal_trim_wen || i_pta_trim_wen),
+    .i_pta_trim_bank    (cal_trim_wen ? cal_trim_bank : i_pta_trim_bank),
+    .i_pta_trim_row     (cal_trim_wen ? cal_trim_row  : i_pta_trim_row),
+    .i_pta_trim_col     (cal_trim_wen ? cal_trim_col  : i_pta_trim_col),
+    .i_pta_trim_data    (cal_trim_wen ? cal_trim_data : i_pta_trim_data),
+    .i_pta_trim_log2    (i_pta_trim_log2),
+    .i_pta_trim_max     (i_pta_trim_max),
+    .o_pta_trim_rdata   (cal_trim_rdata),
+    .o_pta_trim_clamped (cal_trim_clamped),
+    .i_pta_cal_wen      (i_pta_aff_wen),
+    .i_pta_cal_col      (i_pta_aff_col),
+    .i_pta_cal_gain     (i_pta_aff_gain),
+    .i_pta_cal_offs     (i_pta_aff_offs),
+    .i_pta_cal_rst      (i_pta_cal_rst),
+    .i_pta_cal_shift_en (cal_shift_en),
+    .i_pta_cal_shift    (cal_shift),
+    .i_pta_cal_load     (cal_load),
+    .i_pta_cal_seed     (cal_seed)
   );
+
+  // The engine.  It owns the probe, the estimator and the schedulers; the core
+  // owns only the grant and putting the weights back afterwards.
+  localparam int PTA_TRIM_W = 32;
+  logic                             cal_trim_wen, cal_trim_bank, cal_trim_clamped;
+  logic [$clog2(NUM_ROWS)-1:0]      cal_trim_row;
+  logic [$clog2(NUM_COLS)-1:0]      cal_trim_col;
+  logic signed [PTA_TRIM_W-1:0]     cal_trim_data, cal_trim_rdata;
+  logic                             cal_shift_en;
+  logic [5:0]                       cal_shift;
+  logic                             cal_load;
+  logic [31:0]                      cal_seed;
+
+  c930_pta_cal #(
+    .NUM_ROWS (NUM_ROWS),
+    .NUM_COLS (NUM_COLS),
+    .DIN_W    (DIN_W),
+    .ACC_W    (ACC_W),
+    .TRIM_W   (PTA_TRIM_W)
+  ) u_cal (
+    .i_clk          (i_clk),
+    .i_rst_n        (i_rst_n),
+    .i_en           (i_pta_cal_en),
+    .i_cal_now      (i_pta_cal_now),
+    .i_sched        (i_pta_cal_sched),
+    .i_cal_per      (i_pta_cal_per),
+    .i_cal_thr      (i_pta_cal_thr),
+    .i_amp_log2     (i_pta_cal_amp),
+    .i_reps_log2    (i_pta_cal_reps),
+    .i_act_bits     (i_pta_act_bits),
+    .i_adc_bits     (i_pta_adc_bits),
+    .i_quant        (i_pta_impair[0]),
+    .i_trim_max     (i_pta_trim_max),
+    .i_bank         (i_pta_cal_bank),
+    .i_shadow       (cal_shadow_now),
+    .o_req          (cal_req),
+    .i_grant        (cal_grant),
+    .o_busy         (cal_busy),
+    .o_done         (cal_done),
+    .i_hop          (hop_phase),
+    .o_wen          (cal_wen),
+    .o_wrow         (cal_wrow),
+    .o_wcol         (cal_wcol),
+    .o_act          (cal_act),
+    .o_shot_start   (cal_shot_start),
+    .o_shot         (cal_shot),
+    .o_shot_col     (cal_shot_col),
+    .o_shift_en     (cal_shift_en),
+    .o_shift        (cal_shift),
+    .o_load         (cal_load),
+    .o_seed         (cal_seed),
+    .i_cal_seed     (i_pta_cal_seed),
+    .i_cal_rst      (i_pta_cal_rst),
+    .i_ps_out       (ps_out),
+    .o_trim_wen     (cal_trim_wen),
+    .o_trim_bank    (cal_trim_bank),
+    .o_trim_row     (cal_trim_row),
+    .o_trim_col     (cal_trim_col),
+    .o_trim_data    (cal_trim_data),
+    .i_trim_rdata   (cal_trim_rdata),
+    .i_trim_clamped (cal_trim_clamped),
+    .o_cal_ct       (o_pta_cal_ct),
+    .o_cal_cyc      (o_pta_cal_cyc),
+    .o_err_max      (o_pta_err_max),
+    .o_err_found    (o_pta_err_found),
+    .o_cal_valid    (o_pta_cal_valid),
+    .o_drift_alarm  (o_pta_drift_alarm),
+    .o_err          (cal_eng_err)
+  );
+
+  assign cal_bank       = i_pta_cal_bank;
+  assign o_pta_cal_busy = cal_busy;
+  assign o_pta_cal_err  = cal_eng_err || cal_err_q;
 `else
   c930_systolic_array #(
     .NUM_ROWS (NUM_ROWS),
@@ -685,6 +871,28 @@ module c930_npu_core
   );
 
   assign o_pta_sat_count = 32'd0;
+
+  // No modelled tile, so no calibration: the engine's whole interface is off.
+  assign cal_busy       = 1'b0;
+  assign cal_req        = 1'b0;
+  assign cal_done       = 1'b0;
+  assign cal_wen        = 1'b0;
+  assign cal_wrow       = '0;
+  assign cal_wcol       = '0;
+  assign cal_act        = '0;
+  assign cal_shot_start = 1'b0;
+  assign cal_shot       = 1'b0;
+  assign cal_shot_col   = '0;
+  assign cal_bank       = 1'b0;
+  assign cal_eng_err    = 1'b0;
+  assign o_pta_cal_busy    = 1'b0;
+  assign o_pta_cal_valid   = 1'b0;
+  assign o_pta_drift_alarm = 1'b0;
+  assign o_pta_cal_ct      = 32'd0;
+  assign o_pta_cal_cyc     = 32'd0;
+  assign o_pta_err_max     = 24'd0;
+  assign o_pta_err_found   = 24'd0;
+  assign o_pta_cal_err     = 1'b0;
 `endif
 
   // ---------------------------------------------------------------------------
@@ -781,20 +989,40 @@ module c930_npu_core
       kr_reg      <= 0;
       bank_sel    <= 1'b0;
       b_bank_sel  <= 1'b0;
+      cal_resume     <= 1'b0;
+      cal_resume_st  <= S_IDLE;
+      cal_abort_pend <= 1'b0;
+      cal_err_q      <= 1'b0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
       o_done <= done_cond;
 
+      // Two things that must never reach the tile during a calibration, and
+      // must never be lost in silence either (grxcp pta_cpu_integration.md
+      // section 3.2, and the calibration document's section 6).  A START is
+      // the CSR's dispatch guard's job; if one arrives anyway it is reported.
+      if (state == S_CAL && (i_start || i_pta_model_rst))
+        cal_err_q <= 1'b1;
+
       // No more A rows will land once the DMA gives up, so S_AROW would wait
       // forever -- and a core left waiting wakes up when the next GEMM's rows
       // arrive and computes them into this one.
-      if (i_abort)
+      // A calibration cannot be abandoned half way: the engine would go on
+      // driving a tile the core had walked away from.  The abort is held until
+      // it finishes, and then taken instead of the resume.
+      if (i_abort && state == S_CAL)
+        cal_abort_pend <= 1'b1;
+      if (i_abort && state != S_CAL)
         state <= S_IDLE;
       else begin
       case (state)
 
         S_IDLE: begin
-          if (i_start) begin
+          if (cal_take_idle) begin
+            cal_resume    <= 1'b0;
+            cal_resume_st <= S_IDLE;
+            state         <= S_CAL;
+          end else if (i_start) begin
             if (!dims_ok || act_fp || pta_bad) begin
               o_error <= 1'b1;          // stay IDLE
             end else begin
@@ -827,8 +1055,15 @@ module c930_npu_core
           if ((w_n == nc - 1) && (w_r == kr_reg - 1)) begin
             w_r    <= 0;
             w_n    <= 0;
-            t      <= 0;
             n_cnt  <= 0;
+            if (cal_resume) begin
+              // This pass through S_WLOAD only put back what the calibration
+              // zeroed, so the GEMM's place in the row sweep is untouched and
+              // it resumes where the grant found it.
+              cal_resume <= 1'b0;
+              state      <= cal_resume_st;
+            end else begin
+            t      <= 0;
             m_reg  <= 0;
             m_base <= 0;
             if (kt_reg == 0) begin
@@ -839,6 +1074,7 @@ module c930_npu_core
             end else begin
               state <= S_ACCLD;
             end
+            end // !cal_resume
           end else if (w_n == nc - 1) begin
             w_n <= 0;
             w_r <= w_r + 1;
@@ -930,6 +1166,30 @@ module c930_npu_core
         S_AROW: begin
           if (arow_free || m_reg < i_a_rows_ready)
             state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
+          else if (cal_take_arow) begin
+            cal_resume    <= 1'b1;
+            cal_resume_st <= S_AROW;
+            w_r           <= 0;
+            w_n           <= 0;
+            state         <= S_CAL;
+          end
+        end
+
+        // The engine has the tile.  It drives the weight port, the activation
+        // feed and the shot strobes (see the muxes above); the core waits, and
+        // then puts back the weights the probe zeroed.
+        S_CAL: begin
+          if (cal_done) begin
+            if (cal_abort_pend) begin
+              cal_abort_pend <= 1'b0;
+              cal_resume     <= 1'b0;
+              state          <= S_IDLE;
+            end else if (cal_resume) begin
+              state <= S_WLOAD;
+            end else begin
+              state <= S_IDLE;
+            end
+          end
         end
 
         default: state <= S_IDLE;
@@ -954,7 +1214,16 @@ module c930_npu_core
           // on the common path.  Under this loop order the wait is real:
           // the first K tile walks all M rows while the DMA is still
           // fetching them.
-          if (arow_free || (m_reg + 1) < i_a_rows_ready)
+          if (cal_take_row) begin
+            // Calibrate here and come back to whichever state this advance was
+            // headed for, once the weights are back.
+            cal_resume    <= 1'b1;
+            cal_resume_st <= (arow_free || (m_reg + 1) < i_a_rows_ready)
+                             ? ((kt_reg == 0) ? S_RUN : S_ACCLD) : S_AROW;
+            w_r           <= 0;
+            w_n           <= 0;
+            state         <= S_CAL;
+          end else if (arow_free || (m_reg + 1) < i_a_rows_ready)
             state <= (kt_reg == 0) ? S_RUN : S_ACCLD;
           else
             state <= S_AROW;

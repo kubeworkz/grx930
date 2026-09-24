@@ -115,6 +115,11 @@ module c930_npu_top
 
   // FIFO head (next GEMM params for cross-GEMM prefetch)
   logic        fifo_valid;
+  // PTA_STATUS.CAL_BUSY from the core's calibration engine.  The engine is
+  // core-level until C4 maps its registers, so with the PTA configuration tied
+  // off below this is always low -- but the dispatch guard it feeds is wired
+  // now, not later (grxcp pta_cpu_integration.md section 3.2).
+  logic        pta_cal_busy;
   logic [15:0] fifo_dim_m, fifo_dim_n, fifo_dim_k;
   logic [31:0] fifo_a_base, fifo_b_base, fifo_c_base;
   logic [2:0]  fifo_precision;
@@ -148,6 +153,7 @@ module c930_npu_top
     .o_c_base      (c_base),
     .o_precision   (precision),
     .i_busy        (busy),
+    .i_cal_busy    (pta_cal_busy),
     .i_done        (done),
     .i_error       (error),
     .i_cycle_count (cycle_count),
@@ -327,7 +333,38 @@ module c930_npu_top
     .i_pta_drift_max   (16'd0),
     .i_pta_xtalk       (8'd0),
     .i_pta_model_rst   (1'b0),
-    .o_pta_sat_count   ()
+    .o_pta_sat_count   (),
+    // C3(b)'s calibration engine, likewise core-level until C4: off, but its
+    // CAL_BUSY reaches the CSR's dispatch guard.
+    .i_pta_cal_en      (1'b0),
+    .i_pta_cal_now     (1'b0),
+    .i_pta_cal_sched   (2'd0),
+    .i_pta_cal_per     (32'd0),
+    .i_pta_cal_thr     (24'd0),
+    .i_pta_cal_amp     (4'd0),
+    .i_pta_cal_reps    (4'd0),
+    .i_pta_cal_bank    (1'b0),
+    .i_pta_trim_log2   (4'd0),
+    .i_pta_trim_max    (16'd0),
+    .i_pta_cal_seed    (32'd0),
+    .i_pta_aff_wen     (1'b0),
+    .i_pta_aff_col     ('0),
+    .i_pta_aff_gain    (18'sd256),
+    .i_pta_aff_offs    (32'sd0),
+    .i_pta_cal_rst     (1'b0),
+    .i_pta_trim_wen    (1'b0),
+    .i_pta_trim_bank   (1'b0),
+    .i_pta_trim_row    ('0),
+    .i_pta_trim_col    ('0),
+    .i_pta_trim_data   (32'sd0),
+    .o_pta_cal_busy    (pta_cal_busy),
+    .o_pta_cal_valid   (),
+    .o_pta_drift_alarm (),
+    .o_pta_cal_ct      (),
+    .o_pta_cal_cyc     (),
+    .o_pta_err_max     (),
+    .o_pta_err_found   (),
+    .o_pta_cal_err     ()
   );
 
   assign o_busy  = busy;

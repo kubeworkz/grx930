@@ -38,6 +38,11 @@
 //
 //   at a start      sample the configuration; the THERMAL, SHOT and PROG_ERR
 //                   xorshift32 streams load seed ^ K (K itself if that is zero)
+//   at a calibration
+//                   i_pta_cal_load samples the configuration as a start does
+//                   and loads the same three streams from the calibration's own
+//                   seed.  The saturation count and drift are left alone: a
+//                   calibration inside a GEMM must not reset either
 //   model reset     idle only: every drift offset and the drift clock return
 //                   to zero, and the DRIFT stream loads seed ^ K.  Drift is
 //                   device state, so nothing else resets it
@@ -68,11 +73,35 @@
 //   q(x, B) = x if B is 0 or >= DIN_W, else clamp((x + 2^(h-1)) >>> h, B) << h
 //   with h = DIN_W - B.  gs = (sum of a draw's four bytes - 510) * 443.
 //
+// C3's correction, which the error model does not itself produce (grxcp
+// docs/designs/pta_chiplet_calibration.md sections 2 and 4, and section 4 of
+// the design note).  Two stores, both written from outside, both zero out of
+// reset, where they change nothing:
+//
+//   trim_rn     a cell's trim, in the weight DAC below the weight code's LSB.
+//               A write is rounded to the DAC's own step, 2^i_pta_trim_log2 in
+//               Q.8 weight LSB, away from zero at the half step, and clamped
+//               to +-i_pta_trim_max; o_pta_trim_clamped reports a write that
+//               could not reach what was asked, which is the tile saying a
+//               cell needs a weight rewrite or a service call.  The trim is in
+//               the analog weight, so crosstalk couples it as it couples drift:
+//                 wa_r = (...) + (PROG_ERR ? e_r : 0) + (DRIFT ? d_r : 0) + trim_r
+//   gain_n      a column's affine, after the ADC and before the seed -- the
+//   offs_n      column's receiver, not the GEMM's output column:
+//                 out' = ((out * gain_n + 2^7) >>> 8) + offs_n
+//
+// Both correct the error model, so like the error model they exist only where
+// it does: with every impairment clear a column is the array's exact sum, trim
+// and affine included.  i_pta_cal_shift overrides the ADC's shift for the
+// duration of a probe -- a calibration changes range the way an instrument
+// does -- without disturbing the configuration a GEMM is running under.
+//
 // Ablations, each of which parity must catch: ABLATE_ROW moves one row's
 // de-skew a window late (C0); PTM_C_ABLATE_XORSHIFT changes xorshift32's first
 // shift from 13 to 12; PTM_C_ABLATE_QROUND drops the quantiser's rounding term;
 // PTM_C_ABLATE_DRIFT clears drift at every GEMM start; PTM_C_ABLATE_XTALK
-// couples rows outside the K tile.
+// couples rows outside the K tile; PTM_C_ABLATE_TRIM writes a trim without the
+// DAC's step; PTM_C_ABLATE_AFFINE applies the affine before the ADC.
 // -----------------------------------------------------------------------------
 
 module c930_ptm_c
@@ -81,7 +110,8 @@ module c930_ptm_c
   parameter int NUM_COLS   = 8,   // output width
   parameter int DIN_W      = 8,   // activation / weight width
   parameter int ACC_W      = 48,  // accumulator width
-  parameter int ABLATE_ROW = -1   // C0's ablation: this row's de-skew one window late
+  parameter int ABLATE_ROW = -1,  // C0's ablation: this row's de-skew one window late
+  parameter int TRIM_W     = 24   // C3's trim as asked for, before the DAC rounds it
 )
 (
   input  logic                                     i_clk,
@@ -123,7 +153,36 @@ module c930_ptm_c
   input  logic                                     i_pta_shot_start, // this window starts a shot
   input  logic                                     i_pta_shot,       // this window's shot is captured
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_shot_col,   // ... for this column
-  output logic [31:0]                              o_pta_sat_count
+  output logic [31:0]                              o_pta_sat_count,
+
+  // ---- C3's correction (see the header) ----
+  input  logic                                     i_pta_trim_wen,   // one cell's trim
+  input  logic                                     i_pta_trim_bank,
+  input  logic [$clog2(NUM_ROWS)-1:0]              i_pta_trim_row,
+  input  logic [$clog2(NUM_COLS)-1:0]              i_pta_trim_col,
+  input  logic signed [TRIM_W-1:0]                 i_pta_trim_data,  // asked for, Q.8 weight LSB
+  input  logic [3:0]                               i_pta_trim_log2,  // DAC step = 2^this, Q.8
+  input  logic [15:0]                              i_pta_trim_max,   // clamp, Q.8
+  // The cell i_pta_trim_{bank,row,col} names, as the DAC holds it now: the
+  // estimator adds to this rather than keeping a shadow copy that a host write
+  // could put out of step.
+  output logic signed [TRIM_W-1:0]                 o_pta_trim_rdata,
+  output logic                                     o_pta_trim_clamped,
+  input  logic                                     i_pta_cal_wen,    // one column's affine
+  input  logic [$clog2(NUM_COLS)-1:0]              i_pta_cal_col,
+  input  logic signed [17:0]                       i_pta_cal_gain,   // Q8.8, 256 is unity
+  input  logic signed [31:0]                       i_pta_cal_offs,
+  input  logic                                     i_pta_cal_rst,    // trims 0, affine identity
+  input  logic                                     i_pta_cal_shift_en, // the probe's own range
+  input  logic [5:0]                               i_pta_cal_shift,
+  // A calibration loads the THERMAL, SHOT and PROG_ERR streams from its own
+  // seed, as a start does, and then they run through the whole of it: the
+  // repeats differ from one another, which is what makes averaging work, and
+  // the sequence is still reproducible from one word.  It leaves the
+  // configuration and the saturation count alone -- a calibration inside a GEMM
+  // must not reset either -- and it leaves drift alone, which is device state.
+  input  logic                                     i_pta_cal_load,
+  input  logic [31:0]                              i_pta_cal_seed
 );
 
   localparam int R = NUM_ROWS;
@@ -242,6 +301,67 @@ module c930_ptm_c
   logic signed [19:0]      e_bank0 [0:R-1][0:C-1];   // programming error, Q.8
   logic signed [19:0]      e_bank1 [0:R-1][0:C-1];
 
+  // ---- C3's correction stores ----
+  // A trim per cell of both banks, as the weight DAC holds it, and an affine
+  // per column of the tile.  Written from outside; the model never moves them.
+  logic signed [TRIM_W-1:0] trim0 [0:R-1][0:C-1];   // Q.8 weight LSB
+  logic signed [TRIM_W-1:0] trim1 [0:R-1][0:C-1];
+  logic signed [17:0]       gain_q [0:C-1];          // Q8.8, 256 is unity
+  logic signed [31:0]       offs_q [0:C-1];
+
+  // The DAC's own step and clamp: round away from zero at the half step, then
+  // saturate.  A step of 1 (log2 zero) is a DAC with a bit per Q.8 unit, which
+  // rounds nothing.  sim/pta_tile_model.c's pta_trim_write() is the reference,
+  // and agrees with this for every step that is a power of two -- which is
+  // every step a DAC has.
+  function automatic logic signed [TRIM_W:0] trim_dac(input logic signed [TRIM_W-1:0] v);
+    logic [TRIM_W-1:0] mag, mq;
+    logic [TRIM_W-1:0] lim;
+    logic [4:0]        g;
+    g   = 5'(i_pta_trim_log2);
+    mag = v[TRIM_W-1] ? TRIM_W'(-v) : TRIM_W'(v);
+`ifdef PTM_C_ABLATE_TRIM
+    mq  = mag;
+`else
+    mq  = (g == 5'd0) ? mag : (((mag + (TRIM_W'(1) << (g - 5'd1))) >> g) << g);
+`endif
+    lim = TRIM_W'({8'd0, i_pta_trim_max});
+    // The top bit says the write could not reach what it was asked for.
+    trim_dac = {mq > lim, v[TRIM_W-1] ? TRIM_W'(-((mq > lim) ? lim : mq))
+                                      : TRIM_W'((mq > lim) ? lim : mq)};
+  endfunction
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin : b_cal
+    logic signed [TRIM_W:0] tw;
+    if (!i_rst_n || i_pta_cal_rst) begin
+      for (int r = 0; r < R; r++)
+        for (int c = 0; c < C; c++) begin
+          trim0[r][c] <= '0;
+          trim1[r][c] <= '0;
+        end
+      for (int c = 0; c < C; c++) begin
+        gain_q[c] <= 18'sd256;
+        offs_q[c] <= '0;
+      end
+      o_pta_trim_clamped <= 1'b0;
+    end else begin
+      o_pta_trim_clamped <= 1'b0;
+      if (i_pta_trim_wen) begin
+        tw = trim_dac(i_pta_trim_data);
+        if (i_pta_trim_bank) trim1[i_pta_trim_row][i_pta_trim_col] <= tw[TRIM_W-1:0];
+        else                 trim0[i_pta_trim_row][i_pta_trim_col] <= tw[TRIM_W-1:0];
+        o_pta_trim_clamped <= tw[TRIM_W];
+      end
+      if (i_pta_cal_wen) begin
+        gain_q[i_pta_cal_col] <= i_pta_cal_gain;
+        offs_q[i_pta_cal_col] <= i_pta_cal_offs;
+      end
+    end
+  end
+
+  assign o_pta_trim_rdata = i_pta_trim_bank ? trim1[i_pta_trim_row][i_pta_trim_col]
+                                            : trim0[i_pta_trim_row][i_pta_trim_col];
+
   // ---- Error-model configuration and generators ----
   logic [6:0]  impair_r;
   logic [3:0]  abits_r, wbits_r, adcbits_r;
@@ -318,7 +438,7 @@ module c930_ptm_c
       rng_th     <= K_THERMAL;
       rng_sh     <= K_SHOT;
       rng_pr     <= K_PROG;
-    end else if (i_pta_cfg_load) begin
+    end else if (i_pta_cfg_load || i_pta_cal_load) begin
       impair_r   <= i_pta_impair;
       abits_r    <= i_pta_act_bits;
       wbits_r    <= i_pta_w_bits;
@@ -331,9 +451,11 @@ module c930_ptm_c
       dlog2_r    <= i_pta_drift_log2;
       dmax_r     <= i_pta_drift_max;
       chi_r      <= i_pta_xtalk;
-      rng_th     <= stream_seed(i_pta_seed, K_THERMAL);
-      rng_sh     <= stream_seed(i_pta_seed, K_SHOT);
-      rng_pr     <= stream_seed(i_pta_seed, K_PROG);
+      // A calibration samples the configuration as it stands and loads the
+      // streams from its own seed; a start does both from i_pta_seed.
+      rng_th     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_THERMAL);
+      rng_sh     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_SHOT);
+      rng_pr     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_PROG);
     end else begin
       if (shot_step) begin
         rng_th <= rng_th_next;
@@ -474,16 +596,19 @@ module c930_ptm_c
   // Row r's analog weight in column c, Q.8 weight LSB: the DAC's level plus the
   // programming error and the drift the configuration turns on.
   function automatic logic signed [63:0] analog_w(input int r, input int c);
-    logic signed [DIN_W-1:0] w;
-    logic signed [19:0]      e;
-    logic signed [16:0]      d;
-    logic signed [63:0]      wq;
+    logic signed [DIN_W-1:0]  w;
+    logic signed [19:0]       e;
+    logic signed [16:0]       d;
+    logic signed [TRIM_W-1:0] tr;
+    logic signed [63:0]       wq;
     w  = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
     e  = i_bank_sel ? e_bank1[r][c] : e_bank0[r][c];
     d  = i_bank_sel ? d_bank1[r][c] : d_bank0[r][c];
+    tr = i_bank_sel ? trim1[r][c]   : trim0[r][c];
     wq = impair_r[IMP_QUANT] ? 64'(quant(int'(w), int'(wbits_r))) : 64'(w);
     analog_w = wq * 64'sd256 + (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0)
-                              + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0);
+                              + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0)
+                              + 64'(tr);
   endfunction
 
   // Row r's weight as its input sees it.  With XTALK, the input's light also
@@ -506,6 +631,14 @@ module c930_ptm_c
     end
   endfunction
 
+  // sim/pta_tile_model.c's pta_affine(): the column's gain and offset, with
+  // the contract's rounding.  Unity gain and zero offset leave out alone.
+  function automatic logic signed [81:0] affine(input int c, input logic signed [63:0] out);
+    logic signed [81:0] v;
+    v      = (82'(out) * 82'(gain_q[c]) + 82'sd128) >>> 8;
+    affine = v + 82'(offs_q[c]);
+  endfunction
+
   // ---- The shot, integer columns ----
   // One column's registered value and whether its ADC clamped.  With modelled
   // clear it is the array's exact sum; set, it is the error model of the header.
@@ -524,6 +657,8 @@ module c930_ptm_c
     logic signed [29:0]      n_sh;
     logic signed [30:0]      nsum;
     logic signed [79:0]      z, tq, outw, hi, lo;
+    logic signed [63:0]      o64;
+    logic signed [81:0]      aff;
     logic                    clamped;
     int                      s, b, tap;
 
@@ -544,7 +679,7 @@ module c930_ptm_c
     if (!modelled) begin
       int_column = {1'b0, seed + y[ACC_W-1:0]};
     end else begin
-      s       = int'(shift_r);
+      s       = i_pta_cal_shift_en ? int'(i_pta_cal_shift) : int'(shift_r);
       b       = int'(adcbits_r);
       ay      = y[63] ? 64'(-y) : 64'(y);
       v       = ay >> s;                               // Q.8, ADC LSB
@@ -557,6 +692,11 @@ module c930_ptm_c
                 (impair_r[IMP_SHOT]    ? 31'(n_sh) : 31'sd0);
       z       = 80'(y) + (80'(nsum) <<< s);
 
+`ifdef PTM_C_ABLATE_AFFINE
+      // The affine before the ADC: the correction then passes through the
+      // ADC's own rounding and clamp, which is not what it corrects.
+      z       = 80'(affine(c, z[63:0]));
+`endif
       clamped = 1'b0;
       if (impair_r[IMP_QUANT] && b != 0) begin
         tq = (z + (80'sd1 <<< (7 + s))) >>> (8 + s);
@@ -568,7 +708,15 @@ module c930_ptm_c
       end else begin
         outw = (z + 80'sd128) >>> 8;
       end
-      int_column = {clamped, seed + outw[ACC_W-1:0]};
+      // C3's affine, on the column's own gain and offset.  The C reference
+      // carries out in an int64, so the narrowing is where the model narrows.
+      o64     = outw[63:0];
+`ifdef PTM_C_ABLATE_AFFINE
+      aff     = 82'(o64);
+`else
+      aff     = 82'(affine(c, o64));
+`endif
+      int_column = {clamped, seed + aff[ACC_W-1:0]};
     end
   endfunction
 

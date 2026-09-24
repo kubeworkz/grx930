@@ -64,6 +64,42 @@
 //                                   raise o_error at start; the next valid
 //                                   start clears it.  A digital-array build
 //                                   refuses every impairment.
+//
+// The PTA calibration, phase C3(b) (design note section 5, gates P7 to P9).
+//
+//   --pta trim                      gate P7: the two correction paths.  A trim
+//                                   per cell through the weight DAC and an
+//                                   affine per column after the ADC, written
+//                                   into the RTL and the model together: C and
+//                                   the saturation count must match pta_gemm()
+//                                   at every shape.  Directed cases pin the
+//                                   DAC's step and clamp and the affine's
+//                                   rounding against values worked out by
+//                                   hand, and with every impairment clear a
+//                                   loaded correction must change nothing.
+//   --pta engine                    gate P8: the calibration engine.  Drift is
+//                                   accumulated, the engine calibrates, and both
+//                                   errors it publishes and every trim it wrote
+//                                   must match pta_cal_bank() -- the trims by
+//                                   reading the tile back one cell at a time.
+//                                   Also its refusals: an amplitude the probe
+//                                   cannot read back, a START that arrives
+//                                   while CAL_BUSY is set, a MODEL_RST during
+//                                   a calibration, and DRIFT_ALARM when a trim
+//                                   cannot reach what was asked of it.
+//   --pta sched                     gate P9: the four schedulers, on a GEMM
+//                                   sequence whose A rows arrive the way the
+//                                   DMA delivers them.  The shadow scheduler
+//                                   must cost less wall-clock than the periodic
+//                                   one at the same accuracy, which is C3's own
+//                                   gate.  The drift-predictive one is reported
+//                                   rather than gated: how often it fires is
+//                                   PTA_CAL_THR's to decide.
+//
+// Ablations: PTM_C_ABLATE_TRIM (a trim written without the DAC's step) and
+// PTM_C_ABLATE_AFFINE (the affine applied before the ADC) fail P7's directed
+// cases; PTA_CAL_ABLATE_RANGE (a probe that keeps the GEMM's ADC range, which
+// is what C3(a) measured the cost of) fails P8.
 
 #include "Vc930_npu_core.h"
 #include "verilated.h"
@@ -297,6 +333,78 @@ void apply_pta(const pta_cfg& cfg) {
 // from one run_case to the next, exactly as the RTL's.
 pta_device g_dev = {};
 
+// ---------------------------------------------------------------------------
+// PTA calibration, phase C3(b)
+// ---------------------------------------------------------------------------
+struct CalCfg {
+    bool     en        = false;
+    uint32_t sched     = 0;      // 0 off, 1 periodic, 2 predictive, 3 shadow
+    uint32_t per       = 0;      // PTA_CAL_PER
+    uint32_t thr       = 0;      // PTA_CAL_THR
+    uint32_t amp_log2  = 0;      // probe amplitude, 1 << this
+    uint32_t reps_log2 = 0;      // repeats a pass, 1 << this
+    uint32_t trim_log2 = 0;      // the weight DAC's step, 1 << this, Q.8
+    uint32_t trim_max  = 0;      // and its clamp
+    uint32_t seed      = 0;
+    bool     bank      = false;
+};
+
+void apply_cal(const CalCfg& c) {
+    dut->i_pta_cal_en    = c.en;
+    dut->i_pta_cal_sched = c.sched;
+    dut->i_pta_cal_per   = c.per;
+    dut->i_pta_cal_thr   = c.thr;
+    dut->i_pta_cal_amp   = c.amp_log2;
+    dut->i_pta_cal_reps  = c.reps_log2;
+    dut->i_pta_cal_bank  = c.bank;
+    dut->i_pta_trim_log2 = c.trim_log2;
+    dut->i_pta_trim_max  = c.trim_max;
+    dut->i_pta_cal_seed  = c.seed;
+}
+
+// A cell's trim and a column's affine, into the RTL's stores and the model's
+// together.  The DAC rounds and clamps in both, which is the point.
+void write_trim(const pta_cfg& dac, int bank, int row, int col, int64_t q88) {
+    dut->i_pta_trim_wen  = 1;
+    dut->i_pta_trim_bank = bank;
+    dut->i_pta_trim_row  = row;
+    dut->i_pta_trim_col  = col;
+    dut->i_pta_trim_data = static_cast<uint32_t>(static_cast<int32_t>(q88));
+    tick();
+    dut->i_pta_trim_wen = 0;
+    pta_trim_write(&g_dev, &dac, bank, row, col, q88);
+}
+
+void write_affine(int col, int32_t gain, int32_t offs) {
+    dut->i_pta_aff_wen  = 1;
+    dut->i_pta_aff_col  = col;
+    dut->i_pta_aff_gain = static_cast<uint32_t>(gain) & 0x3FFFFu;
+    dut->i_pta_aff_offs = static_cast<uint32_t>(offs);
+    tick();
+    dut->i_pta_aff_wen = 0;
+    pta_column_cal(&g_dev, col, gain, offs);
+}
+
+void cal_reset() {
+    dut->i_pta_cal_rst = 1;
+    tick();
+    dut->i_pta_cal_rst = 0;
+    pta_cal_reset(&g_dev);
+}
+
+// One calibration, fired by CAL_NOW while the core is idle, run to completion.
+// Returns the cycles CAL_BUSY was set for, or 0 if it never started.
+uint64_t run_cal_now(uint64_t patience = 200'000) {
+    uint64_t waited = 0, busy = 0;
+    dut->i_pta_cal_now = 1;
+    tick();
+    dut->i_pta_cal_now = 0;
+    while (!dut->o_pta_cal_busy && waited++ < 200) tick();
+    while (dut->o_pta_cal_busy && busy++ < patience) tick();
+    tick();
+    return dut->o_pta_cal_busy ? 0 : busy;
+}
+
 // A model reset, in the RTL and the model together.  Only while idle.
 void model_reset(uint32_t seed) {
     dut->i_pta_seed      = seed;
@@ -391,6 +499,7 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
     // saying M exercises the comparison the DMA path actually drives.
     dut->i_a_rows_ready = M;
     dut->i_dim_m = M; dut->i_dim_n = N; dut->i_dim_k = K;
+    while (dut->o_pta_cal_busy) tick();   // the dispatch guard, see run_raw()
     dut->i_start = 1; tick();
     dut->i_start = 0;
 
@@ -440,6 +549,100 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
     return r;
 }
 
+// A GEMM the model is not told about.  P9's shadow scheduler interrupts GEMMs,
+// so the RTL's tile and the model's part company by design: what P9 measures is
+// wall-clock and the residual the tile is left with, not parity.
+// gap 0 means every A row is resident at the start; otherwise row m is
+// announced `gap` cycles after row m-1, the way the DMA delivers them, and the
+// core waits in S_AROW between rows -- the idle window the shadow is for.
+uint64_t run_raw(int M, int N, int K, int gap, const std::vector<int>& a,
+                 const std::vector<int>& b, const pta_cfg& pta) {
+    for (int i = 0; i < M * K; ++i) preload(0, i, a[i]);
+    for (int i = 0; i < K * N; ++i) preload(1, i, b[i]);
+    apply_pta(pta);
+    dut->i_dim_m = M; dut->i_dim_n = N; dut->i_dim_k = K;
+    dut->i_a_rows_ready = gap > 0 ? 1 : M;
+    // Never dispatch into a calibrating tile.  Here the harness is the
+    // dispatcher, so it owes the tile the guard the CSR owes it (grxcp
+    // pta_cpu_integration.md section 3.2): a START during a calibration is not
+    // taken, and whoever sent it then waits for a done that never comes.  This
+    // is how P9 first failed, which is as good a demonstration of the guard's
+    // purpose as the regression itself.
+    while (dut->o_pta_cal_busy) tick();
+    dut->i_start = 1; tick();
+    dut->i_start = 0;
+
+    uint64_t n = 0;
+    int rows = 1;
+    while (!dut->o_done) {
+        if (gap > 0 && rows < M && (n % static_cast<uint64_t>(gap)) == 0)
+            dut->i_a_rows_ready = ++rows;
+        tick();
+        if (++n > 4'000'000ull) {
+            fprintf(stderr, "[timeout] M=%d N=%d K=%d gap=%d after %llu cycles:"
+                            " busy=%d cal_busy=%d cal_ct=%u rows=%d err=%d\n",
+                    M, N, K, gap, static_cast<unsigned long long>(n), dut->o_busy,
+                    dut->o_pta_cal_busy, dut->o_pta_cal_ct, rows, dut->o_pta_cal_err);
+            exit(2);
+        }
+    }
+    tick();
+    dut->i_a_rows_ready = M;
+    return n;
+}
+
+uint64_t run_streamed(int M, int N, int K, int width, int gap, const pta_cfg& pta) {
+    std::vector<int> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+    for (auto& x : a) x = rnd(width);
+    for (auto& x : b) x = rnd(width);
+    return run_raw(M, N, K, gap, a, b, pta);
+}
+
+// A read-back is an instrument, and needs a range where what it is reading lands
+// a few codes up.  A GEMM's shift is set for its sums, and a cell's error is
+// several thousand times smaller: at DIN_W 16 it is under one ADC code there, so
+// every read-back would come back zero.  The shift below puts a drift at its
+// clamp a handful of codes up at either width -- the same argument as the probe's
+// auto-ranging, and the same reason.  (That the figure depends on the operand
+// width at all is the design note's open question 2: drift is quoted in weight
+// LSB, which do not scale with DIN_W.)
+pta_cfg read_cfg(const pta_cfg& cfg, int amp_log2) {
+    pta_cfg c = cfg;
+    c.adc_shift = static_cast<uint32_t>(amp_log2 + 2);
+    return c;
+}
+
+// The tile read back a cell at a time: zero weights and one activation at
+// `amp`, so C[r][n] is what cell (r, n) still carries -- its programming error,
+// its drift and its trim, through the ADC.  The zeroing redraws the programming
+// error, which no trim can anticipate, so this measure has a floor; what it
+// compares fairly is one tile against another.
+std::vector<int32_t> read_cells_raw(int amp, const pta_cfg& pta) {
+    std::vector<int> a(static_cast<size_t>(NUM_ROWS) * NUM_ROWS, 0),
+                     b(static_cast<size_t>(NUM_ROWS) * NUM_COLS, 0);
+    for (int r = 0; r < NUM_ROWS; ++r) a[r * NUM_ROWS + r] = amp;
+    run_raw(NUM_ROWS, NUM_COLS, NUM_ROWS, 0, a, b, pta);
+    return read_c(NUM_ROWS, NUM_COLS);
+}
+
+// The same, with the model told: run_case holds the RTL to pta_gemm(), so every
+// cell's trim is checked separately.
+std::vector<int32_t> read_cells(int width, int amp, const pta_cfg& pta, bool* match) {
+    std::vector<int> a(static_cast<size_t>(NUM_ROWS) * NUM_ROWS, 0),
+                     b(static_cast<size_t>(NUM_ROWS) * NUM_COLS, 0);
+    for (int r = 0; r < NUM_ROWS; ++r) a[r * NUM_ROWS + r] = amp;
+    const Result res = run_case(NUM_ROWS, NUM_COLS, NUM_ROWS, width, false, ActCfg{}, pta,
+                                &a, &b);
+    if (match) *match = res.ok && static_cast<long>(res.pta_sats) == res.model_pta_sats;
+    return read_c(NUM_ROWS, NUM_COLS);
+}
+
+double mean_abs(const std::vector<int32_t>& v) {
+    double s = 0;
+    for (int32_t x : v) s += x < 0 ? -static_cast<double>(x) : static_cast<double>(x);
+    return v.empty() ? 0.0 : s / static_cast<double>(v.size());
+}
+
 void reset() {
     dut->i_rst_n = 0;
     dut->i_wen = 0; dut->i_wsel = 0; dut->i_waddr = 0; dut->i_wdata = 0;
@@ -454,7 +657,19 @@ void reset() {
     dut->i_act_tbl_wen = 0; dut->i_act_tbl_waddr = 0; dut->i_act_tbl_wdata = 0;
     apply_act(ActCfg{});
     apply_pta(PTA_OFF);
+    apply_cal(CalCfg{});
     dut->i_pta_model_rst = 0;
+    dut->i_pta_cal_now   = 0;
+    dut->i_pta_cal_rst   = 0;
+    dut->i_pta_trim_wen  = 0;
+    dut->i_pta_trim_bank = 0;
+    dut->i_pta_trim_row  = 0;
+    dut->i_pta_trim_col  = 0;
+    dut->i_pta_trim_data = 0;
+    dut->i_pta_aff_wen   = 0;
+    dut->i_pta_aff_col   = 0;
+    dut->i_pta_aff_gain  = 256;
+    dut->i_pta_aff_offs  = 0;
     for (int i = 0; i < 4; ++i) tick();
     dut->i_rst_n = 1;
     for (int i = 0; i < 2; ++i) tick();
@@ -570,10 +785,11 @@ int main(int argc, char** argv) {
     const bool pta_gate = pta_mode == "quant" || pta_mode == "thermal" || pta_mode == "shot" ||
                           pta_mode == "prog" || pta_mode == "drift" || pta_mode == "xtalk" ||
                           pta_mode == "all";
-    if (!(pta_mode == "off" || pta_gate || pta_mode == "directed" || pta_mode == "refuse") ||
-        !(tile == "array" || tile == "ptm_c")) {
+    const bool pta_cal = pta_mode == "trim" || pta_mode == "engine" || pta_mode == "sched";
+    if (!(pta_mode == "off" || pta_gate || pta_cal || pta_mode == "directed" ||
+          pta_mode == "refuse") || !(tile == "array" || tile == "ptm_c")) {
         fprintf(stderr, "--pta must be off, directed, quant, thermal, shot, prog, drift, xtalk,"
-                        " all or refuse; --tile array or ptm_c\n");
+                        " all, refuse, trim, engine or sched; --tile array or ptm_c\n");
         return 2;
     }
     if (pta_mode != "off" && pta_mode != "refuse" && tile != "ptm_c") {
@@ -749,6 +965,453 @@ int main(int argc, char** argv) {
         printf("[P-%s] %d of 14 shapes moved off their exact sums  %s\n", pta_mode.c_str(),
                moved_cases, moved ? "PASS" : "FAIL");
         if (!moved) ++failures;
+    } else if (pta_mode == "trim") {
+        // Gate P7: the two correction paths.
+        CalCfg cal;
+        cal.trim_log2 = 2;                 // the DAC's step: a quarter of a 6-bit code
+        cal.trim_max  = 16;                // and a clamp the directed case can reach
+        apply_cal(cal);
+        pta_cfg dac = {};
+        dac.trim_step = 1u << cal.trim_log2;
+        dac.trim_max  = cal.trim_max;
+
+        model_reset(0x5EED0007u);
+        cal_reset();
+
+        // Every width zero leaves the quantisers as identities and the ADC
+        // unquantised, so a column is (y + 128) >> 8 and nothing else: the
+        // directed values below are the contract's arithmetic, not pta_gemm's.
+        pta_cfg plain = {};
+        plain.impair = PTA_QUANT;
+        plain.seed   = 1;
+        plain.trim_step = dac.trim_step;
+        plain.trim_max  = dac.trim_max;
+
+        // (1) The DAC's step and clamp.  Eight rows of activation 127 against
+        // zero weights, so C[0][n] = (1016 * stored_n + 128) >>> 8, where
+        // stored_n is what a DAC of step 4 and clamp 16 took.
+        {
+            const int64_t req[NUM_COLS]  = {6, -6, 5, 2, 1, 100, -100, 0};
+            const int64_t want[NUM_COLS] = {32, -32, 16, 16, 0, 64, -63, 0};
+            std::vector<int> a(NUM_ROWS, 127), b(NUM_ROWS * NUM_COLS, 0);
+            for (int r = 0; r < NUM_ROWS; ++r)
+                for (int c = 0; c < NUM_COLS; ++c)
+                    write_trim(dac, 0, r, c, req[c]);
+            const Result r0 = run_case(1, NUM_COLS, NUM_ROWS, dw, false, ActCfg{}, plain,
+                                       &a, &b);
+            const std::vector<int32_t> got = read_c(1, NUM_COLS);
+            bool hand = true;
+            for (int c = 0; c < NUM_COLS; ++c)
+                if (got[c] != static_cast<int32_t>(want[c])) hand = false;
+            const bool ok = hand && r0.ok;
+            printf("[P7] %-24s RTL %s, model %s  %s\n", "trim through the DAC",
+                   hand ? "matches hand values" : "DIFFERS from hand values",
+                   r0.ok ? "agrees" : "DIFFERS", ok ? "PASS" : "FAIL");
+            if (!ok) {
+                for (int c = 0; c < NUM_COLS; ++c)
+                    printf("       col %d: asked %4lld, C = %5d (want %lld)\n", c,
+                           static_cast<long long>(req[c]), got[c],
+                           static_cast<long long>(want[c]));
+                ++failures;
+            }
+        }
+
+        // A clamp that the patterns below do not spend their whole range against.
+        cal.trim_max  = 0x1000;            // 16 weight LSB
+        dac.trim_max  = cal.trim_max;
+        plain.trim_max = cal.trim_max;
+        apply_cal(cal);
+
+        // (2) The affine's rounding, on hand values: out 10 and -10 through
+        // four gains and offsets, with the contract's round-half-up.
+        {
+            cal_reset();
+            const int32_t gains[4] = {384, 128, 256, 0};
+            const int32_t offs[4]  = {7, 0, -3, 4};
+            for (int c = 0; c < 4; ++c) write_affine(c, gains[c], offs[c]);
+            const std::vector<int> a = {10, -10}, b = {1, 1, 1, 1};
+            const int64_t want[8] = {22, 5, 7, 4, -8, -5, -13, 4};
+            const Result r1 = run_case(2, 4, 1, dw, false, ActCfg{}, plain, &a, &b);
+            const std::vector<int32_t> got = read_c(2, 4);
+            bool hand = true;
+            for (int i = 0; i < 8; ++i)
+                if (got[i] != static_cast<int32_t>(want[i])) hand = false;
+            const bool ok = hand && r1.ok;
+            printf("[P7] %-24s RTL %s, model %s  %s\n", "column affine",
+                   hand ? "matches hand values" : "DIFFERS from hand values",
+                   r1.ok ? "agrees" : "DIFFERS", ok ? "PASS" : "FAIL");
+            if (!ok) {
+                for (int i = 0; i < 8; ++i)
+                    printf("       [%d][%d] C = %5d (want %lld)\n", i / 4, i % 4, got[i],
+                           static_cast<long long>(want[i]));
+                ++failures;
+            }
+        }
+
+        // (3) A correction is a correction to the error model, so with every
+        // impairment clear it must change nothing: P0 still holds with the
+        // stores loaded.
+        {
+            for (int r = 0; r < NUM_ROWS; ++r)
+                for (int c = 0; c < NUM_COLS; ++c)
+                    write_trim(dac, 0, r, c, ((r * 37 + c * 53) % 601) - 300);
+            for (int c = 0; c < NUM_COLS; ++c) write_affine(c, 200, 9);
+            const Result off = run_case(8, 8, 32, dw, false, ActCfg{}, PTA_OFF);
+            printf("[P7] %-24s %s  %s\n", "off is still exact",
+                   off.ok ? "a loaded correction changes nothing"
+                          : "the exact sum MOVED", off.ok ? "PASS" : "FAIL");
+            if (!off.ok) ++failures;
+        }
+
+        // (4) Every shape, with every impairment and a correction of its own.
+        {
+            int idx = 0, moved_cases = 0;
+            for (auto& cs : cases) {
+                pta_cfg cfg = pta_gate_cfg("all", idx, dw);
+                cfg.trim_step = dac.trim_step;
+                cfg.trim_max  = dac.trim_max;
+                for (int r = 0; r < NUM_ROWS; ++r)
+                    for (int j = 0; j < NUM_COLS; ++j)
+                        write_trim(dac, 0, r, j, ((r * 37 + j * 53 + idx * 11) % 601) - 300);
+                for (int j = 0; j < NUM_COLS; ++j)
+                    write_affine(j, 256 + ((j * 13 + idx * 7) % 97) - 48,
+                                 ((j * 7 + idx) % 21) - 10);
+                const Result r2 = run_case(cs.M, cs.N, cs.K, dw, false, ActCfg{}, cfg);
+                const bool ok = r2.ok && static_cast<long>(r2.pta_sats) == r2.model_pta_sats;
+                if (r2.changed > 0) ++moved_cases;
+                printf("[P7] M=%-3d N=%-2d K=%-4d trim+affine loaded moved=%-5d sats=%u"
+                       " (model %ld)  %s\n", cs.M, cs.N, cs.K, r2.changed, r2.pta_sats,
+                       r2.model_pta_sats, ok ? "PASS" : "FAIL");
+                if (!ok) ++failures;
+                ++idx;
+            }
+            const bool moved = moved_cases >= 12;
+            printf("[P7] %d of 14 shapes moved off their exact sums  %s\n", moved_cases,
+                   moved ? "PASS" : "FAIL");
+            if (!moved) ++failures;
+        }
+    } else if (pta_mode == "engine") {
+        // Gate P8: the calibration engine against pta_cal_bank().
+        const pta_tile tile = {NUM_ROWS, NUM_COLS, dw, 48};
+        CalCfg cal;
+        cal.en        = true;
+        cal.sched     = 0;                 // CAL_NOW only
+        cal.amp_log2  = static_cast<uint32_t>(dw - 2);
+        cal.reps_log2 = 2;                 // four repeats: what C3(a) measured is enough
+        cal.trim_log2 = 2;
+        cal.trim_max  = 0x2000;
+        cal.seed      = 0x00CA11B0u;
+        apply_cal(cal);
+
+        pta_cfg cfg = {};
+        cfg.impair      = PTA_QUANT | PTA_PROG_ERR | PTA_DRIFT | PTA_XTALK;
+        cfg.act_bits    = static_cast<uint32_t>(dw - 2);
+        cfg.w_bits      = static_cast<uint32_t>(dw - 3);
+        cfg.adc_bits    = 7;
+        cfg.adc_shift   = dw == 8 ? 8 : 24;
+        cfg.seed        = 0x42424242u;
+        cfg.sigma_pr    = 0x0200;
+        cfg.drift_sigma = 0x0180;
+        cfg.drift_log2  = 1;
+        cfg.drift_max   = 0x0C00;
+        cfg.xtalk       = 0x20;
+        cfg.trim_step   = 1u << cal.trim_log2;
+        cfg.trim_max    = cal.trim_max;
+
+        model_reset(0x5EED0008u);
+        cal_reset();
+
+        // Drift and programming error accumulate over a few GEMMs, in the RTL
+        // and the model together.
+        for (int i = 0; i < 3; ++i)
+            if (!run_case(16, 8, 64, dw, false, ActCfg{}, cfg).ok) ++failures;
+
+        bool before_ok = true;
+        const pta_cfg rcfg = read_cfg(cfg, static_cast<int>(cal.amp_log2));
+        const std::vector<int32_t> before = read_cells(dw, 1 << cal.amp_log2, rcfg,
+                                                       &before_ok);
+        if (!before_ok) ++failures;
+
+        // Calibrate, in the RTL and the reference together.  The engine's
+        // streams load from cal.seed mixed with the calibration's number, which
+        // is what lets the reference reproduce the draws exactly.
+        const uint32_t j    = dut->o_pta_cal_ct;
+        const uint64_t busy = run_cal_now();
+        pta_streams st;
+        pta_start(&st, cal.seed ^ (j * 0x9E3779B1u));
+        const pta_cal_cfg cc = {cal.amp_log2, cal.reps_log2, 3};
+        int     clamped = 0;
+        long    sats    = 0;
+        int64_t found   = -1;
+        const int64_t resid = pta_cal_bank(&g_dev, &cfg, &tile, 0, &st, &cc, &sats, &clamped,
+                                           &found);
+        const bool r_ok = busy > 0 && dut->o_pta_cal_valid && dut->o_pta_cal_ct == j + 1 &&
+                          static_cast<int64_t>(dut->o_pta_err_max) == resid &&
+                          static_cast<int64_t>(dut->o_pta_err_found) == found &&
+                          !dut->o_pta_cal_err;
+        printf("[P8] %-24s %llu cycles, found %u (model %lld), left %u (model %lld),"
+               " CAL_CT %u, valid %d, err %d  %s\n", "one calibration",
+               static_cast<unsigned long long>(busy), dut->o_pta_err_found,
+               static_cast<long long>(found), dut->o_pta_err_max,
+               static_cast<long long>(resid), dut->o_pta_cal_ct, dut->o_pta_cal_valid,
+               dut->o_pta_cal_err, r_ok ? "PASS" : "FAIL");
+        if (!r_ok) ++failures;
+
+        // Every trim, one at a time: if any cell disagrees with the reference,
+        // its column's readout does.
+        bool after_ok = true;
+        const std::vector<int32_t> after = read_cells(dw, 1 << cal.amp_log2, rcfg, &after_ok);
+        printf("[P8] %-24s mean |cell| %.2f -> %.2f, every cell %s  %s\n",
+               "the trims it wrote", mean_abs(before), mean_abs(after),
+               after_ok ? "matches the reference" : "DIFFERS from the reference",
+               after_ok ? "PASS" : "FAIL");
+        if (!after_ok) ++failures;
+
+        // It has to have moved the tile, or nothing above is a test.  How far it
+        // can move it is measured at the end of this gate, where a trim is up
+        // against drift rather than an error redrawn at every weight write.
+        const bool moved = mean_abs(after) < mean_abs(before);
+        printf("[P8] %-24s mean |cell| %.2f against %.2f  %s\n", "the tile moved",
+               mean_abs(after), mean_abs(before), moved ? "PASS" : "FAIL");
+        if (!moved) ++failures;
+
+        // Every shape still agrees with the model, now with the trims in place.
+        {
+            int bad = 0;
+            for (auto& cs : cases) {
+                const Result r = run_case(cs.M, cs.N, cs.K, dw, false, ActCfg{}, cfg);
+                if (!(r.ok && static_cast<long>(r.pta_sats) == r.model_pta_sats)) {
+                    printf("[P8] M=%-3d N=%-2d K=%-4d after calibration  FAIL\n",
+                           cs.M, cs.N, cs.K);
+                    ++bad;
+                }
+            }
+            printf("[P8] %-24s 14 shapes against pta_gemm(), %d bad  %s\n",
+                   "with trims loaded", bad, bad == 0 ? "PASS" : "FAIL");
+            failures += bad;
+        }
+
+        // A START and a MODEL_RST that arrive during a calibration.  Neither may
+        // be taken, and neither may be lost in silence.
+        {
+            cal_reset();
+            const uint32_t jk = dut->o_pta_cal_ct;
+            dut->i_pta_cal_now = 1; tick(); dut->i_pta_cal_now = 0;
+            uint64_t w = 0;
+            while (!dut->o_pta_cal_busy && w++ < 200) tick();
+            const bool started = dut->o_pta_cal_busy;
+            dut->i_dim_m = 4; dut->i_dim_n = 4; dut->i_dim_k = 4;
+            dut->i_start = 1; dut->i_pta_model_rst = 1; tick();
+            dut->i_start = 0; dut->i_pta_model_rst = 0;
+            const bool no_busy = !dut->o_busy;
+            while (dut->o_pta_cal_busy) tick();
+            tick();
+            // That calibration moved the tile -- shots fired, drift stepped --
+            // so the reference has to run it too or the two part company here.
+            pta_streams sk;
+            pta_start(&sk, cal.seed ^ (jk * 0x9E3779B1u));
+            pta_cal_bank(&g_dev, &cfg, &tile, 0, &sk, &cc, nullptr, nullptr, nullptr);
+            const bool ok = started && no_busy && dut->o_pta_cal_err && !dut->o_busy;
+            printf("[P8] %-24s cal ran %d, BUSY stayed %d, ERR %d  %s\n",
+                   "START during a cal", started, !no_busy, dut->o_pta_cal_err,
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        }
+
+        // A trim that cannot reach what the estimator asked for: DRIFT_ALARM,
+        // and the reference says the same.
+        {
+            CalCfg tight = cal;
+            tight.trim_max = 0x0040;       // a quarter of a weight LSB
+            apply_cal(tight);
+            cal_reset();
+            pta_cfg tcfg = cfg;
+            tcfg.trim_max = tight.trim_max;
+            const uint32_t j2 = dut->o_pta_cal_ct;
+            run_cal_now();
+            pta_streams st2;
+            pta_start(&st2, tight.seed ^ (j2 * 0x9E3779B1u));
+            int cl = 0;
+            long s2 = 0;
+            const int64_t r2 = pta_cal_bank(&g_dev, &tcfg, &tile, 0, &st2, &cc, &s2, &cl,
+                                            nullptr);
+            const bool ok = dut->o_pta_drift_alarm == (cl != 0) && cl != 0 &&
+                            static_cast<int64_t>(dut->o_pta_err_max) == r2;
+            printf("[P8] %-24s alarm %d, reference %d, residual %u (model %lld)  %s\n",
+                   "a trim at its clamp", dut->o_pta_drift_alarm, cl, dut->o_pta_err_max,
+                   static_cast<long long>(r2), ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+            apply_cal(cal);
+        }
+
+        // An amplitude the probe cannot read back through the quantiser.
+        {
+            cal_reset();
+            CalCfg bad = cal;
+            bad.amp_log2 = static_cast<uint32_t>(dw - 1);
+            apply_cal(bad);
+            const uint32_t ct = dut->o_pta_cal_ct;
+            run_cal_now();
+            const pta_cal_cfg bc = {bad.amp_log2, bad.reps_log2, 3};
+            pta_streams st3;
+            pta_start(&st3, bad.seed);
+            const int64_t ref = pta_cal_bank(&g_dev, &cfg, &tile, 0, &st3, &bc, nullptr,
+                                             nullptr, nullptr);
+            const bool ok = !dut->o_pta_cal_valid && dut->o_pta_cal_err &&
+                            dut->o_pta_cal_ct == ct && ref < 0;
+            printf("[P8] %-24s refused %d, CAL_CT %u (was %u), reference %lld  %s\n",
+                   "an unreadable amplitude", dut->o_pta_cal_err ? 1 : 0,
+                   dut->o_pta_cal_ct, ct, static_cast<long long>(ref),
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+            apply_cal(cal);
+        }
+
+        // What the trim is for: drift, which stays where it is until something
+        // takes it away.  With the programming error off, what the probe
+        // measures is what a trim can hold, and the residual should collapse.
+        // (With it on, every weight write redraws it, and the floor that leaves
+        // is what the sub-tests above measure against.)
+        {
+            pta_cfg d = cfg;
+            d.impair     = PTA_QUANT | PTA_DRIFT | PTA_XTALK;
+            d.sigma_pr   = 0;
+            d.drift_log2 = 0;              // a step a shot: drift in a hurry
+            model_reset(0x5EED0088u);
+            cal_reset();
+            for (int i = 0; i < 3; ++i)
+                if (!run_case(16, 8, 64, dw, false, ActCfg{}, d).ok) ++failures;
+            // And now hold it still, as the fitted rate does: one step every
+            // 2^20 shots, where a calibration is 96 of them.  A tile that
+            // drifts faster than it can be measured cannot be calibrated, and
+            // saying so is not the same as measuring the trim.
+            d.drift_log2 = 20;
+            bool m0 = true, m1 = true;
+            const pta_cfg dr = read_cfg(d, static_cast<int>(cal.amp_log2));
+            const std::vector<int32_t> pre = read_cells(dw, 1 << cal.amp_log2, dr, &m0);
+            const uint32_t jd = dut->o_pta_cal_ct;
+            run_cal_now();
+            pta_streams sd;
+            pta_start(&sd, cal.seed ^ (jd * 0x9E3779B1u));
+            int64_t fd = -1;
+            const int64_t rd = pta_cal_bank(&g_dev, &d, &tile, 0, &sd, &cc, nullptr, nullptr,
+                                            &fd);
+            const std::vector<int32_t> post = read_cells(dw, 1 << cal.amp_log2, dr, &m1);
+            const double a0 = mean_abs(pre), a1 = mean_abs(post);
+            const bool ok = m0 && m1 && static_cast<int64_t>(dut->o_pta_err_max) == rd &&
+                            static_cast<int64_t>(dut->o_pta_err_found) == fd &&
+                            a1 * 4.0 < a0;
+            printf("[P8] %-24s mean |cell| %.2f -> %.2f, found %u (model %lld), left %u"
+                   " (model %lld), parity %s  %s\n", "recovery from drift", a0, a1,
+                   dut->o_pta_err_found, static_cast<long long>(fd), dut->o_pta_err_max,
+                   static_cast<long long>(rd), (m0 && m1) ? "holds" : "BROKEN",
+                   ok ? "PASS" : "FAIL");
+            if (!ok) ++failures;
+        }
+    } else if (pta_mode == "sched") {
+        // Gate P9: the four schedulers, on the same work with the same operands
+        // and the same A-row arrivals.  C3's gate is the last two columns: the
+        // shadow scheduler has to cost less wall-clock than the periodic one
+        // without giving up accuracy.
+        pta_cfg cfg = {};
+        // Drift only: a trim can take drift away, and the programming error
+        // that is redrawn at every weight write would only set a floor under
+        // the measurement (P8 measures against that floor separately).
+        cfg.impair      = PTA_QUANT | PTA_DRIFT;
+        cfg.act_bits    = static_cast<uint32_t>(dw - 2);
+        cfg.w_bits      = static_cast<uint32_t>(dw - 3);
+        cfg.adc_bits    = 7;
+        cfg.adc_shift   = dw == 8 ? 8 : 24;
+        cfg.seed        = 0x1234567u;
+        cfg.sigma_pr    = 0;
+        cfg.drift_sigma = 0x0200;
+        cfg.drift_log2  = 4;               // a step every 16 shots: drift that bites
+        cfg.drift_max   = 0x1800;
+
+        struct Sched { const char* what; uint32_t mode; uint32_t per; uint32_t thr; };
+        // The same minimum interval for all three, so what is being compared is
+        // the policy and not the budget: the periodic scheduler takes every
+        // 12,000 cycles, and the two that predict take no more than that and
+        // only when the extrapolation asks for it.
+        const Sched modes[] = {
+            {"off",        0, 0,     0},
+            {"periodic",   1, 12000, 0},
+            {"predictive", 2, 12000, 4000},
+            {"shadow",     3, 12000, 4000},
+        };
+        struct Out { uint64_t cycles; uint32_t ct, cyc, err; double resid; };
+        Out out[4] = {};
+        int i = 0;
+        for (const auto& s : modes) {
+            CalCfg cal;
+            cal.en        = s.mode != 0;
+            cal.sched     = s.mode;
+            cal.per       = s.per;
+            cal.thr       = s.thr;
+            cal.amp_log2  = static_cast<uint32_t>(dw - 2);
+            cal.reps_log2 = 0;             // one probe a pass: 1,728 cycles all told
+            cal.trim_log2 = 2;
+            cal.trim_max  = 0x2000;
+            cal.seed      = 0x00CA11B0u;
+
+            reset();
+            lfsr_state = 0xACE1u;          // the same operands for every mode
+            model_reset(0x5EED0009u);      // and the same drift realisation
+            apply_cal(cal);
+            cal_reset();
+
+            // A row every 1,200 cycles against 8 rows that take about 80 each:
+            // the operand supply, not the tile, is the limit, which is what X2
+            // says the chiplet's link does to it -- and it is what makes the
+            // idle windows long enough for a calibration to hide inside one.
+            uint64_t total = 0;
+            for (int g = 0; g < 4; ++g)
+                total += run_streamed(8, 8, 64, dw, 1200, cfg);
+
+            CalCfg quiet = cal;
+            quiet.en = false;
+            apply_cal(quiet);              // no calibration inside the readout
+            const std::vector<int32_t> cells =
+                read_cells_raw(1 << cal.amp_log2, read_cfg(cfg, static_cast<int>(cal.amp_log2)));
+            out[i++] = {total, dut->o_pta_cal_ct, dut->o_pta_cal_cyc, dut->o_pta_err_found,
+                        mean_abs(cells)};
+            fprintf(stderr, "  %s done: %llu cycles, %u calibrations\n", s.what,
+                    static_cast<unsigned long long>(total), dut->o_pta_cal_ct);
+        }
+
+        for (int k = 0; k < 4; ++k)
+            printf("[P9] %-11s cycles %-9llu calibrations %-3u cal cycles %-8u"
+                   " last found %-6u mean |cell| %.2f\n", modes[k].what,
+                   static_cast<unsigned long long>(out[k].cycles), out[k].ct, out[k].cyc,
+                   out[k].err, out[k].resid);
+
+        // Calibrating at all has to be worth it, or the comparison is empty.  The
+        // two modes the CPU document's claim is between are gated; how often the
+        // predictive one fires is PTA_CAL_THR's to decide, so it is reported.
+        const bool worth = out[1].resid < out[0].resid * 0.75 &&
+                           out[3].resid < out[0].resid * 0.75;
+        printf("[P9] %-24s %.2f uncalibrated against %.2f periodic and %.2f shadow"
+               " (predictive %.2f, at its own threshold)  %s\n",
+               "calibration is worth it", out[0].resid, out[1].resid, out[3].resid,
+               out[2].resid, worth ? "PASS" : "FAIL");
+        if (!worth) ++failures;
+
+        // C3's gate: less wall-clock than periodic, at the same accuracy.
+        const bool cheaper = out[3].cycles < out[1].cycles;
+        const bool as_good = out[3].resid <= out[1].resid * 1.5;
+        printf("[P9] %-24s shadow %llu cycles against periodic %llu, left %.2f"
+               " against %.2f  %s\n", "shadow costs less",
+               static_cast<unsigned long long>(out[3].cycles),
+               static_cast<unsigned long long>(out[1].cycles), out[3].resid, out[1].resid,
+               (cheaper && as_good) ? "PASS" : "FAIL");
+        if (!(cheaper && as_good)) ++failures;
+
+        // And every scheduler has to have fired, or it was not tested.
+        const bool fired = out[0].ct == 0 && out[1].ct > 0 && out[2].ct > 0 && out[3].ct > 0;
+        printf("[P9] %-24s off %u, periodic %u, predictive %u, shadow %u  %s\n",
+               "each scheduler fired", out[0].ct, out[1].ct, out[2].ct, out[3].ct,
+               fired ? "PASS" : "FAIL");
+        if (!fired) ++failures;
     } else if (pta_mode == "refuse") {
         auto refused = [&](const pta_cfg& cfg, int prec) {
             apply_pta(cfg);
