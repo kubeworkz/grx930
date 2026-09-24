@@ -1,11 +1,19 @@
 # C930 SoC -- Xilinx Artix-7 Port
 
-This directory contains the Vivado project flow for synthesizing the C930 SoC
-on a **Digilent Arty A7-100T** board (XC7A100TCSG324-1).
+This directory contains the Vivado project flow for synthesizing the C930 SoC.
 
-> **Note:** The original -35T target (20.8K LUTs) was too small for the full
-> NPU+DMA+64-bit-AXI design (~32K LUTs). The -100T (63.4K LUTs) fits
-> comfortably at 52% utilization.
+> **Target, as of C4(b) 2026-09-24: Arty A7-200T (`xc7a200tfbg484-1`).**
+> `create_and_synth.sh` has targeted the -200T for some time; the measured
+> results further down are from the earlier -100T
+> (`XC7A100TCSG324-1`) run and say so. The -35T (20.8K LUTs) was too small for
+> the full NPU+DMA+64-bit-AXI design (~32K LUTs); the -100T (63.4K LUTs) fitted
+> at 52%.
+>
+> **Vivado only licences here against MAC `00:15:5d:c5:ac:f9`,** which the
+> Hyper-V vSwitch blackholes, so WSL has no network while it runs — including
+> the CI runner in this VM. `heal_mac.sh` sets it, and the MAC, address and
+> default route have to be put back afterwards. There is no WebPACK fallback:
+> the licence file is the only one, and Vivado will not launch without it.
 
 ## Why Artix-7?
 
@@ -70,6 +78,47 @@ and C write packing features from the ECP5 flow carry over unchanged.
 **vs ECP5 comparison:** 44.6 MHz / 29.6 MHz = **1.51x Fmax improvement**. The
 critical path is the same FP16 accumulator but Artix-7's CARRY4 slices cut the
 logic depth from 40 LUT levels to 33 levels + 15 CARRY4.
+
+## Out-of-context results (C4(b), Vivado 2026.1, xc7a200tfbg484-1)
+
+`synth_xilinx/ooc_synth.tcl` synthesizes, places and routes one module with a
+clock constraint and no I/O buffers, so the report is the logic and not the
+pinout. `run_ooc_c4b.sh` drives it. Every run below is a 10.000 ns constraint —
+100 MHz, the gate in grxcp's `pta_program_plan.md` — with the NPU runs given the
+shape `c930_soc_top` instantiates (`MAX_M=8 MAX_K=16 MAX_N=12`), because the
+module's own defaults are the §6.2 shape and its 262,144-bit A staging buffer
+infers no RAM.
+
+| module | LUTs | FFs | DSP | BRAM | WNS | Fmax | limiting path |
+|---|---|---|---|---|---|---|---|
+| `c930_npu_top` (systolic array) | 56,600 | 35,066 | 226 | 3 | −7.229 | **58.0** | PE(3,7)→PE(4,7) FP16 accumulator, 17.2 ns, 74% route |
+| `c930_npu_act` (as written) | 1,701¹ | 775 | 13 | 4¹ | −14.286 | **41.2** | stage 6 → `o_sat_count`, 37 levels |
+| `c930_npu_act` (stage 6 shortened) | 1,491 | 846 | 13 | 3 | −9.539 | **51.2** | same cone, 27 levels |
+| `c930_pta_cal` (calibration engine) | 3,785 | 4,051 | 15 | 0 | −3.117 | **76.2** | |
+| `c930_npu_csr` (whole CSR) | 1,111 | 1,725 | 0 | 0 | **+3.685** | meets 100 MHz | |
+
+¹ synthesis cell counts; the rest are routed Slice LUTs and BRAM tiles. The two
+are not the same metric and should not be subtracted across the rows.
+
+**Nothing here reaches 100 MHz except the CSR**, and the array build's 58.0 MHz
+is the *digital baseline* — the FP16 accumulator chain between PEs, which is the
+same path the -100T run found at 21.4 ns and which no PTA work touches. On the
+-100T the whole SoC routed at 44.6 MHz; one NPU alone on the -200T is 58.0 MHz,
+so the SoC's other logic and the wider device both matter, and neither closes
+100 MHz.
+
+### Two that did not synthesize on this VM
+
+* **`c930_npu_top` with `PTM_C`.** Peaked at 6,474 MB against a 5,926 MB WSL VM
+  and was still short of finishing synthesis after an hour of swapping, where
+  the array build routed in thirteen minutes. Abandoned.
+* **`c930_ptm_c` alone.** Reached Technology Mapping and was still there after
+  an hour, with four Vivado helper processes of about 1 GB each.
+
+Both want either a bigger WSL allocation than this VM has or `-jobs 1`, and
+neither is a statement about the design. The PTA's cost is therefore measured
+for the calibration engine and the CSR but **not** for the tile, which is the
+largest row of `pta_cpu_integration.md` §6.1 and is still owed.
 
 ## Boot firmware: LEDs light on power-up
 
