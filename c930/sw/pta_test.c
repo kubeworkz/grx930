@@ -78,7 +78,15 @@ static void rec(int i, u32 v) { wr(REC_ADDR + 4u * (u32)i, v); }
 static int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
 /* Every element of C equal to want?  The operands are all ones, so "want" is a
- * number the contract gives, not a reference computed here. */
+ * number the contract gives, not a reference computed here.
+ *
+ * C is never written from here, only read.  It cannot be: c930_l2.sv records a
+ * sharer on a read fill and drops the line on a write, so a line the CPU has
+ * written is one the L2 no longer tracks -- the NPU DMA's write to it then
+ * invalidates nobody and the CPU reads its own stale value for ever.  Clearing
+ * C first is therefore the one thing this test must not do; each GEMM writes
+ * every element anyway, so a check that C *became* the expected value is
+ * stronger than one against a cleared buffer. */
 static int c_all(int m, int n, int want)
 {
     int i;
@@ -86,13 +94,6 @@ static int c_all(int m, int n, int want)
         if ((int)rd(C_ADDR + (u32)(i * 4)) != want)
             return 0;
     return 1;
-}
-
-static void clear_c(int m, int n)
-{
-    int i;
-    for (i = 0; i < m * n; i++)
-        wr(C_ADDR + (u32)(i * 4), 0);
 }
 
 /* One GEMM through the driver, so the widened decode is exercised by the path a
@@ -103,12 +104,53 @@ static int run_gemm(int m, int n, int k)
     g.dim_m = (u32)m; g.dim_n = (u32)n; g.dim_k = (u32)k;
     g.a_base = A_ADDR; g.b_base = B_ADDR; g.c_base = C_ADDR;
     g.prec = NPU_PREC_INT8;
-    clear_c(m, n);
+    /* submit, drain and error all report 0 for "nothing wrong": drain is a
+     * status code, not a predicate, and reading it as one is how this test
+     * first reported a GEMM that had in fact run. */
     if (npu_drv_submit(&g) != 0)
         return 0;
-    if (!npu_drv_drain(4000000ull))
+    if (npu_drv_drain(4000000ull) != 0)
         return 0;
     return npu_drv_error() ? 0 : 1;
+}
+
+/* A probe amplitude this tile accepts.
+ *
+ * PTA_CAL_CFG.amp is an absolute bit position: the engine takes it only in
+ * [DIN_W - B_a, DIN_W - 2], because the activation quantiser has to leave the
+ * probe alone.  Nothing in the register map tells firmware what DIN_W is, so a
+ * value that is right for one build is refused by another -- amp 6 is right for
+ * tb_c930_npu's 8-bit tile and refused by this SoC's 16-bit one.  A driver
+ * therefore has to find one, which it can: the refusal is visible in CAL_ERR,
+ * a refused attempt ends in two cycles, and MODEL_RST is what clears it.
+ *
+ * Called before the impairments are set up, because MODEL_RST resets the model
+ * with the correction and would throw away the drift the test accumulates. */
+static int cal_amp_find(void)
+{
+    int amp;
+    u32 ct0, spin, st;
+
+    for (amp = 14; amp >= 2; amp--) {
+        wr(PTA_REG_CTRL, PTA_CTRL_MODEL_RST);        /* clears a stale CAL_ERR */
+        wr(PTA_REG_CAL_CFG, PTA_CAL_CFG_FIELDS(amp, 0, 1, 0));
+        ct0 = rd(PTA_REG_CAL_CT);
+        wr(PTA_REG_CTRL, PTA_CTRL_EN | PTA_CTRL_CAL_NOW);
+
+        for (spin = 0; spin < 200000u; spin++) {
+            st = rd(PTA_REG_STATUS);
+            if ((st & PTA_ST_CAL_ERR) != 0)
+                break;                               /* refused: go smaller */
+            /* CAL_BUSY is asserted for the refusal's two cycles too, so the
+             * accept is CAL_CT advancing, not the tile having been taken. */
+            if ((st & PTA_ST_CAL_BUSY) == 0 && rd(PTA_REG_CAL_CT) != ct0) {
+                wr(PTA_REG_CTRL, 0);
+                return amp;
+            }
+        }
+    }
+    wr(PTA_REG_CTRL, 0);
+    return -1;
 }
 
 int main(void)
@@ -222,14 +264,21 @@ int main(void)
     if (!digital) {
         u32 ct0, ct1, st;
         int guard_ok = 0;
+        int cal_amp;
         npu_drv_gemm_t g;
+        /* Before the impairments: this uses MODEL_RST. */
+        wr(PTA_REG_BITS, PTA_BITS_FIELDS(6, 5, 7, 8));
+        cal_amp = cal_amp_find();
+        rec(16, (u32)cal_amp);
+        if (cal_amp < 2)
+            cal_amp = 6;                 /* report the refusal rather than hide it */
         wr(PTA_REG_IMPAIR, PTA_IMP_QUANT | PTA_IMP_PROG_ERR | PTA_IMP_DRIFT);
         wr(PTA_REG_BITS, PTA_BITS_FIELDS(6, 5, 7, 8));
         wr(PTA_REG_SIGMA_PR, 0x0200);
         wr(PTA_REG_DRIFT, 0x00000200u);          /* sigma 2.0, a step every shot */
         wr(PTA_REG_DRIFT_MAX, 0x0C00);
         wr(PTA_REG_TRIM, PTA_TRIM_FIELDS(2, 0x2000));
-        wr(PTA_REG_CAL_CFG, PTA_CAL_CFG_FIELDS(6, 0, 3, 0));
+        wr(PTA_REG_CAL_CFG, PTA_CAL_CFG_FIELDS(cal_amp, 0, 3, 0));
         wr(PTA_REG_CAL_SEED, 0x00CA11B0u);
         wr(PTA_REG_CAL_PER, 0);
         wr(PTA_REG_CTRL, PTA_CTRL_EN);           /* the engine, scheduler off */
@@ -238,13 +287,30 @@ int main(void)
         ct0 = rd(PTA_REG_CAL_CT);
         wr(PTA_REG_CTRL, PTA_CTRL_EN | PTA_CTRL_CAL_NOW);
 
+        /* The engine takes the tile when the core hands it an idle window, so
+         * the calibration is not running the instant CAL_NOW is written.  A
+         * bus master gets to its START a few cycles later and races it;
+         * firmware needs a descriptor's worth of writes first, so wait for the
+         * calibration to be under way -- otherwise the START lands after it and
+         * the guard is not what is being tested. */
+        {
+            u32 spin = 0;
+            while ((rd(PTA_REG_STATUS) & PTA_ST_CAL_BUSY) == 0 &&
+                   ++spin < 20000u)
+                ;
+            if (spin >= 20000u)
+                rec(17, 0xBADu);         /* it never started: say so */
+        }
+
         /* The tile is calibrating, so this command has to queue.  Without the
          * guard it would dispatch into a tile that is not available, or vanish
          * and leave occupancy 0 with BUSY 0 -- which a driver reads as done. */
         g.dim_m = (u32)m; g.dim_n = (u32)n; g.dim_k = (u32)k;
         g.a_base = A_ADDR; g.b_base = B_ADDR; g.c_base = C_ADDR;
         g.prec = NPU_PREC_INT8;
-        clear_c(m, n);
+        /* Nothing between CAL_NOW and this START but the descriptor: the
+         * calibration has to still be running when it lands, or the guard is
+         * not the thing being tested. */
         if (npu_drv_submit(&g) == 0) {
             st = rd(PTA_REG_STATUS);
             rec(6, st);
@@ -253,7 +319,7 @@ int main(void)
                 npu_drv_queue_occupancy() == 1)
                 guard_ok = 1;
         }
-        if (npu_drv_drain(4000000ull) && guard_ok)
+        if (npu_drv_drain(4000000ull) == 0 && guard_ok)
             diag |= T5_OK;
 
         while ((rd(PTA_REG_STATUS) & PTA_ST_CAL_BUSY) != 0)
