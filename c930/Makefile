@@ -63,11 +63,19 @@ NPU_RTL := \
 # NPU benches must catch.
 PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_pta_cal.sv
 NPU_RTL_ARRAY := $(NPU_RTL)
+# PTM_B=1 is PTM-B, the broadside tile (grxcp pta_cpu_integration.md 4.2): the
+# same arithmetic as PTM-C with BROADSIDE = 1 inside it, and the core's S_RUN a
+# shot-and-wait instead of a skewed drain.  It implies PTM_C, so the PTA block,
+# the calibration engine and the muxes are the ones already gated.
+ifeq ($(PTM_B),1)
+PTM_C     := 1
+endif
+
 ifeq ($(PTM_C),1)
 NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv rtl/c930_tensor_pe.sv,$(NPU_RTL)) \
-             $(PTM_C_RTL)
-BUILD_DIR := build/ptm_c$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
-GFLAGS    += -DPTM_C $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
+             $(PTM_C_RTL) $(if $(filter 1,$(PTM_B)),rtl/pta/c930_ptm_b.sv)
+BUILD_DIR := build/ptm_$(if $(filter 1,$(PTM_B)),b,c)$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
+GFLAGS    += -DPTM_C $(if $(filter 1,$(PTM_B)),-DPTM_B) $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
 endif
 
 SOC_RTL := $(NPU_RTL) \
