@@ -5,9 +5,14 @@
 // curve, the shot noise its light carries, a per-column detuning, and an
 // optional requantisation standing in for an O-E-O reset, applied to each
 // complete sum on its way into C.  The core feeds acc[j] for j = 0 .. nc-1 on
-// consecutive cycles; each element is written back ACT_P = 7 cycles later
-// (stage 2 is split into 2a: root + draw, and 2b: the k_shot multiply -- the
-// unsplit cone was the post-route critical path).
+// consecutive cycles; each element is written back ACT_P = 8 cycles later.
+//
+// Two stages are split for timing, and both splits were measured, not guessed:
+// stage 2 into 2a (root + draw) and 2b (the k_shot multiply), and stage 6 into
+// 6a (the per-column detune multiply) and 6b (requantise, scale, saturate).
+// A-synth had the unsplit stage 6 at 24.2 ns over 37 levels on the 200T, 41 MHz
+// against a 100 MHz target; shortening its arithmetic took it to 19.5 ns over
+// 27, and this split takes the rest.
 //
 // Fixed-point contract.  sim/tb_core_verilator.cc's C reference implements
 // these steps exactly, and gate A2 holds the two to bitwise agreement.  All
@@ -359,19 +364,31 @@ module c930_npu_act
   logic [CW-1:0]       col5;
   logic [C_AW-1:0]     idx5;
 
-  // ---- stage 6: detune, requantise, scale ---------------------------------------
+  // ---- stage 6a: the per-column detune multiply -----------------------------------
+  // The 8:1 mux on r_r[col5] and the product, alone.  The DSP48E1 carries its
+  // own output register, so the only cost here is the pipeline slot -- and it
+  // is the half of the old stage 6 that has a multiply in it.
+  logic signed [40:0]  prod6a;
+  logic signed [28:0]  yr6a_c;
+  always_comb begin
+    prod6a = y5 * $signed({1'b0, r_r[col5]});
+    yr6a_c = 29'(prod6a >>> 12);
+  end
+
+  logic                v6;
+  logic signed [28:0]  yr6;
+  logic [1:0]          sat6q;
+  logic [C_AW-1:0]     idx6;
+
+  // ---- stage 6b: requantise, scale, saturate --------------------------------------
   // The arithmetic of the header's stage 6, with everything the configuration
   // fixes lifted out of it: t6 is `(yr + round) >>> sh <<< sh` as a mask, the
   // clamp is against bounds already shifted, and one variable shift is left.
-  logic signed [40:0]  prod6;
-  logic signed [28:0]  yr6;
   logic signed [28:0]  t6, tc6, c6;
   logic signed [63:0]  wide6;
   logic signed [31:0]  out6;
   logic                sat6;
   always_comb begin
-    prod6 = y5 * $signed({1'b0, r_r[col5]});
-    yr6   = 29'(prod6 >>> 12);
     t6    = (yr6 + round_r) & mask_r;
     if (t6 > hi_s_r)
       tc6 = hi_s_r;
@@ -391,8 +408,8 @@ module c930_npu_act
     end
   end
 
-  assign o_wvalid = v5;
-  assign o_widx   = idx5;
+  assign o_wvalid = v6;
+  assign o_widx   = idx6;
   assign o_wdata  = ACC_W'(out6);
 
   // ---- pipeline registers and counters -------------------------------------------
@@ -406,6 +423,7 @@ module c930_npu_act
       u3 <= '0; sat3 <= '0; col3 <= '0; idx3 <= '0;
       f4 <= '0; sat4 <= '0; col4 <= '0; idx4 <= '0;
       y5 <= '0; sat5 <= '0; col5 <= '0; idx5 <= '0;
+      v6 <= 1'b0; yr6 <= '0; sat6q <= '0; idx6 <= '0;
       rng <= 32'd0;
       o_count     <= 32'd0;
       o_sat_count <= 32'd0;
@@ -434,6 +452,10 @@ module c930_npu_act
       v5 <= v4;
       y5 <= y5_c; sat5 <= sat4; col5 <= col4; idx5 <= idx4;
 
+      // stage 6a: the detune product, registered
+      v6 <= v5;
+      yr6 <= yr6a_c; sat6q <= sat5; idx6 <= idx5;
+
       if (i_cfg_load)
         rng <= i_seed;
       else if (v1)
@@ -442,9 +464,11 @@ module c930_npu_act
       if (i_cfg_load) begin
         o_count     <= 32'd0;
         o_sat_count <= 32'd0;
-      end else if (v5) begin
+      end else if (v6) begin
+        // On 6b, with the element: stage 1's and stage 3's saturations have
+        // come down the pipe in sat6q, and stage 6b's is this cycle's.
         o_count     <= o_count + 32'd1;
-        o_sat_count <= o_sat_count + 32'(sat5[0]) + 32'(sat5[1]) + 32'(sat6);
+        o_sat_count <= o_sat_count + 32'(sat6q[0]) + 32'(sat6q[1]) + 32'(sat6);
       end
     end
   end

@@ -94,11 +94,18 @@ infers no RAM.
 | `c930_npu_top` (systolic array) | 56,600 | 35,066 | 226 | 3 | −7.229 | **58.0** | PE(3,7)→PE(4,7) FP16 accumulator, 17.2 ns, 74% route |
 | `c930_npu_act` (as written) | 1,701¹ | 775 | 13 | 4¹ | −14.286 | **41.2** | stage 6 → `o_sat_count`, 37 levels |
 | `c930_npu_act` (stage 6 shortened) | 1,491 | 846 | 13 | 3 | −9.539 | **51.2** | same cone, 27 levels |
+| `c930_npu_act` (stage 6 split, `ACT_P` 8) | 1,713¹ | 905 | 13 | 4¹ | −8.016 | **55.5** | moves to stage 1: `xs_r_reg[6][0]` → `x1_reg[7]`, 28 levels |
 | `c930_pta_cal` (calibration engine) | 3,785 | 4,051 | 15 | 0 | −3.117 | **76.2** | |
 | `c930_npu_csr` (whole CSR) | 1,111 | 1,725 | 0 | 0 | **+3.685** | meets 100 MHz | |
 
 ¹ synthesis cell counts; the rest are routed Slice LUTs and BRAM tiles. The two
 are not the same metric and should not be subtracted across the rows.
+
+The split moved S_ACT's critical path out of stage 6 and into stage 1's 48 × 32
+product — which is where grxcp's program plan said the risk was, and it was
+second in line behind a stage no estimate had named. At 55.5 MHz S_ACT is within
+2.5 MHz of the array's own 58.0, so further work on it buys little until the
+FP16 accumulator chain is addressed.
 
 **Nothing here reaches 100 MHz except the CSR**, and the array build's 58.0 MHz
 is the *digital baseline* — the FP16 accumulator chain between PEs, which is the

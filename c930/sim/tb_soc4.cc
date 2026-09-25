@@ -493,6 +493,83 @@ static int run_mulstore(Vc930_soc4_verilator *top) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// The command-queue driver, from firmware (sw/driver_test.c)
+//
+// Three back-to-back submits through npu_drv_submit -- the first starts the
+// engine, the other two queue -- then one npu_drv_drain, then every C element
+// checked on-core against the firmware's own software reference.  The same test
+// make driver_test runs under iverilog, where it does not finish: 48,428
+// seconds of simulator CPU here without printing, because TILE_WAIT_BOUND alone
+// is 500,000 cycles per wait and the full SoC manages tens of cycles a second.
+//
+// The firmware does the checking, so this preloads the operands and the
+// dimensions, waits for the magic and reads the verdict.  Occupancy must be
+// zero at the end: the completion contract is the point of the test.
+// ---------------------------------------------------------------------------
+static int run_driver(Vc930_soc4_verilator *top) {
+    struct Case { int M, N, K; };
+    const Case cases[] = { {1, 1, 1}, {3, 4, 8}, {8, 12, 16} };
+    const uint32_t A = 0x1000, B = 0x2000, C = 0x3000, C_REF = 0x4000;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t ST = 0x9430, DIAG = 0x9480, PHASE = 0x9490;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+    const int BOUND = 4000000;
+
+    printf("[TB] 4-core SoC -- driver mode: submit/drain through the driver\n");
+
+    int bad = 0;
+    for (const Case &c : cases) {
+        top->i_rst_n = 0;
+        top->i_tb_wr_en = 0;
+        top->i_clk = 0; top->eval();
+
+        const char *fw = getenv("DRIVER_FW");
+        preload_words_at(top, fw ? fw : "sw/driver_prog.hex", 0x0000, 8192);
+        for (int i = 0; i < c.M * c.K; i++) preload_byte(top, A + i, (i % 7) - 3);
+        for (int i = 0; i < c.K * c.N; i++) preload_byte(top, B + i, (i % 5) - 2);
+        for (int i = 0; i < c.M * c.N; i++) {
+            preload_word(top, C + i * 4, 0);
+            preload_word(top, C_REF + i * 4, 0);
+        }
+        preload_word(top, DIMS + 0, (uint32_t)c.M);
+        preload_word(top, DIMS + 4, (uint32_t)c.N);
+        preload_word(top, DIMS + 8, (uint32_t)c.K);
+        preload_word(top, DIMS + 12, 0);          // NPU_PREC_INT8
+        preload_word(top, DONE, 0);
+        preload_word(top, RESULT, 0);
+        preload_word(top, DIAG, 0);
+        preload_word(top, PHASE, 0);
+        for (int i = 0; i < 6; i++) preload_word(top, ST + i * 4, 0);
+        reset_release(top);
+
+        int cyc = -1;
+        for (int t = 0; t < BOUND; t++) {
+            clock_n(top, 1);
+            if (ddr_word(top, DONE) == 0xDEADBEEF) { cyc = t; break; }
+        }
+        const uint32_t res = ddr_word(top, RESULT);
+        const uint32_t occ = ddr_word(top, ST + 16);
+        const bool ok = (cyc >= 0) && (res == PASS_MAGIC) && (occ == 0);
+        if (!ok) bad++;
+        if (cyc < 0)
+            printf("[TB]   [FAIL] M=%d N=%d K=%d never finished: PHASE=%u pc0=0x%08llx\n",
+                   c.M, c.N, c.K, ddr_word(top, PHASE),
+                   (unsigned long long)top->o_hart0_pc);
+        else
+            printf("[TB]   [%s] M=%-2d N=%-2d K=%-2d in %6d cycles: RESULT=0x%08x "
+                   "occupancy=%u DIAG=%u\n", ok ? "PASS" : "FAIL",
+                   c.M, c.N, c.K, cyc, res, occ, ddr_word(top, DIAG));
+    }
+    if (bad) {
+        printf("[TB] FAIL: %d of 3 dims\n", bad);
+        return 1;
+    }
+    printf("[TB] PASS: three back-to-back submits, drained, C verified on-core, "
+           "at three dims\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered for live traces
     Verilated::commandArgs(argc, argv);
@@ -506,6 +583,8 @@ int main(int argc, char **argv) {
         rc = run_pta(top);
     else if (mode == "mulstore")
         rc = run_mulstore(top);
+    else if (mode == "driver")
+        rc = run_driver(top);
     else
         rc = run_quad(top);
 

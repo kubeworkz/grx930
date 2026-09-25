@@ -470,8 +470,29 @@ $(OUT_DRV): $(SOC_FULL_RTL) $(CORE_RTL) tb/tb_npu_tile.sv $(DRV_SW_HEX)
 	$(IVERILOG) $(GFLAGS) -DFW_HEX_FILE='"$(DRV_SW_HEX)"' -DTILE_WAIT_BOUND=500000 \
 	  -o $@ $(CORE_RTL) $(SOC_FULL_RTL) tb/tb_npu_tile.sv
 
+# NOT RUNNABLE ON THIS HOST, and driver_fw below is what to run instead: the
+# full SoC under iverilog manages tens of cycles a second, TILE_WAIT_BOUND alone
+# is 500,000 cycles per wait, and three dims of three submits each never get
+# there.  Measured 2026-09-25: 48,428 seconds of vvp CPU, overnight, without
+# printing a single result.  Kept because it is the same firmware and the same
+# checks, and a faster iverilog or a smaller bound would make it usable again.
 driver_test: $(OUT_DRV)
 	$(VVP) $(OUT_DRV)
+
+# ---------------------------------------------------------------------------
+# The same test on the Verilator four-core SoC, which finishes in seconds.
+#
+# sw/driver_test.c computes its own software reference and checks every C element
+# on-core, so the harness preloads the operands and dimensions, waits for the
+# magic and reads the verdict.  Three back-to-back submits per dim -- the first
+# starts the engine, the other two queue -- one drain, and occupancy zero at the
+# end, which is the completion contract the test exists for.
+#
+#   make driver_fw
+# ---------------------------------------------------------------------------
+.PHONY: driver_fw
+driver_fw: $(DRV_SW_HEX) verilate-soc4
+	bash synth_xilinx/build_soc4_verilator_wsl.sh run driver $(VERIL4_OUT)
 
 # ---------------------------------------------------------------------------
 # The M unit's result hold (a CPU fix, found by C4(a)'s firmware)
