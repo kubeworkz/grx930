@@ -111,7 +111,12 @@ module c930_ptm_c
   parameter int DIN_W      = 8,   // activation / weight width
   parameter int ACC_W      = 48,  // accumulator width
   parameter int ABLATE_ROW = -1,  // C0's ablation: this row's de-skew one window late
-  parameter int TRIM_W     = 24   // C3's trim as asked for, before the DAC rounds it
+  parameter int TRIM_W     = 24,  // C3's trim as asked for, before the DAC rounds it
+  // PTM-B's readout (pta_cpu_integration.md 4.2): the whole activation vector
+  // arrives at once, so there is no skew to undo, and every column is captured
+  // on one shot instead of one per window.  The arithmetic is the same -- that is
+  // the point of the parameter, and of the two tiles having to agree.
+  parameter bit BROADSIDE  = 1'b0
 )
 (
   input  logic                                     i_clk,
@@ -285,25 +290,39 @@ module c930_ptm_c
   logic [4:0]  dlog2_r;
   logic [7:0]  chi_r;
   logic [31:0] rng_th, rng_sh, rng_pr;
-  logic [31:0] rng_th_next, rng_sh_next, rng_pr_next;
-  logic signed [19:0] gs_th, gs_sh, gs_pr;
-  logic signed [36:0] pr_prod, th_prod;
+  logic [31:0] rng_pr_next;
+  logic signed [19:0] gs_pr;
+  logic signed [36:0] pr_prod;
   logic signed [19:0] e_new;     // this write's programming error, Q.8
-  logic signed [20:0] n_th;      // this window's thermal noise, Q.8 ADC LSB
+
+  // One draw per column captured.  Skewed, that is one column a window, so one
+  // draw; broadside it is every column on one shot, so NUM_COLS of them, taken
+  // in column order -- the same draws in the same order either way, which is
+  // what makes the two readouts agree.  Draw d is d + 1 steps from the state.
+  localparam int NDRAW = BROADSIDE ? NUM_COLS : 1;
+  logic [31:0]        rng_th_seq[0:NDRAW];
+  logic [31:0]        rng_sh_seq[0:NDRAW];
+  logic signed [19:0] gs_sh_a[0:NDRAW-1];
+  logic signed [20:0] n_th_a[0:NDRAW-1];   // thermal noise, Q.8 ADC LSB
 
   always_comb begin : b_draws
-    rng_th_next = xorshift32(rng_th);
-    rng_sh_next = xorshift32(rng_sh);
+    logic signed [19:0] gs_th_d;
+    logic signed [36:0] th_prod_d;
     rng_pr_next = xorshift32(rng_pr);
-    gs_th       = gauss(rng_th_next);
-    gs_sh       = gauss(rng_sh_next);
     gs_pr       = gauss(rng_pr_next);
     pr_prod     = $signed({21'd0, sigma_pr_r}) * 37'(gs_pr);
-    th_prod     = $signed({21'd0, sigma_th_r}) * 37'(gs_th);
     e_new       = 20'((pr_prod + 37'sd32768) >>> 16);
-    // Thermal noise is the same draw for every column this window; only the
-    // column i_pta_shot names is captured.
-    n_th        = 21'((th_prod + 37'sd32768) >>> 16);
+
+    rng_th_seq[0] = rng_th;
+    rng_sh_seq[0] = rng_sh;
+    for (int d = 0; d < NDRAW; d++) begin
+      rng_th_seq[d+1] = xorshift32(rng_th_seq[d]);
+      rng_sh_seq[d+1] = xorshift32(rng_sh_seq[d]);
+      gs_th_d         = gauss(rng_th_seq[d+1]);
+      gs_sh_a[d]      = gauss(rng_sh_seq[d+1]);
+      th_prod_d       = $signed({21'd0, sigma_th_r}) * 37'(gs_th_d);
+      n_th_a[d]       = 21'((th_prod_d + 37'sd32768) >>> 16);
+    end
   end
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
@@ -372,8 +391,9 @@ module c930_ptm_c
       rng_pr     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_PROG);
     end else begin
       if (shot_step) begin
-        rng_th <= rng_th_next;
-        rng_sh <= rng_sh_next;
+        // NDRAW is 1 skewed, so this is the single step it always was.
+        rng_th <= rng_th_seq[NDRAW];
+        rng_sh <= rng_sh_seq[NDRAW];
       end
       if (i_wen)
         rng_pr <= rng_pr_next;
@@ -560,7 +580,8 @@ module c930_ptm_c
   // capturing from this window, since no other column's value this window is
   // ever read.  Evaluated once per hop edge, inside that register's process,
   // for the simulator's sake as the float chain is held above.
-  function automatic logic [ACC_W:0] int_column(input int c, input logic modelled);
+  function automatic logic [ACC_W:0] int_column(input int c, input logic modelled,
+                                               input int d);
     logic signed [ACC_W-1:0] seed;
     logic signed [DIN_W-1:0] a, w;
     logic signed [63:0]      y, xa;
@@ -576,11 +597,13 @@ module c930_ptm_c
     logic                    clamped;
     int                      s, b, tap;
 
-    seed = seed_h[c][2*R - 1];
+    // Broadside there is no skew to undo: the vector and the seed are at the
+    // port this cycle.  Skewed, both come from the history the cascade implies.
+    seed = BROADSIDE ? $signed(i_ps_in[c*ACC_W +: ACC_W]) : seed_h[c][2*R - 1];
     y    = 64'sd0;
     for (int r = 0; r < R; r++) begin
       tap = 2*(R - r) + 2*c - 1 + ((r == ABLATE_ROW) ? 1 : 0);
-      a   = act_h[r][tap];
+      a   = BROADSIDE ? $signed(i_act[r*DIN_W +: DIN_W]) : act_h[r][tap];
       if (!modelled) begin
         w = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
         y = y + 64'(a) * 64'(w);
@@ -600,9 +623,9 @@ module c930_ptm_c
       if (v > 64'd8388608) v = 64'd8388608;            // 2^23
       rt      = isqrt4(v[23:0]);
       krt     = 29'(k_shot_r) * 29'(rt);
-      sh_prod = $signed({21'd0, krt}) * 50'(gs_sh);
+      sh_prod = $signed({21'd0, krt}) * 50'(gs_sh_a[d]);
       n_sh    = 30'((sh_prod + 50'sd524288) >>> 20);
-      nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th) : 31'sd0) +
+      nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th_a[d]) : 31'sd0) +
                 (impair_r[IMP_SHOT]    ? 31'(n_sh) : 31'sd0);
       z       = 80'(y) + (80'(nsum) <<< s);
 
@@ -653,7 +676,10 @@ module c930_ptm_c
           if (fp_mode) begin
             ps_out_q[c*ACC_W +: ACC_W] <= {{(ACC_W-32){1'b0}}, y_fp[c]};
           end else begin
-            col = int_column(c, modelling && i_pta_shot && (c == int'(i_pta_shot_col)));
+            col = int_column(c,
+                             modelling && i_pta_shot &&
+                               (BROADSIDE || (c == int'(i_pta_shot_col))),
+                             BROADSIDE ? c : 0);
             ps_out_q[c*ACC_W +: ACC_W] <= col[ACC_W-1:0];
             if (col[ACC_W])
               sat_cnt <= sat_cnt + 32'd1;
