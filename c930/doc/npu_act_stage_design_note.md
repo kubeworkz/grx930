@@ -99,10 +99,14 @@ stage 6   c  = requant ? sat(round(y*r_j / LSB_adc), 2^(B-1)) * LSB_adc : y*r_j
           C[m][n_base + j] <- sat32( c <<< YSHIFT )
 ```
 
-At most one multiply per registered stage, P = 6, with the write index
-travelling alongside the data. `nc` elements enter on consecutive cycles, so
-S_ACT lasts `nc + P` cycles per row: the element is registered on entry, and
-stage 6 is the `c_mem` write itself. The output scale and the table's output full
+At most one multiply per registered stage, six stages, with the write index
+travelling alongside the data. **Two of them are split for timing, so the
+implemented latency `ACT_P` is 8, not 6**: stage 2 into 2a (root and draw) and 2b
+(the `k_shot` multiply), and stage 6 into 6a (the `r_j` multiply) and 6b
+(requantise, scale, saturate). Both splits were made against a measured path,
+not a guess — §5. `nc` elements enter on consecutive cycles, so S_ACT lasts
+`nc + ACT_P` cycles per row: the element is registered on entry, and the last
+sub-stage is the `c_mem` write itself. The output scale and the table's output full
 scale are powers of two, so the output scale and `LSB_adc` both cost shifts. The
 detuning's output factor `r_j` is applied before requantisation, because a real
 reset digitises what the unit actually emits.
@@ -260,17 +264,31 @@ the command snapshot beside `precision`, taking `CMD_W` from 147 bits to 148.
 GEMM pays `M · Nt · P` extra cycles. At `M=64, N=8, K=256` that is 384 cycles
 against 71,734.
 
-*That figure is an upper bound, not the cost, and gate A1 currently encodes it
-as an equality and fails.* Measured (C4(b), 2026-09-24): `M=8 N=12 K=8` pays
-**+98** cycles where `M · Nt · P` is 112, `M=5 N=11 K=8` pays +69 against 70,
-`M=1 N=12 K=16` pays +13 against 14. `act_cycles` agrees exactly every time
-(208/208, 125/125, 26/26), so the stage is doing what it says; it is the *GEMM's*
-extra cost that is smaller, because some of S_ACT's cycles overlap work the core
-would have done anyway. A1 fails identically on the unmodified stage — same
-cases, same numbers — so it is not a regression and not a gate as written:
-either the expectation becomes `≤ M · Nt · P` with the overlap explained, or the
-overlap is modelled and the equality kept. Nobody has done either, and A1 has
-been red for long enough that its failure carries no information.
+*Gate A1 encodes that as an equality, and what it was telling us was mostly
+right.* Measured at `ACT_P = 7`, before the stage-6 split, a GEMM paid **+98**
+cycles where `M · Nt · P` was 112 for `M=8 N=12 K=8`, and 38 against 42 for
+`M=3 N=12 K=2` — 13 failures, and the same 13 on the unmodified stage, so not a
+regression. It was tempting to call the bench mis-specified and move on. Taking
+the cut settled it the other way: at `ACT_P = 8` those same shapes pay **exactly**
+`M · Nt · P` (+128 of 128, +48 of 48) and A1 is down to **5 failures**, all of
+them ±1 cycle and all on shapes where `N` is not a multiple of `NUM_COLS` or
+`M` is 1:
+
+| shape | paid | `M · Nt · ACT_P` |
+|---|---|---|
+| `M=8 N=12 K=16` | +128 | 128 ✓ |
+| `M=8 N=12 K=8` | +128 | 128 ✓ |
+| `M=3 N=12 K=2` | +48 | 48 ✓ |
+| `M=5 N=11 K=8` | +79 | 80 |
+| `M=1 N=12 K=16` | +17 | 16 |
+| `M=8 N=9 K=16` | +127 | 128 |
+
+`act_cycles` agrees exactly in every case, before and after (208/208 then
+224/224), so the stage's own accounting was never in doubt. What is left is a
+±1 boundary effect on a ragged last tile, one cycle either way. That is worth
+finding, and it is a much smaller thing than the paragraph this replaces
+claimed. **A1 is still red and still a gate; it is closer to green than it has
+been, and the residue is a real off-by-one, not a wrong expectation.**
 
 **Area — measured.** A-synth, C4(b), 2026-09-24: `c930_npu_act` alone, out of
 context on `xc7a200tfbg484-1` through synthesis, placement and routing with a
@@ -319,19 +337,26 @@ combinations of `adc_bits`, `YSHIFT`, `requant` and operands, including the
 29-bit wrap the intermediate width allows; gate A2 agrees in RTL, saturation
 counts included. `ACT_P` is still 7.
 
-**The named cut, for 100 MHz.** 51.2 MHz is not 100 MHz, and the rest needs
-latency. The measured path is 19.5 ns over 27 levels, so it splits in two:
+**The cut, taken.** 51.2 MHz is not 100 MHz and the rest needed latency. The
+measured path was 19.5 ns over 27 levels, so stage 6 splits after the multiply:
+**6a** is the `r_r[col5]` mux and the DSP product — the DSP48E1 carries its own
+output register, so this costs only the pipeline slot — and **6b** is the mask,
+the clamp, the shift and the saturate. `ACT_P` 7 → 8. The saturation counter
+moves to 6b with the data, so each element is still counted once, and gate A2
+passes unchanged with the counts exact.
 
-1. **6a / 6b after the DSP.** Register `prod6`, leaving 6a as the `r_r[col5]`
-   mux and the multiply — the DSP48E1's own output register makes this nearly
-   free — and 6b as the mask, clamp, shift and saturate. `ACT_P` 7 → 8.
-2. If 6b is still long, **6b / 6c before the 64-bit shift**, which with the two
-   64-bit saturation comparators is most of the remaining carry chain.
-   `ACT_P` 8 → 9.
+If 6b is still long, the next split is before the 64-bit shift, which with the
+two 64-bit saturation comparators is most of the remaining carry chain
+(`ACT_P` 8 → 9). Whether it is needed is a measurement, not a guess, and it has
+not been made yet — **the routed Fmax of the split stage is still owed**, because
+Vivado here takes WSL's network down for the duration (`synth_xilinx/README.md`).
 
-A cut changes `ACT_P` in `c930_npu_core.sv`, `PTA_TS`, and §2.1's model, never
-around them (program plan §5). Not done here: this note records the measurement
-and the cut it names.
+A cut goes into `ACT_P` and, where they apply, `PTA_TS` and §2.1's model, never
+around them (program plan §5). `ACT_P` is updated in `c930_npu_core.sv` and in
+`sim/tb_core_verilator.cc`, the two places that hold it. `PTA_TS` is the *tile's*
+modelled shot latency, not this stage's, and §2.1's cost model has no S_ACT
+term — so neither moves for this cut, which is said here rather than left as a
+silence.
 
 ---
 

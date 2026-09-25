@@ -122,7 +122,7 @@ constexpr int NUM_COLS = 8;
 constexpr int MAX_M    = 64;
 constexpr int MAX_K    = 256;
 constexpr int MAX_N    = 12;
-constexpr int ACT_P    = 7;       // c930_npu_act: element in to result written
+constexpr int ACT_P    = 8;       // c930_npu_act: element in to result written
                                   // (7 since the stage-2 split -- root/draw and
                                   // the k_shot multiply are separate cycles)
 constexpr int ACT_TBL  = 1025;    // breakpoints
