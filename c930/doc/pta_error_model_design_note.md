@@ -668,15 +668,30 @@ With the 8-bit ADC, 97.42% before any noise:
    per-column multiplier and addend, drawn once at a model reset, which is what a
    real receiver has — or the column loop stays a path with no measurement behind
    it. grxcp's `pta_chiplet_calibration.md` §2 says the same from the other side.
-5. **The firmware path does not run yet.** C4(a) put the block on the CSR and
-   `make npu` checks every bit of it over AXI-Lite, which is where the evidence
-   is. `sw/pta_test.c` is the same seven checks driven by a RISC-V program, and
-   on the Verilator four-core SoC it boots, writes and reads the block, and then
-   stalls forever on a stack store in `run_gemm`'s prologue with the NPU never
-   started. `sw/driver_prog.hex` runs to completion on that same harness, so the
-   harness and the driver library are not it. Until that is found, the register
-   block is verified and the firmware is not.
-6. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
+5. **The probe amplitude is an absolute bit position.** `PTA_CAL_CFG.amp` is a
+   shift, and the engine takes it only in `[DIN_W - B_a, DIN_W - 2]`, because the
+   activation quantiser has to leave the probe alone. Nothing in the register map
+   reports `DIN_W`, so the same value is right on one build and refused on
+   another: 6 is right for `tb_c930_npu`'s eight-bit tile and refused by the
+   SoC's sixteen-bit one, which ends the calibration in two cycles with
+   `CAL_ERR` set and `CAL_CT` unmoved. `sw/pta_test.c` finds one the tile accepts
+   the way a driver would have to — the refusal is observable and `MODEL_RST`
+   clears it — but firmware should not have to search for a number the hardware
+   knows. Either the map gains a read-only field for the datapath width, or
+   `amp` is specified relative to it and the tile does the arithmetic. grxcp's
+   `pta_chiplet_regmap.md` §4 records it against the map.
+6. **A line the CPU has written is outside the L2's directory.** Not this
+   contract's problem, but it decides what firmware driving this block may do.
+   `c930_l2.sv` records a sharer on a read fill and is write-through with no
+   allocate: on a write it invalidates the sharers it knows and drops its own
+   copy. The D-cache keeps the written data. So after the CPU writes a line, the
+   L2 no longer tracks it, and the NPU DMA's later write to that line invalidates
+   nobody — the CPU reads its own stale value for ever. `sw/pta_test.c` cleared C
+   before each GEMM and then read back the zeros it had written, which made an
+   impaired GEMM look right (C all zero) and an exact one look wrong (C zero, not
+   K). It only reads C now. The general fix is one of: keep the writer as a
+   sharer, invalidate the writer's own line, or make the L1 write no-allocate.
+7. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
    neighbour's crosstalk does not couple on again. An MZI mesh would couple
    along its triangular structure instead (CPU document §8 item 5); that is a
    different matrix, and a hypothesis this program has no ground truth for.

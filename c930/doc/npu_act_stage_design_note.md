@@ -260,14 +260,78 @@ the command snapshot beside `precision`, taking `CMD_W` from 147 bits to 148.
 GEMM pays `M · Nt · P` extra cycles. At `M=64, N=8, K=256` that is 384 cycles
 against 71,734.
 
-**Area.** One RAMB36 of breakpoints, five multiplies, `48 · NUM_COLS` bits of
-per-column scale, xorshift32, and a leading-zero count with a `√` LUT: of order
-2,000 LUTs, five DSPs and one BRAM, well inside the headroom
-`pta_cpu_integration.md` §6.1 counts on the 200T.
+*That figure is an upper bound, not the cost, and gate A1 currently encodes it
+as an equality and fails.* Measured (C4(b), 2026-09-24): `M=8 N=12 K=8` pays
+**+98** cycles where `M · Nt · P` is 112, `M=5 N=11 K=8` pays +69 against 70,
+`M=1 N=12 K=16` pays +13 against 14. `act_cycles` agrees exactly every time
+(208/208, 125/125, 26/26), so the stage is doing what it says; it is the *GEMM's*
+extra cost that is smaller, because some of S_ACT's cycles overlap work the core
+would have done anyway. A1 fails identically on the unmodified stage — same
+cases, same numbers — so it is not a regression and not a gate as written:
+either the expectation becomes `≤ M · Nt · P` with the overlap explained, or the
+overlap is modelled and the equality kept. Nobody has done either, and A1 has
+been red for long enough that its failure carries no information.
 
-**Timing.** S_ACT is registered and lives outside the array, so it cannot
-lengthen the PE path the feed-logic comments guard. It adds one source to
-`c_mem`'s write mux.
+**Area — measured.** A-synth, C4(b), 2026-09-24: `c930_npu_act` alone, out of
+context on `xc7a200tfbg484-1` through synthesis, placement and routing with a
+10 ns clock (`make -f` nothing; `bash synth_xilinx/run_ooc_c4b.sh act`).
+
+| | estimated above | measured |
+|---|---|---|
+| LUTs | ~2,000 | 1,701 cells |
+| DSP48E1 | 5 | **13** |
+| RAMB | 1 | **4** (3 tiles routed) |
+| FF | — | 775 |
+| CARRY4 | — | 120 |
+
+The LUT estimate held. The DSP count did not: "five multiplies" counts the
+multiplies in the arithmetic, not the DSP48E1s Vivado spends on them — the
+48-bit stage-1 product and the 64-bit stage-6 shift each take more than one.
+Nor did the BRAM: 1025 entries of 24 bits is one RAMB36 of data, but the bench
+reads two adjacent entries every cycle and writes a third port while idle, and
+that is built from four.
+
+**Timing — measured, and it does not close.** The claim above is true and was
+answering a different question. S_ACT does not lengthen the PE path; it is its
+own path, and nobody had timed it:
+
+| | WNS at 10 ns | Fmax | worst path | levels |
+|---|---|---|---|---|
+| as written | −14.286 ns | **41.2 MHz** | `col5_reg[1]` → `o_sat_count_reg[31]` | 37 |
+| stage 6 shortened | −9.539 ns | **51.2 MHz** | `col5_reg[2]` → `o_sat_count_reg[29]` | 27 |
+
+141 of 504 endpoints failed in the first. The cone is stage 6, which in one
+cycle did: an 8:1 mux selecting `r_r[col5]` (which is why the path starts at a
+`col5` bit), a DSP multiply, **three variable shifts** including a 64-bit one, a
+clamp against bounds recomputed from `adc_bits` every cycle, two 64-bit
+comparators, and the saturation counter's accumulate hanging off the end. Not
+the wide stage-1 multiply that `pta_cpu_integration.md` §6.1 and the program
+plan both named as the risk.
+
+Shortening it cost no latency and no accuracy. `sh`, the round addend, the
+quantiser mask, the clamp bounds and the capped `YSHIFT` all come from the
+configuration, which is sampled at `cfg_load`, so they are registers now. And
+two of the three shifts cancel: `(x >>> s) <<< s` clears x's low s bits, which
+is an AND with a mask, and a clamp commutes with a monotone left shift, so the
+bounds are held already shifted. One variable shift is left.
+`sim/act_stage6_equiv.py` checks the two forms agree over 99,900
+combinations of `adc_bits`, `YSHIFT`, `requant` and operands, including the
+29-bit wrap the intermediate width allows; gate A2 agrees in RTL, saturation
+counts included. `ACT_P` is still 7.
+
+**The named cut, for 100 MHz.** 51.2 MHz is not 100 MHz, and the rest needs
+latency. The measured path is 19.5 ns over 27 levels, so it splits in two:
+
+1. **6a / 6b after the DSP.** Register `prod6`, leaving 6a as the `r_r[col5]`
+   mux and the multiply — the DSP48E1's own output register makes this nearly
+   free — and 6b as the mask, clamp, shift and saturate. `ACT_P` 7 → 8.
+2. If 6b is still long, **6b / 6c before the 64-bit shift**, which with the two
+   64-bit saturation comparators is most of the remaining carry chain.
+   `ACT_P` 8 → 9.
+
+A cut changes `ACT_P` in `c930_npu_core.sv`, `PTA_TS`, and §2.1's model, never
+around them (program plan §5). Not done here: this note records the measurement
+and the cut it names.
 
 ---
 

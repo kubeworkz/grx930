@@ -335,12 +335,32 @@ static int run_pta(Vc930_soc4_verilator *top) {
     preload_word(top, RESULT, 0);
     preload_word(top, DIAG, 0);
     preload_word(top, PHASE, 0);
+    // Every slot the report reads: a build that skips a test leaves its slots
+    // alone, and an uninitialised DDR word would be read as its answer.
+    for (int i = 0; i < 20; i++) preload_word(top, REC + i * 4, 0);
 
     printf("[TB] image preloaded, M=%d N=%d K=%d all ones. Booting CPU0.\n",
            M, N, K);
     reset_release(top);
 
-    int c = wait_magic(top, DONE, 0xDEADBEEF, 8000000, "pta", 0);
+    // Sample the machine as it goes: a stall that says only "it hung" costs
+    // another run to locate, and the signals are already brought out.
+    int c = -1;
+    for (int t = 0; t < 8000000; t++) {
+        clock_n(top, 1);
+        if ((t % 250000) == 0 || t == 8000000 - 1)
+            printf("[TB]   t=%-8d pc=0x%08llx dc=%d/%d l2=%d/%d npu=%d/%d "
+                   "dma=%d disp=%d fifo=%d phase=%u\n",
+                   t, (unsigned long long)top->o_hart0_pc,
+                   (int)top->o_dc0_state, (int)top->o_dc0_stall,
+                   (int)top->o_l2_rd_state, (int)top->o_l2_wr_state,
+                   (int)top->o_npu0_busy, (int)top->o_npu0_done,
+                   (int)top->o_dma0_phase, (int)top->o_csr0_disp,
+                   (int)top->o_csr0_fifo, ddr_word(top, PHASE));
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c >= 0) printf("[TB] pta: done after %d cycles\n", c);
+    else        printf("[TB] pta: TIMEOUT after 8000000 cycles\n");
     uint32_t diag = ddr_word(top, DIAG);
     uint32_t res  = ddr_word(top, RESULT);
     if (c < 0) {
@@ -367,6 +387,12 @@ static int run_pta(Vc930_soc4_verilator *top) {
            ddr_word(top, REC + 32), ddr_word(top, REC + 36),
            ddr_word(top, REC + 40), ddr_word(top, REC + 44),
            ddr_word(top, REC + 48));
+    // The probe amplitude is a bit position relative to the tile's operand
+    // width, which no register reports, so the firmware finds one the tile
+    // accepts and this says which -- 14 on this SoC's 16-bit tile, 6 on
+    // tb_c930_npu's 8-bit one.  0xBAD means a calibration never started.
+    printf("[TB]   probe amplitude 1 << %u%s\n", ddr_word(top, REC + 64),
+           ddr_word(top, REC + 68) == 0xBAD ? " (and none ever started)" : "");
     printf("[TB]   refusal %u, then ran %u\n",
            ddr_word(top, REC + 52), ddr_word(top, REC + 56));
 
@@ -402,6 +428,71 @@ static int run_pta(Vc930_soc4_verilator *top) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// The M unit's result hold (sw/mul_store_test.S)
+//
+// Nine instructions that deadlocked the CPU: a multiply finishing into a
+// pipeline that a store in MEM is stalling.  This checks the arithmetic as well
+// as the liveness, because a lost-and-recomputed M result is invisible in a
+// hang test, and back-to-back M instructions are where a hold keyed on the
+// enable falling would hand the second one the first one's result.
+// ---------------------------------------------------------------------------
+static int run_mulstore(Vc930_soc4_verilator *top) {
+    const uint32_t DONE = 0x9410, RESULT = 0x9420, REC = 0x9430, PHASE = 0x9490;
+    const int BOUND = 100000;
+
+    printf("[TB] 4-core SoC -- mulstore mode: the M unit's result hold\n");
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("MULSTORE_FW");
+    preload_words_at(top, fw ? fw : "sw/mul_store_prog.hex", 0x0000, 8192);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, PHASE, 0);
+    for (int i = 0; i < 8; i++) preload_word(top, REC + i * 4, 0);
+    reset_release(top);
+
+    int c = -1;
+    for (int t = 0; t < BOUND; t++) {
+        clock_n(top, 1);
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c < 0) {
+        printf("[TB] FAIL: %d cycles and it never finished -- PHASE=%u "
+               "pc0=0x%08llx dc=%d/%d\n", BOUND, ddr_word(top, PHASE),
+               (unsigned long long)top->o_hart0_pc,
+               (int)top->o_dc0_state, (int)top->o_dc0_stall);
+        printf("[TB]   a store in MEM with an M instruction in EX: the result "
+               "hold is not holding\n");
+        return 1;
+    }
+
+    // The control build (NO_MUL=1) sums instead of multiplying, so it wants
+    // different numbers from the same program.
+    const bool nomul = (getenv("MULSTORE_NOMUL") != NULL);
+    struct { const char *what; uint32_t got, want; } chk[] = {
+        { "the first product",      ddr_word(top, RESULT)   , nomul ?  8u :  16u },
+        { "back-to-back, first",    ddr_word(top, REC +  0), nomul ? 11u :  48u },
+        { "back-to-back, second",   ddr_word(top, REC +  4), nomul ? 14u : 144u },
+        { "the divide",             ddr_word(top, REC +  8), nomul ? 13u :   3u },
+        { "the store that spun",    ddr_word(top, REC + 12), 0x1000u },
+    };
+    int bad = 0;
+    for (unsigned i = 0; i < sizeof(chk) / sizeof(chk[0]); i++) {
+        const bool ok = (chk[i].got == chk[i].want);
+        if (!ok) bad++;
+        printf("[TB]   [%s] %s: %u (want %u)\n", ok ? "PASS" : "FAIL",
+               chk[i].what, chk[i].got, chk[i].want);
+    }
+    printf("[TB] finished in %d cycles, PHASE=%u\n", c, ddr_word(top, PHASE));
+    if (bad) { printf("[TB] FAIL: %d of 5 wrong\n", bad); return 1; }
+    printf("[TB] PASS: the M unit keeps its result across a stalled store\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered for live traces
     Verilated::commandArgs(argc, argv);
@@ -413,6 +504,8 @@ int main(int argc, char **argv) {
         rc = run_suite(top);
     else if (mode == "pta")
         rc = run_pta(top);
+    else if (mode == "mulstore")
+        rc = run_mulstore(top);
     else
         rc = run_quad(top);
 
