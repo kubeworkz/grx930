@@ -823,6 +823,10 @@ module c930_npu_core
     .i_precision     (i_precision),
     .i_shot_start    (bs_shot_req),
     .i_ts            (i_pta_ts),
+    .i_cal_busy      (cal_busy),
+    .i_cal_shot_start (cal_shot_start),
+    .i_cal_shot      (cal_shot),
+    .i_cal_shot_col  (cal_shot_col),
     .o_valid         (bs_valid),
     .o_ps_out        (ps_out),
     .i_pta_cfg_load  (start_ok),
@@ -919,9 +923,13 @@ module c930_npu_core
     .i_pta_cal_load     (cal_load),
     .i_pta_cal_seed     (cal_seed)
   );
+`endif
 
   // The engine.  It owns the probe, the estimator and the schedulers; the core
-  // owns only the grant and putting the weights back afterwards.
+  // owns only the grant and putting the weights back afterwards.  Shared by
+  // both tiles: it drives the weight port through the same muxes, so leaving it
+  // out of one branch leaves cal_wen undriven and w_load_active x -- which is
+  // exactly how the broadside tile first came up with zero weights.
   c930_pta_cal #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -979,8 +987,6 @@ module c930_npu_core
     .o_drift_alarm  (o_pta_drift_alarm),
     .o_err          (cal_eng_err)
   );
-
-`endif
 
   assign cal_bank       = i_pta_cal_bank;
   assign o_pta_cal_busy = cal_busy;
@@ -1432,7 +1438,15 @@ module c930_npu_core
       shot_cnt  <= 32'd0;
       wload_cnt <= 32'd0;
     end else begin
+`ifdef PTM_B
+      // One shot a run, counted where the tile answers: broadside, t never
+      // leaves 0, so the skewed `t == 0` start is asserted for the whole state
+      // and would count a shot a hop.
+      if (bs_valid || (hop_phase && cal_busy && cal_shot_start))
+        shot_cnt <= shot_cnt + 32'd1;
+`else
       if (hop_phase && tile_shot_start) shot_cnt  <= shot_cnt + 32'd1;
+`endif
       if (wload_done)                   wload_cnt <= wload_cnt + 32'd1;
     end
   end

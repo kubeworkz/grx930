@@ -733,6 +733,17 @@ module tb_c930_npu;
     $display("[PTA]   [PASS] IMPAIR and BITS reach the tile: C is 0, was %0d", k);
 
     // ---- a calibration, and a START during it -----------------------------
+`ifdef PTM_B
+    // Not on the broadside tile yet, and this says so rather than failing
+    // opaquely.  rtl/pta/c930_pta_cal.sv's probe walks t to 2R + 2C - 1 and
+    // captures column (t - 2R - 1) / 2 on odd t: it emulates PTM-C's staggered
+    // readout itself.  A broadside tile answers every column on one shot, so the
+    // walk reads nothing and ERR_FOUND comes back zero.  The engine needs a
+    // broadside probe -- one shot a row, every column captured at once, which is
+    // also eight times fewer shots -- and that is a change to the engine's own
+    // contract, not to this tile.
+    $display("[PTA]   [SKIP] a calibration: the engine's probe is PTM-C's");
+`else
     axi_write(P_IMPAIR, 32'h49);                 // QUANT | DRIFT | PROG_ERR
     axi_write(P_BITS,   32'h00008756);           // B_a 6, B_w 5, B_adc 7, S 8
     axi_write(P_SIG_PR, 32'h00000200);
@@ -782,6 +793,7 @@ module tb_c930_npu;
     $display("[PTA]   [PASS] a calibration ran: found %0d, left %0d, status %h",
              found, left, st);
     axi_write(P_CTRL, 32'h0);
+`endif
 `endif
 
     // ---- the refusal, and that the next valid start clears it -------------

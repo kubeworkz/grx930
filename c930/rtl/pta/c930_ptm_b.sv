@@ -60,6 +60,14 @@ module c930_ptm_b
   input  logic [2:0]                               i_precision,
   input  logic                                     i_shot_start,
   input  logic [31:0]                              i_ts,       // PTA_TS, dilation
+  // The calibration engine drives the tile directly while it holds it, one
+  // column a shot, so its strobes pass through ahead of the schedule below.
+  // Broadside a probe shot still illuminates every column -- which is what the
+  // tile does -- so the draws advance per column as they do for a GEMM.
+  input  logic                                     i_cal_busy,
+  input  logic                                     i_cal_shot_start,
+  input  logic                                     i_cal_shot,
+  input  logic [$clog2(NUM_COLS)-1:0]              i_cal_shot_col,
   output logic                                     o_valid,
   output logic signed [ACC_W*NUM_COLS-1:0]         o_ps_out,
 
@@ -203,9 +211,9 @@ module c930_ptm_b
     .i_pta_drift_max    (i_pta_drift_max),
     .i_pta_xtalk        (i_pta_xtalk),
     .i_pta_model_rst    (i_pta_model_rst),
-    .i_pta_shot_start   (shot_now),
-    .i_pta_shot         (shot_now),
-    .i_pta_shot_col     ('0),
+    .i_pta_shot_start   (i_cal_busy ? i_cal_shot_start : shot_now),
+    .i_pta_shot         (i_cal_busy ? i_cal_shot       : shot_now),
+    .i_pta_shot_col     (i_cal_busy ? i_cal_shot_col   : '0),
     .o_pta_sat_count    (o_pta_sat_count),
     .i_pta_trim_wen     (i_pta_trim_wen),
     .i_pta_trim_bank    (i_pta_trim_bank),
