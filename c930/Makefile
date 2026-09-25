@@ -18,7 +18,7 @@
 
 IVERILOG ?= iverilog
 VVP      ?= vvp
-GFLAGS   ?= -g2012 -Wall
+GFLAGS   ?= -g2012 -Wall -I rtl/pta
 PYTHON   ?= python
 
 BUILD_DIR := build
@@ -313,7 +313,8 @@ synth-fit:
 OSS_DIR ?= toolchain/oss-cad-suite
 VERILATOR := $(OSS_DIR)/bin/verilator_bin.exe
 VERILATOR_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal \
-  -Wno-EOFNEWLINE -Wno-REDEFMACRO --threads 0 -I../rv64imac/RTL --top-module c930_soc_verilator
+  -Wno-EOFNEWLINE -Wno-REDEFMACRO --threads 0 -I../rv64imac/RTL -Irtl/pta \
+  --top-module c930_soc_verilator
 # Use sim/c930_ddr_verilator.sv (flat 1D byte array) instead of
 # synth/c930_ddr_stub.sv (2D banked array that won't init in Verilator).
 VERIL_RTL := $(NPU_RTL) \
@@ -347,7 +348,7 @@ VERIL4_OUT   := $(BUILD_DIR)/verilator4
 # the array filtered out.
 VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal   $(if $(filter 1,$(PTM_C)),-DPTM_C) \
   -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
-  -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL \
+  -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL -Irtl/pta \
   --top-module c930_soc4_verilator
 
 verilate-soc4: $(SW_HEX)

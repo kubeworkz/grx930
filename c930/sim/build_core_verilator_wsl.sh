@@ -46,7 +46,7 @@ VERILATOR_ROOT=toolchain/oss-cad-suite/share/verilator \
 toolchain/oss-cad-suite/bin/verilator_bin.exe \
   --cc --exe -O3 --top-module c930_npu_core -GMAX_N=12 \
   -Wall -Wno-DECLFILENAME -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
-  -Wno-PINMISSING -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+  -Wno-PINMISSING -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Irtl/pta \
   $DEFS --Mdir "$OUT" $CORE_RTL $ARRAY sim/tb_core_verilator.cc
 
 C930_WSL="$(cygpath -w "$(pwd)" 2>/dev/null | sed 's|^\([A-Za-z]\):|/mnt/\L\1|' | tr '\\' '/')"

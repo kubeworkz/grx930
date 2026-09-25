@@ -111,7 +111,12 @@ module c930_ptm_c
   parameter int DIN_W      = 8,   // activation / weight width
   parameter int ACC_W      = 48,  // accumulator width
   parameter int ABLATE_ROW = -1,  // C0's ablation: this row's de-skew one window late
-  parameter int TRIM_W     = 24   // C3's trim as asked for, before the DAC rounds it
+  parameter int TRIM_W     = 24,  // C3's trim as asked for, before the DAC rounds it
+  // PTM-B's readout (pta_cpu_integration.md 4.2): the whole activation vector
+  // arrives at once, so there is no skew to undo, and every column is captured
+  // on one shot instead of one per window.  The arithmetic is the same -- that is
+  // the point of the parameter, and of the two tiles having to agree.
+  parameter bit BROADSIDE  = 1'b0
 )
 (
   input  logic                                     i_clk,
@@ -205,95 +210,9 @@ module c930_ptm_c
   localparam logic [31:0] K_DRIFT   = 32'h78DDE6E4;
 
   // ---- Arithmetic helpers: the contract's, shared with sim/pta_tile_model.c ----
-  function automatic logic [31:0] xorshift32(input logic [31:0] s);
-    logic [31:0] v;
-`ifdef PTM_C_ABLATE_XORSHIFT
-    v = s ^ (s << 12);
-`else
-    v = s ^ (s << 13);
-`endif
-    v = v ^ (v >> 17);
-    v = v ^ (v << 5);
-    xorshift32 = v;
-  endfunction
-
-  // (sum of the four bytes - 510) * 443: about N(0, 1) * 2^16
-  function automatic logic signed [19:0] gauss(input logic [31:0] s);
-    logic signed [10:0] g;
-    g = $signed({3'b0, s[31:24]}) + $signed({3'b0, s[23:16]}) +
-        $signed({3'b0, s[15:8]})  + $signed({3'b0, s[7:0]}) - 11'sd510;
-    gauss = g * 20'sd443;
-  endfunction
-
-  function automatic logic [31:0] stream_seed(input logic [31:0] seed, input logic [31:0] k);
-    stream_seed = ((seed ^ k) == 32'd0) ? k : (seed ^ k);
-  endfunction
-
-  // c930_npu_act's isqrt4, unchanged: a leading-zero count and a four-entry
-  // table of 2^11 * sqrt(1..4), interpolated on six fraction bits.
-  function automatic logic [4:0] msb24(input logic [23:0] a);
-    logic [7:0] byte_sel;
-    logic [2:0] byte_idx;
-    logic [2:0] bit_idx;
-    if (a[23:16] != 8'd0) begin
-      byte_sel = a[23:16]; byte_idx = 3'd2;
-    end else if (a[15:8] != 8'd0) begin
-      byte_sel = a[15:8];  byte_idx = 3'd1;
-    end else begin
-      byte_sel = a[7:0];   byte_idx = 3'd0;
-    end
-    bit_idx = byte_sel[7] ? 3'd7 : byte_sel[6] ? 3'd6 :
-              byte_sel[5] ? 3'd5 : byte_sel[4] ? 3'd4 :
-              byte_sel[3] ? 3'd3 : byte_sel[2] ? 3'd2 :
-              byte_sel[1] ? 3'd1 : 3'd0;
-    msb24 = {byte_idx, bit_idx};
-  endfunction
-
-  function automatic logic [12:0] isqrt4(input logic [23:0] a);
-    logic [4:0]  p;
-    logic [3:0]  e;
-    logic [7:0]  th;
-    logic [1:0]  seg;
-    logic [12:0] lo, hi;
-    logic [22:0] prod;
-    logic [12:0] rn;
-    if (a == 24'd0) begin
-      isqrt4 = 13'd0;
-    end else begin
-      p   = msb24(a);
-      e   = 4'(p >> 1);
-      th  = 8'((a << (5'd22 - {e, 1'b0})) >> 16);
-      seg = th[7:6] - 2'd1;
-      case (seg)
-        2'd0:    begin lo = 13'd2048; hi = 13'd2896; end
-        2'd1:    begin lo = 13'd2896; hi = 13'd3547; end
-        default: begin lo = 13'd3547; hi = 13'd4096; end
-      endcase
-      prod = 23'(hi - lo) * 23'(th[5:0]);
-      rn   = lo + 13'(prod >> 6);
-      isqrt4 = rn >> (4'd11 - e);
-    end
-  endfunction
-
-  // q(x, B) over the DIN_W-bit operand range: round half up, saturate.
-  function automatic int quant(input int x, input int b);
-    int h, v, hi, lo;
-    if (b == 0 || b >= DIN_W) begin
-      quant = x;
-    end else begin
-      h  = DIN_W - b;
-`ifdef PTM_C_ABLATE_QROUND
-      v  = x >>> h;
-`else
-      v  = (x + (1 << (h - 1))) >>> h;
-`endif
-      hi = (1 << (b - 1)) - 1;
-      lo = -(1 << (b - 1));
-      if (v > hi) v = hi;
-      if (v < lo) v = lo;
-      quant = v <<< h;
-    end
-  endfunction
+  // The contract's arithmetic, shared with PTM-B so the two cannot drift
+  // (pta_cpu_integration.md 4.2: they must agree).
+`include "c930_pta_contract.svh"
 
   // ---- Weight banks, written as the array's PEs write theirs ----
   logic signed [DIN_W-1:0] w_bank0 [0:R-1][0:C-1];
@@ -371,25 +290,39 @@ module c930_ptm_c
   logic [4:0]  dlog2_r;
   logic [7:0]  chi_r;
   logic [31:0] rng_th, rng_sh, rng_pr;
-  logic [31:0] rng_th_next, rng_sh_next, rng_pr_next;
-  logic signed [19:0] gs_th, gs_sh, gs_pr;
-  logic signed [36:0] pr_prod, th_prod;
+  logic [31:0] rng_pr_next;
+  logic signed [19:0] gs_pr;
+  logic signed [36:0] pr_prod;
   logic signed [19:0] e_new;     // this write's programming error, Q.8
-  logic signed [20:0] n_th;      // this window's thermal noise, Q.8 ADC LSB
+
+  // One draw per column captured.  Skewed, that is one column a window, so one
+  // draw; broadside it is every column on one shot, so NUM_COLS of them, taken
+  // in column order -- the same draws in the same order either way, which is
+  // what makes the two readouts agree.  Draw d is d + 1 steps from the state.
+  localparam int NDRAW = BROADSIDE ? NUM_COLS : 1;
+  logic [31:0]        rng_th_seq[0:NDRAW];
+  logic [31:0]        rng_sh_seq[0:NDRAW];
+  logic signed [19:0] gs_sh_a[0:NDRAW-1];
+  logic signed [20:0] n_th_a[0:NDRAW-1];   // thermal noise, Q.8 ADC LSB
 
   always_comb begin : b_draws
-    rng_th_next = xorshift32(rng_th);
-    rng_sh_next = xorshift32(rng_sh);
+    logic signed [19:0] gs_th_d;
+    logic signed [36:0] th_prod_d;
     rng_pr_next = xorshift32(rng_pr);
-    gs_th       = gauss(rng_th_next);
-    gs_sh       = gauss(rng_sh_next);
     gs_pr       = gauss(rng_pr_next);
     pr_prod     = $signed({21'd0, sigma_pr_r}) * 37'(gs_pr);
-    th_prod     = $signed({21'd0, sigma_th_r}) * 37'(gs_th);
     e_new       = 20'((pr_prod + 37'sd32768) >>> 16);
-    // Thermal noise is the same draw for every column this window; only the
-    // column i_pta_shot names is captured.
-    n_th        = 21'((th_prod + 37'sd32768) >>> 16);
+
+    rng_th_seq[0] = rng_th;
+    rng_sh_seq[0] = rng_sh;
+    for (int d = 0; d < NDRAW; d++) begin
+      rng_th_seq[d+1] = xorshift32(rng_th_seq[d]);
+      rng_sh_seq[d+1] = xorshift32(rng_sh_seq[d]);
+      gs_th_d         = gauss(rng_th_seq[d+1]);
+      gs_sh_a[d]      = gauss(rng_sh_seq[d+1]);
+      th_prod_d       = $signed({21'd0, sigma_th_r}) * 37'(gs_th_d);
+      n_th_a[d]       = 21'((th_prod_d + 37'sd32768) >>> 16);
+    end
   end
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
@@ -458,8 +391,9 @@ module c930_ptm_c
       rng_pr     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_PROG);
     end else begin
       if (shot_step) begin
-        rng_th <= rng_th_next;
-        rng_sh <= rng_sh_next;
+        // NDRAW is 1 skewed, so this is the single step it always was.
+        rng_th <= rng_th_seq[NDRAW];
+        rng_sh <= rng_sh_seq[NDRAW];
       end
       if (i_wen)
         rng_pr <= rng_pr_next;
@@ -646,7 +580,8 @@ module c930_ptm_c
   // capturing from this window, since no other column's value this window is
   // ever read.  Evaluated once per hop edge, inside that register's process,
   // for the simulator's sake as the float chain is held above.
-  function automatic logic [ACC_W:0] int_column(input int c, input logic modelled);
+  function automatic logic [ACC_W:0] int_column(input int c, input logic modelled,
+                                               input int d);
     logic signed [ACC_W-1:0] seed;
     logic signed [DIN_W-1:0] a, w;
     logic signed [63:0]      y, xa;
@@ -662,11 +597,13 @@ module c930_ptm_c
     logic                    clamped;
     int                      s, b, tap;
 
-    seed = seed_h[c][2*R - 1];
+    // Broadside there is no skew to undo: the vector and the seed are at the
+    // port this cycle.  Skewed, both come from the history the cascade implies.
+    seed = BROADSIDE ? $signed(i_ps_in[c*ACC_W +: ACC_W]) : seed_h[c][2*R - 1];
     y    = 64'sd0;
     for (int r = 0; r < R; r++) begin
       tap = 2*(R - r) + 2*c - 1 + ((r == ABLATE_ROW) ? 1 : 0);
-      a   = act_h[r][tap];
+      a   = BROADSIDE ? $signed(i_act[r*DIN_W +: DIN_W]) : act_h[r][tap];
       if (!modelled) begin
         w = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
         y = y + 64'(a) * 64'(w);
@@ -686,9 +623,9 @@ module c930_ptm_c
       if (v > 64'd8388608) v = 64'd8388608;            // 2^23
       rt      = isqrt4(v[23:0]);
       krt     = 29'(k_shot_r) * 29'(rt);
-      sh_prod = $signed({21'd0, krt}) * 50'(gs_sh);
+      sh_prod = $signed({21'd0, krt}) * 50'(gs_sh_a[d]);
       n_sh    = 30'((sh_prod + 50'sd524288) >>> 20);
-      nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th) : 31'sd0) +
+      nsum    = (impair_r[IMP_THERMAL] ? 31'(n_th_a[d]) : 31'sd0) +
                 (impair_r[IMP_SHOT]    ? 31'(n_sh) : 31'sd0);
       z       = 80'(y) + (80'(nsum) <<< s);
 
@@ -739,7 +676,10 @@ module c930_ptm_c
           if (fp_mode) begin
             ps_out_q[c*ACC_W +: ACC_W] <= {{(ACC_W-32){1'b0}}, y_fp[c]};
           end else begin
-            col = int_column(c, modelling && i_pta_shot && (c == int'(i_pta_shot_col)));
+            col = int_column(c,
+                             modelling && i_pta_shot &&
+                               (BROADSIDE || (c == int'(i_pta_shot_col))),
+                             BROADSIDE ? c : 0);
             ps_out_q[c*ACC_W +: ACC_W] <= col[ACC_W-1:0];
             if (col[ACC_W])
               sat_cnt <= sat_cnt + 32'd1;
