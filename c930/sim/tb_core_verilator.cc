@@ -11,6 +11,7 @@
 //     sim/tb_core_verilator.cc sim/pta_tile_model.c <core RTL>
 //   ./obj_dir/tb_core_verilator            # default case list
 //   ./obj_dir/tb_core_verilator --sweep    # M/N/K sweep, CSV on stdout
+//   ./obj_dir/tb_core_verilator --tw       # C2: cycles affine in PTA_TW
 //
 // <core RTL> is the core's list in the Makefile's NPU_RTL, less the CSR, DMA
 // and top.  For a PTM-C build add -DPTM_C and take rtl/pta/c930_fp32_add.sv and
@@ -317,6 +318,11 @@ void identity_table() {
 // PTA error model
 // ---------------------------------------------------------------------------
 const pta_cfg PTA_OFF = {};
+// The emulation's settle, in cycles, held after a weight program's last write.
+// A core input rather than a tile one: the core spends it, the tile never sees
+// it.  Zero unless the --tw gate is sweeping it.
+uint32_t g_pta_tw = 0;
+
 
 void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_impair    = cfg.impair;
@@ -332,6 +338,7 @@ void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_drift_log2  = cfg.drift_log2;
     dut->i_pta_drift_max   = cfg.drift_max;
     dut->i_pta_xtalk       = cfg.xtalk;
+    dut->i_pta_tw          = g_pta_tw;
 }
 
 // The modelled device.  Drift outlives a GEMM, so the model's state does too,
@@ -778,10 +785,12 @@ int main(int argc, char** argv) {
     int  dw    = 8;
     std::string act_mode = "off", table_path;
     std::string pta_mode = "off", tile = "array";
+    bool tw_gate = false;
     int  perturb = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg == "--sweep") sweep = true;
+        else if (arg == "--tw") tw_gate = true;
         else if (arg == "--dw" && i + 1 < argc) dw = std::atoi(argv[++i]);
         else if (arg == "--act" && i + 1 < argc) act_mode = argv[++i];
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
@@ -949,6 +958,60 @@ int main(int argc, char** argv) {
         drift_case("drift, held", 0, 0, dM * dN * 9 / 10, dM * dN, &last);
         model_reset(0x0D1F7u);
         drift_case("drift, after a reset", 5, 0xFFFF, 0, 0, nullptr);
+    } else if (tw_gate) {
+        // C2: the core spends PTA_TW as the tile's settle, held after a weight
+        // program's last write (pta_cpu_integration.md 6.2, where Tw is the
+        // 64-cycle scan plus this).  The m-inner order programs weights once per
+        // (N tile, K tile), so a GEMM pays Nt * Kt of them and the total is
+        // affine in the register with that slope -- which is the claim, stated
+        // without Ts or Td, since those belong to the tile.
+        //
+        // C is checked at every point as well.  A settle that held the write
+        // port open would redraw the last cell's programming error once per
+        // cycle, and that shows up here and nowhere else.
+        struct TwCase { int M, N, K; };
+        const TwCase tw_cases[] = { {8, 12, 16}, {5, 11, 8}, {4, 8, 32} };
+        for (const TwCase& c : tw_cases) {
+            const int nt = (c.N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (c.K + NUM_ROWS - 1) / NUM_ROWS;
+            // No settle, then the smallest one, which is the reference: the
+            // step between those two is the entry alignment, one cycle per GEMM
+            // at most, and it is not part of the slope.
+            g_pta_tw = 0;
+            const Result none = run_case(c.M, c.N, c.K, dw, false, ActCfg{});
+            const uint32_t REF = 2;             // smallest non-zero even settle
+            g_pta_tw = REF;
+            const Result ref = run_case(c.M, c.N, c.K, dw, false, ActCfg{});
+            const int entry = static_cast<int>(ref.cycles) -
+                              static_cast<int>(none.cycles) -
+                              static_cast<int>(nt * kt) * static_cast<int>(REF);
+            bool all_ok = none.ok && ref.ok && (entry >= -1) && (entry <= 1);
+            if (!all_ok) ++failures;
+            printf("[TW] M=%-2d N=%-2d K=%-3d Nt*Kt=%-3d  no settle %u, TW=2 %u, "
+                   "entry step %+d (bound 1)\n",
+                   c.M, c.N, c.K, nt * kt, none.cycles, ref.cycles, entry);
+
+            // The claim: exactly Nt * Kt cycles per unit of settle, measured
+            // from the reference so the entry step is not counted twice.  The
+            // settle is rounded up to the hop cadence, so an odd value costs
+            // what the next even one does.
+            for (uint32_t tw : {3u, 4u, 7u, 64u, 1000u}) {
+                g_pta_tw = tw;
+                const Result r = run_case(c.M, c.N, c.K, dw, false, ActCfg{});
+                const uint32_t tw_eff = tw + (tw & 1u);
+                const uint32_t want = ref.cycles +
+                                      static_cast<uint32_t>(nt * kt) * (tw_eff - REF);
+                const bool ok = r.ok && (r.cycles == want) &&
+                                (r.ops == ref.ops) && (r.act_cycles == ref.act_cycles);
+                if (!ok) { all_ok = false; ++failures; }
+                printf("[TW]   TW=%-5u (eff %-5u) cycles %-8u want %-8u C %s  %s\n",
+                       tw, tw_eff, r.cycles, want, r.ok ? "ok" : "WRONG",
+                       ok ? "PASS" : "FAIL");
+            }
+            g_pta_tw = 0;
+            if (!all_ok) printf("[TW]   ^ affine claim broken at M=%d N=%d K=%d\n",
+                                c.M, c.N, c.K);
+        }
     } else if (pta_gate) {
         int idx = 0;
         int moved_cases = 0;

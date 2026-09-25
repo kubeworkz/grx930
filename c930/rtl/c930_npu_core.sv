@@ -167,6 +167,10 @@ module c930_npu_core
   input  logic [3:0]                  i_pta_cal_amp,      // probe amplitude, 1 << this
   input  logic [3:0]                  i_pta_cal_reps,     // repeats a pass, 1 << this
   input  logic [1:0]                  i_pta_cal_passes,   // auto-ranging passes; 0 is 1
+  // The emulation's settle: cycles held after a weight program's last write,
+  // on top of the scan itself, so Tw = NUM_ROWS * NUM_COLS + i_pta_tw and a
+  // GEMM's total is affine in it (pta_cpu_integration.md 6.2).  Zero is free.
+  input  logic [31:0]                 i_pta_tw,
   input  logic                        i_pta_cal_bank,     // the bank to calibrate
   input  logic [3:0]                  i_pta_trim_log2,    // the weight DAC's step, Q.8
   input  logic [15:0]                 i_pta_trim_max,     // ... and its clamp
@@ -543,6 +547,9 @@ module c930_npu_core
       // with the state.  Also count S_ACCLD: reloading acc[] from C is
       // accumulator traffic, not compute, and hiding it would overstate the
       // array's utilisation the same way undercounting weights did.
+      // The settle is inside S_WLOAD and counted here with the scan: it is the
+      // cost of delivering weights, and counting it keeps the accounting
+      // identity in doc/c930_architecture.md closing as CYCLE_COUNT grows.
       if (state == S_WLOAD || state == S_ACCLD)
         stall_cnt <= stall_cnt + 1;
       // Kept separate from stall_cnt so the accounting identity in
@@ -682,6 +689,20 @@ module c930_npu_core
   // Weight load: S_WLOAD drives the array's write port directly.  The
   // preload path the m-outer order needed is gone with S_PRELOAD.
   logic        w_load_active;
+  // Cycles held in S_WLOAD after the last weight write, counting the settle.
+  //
+  // Rounded up to the hop cadence, which is why it is even.  hop_phase is a
+  // free-running toggle and S_RUN advances only on its edges, so a settle of an
+  // odd number of cycles leaves the next state entered on the other phase and
+  // costs it a cycle -- the total then carries an alignment term of up to one
+  // cycle per weight program instead of being affine in the register.  An even
+  // settle preserves the phase, so a GEMM pays exactly Nt * Kt * PTA_TW.  Every
+  // point in pta_cpu_integration.md 6.2 is even (100,000, 1,000, 0); an odd
+  // value costs one cycle more than it asks for, per program.
+  logic [31:0] settle_cnt;
+  wire [31:0]  tw_eff = i_pta_tw + {31'd0, i_pta_tw[0]};
+  wire         scan_done = (w_n == nc - 1) && (w_r == kr_reg - 1);
+  wire         settling  = (state == S_WLOAD) && scan_done && (settle_cnt != 32'd0);
   logic        w_load_bank;
   logic [$clog2(NUM_ROWS)-1:0] w_load_row;
   logic [$clog2(NUM_COLS)-1:0] w_load_col;
@@ -689,7 +710,9 @@ module c930_npu_core
 
   // The calibration zeroes the bank through this same port, which is what
   // redraws each cell's programming error (rtl/pta/c930_pta_cal.sv).
-  assign w_load_active = (state == S_WLOAD) || cal_wen;
+  // Not while settling: a weight write steps the PROG_ERR stream, so holding the
+  // port open would redraw the last cell's error once per settle cycle.
+  assign w_load_active = ((state == S_WLOAD) && !settling) || cal_wen;
   assign w_load_bank   = cal_wen ? cal_bank : bank_sel;
   assign w_load_row    = cal_wen ? cal_wrow : w_r[$clog2(NUM_ROWS)-1:0];
   assign w_load_col    = cal_wen ? cal_wcol : w_n[$clog2(NUM_COLS)-1:0];
@@ -1012,6 +1035,7 @@ module c930_npu_core
       cal_resume_st  <= S_IDLE;
       cal_abort_pend <= 1'b0;
       cal_err_q      <= 1'b0;
+      settle_cnt     <= 32'd0;
       for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
     end else begin
       o_done <= done_cond;
@@ -1071,7 +1095,12 @@ module c930_npu_core
         // Only the nc active columns and kr active rows of this tile are
         // loaded.  Entered once per (N tile, K tile), not once per row.
         S_WLOAD: begin
-          if ((w_n == nc - 1) && (w_r == kr_reg - 1)) begin
+          if (scan_done && (settle_cnt < tw_eff)) begin
+            // The tile is settling.  w_n and w_r hold, so scan_done stays true
+            // and w_load_active is gated off above.
+            settle_cnt <= settle_cnt + 32'd1;
+          end else if (scan_done) begin
+            settle_cnt <= 32'd0;
             w_r    <= 0;
             w_n    <= 0;
             n_cnt  <= 0;

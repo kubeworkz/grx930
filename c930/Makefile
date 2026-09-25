@@ -495,6 +495,23 @@ driver_fw: $(DRV_SW_HEX) verilate-soc4
 	bash synth_xilinx/build_soc4_verilator_wsl.sh run driver $(VERIL4_OUT)
 
 # ---------------------------------------------------------------------------
+# The core bench's gates (sim/tb_core_verilator.cc)
+#
+# Built by sim/build_core_verilator_wsl.sh: the vendored verilator_bin.exe only
+# generates C++, so WSL g++ compiles the model.  The core alone, no CSR and no
+# DMA, which is why a 3-million-cycle sweep finishes in seconds.
+#
+#   make core_tw      C2: a GEMM's cycles are affine in PTA_TW, slope Nt * Kt
+#   make core_act     A1 and A2: the activation stage, cycles and bit-exactness
+# ---------------------------------------------------------------------------
+.PHONY: core_tw core_act
+core_tw:
+	@bash sim/build_core_verilator_wsl.sh run --tw
+
+core_act:
+	@bash sim/build_core_verilator_wsl.sh run --sweep --act identity
+
+# ---------------------------------------------------------------------------
 # The M unit's result hold (a CPU fix, found by C4(a)'s firmware)
 #
 # sw/mul_store_test.S is nine instructions that deadlocked the CPU: the booth
