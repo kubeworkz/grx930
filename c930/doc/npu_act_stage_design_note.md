@@ -284,11 +284,37 @@ them ±1 cycle and all on shapes where `N` is not a multiple of `NUM_COLS` or
 | `M=8 N=9 K=16` | +127 | 128 |
 
 `act_cycles` agrees exactly in every case, before and after (208/208 then
-224/224), so the stage's own accounting was never in doubt. What is left is a
-±1 boundary effect on a ragged last tile, one cycle either way. That is worth
-finding, and it is a much smaller thing than the paragraph this replaces
-claimed. **A1 is still red and still a gate; it is closer to green than it has
-been, and the residue is a real off-by-one, not a wrong expectation.**
+224/224), so the stage's own accounting was never in doubt.
+
+**A1 is green now, 14 of 14, and the residue was not an off-by-one.** Two
+readings of it were wrong before the third stuck: that the bench was
+mis-specified and carried no information, and then that the residue was a
+boundary effect on a ragged last tile. Six cases were not enough to tell; the
+sweep's fourteen sort perfectly by the **parity of the unactivated cycle count** —
+nine even baselines, every one exact, and five odd, every one out by a cycle.
+
+`hop_phase` is a free-running toggle from reset and `S_RUN` advances only on its
+edges, so S_RUN's length in cycles depends on the phase it is entered at.
+Enabling S_ACT lengthens each last-K-tile store by `ACT_P` and shifts that phase
+for everything after it, and a later S_RUN is sometimes entered off-phase and
+runs a cycle longer. Both of A1's equalities were then impossible, for the same
+reason:
+
+- the **cycle** equality, because `ACT_P` is even, so `off + M · Nt · ACT_P`
+  keeps the baseline's parity while an activated total is always even — 14 of 14
+  measured;
+- the **`OP_COUNT`** equality, because `doc/c930_architecture.md` defines
+  `OP_COUNT / (NUM_ROWS · NUM_COLS)` as the S_RUN cycle count, so the counter
+  reports that same extra cycle as exactly one array pass of MACs — ±64, always
+  with the same sign as the cycle.
+
+Neither the design nor the counters are wrong. The gate asserts the true
+relationship now: the activated total is even, within one cycle of
+`M · Nt · ACT_P`, that cycle only on an odd baseline, and `OP_COUNT` moving with
+it by one array pass in the same direction. **Its ablation:** setting the
+bench's `ACT_P` to 7 against the RTL's 8 fails all fourteen cases, where the old
+form could not distinguish a latency error from the alignment on five of them.
+So the gate is stricter than it was, not looser.
 
 **Area — measured.** A-synth, C4(b), 2026-09-24: `c930_npu_act` alone, out of
 context on `xc7a200tfbg484-1` through synthesis, placement and routing with a
