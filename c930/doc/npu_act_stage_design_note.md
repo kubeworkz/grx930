@@ -317,14 +317,21 @@ own path, and nobody had timed it:
 |---|---|---|---|---|
 | as written | −14.286 ns | **41.2 MHz** | `col5_reg[1]` → `o_sat_count_reg[31]` | 37 |
 | stage 6 shortened | −9.539 ns | **51.2 MHz** | `col5_reg[2]` → `o_sat_count_reg[29]` | 27 |
+| stage 6 split, `ACT_P` 8 | −8.016 ns | **55.5 MHz** | `xs_r_reg[6][0]` → `x1_reg[7]` | 28 |
 
 141 of 504 endpoints failed in the first. The cone is stage 6, which in one
 cycle did: an 8:1 mux selecting `r_r[col5]` (which is why the path starts at a
 `col5` bit), a DSP multiply, **three variable shifts** including a 64-bit one, a
 clamp against bounds recomputed from `adc_bits` every cycle, two 64-bit
-comparators, and the saturation counter's accumulate hanging off the end. Not
-the wide stage-1 multiply that `pta_cpu_integration.md` §6.1 and the program
-plan both named as the risk.
+comparators, and the saturation counter's accumulate hanging off the end.
+
+Nobody had named it. `pta_cpu_integration.md` §6.1 named the shot path — "a
+multiply, a square-root approximation and two adds" — and the program plan named
+stage 1's wide multiply. **The plan's guess was right and mine was wrong about
+it:** once stage 6 is split the path moves to exactly where the plan said,
+`xs_r_reg[6][0]` → `x1_reg[7]`, the 48 × 32 product with its variable `XSHIFT`
+and `sat24`, 18.0 ns over 28 levels. It was second in the queue, behind a stage
+that no estimate mentioned. §6.1's shot path has still not bitten.
 
 Shortening it cost no latency and no accuracy. `sh`, the round addend, the
 quantiser mask, the clamp bounds and the capped `YSHIFT` all come from the
@@ -345,11 +352,18 @@ the clamp, the shift and the saturate. `ACT_P` 7 → 8. The saturation counter
 moves to 6b with the data, so each element is still counted once, and gate A2
 passes unchanged with the counts exact.
 
-If 6b is still long, the next split is before the 64-bit shift, which with the
-two 64-bit saturation comparators is most of the remaining carry chain
-(`ACT_P` 8 → 9). Whether it is needed is a measurement, not a guess, and it has
-not been made yet — **the routed Fmax of the split stage is still owed**, because
-Vivado here takes WSL's network down for the duration (`synth_xilinx/README.md`).
+**Measured: 55.5 MHz, and stage 6 is no longer the limit.** The split cost 59
+flip-flops (846 → 905) and nothing else — 1,713 LUT cells, 13 DSPs, 4 BRAMs, the
+same as before. The worst path is now stage 1, so a third split of stage 6 would
+buy nothing; the next cut, if 100 MHz is wanted, is **stage 1 into 1a/1b**, and
+the same trick may apply first, since `XSHIFT` is configuration and the `sat24`
+bounds are constants.
+
+**There is a floor to chasing this.** The digital NPU with its systolic array
+routes at 58.0 MHz, limited by the FP16 accumulator chain between PEs, and a SoC
+runs no faster than its slowest block. S_ACT at 55.5 MHz is still the binding
+constraint, but only by 2.5 MHz — past that, work on this stage buys nothing
+until the array's own path is addressed.
 
 A cut goes into `ACT_P` and, where they apply, `PTA_TS` and §2.1's model, never
 around them (program plan §5). `ACT_P` is updated in `c930_npu_core.sv` and in
