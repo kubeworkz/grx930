@@ -460,10 +460,12 @@ was in this RTL rather than in any document: `CAL_BUSY` has to cover the handove
 back to the core as well as the work, or there is exactly one cycle in which a
 dispatcher believes the tile is free and the command it sends is lost.
 
-The CPU document's gate C1(b) names the NPU DPI wrapper. The configuration is
-not on a CSR until C4, so the wrapper cannot reach it yet; the core harness
-carries the parity gate until then, and the wrapper takes it when C4 maps the
-ports.
+The CPU document's gate C1(b) names the NPU DPI wrapper. The core harness
+carried the parity gate while the configuration was core-level only; C4(a) put it
+on the CSR — the PTA register block at `0x100`, see `rtl/c930_npu_csr.sv`'s header
+— so the wrapper can reach it now, and `make pta_test PTM_C=1` is firmware doing
+exactly that through MMIO. The parity gate stays in the core harness, which is
+where bit-for-bit comparison against the C reference belongs.
 
 ### Gate C1(a): the accuracy sweep
 
@@ -666,7 +668,30 @@ With the 8-bit ADC, 97.42% before any noise:
    per-column multiplier and addend, drawn once at a model reset, which is what a
    real receiver has — or the column loop stays a path with no measurement behind
    it. grxcp's `pta_chiplet_calibration.md` §2 says the same from the other side.
-5. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
+5. **The probe amplitude is an absolute bit position.** `PTA_CAL_CFG.amp` is a
+   shift, and the engine takes it only in `[DIN_W - B_a, DIN_W - 2]`, because the
+   activation quantiser has to leave the probe alone. Nothing in the register map
+   reports `DIN_W`, so the same value is right on one build and refused on
+   another: 6 is right for `tb_c930_npu`'s eight-bit tile and refused by the
+   SoC's sixteen-bit one, which ends the calibration in two cycles with
+   `CAL_ERR` set and `CAL_CT` unmoved. `sw/pta_test.c` finds one the tile accepts
+   the way a driver would have to — the refusal is observable and `MODEL_RST`
+   clears it — but firmware should not have to search for a number the hardware
+   knows. Either the map gains a read-only field for the datapath width, or
+   `amp` is specified relative to it and the tile does the arithmetic. grxcp's
+   `pta_chiplet_regmap.md` §4 records it against the map.
+6. **A line the CPU has written is outside the L2's directory.** Not this
+   contract's problem, but it decides what firmware driving this block may do.
+   `c930_l2.sv` records a sharer on a read fill and is write-through with no
+   allocate: on a write it invalidates the sharers it knows and drops its own
+   copy. The D-cache keeps the written data. So after the CPU writes a line, the
+   L2 no longer tracks it, and the NPU DMA's later write to that line invalidates
+   nobody — the CPU reads its own stale value for ever. `sw/pta_test.c` cleared C
+   before each GEMM and then read back the zeros it had written, which made an
+   impaired GEMM look right (C all zero) and an exact one look wrong (C zero, not
+   K). It only reads C now. The general fix is one of: keep the writer as a
+   sharer, invalidate the writer's own line, or make the L1 write no-allocate.
+7. **Crosstalk beyond first order.** E8 couples nearest neighbours only, and a
    neighbour's crosstalk does not couple on again. An MZI mesh would couple
    along its triangular structure instead (CPU document §8 item 5); that is a
    different matrix, and a hypothesis this program has no ground truth for.

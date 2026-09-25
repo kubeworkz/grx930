@@ -42,6 +42,45 @@
 //     and the snapshot push requires FIFO space in that same cycle, so a
 //     submission against a full FIFO is silently dropped.
 //
+// The PTA register block, phase C4(a) (grxcp pta_cpu_integration.md section 3.1
+// and pta_chiplet_regmap.md section 4).  The internal decode widens from
+// s_axi_awaddr[5:2] to [9:2] -- sixteen words to 256, 0x000 to 0x3FC -- which
+// leaves 0x00-0x3C bit-identical and needs no change in the crossbar, whose
+// MMIO slave already covers 0x4000_0000-0x4000_FFFF.
+//
+// It does NOT go at 0x40, which is where the CPU document's section 3 puts it.
+// That range is NPU1's CSR window on this SoC (c930_soc_top's w_to_npu1 /
+// r_to_npu1 decode 0x4000_0040-0x4000_007F), so a block there would have been
+// shadowed by the second NPU whenever ENABLE_NPU1 was set -- and by nothing at
+// all when it was clear, which is worse, because it would have worked in test.
+// The block therefore sits at 0x100, laid out exactly as the chiplet's window
+// from its own 0x040 (pta_chiplet_regmap.md section 4), so one driver reaches a
+// c930 tile and a chiplet with the same offsets inside the block and a different
+// base:
+//
+//   0x000-0x03C  this file's own registers, unchanged
+//   0x040-0x07F  NPU1's CSR window -- routed away by the SoC, never seen here
+//   0x0F0-0x0FC  the MMIO bridge's HART_ID and CORE*_RELEASE, likewise
+//   0x140-0x1DC  the PTA block: CTRL, STATUS, IMPAIR, BITS, SEED, the sigmas,
+//                DRIFT, XTALK, TW, TS, CAL_PER, CAL_THR, CAL_CT, CAL_CYC,
+//                SHOT_CT, WLOAD_CT, SAT_CT, ERR_MAX, GAIN[j], OFFS[j],
+//                DRIFT_MAX, CAL_CFG, TRIM, CAL_SEED
+//   0x1F0        PTA_ERR_FOUND, the error the last calibration found
+//
+// Three things the register block does that no document said.  PTA_CTRL bit2,
+// CAL_AUTO, reads zero and does nothing: CAL_SCHED already says whether
+// calibration is automatic, and two controls for one question is a way to make
+// firmware wrong.  PTA_STATUS gains bit4 BUSY, as the chiplet's map does, so one
+// read is a consistent snapshot, and bit5 CAL_ERR, because the c930 has no
+// interrupt block for PTA_IRQ_STATUS.ERR to live in.  And MODEL_RST clears the
+// correction stores with the model, which is what the calibration document says
+// it does, so this file clears its own copies of GAIN and OFFS with them.
+//
+// Every address above 0x3F that the SoC does not route elsewhere still falls
+// through to this slave and aliases modulo 1 KB, as it aliased modulo 64 bytes
+// before: 0x4000_2140 reaches PTA_CTRL.  That is the fall-through the
+// architecture document describes, with a wider footprint.
+//
 // Calibration (i_cal_busy), grxcp pta_cpu_integration.md section 3.2:
 //   The PTA tile calibrates between commands, and while it does the tile is
 //   not available -- but the calibration is not a command, so STATUS.BUSY
@@ -57,7 +96,8 @@
 // -----------------------------------------------------------------------------
 module c930_npu_csr
 #(
-  parameter int CMD_QUEUE_DEPTH = 4
+  parameter int CMD_QUEUE_DEPTH = 4,
+  parameter int NUM_COLS        = 8    // PTA_GAIN[j] / PTA_OFFS[j], one per column
 )
 (
   input  logic        i_clk,
@@ -106,6 +146,55 @@ module c930_npu_csr
   input  logic [31:0] i_dma_cycle_count,
   input  logic [31:0] i_dma_last_count,
 
+  // ---- PTA register block, C4(a) ----
+  // Configuration out to the core, status and counters back.  Every field is
+  // the CPU document's section 3.1 unless the header says otherwise.
+  output logic        o_pta_cal_en,        // PTA_CTRL.EN
+  output logic        o_pta_cal_now,       // PTA_CTRL.CAL_NOW, one cycle
+  output logic [1:0]  o_pta_cal_sched,     // PTA_CTRL.CAL_SCHED
+  output logic        o_pta_model_rst,     // PTA_CTRL.MODEL_RST, one cycle
+  output logic        o_pta_cal_rst,       // ... which also clears the correction
+  output logic [6:0]  o_pta_impair,
+  output logic [3:0]  o_pta_act_bits,
+  output logic [3:0]  o_pta_w_bits,
+  output logic [3:0]  o_pta_adc_bits,
+  output logic [5:0]  o_pta_adc_shift,
+  output logic [31:0] o_pta_seed,
+  output logic [15:0] o_pta_sigma_th,
+  output logic [15:0] o_pta_k_shot,
+  output logic [15:0] o_pta_sigma_pr,
+  output logic [15:0] o_pta_drift_sigma,
+  output logic [4:0]  o_pta_drift_log2,
+  output logic [15:0] o_pta_drift_max,
+  output logic [7:0]  o_pta_xtalk,
+  output logic [31:0] o_pta_tw,            // the emulation's settle and shot
+  output logic [31:0] o_pta_ts,            // latency; the tile takes them at C2
+  output logic [31:0] o_pta_cal_per,
+  output logic [23:0] o_pta_cal_thr,
+  output logic [3:0]  o_pta_cal_amp,
+  output logic [3:0]  o_pta_cal_reps,
+  output logic [1:0]  o_pta_cal_passes,
+  output logic        o_pta_cal_bank,
+  output logic [3:0]  o_pta_trim_log2,
+  output logic [15:0] o_pta_trim_max,
+  output logic [31:0] o_pta_cal_seed,
+  // A write to PTA_GAIN[j] or PTA_OFFS[j] sends the pair to the tile.
+  output logic        o_pta_aff_wen,
+  output logic [$clog2(NUM_COLS)-1:0] o_pta_aff_col,
+  output logic signed [17:0] o_pta_aff_gain,
+  output logic signed [31:0] o_pta_aff_offs,
+
+  input  logic        i_pta_cal_valid,
+  input  logic        i_pta_drift_alarm,
+  input  logic        i_pta_cal_err,
+  input  logic [31:0] i_pta_cal_ct,
+  input  logic [31:0] i_pta_cal_cyc,
+  input  logic [31:0] i_pta_shot_ct,
+  input  logic [31:0] i_pta_wload_ct,
+  input  logic [31:0] i_pta_sat_count,
+  input  logic [23:0] i_pta_err_max,
+  input  logic [23:0] i_pta_err_found,
+
   // ---- FIFO head (next GEMM params for cross-GEMM prefetch) ----
   output logic        o_fifo_valid,    // 1 when FIFO has a queued command
   output logic [15:0] o_fifo_dim_m,
@@ -117,22 +206,54 @@ module c930_npu_csr
   output logic [2:0]  o_fifo_precision
 );
 
-  localparam logic [3:0] ADDR_CTRL      = 4'h0;
-  localparam logic [3:0] ADDR_STAT      = 4'h1;
-  localparam logic [3:0] ADDR_DIM_M     = 4'h2;
-  localparam logic [3:0] ADDR_DIM_N     = 4'h3;
-  localparam logic [3:0] ADDR_DIM_K     = 4'h4;
-  localparam logic [3:0] ADDR_A_BASE    = 4'h5;
-  localparam logic [3:0] ADDR_B_BASE    = 4'h6;
-  localparam logic [3:0] ADDR_C_BASE    = 4'h7;
-  localparam logic [3:0] ADDR_PREC      = 4'h8;
-  localparam logic [3:0] ADDR_CYCLE_LO  = 4'h9;
-  localparam logic [3:0] ADDR_OP_COUNT  = 4'hB;
-  localparam logic [3:0] ADDR_STALL_CT  = 4'hC;
-  localparam logic [3:0] ADDR_DMA_CT    = 4'hD;
-  localparam logic [3:0] ADDR_DMA_LAST  = 4'hA;  // 0x28: latched DMA cycle count from last completed GEMM
-  localparam logic [3:0] ADDR_QUEUE_STAT = 4'hE;
-  localparam logic [3:0] ADDR_QUEUE_MAX  = 4'hF;
+  // Word indices into a 256-word window; the byte offset is four times these.
+  localparam logic [7:0] ADDR_CTRL      = 8'h00;
+  localparam logic [7:0] ADDR_STAT      = 8'h01;
+  localparam logic [7:0] ADDR_DIM_M     = 8'h02;
+  localparam logic [7:0] ADDR_DIM_N     = 8'h03;
+  localparam logic [7:0] ADDR_DIM_K     = 8'h04;
+  localparam logic [7:0] ADDR_A_BASE    = 8'h05;
+  localparam logic [7:0] ADDR_B_BASE    = 8'h06;
+  localparam logic [7:0] ADDR_C_BASE    = 8'h07;
+  localparam logic [7:0] ADDR_PREC      = 8'h08;
+  localparam logic [7:0] ADDR_CYCLE_LO  = 8'h09;
+  localparam logic [7:0] ADDR_OP_COUNT  = 8'h0B;
+  localparam logic [7:0] ADDR_STALL_CT  = 8'h0C;
+  localparam logic [7:0] ADDR_DMA_CT    = 8'h0D;
+  localparam logic [7:0] ADDR_DMA_LAST  = 8'h0A;  // 0x28: latched DMA cycle count from last completed GEMM
+  localparam logic [7:0] ADDR_QUEUE_STAT = 8'h0E;
+  localparam logic [7:0] ADDR_QUEUE_MAX  = 8'h0F;
+
+  // The PTA block: byte 0x100 plus the chiplet map's own offsets (see header).
+  localparam logic [7:0] A_PTA_CTRL   = 8'h50;   // 0x140
+  localparam logic [7:0] A_PTA_STATUS = 8'h51;
+  localparam logic [7:0] A_PTA_IMPAIR = 8'h52;
+  localparam logic [7:0] A_PTA_BITS   = 8'h53;
+  localparam logic [7:0] A_PTA_SEED   = 8'h54;
+  localparam logic [7:0] A_PTA_SIG_TH = 8'h55;
+  localparam logic [7:0] A_PTA_SIG_SH = 8'h56;
+  localparam logic [7:0] A_PTA_SIG_PR = 8'h57;
+  localparam logic [7:0] A_PTA_DRIFT  = 8'h58;
+  localparam logic [7:0] A_PTA_XTALK  = 8'h59;
+  localparam logic [7:0] A_PTA_TW     = 8'h5A;
+  localparam logic [7:0] A_PTA_TS     = 8'h5B;
+  localparam logic [7:0] A_PTA_CAL_PER = 8'h5C;
+  localparam logic [7:0] A_PTA_CAL_THR = 8'h5D;
+  localparam logic [7:0] A_PTA_CAL_CT  = 8'h5E;
+  localparam logic [7:0] A_PTA_CAL_CYC = 8'h5F;
+  localparam logic [7:0] A_PTA_SHOT_CT = 8'h60;
+  localparam logic [7:0] A_PTA_WLOAD_CT = 8'h61;
+  localparam logic [7:0] A_PTA_SAT_CT  = 8'h62;
+  localparam logic [7:0] A_PTA_ERR_MAX = 8'h63;
+  localparam logic [7:0] A_PTA_GAIN0   = 8'h64;   // 0x190, NUM_COLS words
+  localparam logic [7:0] A_PTA_OFFS0   = 8'h6C;   // 0x1B0, NUM_COLS words
+  localparam logic [7:0] A_PTA_DRIFT_MAX = 8'h74; // 0x1D0
+  localparam logic [7:0] A_PTA_CAL_CFG   = 8'h75;
+  localparam logic [7:0] A_PTA_TRIM      = 8'h76;
+  localparam logic [7:0] A_PTA_CAL_SEED  = 8'h77;
+  localparam logic [7:0] A_PTA_ERR_FOUND = 8'h7C; // 0x1F0
+
+  localparam int CW = $clog2(NUM_COLS);
 
   // ---------------------------------------------------------------------------
   // Live CSR registers
@@ -141,6 +262,77 @@ module c930_npu_csr
   logic [31:0] a_base, b_base, c_base;
   logic [2:0]  precision;
   logic        done_latch;
+
+  // ---- The PTA block's own registers (C4(a)) ----
+  logic        pta_en;
+  logic [1:0]  pta_sched;
+  logic [6:0]  pta_impair;
+  logic [3:0]  pta_abits, pta_wbits, pta_adcbits;
+  logic [5:0]  pta_shift;
+  logic [31:0] pta_seed;
+  logic [15:0] pta_sig_th, pta_sig_sh, pta_sig_pr;
+  logic [15:0] pta_dsig, pta_dmax;
+  logic [4:0]  pta_dlog2;
+  logic [7:0]  pta_xtalk;
+  logic [31:0] pta_tw, pta_ts;
+  logic [31:0] pta_cal_per;
+  logic [23:0] pta_cal_thr;
+  logic [3:0]  pta_cal_amp, pta_cal_reps;
+  logic [1:0]  pta_cal_passes;
+  logic        pta_cal_bank;
+  logic [3:0]  pta_trim_log2;
+  logic [15:0] pta_trim_max;
+  logic [31:0] pta_cal_seed;
+  logic signed [17:0] pta_gain [0:NUM_COLS-1];
+  logic signed [31:0] pta_offs [0:NUM_COLS-1];
+  // One-cycle strobes, and the affine write the tile takes as a pair.
+  logic        pta_now_q, pta_mrst_q, pta_aff_wen_q;
+  logic [CW-1:0]      pta_aff_col_q;
+  logic signed [17:0] pta_aff_gain_q;
+  logic signed [31:0] pta_aff_offs_q;
+
+  wire [7:0] wsel = s_axi_awaddr[9:2];
+  wire [7:0] rsel = s_axi_araddr[9:2];
+  wire       w_gain = (wsel >= A_PTA_GAIN0) && (wsel < A_PTA_GAIN0 + 8'(NUM_COLS));
+  wire       w_offs = (wsel >= A_PTA_OFFS0) && (wsel < A_PTA_OFFS0 + 8'(NUM_COLS));
+  wire [7:0] w_col  = w_gain ? (wsel - A_PTA_GAIN0) : (wsel - A_PTA_OFFS0);
+  wire       r_gain = (rsel >= A_PTA_GAIN0) && (rsel < A_PTA_GAIN0 + 8'(NUM_COLS));
+  wire       r_offs = (rsel >= A_PTA_OFFS0) && (rsel < A_PTA_OFFS0 + 8'(NUM_COLS));
+  wire [7:0] r_col  = r_gain ? (rsel - A_PTA_GAIN0) : (rsel - A_PTA_OFFS0);
+
+  assign o_pta_cal_en      = pta_en;
+  assign o_pta_cal_now     = pta_now_q;
+  assign o_pta_cal_sched   = pta_sched;
+  assign o_pta_model_rst   = pta_mrst_q;
+  assign o_pta_cal_rst     = pta_mrst_q;   // MODEL_RST clears the correction too
+  assign o_pta_impair      = pta_impair;
+  assign o_pta_act_bits    = pta_abits;
+  assign o_pta_w_bits      = pta_wbits;
+  assign o_pta_adc_bits    = pta_adcbits;
+  assign o_pta_adc_shift   = pta_shift;
+  assign o_pta_seed        = pta_seed;
+  assign o_pta_sigma_th    = pta_sig_th;
+  assign o_pta_k_shot      = pta_sig_sh;
+  assign o_pta_sigma_pr    = pta_sig_pr;
+  assign o_pta_drift_sigma = pta_dsig;
+  assign o_pta_drift_log2  = pta_dlog2;
+  assign o_pta_drift_max   = pta_dmax;
+  assign o_pta_xtalk       = pta_xtalk;
+  assign o_pta_tw          = pta_tw;
+  assign o_pta_ts          = pta_ts;
+  assign o_pta_cal_per     = pta_cal_per;
+  assign o_pta_cal_thr     = pta_cal_thr;
+  assign o_pta_cal_amp     = pta_cal_amp;
+  assign o_pta_cal_reps    = pta_cal_reps;
+  assign o_pta_cal_passes  = pta_cal_passes;
+  assign o_pta_cal_bank    = pta_cal_bank;
+  assign o_pta_trim_log2   = pta_trim_log2;
+  assign o_pta_trim_max    = pta_trim_max;
+  assign o_pta_cal_seed    = pta_cal_seed;
+  assign o_pta_aff_wen     = pta_aff_wen_q;
+  assign o_pta_aff_col     = pta_aff_col_q;
+  assign o_pta_aff_gain    = pta_aff_gain_q;
+  assign o_pta_aff_offs    = pta_aff_offs_q;
 
   // ---------------------------------------------------------------------------
   // Dispatch register — drives o_dim_m etc. to the DMA.
@@ -214,7 +406,7 @@ module c930_npu_csr
     if (!i_rst_n)
       start_written <= 1'b0;
     else if (s_axi_awvalid && s_axi_wvalid && !s_axi_bvalid &&
-             s_axi_awaddr[5:2] == ADDR_CTRL && s_axi_wstrb[0] && s_axi_wdata[0])
+             s_axi_awaddr[9:2] == ADDR_CTRL && s_axi_wstrb[0] && s_axi_wdata[0])
       start_written <= 1'b1;
     else
       start_written <= 1'b0;
@@ -444,9 +636,52 @@ module c930_npu_csr
       c_base        <= 32'd0;
       precision     <= 3'd0;
       done_latch    <= 1'b0;
+      pta_en        <= 1'b0;
+      pta_sched     <= 2'd0;
+      pta_impair    <= 7'd0;
+      pta_abits     <= 4'd0;
+      pta_wbits     <= 4'd0;
+      pta_adcbits   <= 4'd0;
+      pta_shift     <= 6'd0;
+      pta_seed      <= 32'd0;
+      pta_sig_th    <= 16'd0;
+      pta_sig_sh    <= 16'd0;
+      pta_sig_pr    <= 16'd0;
+      pta_dsig      <= 16'd0;
+      pta_dlog2     <= 5'd0;
+      pta_dmax      <= 16'd0;
+      pta_xtalk     <= 8'd0;
+      pta_tw        <= 32'd0;
+      pta_ts        <= 32'd0;
+      pta_cal_per   <= 32'd0;
+      pta_cal_thr   <= 24'd0;
+      pta_cal_amp   <= 4'd0;
+      pta_cal_reps  <= 4'd0;
+      // Three passes out of reset: C3(a) measured that a probe which does not
+      // take its own range recovers almost nothing, and three is what it took.
+      pta_cal_passes <= 2'd3;
+      pta_cal_bank  <= 1'b0;
+      pta_trim_log2 <= 4'd0;
+      pta_trim_max  <= 16'd0;
+      pta_cal_seed  <= 32'd0;
+      for (int j = 0; j < NUM_COLS; j++) begin
+        pta_gain[j] <= 18'sd256;          // unity
+        pta_offs[j] <= 32'sd0;
+      end
+      pta_now_q      <= 1'b0;
+      pta_mrst_q     <= 1'b0;
+      pta_aff_wen_q  <= 1'b0;
+      pta_aff_col_q  <= '0;
+      pta_aff_gain_q <= 18'sd256;
+      pta_aff_offs_q <= 32'sd0;
     end else begin
       if (i_done)
         done_latch <= 1'b1;
+
+      // The strobes are one cycle each.
+      pta_now_q     <= 1'b0;
+      pta_mrst_q    <= 1'b0;
+      pta_aff_wen_q <= 1'b0;
 
       if (s_axi_bvalid && s_axi_bready)
         s_axi_bvalid <= 1'b0;
@@ -458,7 +693,17 @@ module c930_npu_csr
         s_axi_awready <= 1'b1;
         s_axi_wready  <= 1'b1;
 
-        case (s_axi_awaddr[5:2])
+        // PTA_GAIN[j] and PTA_OFFS[j] are a range, and either write sends the
+        // pair to the tile, since the tile takes them together.
+        if (s_axi_wstrb[0] && (w_gain || w_offs)) begin
+          if (w_gain) pta_gain[w_col[CW-1:0]] <= s_axi_wdata[17:0];
+          else        pta_offs[w_col[CW-1:0]] <= s_axi_wdata;
+          pta_aff_wen_q  <= 1'b1;
+          pta_aff_col_q  <= w_col[CW-1:0];
+          pta_aff_gain_q <= w_gain ? s_axi_wdata[17:0] : pta_gain[w_col[CW-1:0]];
+          pta_aff_offs_q <= w_offs ? s_axi_wdata       : pta_offs[w_col[CW-1:0]];
+        end else
+        case (wsel)
           ADDR_CTRL: begin
             if (s_axi_wstrb[0] && s_axi_wdata[0])
               done_latch <= 1'b0;
@@ -470,6 +715,51 @@ module c930_npu_csr
           ADDR_B_BASE: if (s_axi_wstrb[0]) b_base <= s_axi_wdata;
           ADDR_C_BASE: if (s_axi_wstrb[0]) c_base <= s_axi_wdata;
           ADDR_PREC:   if (s_axi_wstrb[0]) precision <= s_axi_wdata[2:0];
+          A_PTA_CTRL: if (s_axi_wstrb[0]) begin
+            pta_en    <= s_axi_wdata[0];
+            pta_sched <= s_axi_wdata[5:4];      // bit 6 of CAL_SCHED is reserved
+            if (s_axi_wdata[1]) pta_now_q  <= 1'b1;
+            if (s_axi_wdata[3]) pta_mrst_q <= 1'b1;
+            // MODEL_RST clears the correction in the tile, so this file's copy
+            // of it goes back to unity and zero with it.
+            if (s_axi_wdata[3])
+              for (int j = 0; j < NUM_COLS; j++) begin
+                pta_gain[j] <= 18'sd256;
+                pta_offs[j] <= 32'sd0;
+              end
+          end
+          A_PTA_IMPAIR: if (s_axi_wstrb[0]) pta_impair <= s_axi_wdata[6:0];
+          A_PTA_BITS:   if (s_axi_wstrb[0]) begin
+            pta_abits   <= s_axi_wdata[3:0];
+            pta_wbits   <= s_axi_wdata[7:4];
+            pta_adcbits <= s_axi_wdata[11:8];
+            pta_shift   <= s_axi_wdata[17:12];
+          end
+          A_PTA_SEED:   if (s_axi_wstrb[0]) pta_seed   <= s_axi_wdata;
+          A_PTA_SIG_TH: if (s_axi_wstrb[0]) pta_sig_th <= s_axi_wdata[15:0];
+          A_PTA_SIG_SH: if (s_axi_wstrb[0]) pta_sig_sh <= s_axi_wdata[15:0];
+          A_PTA_SIG_PR: if (s_axi_wstrb[0]) pta_sig_pr <= s_axi_wdata[15:0];
+          A_PTA_DRIFT:  if (s_axi_wstrb[0]) begin
+            pta_dsig  <= s_axi_wdata[15:0];
+            pta_dlog2 <= s_axi_wdata[20:16];
+          end
+          A_PTA_XTALK:  if (s_axi_wstrb[0]) pta_xtalk <= s_axi_wdata[7:0];
+          A_PTA_TW:     if (s_axi_wstrb[0]) pta_tw <= s_axi_wdata;
+          A_PTA_TS:     if (s_axi_wstrb[0]) pta_ts <= s_axi_wdata;
+          A_PTA_CAL_PER: if (s_axi_wstrb[0]) pta_cal_per <= s_axi_wdata;
+          A_PTA_CAL_THR: if (s_axi_wstrb[0]) pta_cal_thr <= s_axi_wdata[23:0];
+          A_PTA_DRIFT_MAX: if (s_axi_wstrb[0]) pta_dmax <= s_axi_wdata[15:0];
+          A_PTA_CAL_CFG: if (s_axi_wstrb[0]) begin
+            pta_cal_amp    <= s_axi_wdata[3:0];
+            pta_cal_reps   <= s_axi_wdata[7:4];
+            pta_cal_passes <= s_axi_wdata[9:8];
+            pta_cal_bank   <= s_axi_wdata[10];
+          end
+          A_PTA_TRIM: if (s_axi_wstrb[0]) begin
+            pta_trim_log2 <= s_axi_wdata[3:0];
+            pta_trim_max  <= s_axi_wdata[31:16];
+          end
+          A_PTA_CAL_SEED: if (s_axi_wstrb[0]) pta_cal_seed <= s_axi_wdata;
           default: ;
         endcase
 
@@ -497,7 +787,12 @@ module c930_npu_csr
       if (s_axi_arvalid && !s_axi_rvalid) begin
         s_axi_arready <= 1'b1;
 
-        case (s_axi_araddr[5:2])
+        if (r_gain)
+          s_axi_rdata <= {14'd0, pta_gain[r_col[CW-1:0]]};
+        else if (r_offs)
+          s_axi_rdata <= pta_offs[r_col[CW-1:0]];
+        else
+        case (rsel)
           ADDR_STAT:       s_axi_rdata <= {29'd0, i_error, done_latch, i_busy};
           ADDR_DIM_M:      s_axi_rdata <= {16'd0, dim_m};
           ADDR_DIM_N:      s_axi_rdata <= {16'd0, dim_n};
@@ -513,6 +808,39 @@ module c930_npu_csr
           ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
           ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
           ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
+          A_PTA_CTRL:      s_axi_rdata <= {25'd0, pta_sched, 3'd0, pta_en};
+          // One read is the whole snapshot: bit4 BUSY as the chiplet's map has
+          // it, bit5 CAL_ERR because this SoC has no interrupt block, and the
+          // residual in [23:8] as the CPU document's 3.1 asks.
+          A_PTA_STATUS:    s_axi_rdata <= {8'd0, i_pta_err_max[15:0], 2'd0,
+                                           i_pta_cal_err, i_busy, i_pta_drift_alarm,
+                                           (i_pta_sat_count != 32'd0), i_pta_cal_valid,
+                                           i_cal_busy};
+          A_PTA_IMPAIR:    s_axi_rdata <= {25'd0, pta_impair};
+          A_PTA_BITS:      s_axi_rdata <= {14'd0, pta_shift, pta_adcbits, pta_wbits,
+                                           pta_abits};
+          A_PTA_SEED:      s_axi_rdata <= pta_seed;
+          A_PTA_SIG_TH:    s_axi_rdata <= {16'd0, pta_sig_th};
+          A_PTA_SIG_SH:    s_axi_rdata <= {16'd0, pta_sig_sh};
+          A_PTA_SIG_PR:    s_axi_rdata <= {16'd0, pta_sig_pr};
+          A_PTA_DRIFT:     s_axi_rdata <= {11'd0, pta_dlog2, pta_dsig};
+          A_PTA_XTALK:     s_axi_rdata <= {24'd0, pta_xtalk};
+          A_PTA_TW:        s_axi_rdata <= pta_tw;
+          A_PTA_TS:        s_axi_rdata <= pta_ts;
+          A_PTA_CAL_PER:   s_axi_rdata <= pta_cal_per;
+          A_PTA_CAL_THR:   s_axi_rdata <= {8'd0, pta_cal_thr};
+          A_PTA_CAL_CT:    s_axi_rdata <= i_pta_cal_ct;
+          A_PTA_CAL_CYC:   s_axi_rdata <= i_pta_cal_cyc;
+          A_PTA_SHOT_CT:   s_axi_rdata <= i_pta_shot_ct;
+          A_PTA_WLOAD_CT:  s_axi_rdata <= i_pta_wload_ct;
+          A_PTA_SAT_CT:    s_axi_rdata <= i_pta_sat_count;
+          A_PTA_ERR_MAX:   s_axi_rdata <= {8'd0, i_pta_err_max};
+          A_PTA_DRIFT_MAX: s_axi_rdata <= {16'd0, pta_dmax};
+          A_PTA_CAL_CFG:   s_axi_rdata <= {21'd0, pta_cal_bank, pta_cal_passes,
+                                           pta_cal_reps, pta_cal_amp};
+          A_PTA_TRIM:      s_axi_rdata <= {pta_trim_max, 12'd0, pta_trim_log2};
+          A_PTA_CAL_SEED:  s_axi_rdata <= pta_cal_seed;
+          A_PTA_ERR_FOUND: s_axi_rdata <= {8'd0, i_pta_err_found};
           default:         s_axi_rdata <= 32'd0;
         endcase
 

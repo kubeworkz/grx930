@@ -10,6 +10,9 @@ module riscv_core_mul_div
   input   logic            i_mul_div_isword,
   input   logic            i_mul_div_clk,
   input   logic            i_mul_div_rstn,
+  // High while the EX stage is held, so the unit can tell a stall from the
+  // instruction leaving: see the result hold below.
+  input   logic            i_mul_div_stall_ex,
   output  logic            o_mul_div_busy,   
   output  logic            o_mul_div_done,
   output  logic            o_mul_div_overflow,
@@ -30,6 +33,14 @@ logic            div_start;
 
 logic mul_div_sel;
 logic out_sel;
+
+// The control FSM's own outputs, before the result hold at the end of the file.
+logic            ctrl_busy;
+logic            ctrl_done;
+logic            ctrl_overflow;
+logic            ctrl_div_by_zero;
+logic [XLEN-1:0] ctrl_result;
+logic            res_held;
 
 logic [XLEN-1:0]   multiplicand;
 logic [XLEN-1:0]   multiplier;
@@ -77,7 +88,8 @@ u_riscv_core_mul_div_ctrl
   .i_mul_div_ctrl_srcA(i_mul_div_srcA),
   .i_mul_div_ctrl_srcB(i_mul_div_srcB),
   .i_mul_div_ctrl_control(i_mul_div_control[2:0]),
-  .i_mul_div_ctrl_en(i_mul_div_en),
+  // Gated so a held result cannot start the operation over.
+  .i_mul_div_ctrl_en(i_mul_div_en && !res_held),
   .i_mul_div_ctrl_isword(i_mul_div_isword),
   .i_mul_div_ctrl_clk(i_mul_div_clk),
   .i_mul_div_ctrl_rstn(i_mul_div_rstn),
@@ -86,10 +98,10 @@ u_riscv_core_mul_div_ctrl
   .o_mul_div_ctrl_out_fast(fast_result),
   .o_mul_div_ctrl_mul_start(mul_start),
   .o_mul_div_ctrl_div_start(div_start),
-  .o_mul_div_ctrl_busy(o_mul_div_busy),
-  .o_mul_div_ctrl_done(o_mul_div_done),
-  .o_mul_div_ctrl_div_by_zero(o_mul_div_div_by_zero),
-  .o_mul_div_ctrl_overflow(o_mul_div_overflow),
+  .o_mul_div_ctrl_busy(ctrl_busy),
+  .o_mul_div_ctrl_done(ctrl_done),
+  .o_mul_div_ctrl_div_by_zero(ctrl_div_by_zero),
+  .o_mul_div_ctrl_overflow(ctrl_overflow),
   .o_mul_div_ctrl_mul_div_sel(mul_div_sel),
   .o_mul_div_ctrl_out_sel(out_sel)
 );
@@ -212,7 +224,62 @@ u_riscv_core_mux2x1_out_sel
   .i_mux2x1_in0 (mul_div_result)
   ,.i_mux2x1_in1(fast_result)
   ,.i_mux2x1_sel(out_sel)
-  ,.o_mux2x1_out(o_mul_div_result)
+  ,.o_mux2x1_out(ctrl_result)
 );
+
+// ---------------------------------------------------------------------------
+// Result hold
+//
+// booth and non_restoring present their result for exactly ONE cycle -- the
+// cycle their done pulses -- and drive zero otherwise, and the control FSM
+// returns to IDLE on that pulse with i_mul_div_en still asserted, so it starts
+// the operation again.  A stall in that one cycle therefore loses the result
+// silently and recomputes it, which is slow but survivable on its own.  With a
+// store in MEM it is a deadlock: stall_mem holds the store while this unit is
+// busy, the held store re-requests the D-cache every time it completes, and the
+// D-cache's stall freezes EX -- so the one-cycle window lands on a stalled
+// cycle for ever.  A `mulw` two instructions ahead of a `sw` hangs the machine;
+// c930/sw/mul_store_test.S is nine instructions that did.
+//
+// So latch the result when it arrives into a stalled pipeline, report done and
+// drop busy while it is latched, and gate the FSM's enable so it cannot
+// restart.  The latch clears when EX advances, which is the cycle the
+// instruction leaves -- not when i_mul_div_en falls, because back-to-back M
+// instructions hold that asserted and the second would be handed the first
+// one's result.
+// ---------------------------------------------------------------------------
+logic [XLEN-1:0] res_reg;
+logic            of_reg;
+logic            dbz_reg;
+
+always_ff @(posedge i_mul_div_clk, negedge i_mul_div_rstn)
+  if (!i_mul_div_rstn)
+    begin
+      res_held <= 1'b0;
+      res_reg  <= '0;
+      of_reg   <= 1'b0;
+      dbz_reg  <= 1'b0;
+    end
+  else if (res_held)
+    begin
+      // Held until the pipeline takes it.
+      if (!i_mul_div_stall_ex)
+        res_held <= 1'b0;
+    end
+  else if (ctrl_done && i_mul_div_stall_ex)
+    begin
+      // Finished into a stalled pipeline, so keep it.  With EX not stalled the
+      // result is latched into EX/MEM this cycle and there is nothing to hold.
+      res_held <= 1'b1;
+      res_reg  <= ctrl_result;
+      of_reg   <= ctrl_overflow;
+      dbz_reg  <= ctrl_div_by_zero;
+    end
+
+assign o_mul_div_busy        = ctrl_busy && !res_held;
+assign o_mul_div_done        = ctrl_done || res_held;
+assign o_mul_div_result      = res_held ? res_reg : ctrl_result;
+assign o_mul_div_overflow    = res_held ? of_reg  : ctrl_overflow;
+assign o_mul_div_div_by_zero = res_held ? dbz_reg : ctrl_div_by_zero;
 
 endmodule

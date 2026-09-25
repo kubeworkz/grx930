@@ -183,7 +183,7 @@ module c930_soc4_verilator (
   assign o_arb_s_arready      = u_soc.u_dma_arb.s_arready;
   assign o_npu0_arvalid       = u_soc.npu_arvalid;
   assign o_npu1_arvalid       = u_soc.npu1_arvalid;
-  assign o_dma1_phase         = u_soc.u_npu1.u_dma.phase;
+  assign o_dma1_phase         = u_soc.g_npu1.u_npu1.u_dma.phase;
   assign o_dma0_pf            = u_soc.u_npu.u_dma.pf_state;
   assign o_dma0_pf2           = u_soc.u_npu.u_dma.pf2_state;
   assign o_dma0_wr_sub        = u_soc.u_npu.u_dma.wr_sub;

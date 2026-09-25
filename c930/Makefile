@@ -342,7 +342,10 @@ verilate-run: verilate
 VERIL4_TOP   := sim/c930_soc4_verilator.sv
 VERIL4_TB    := sim/tb_soc4.cc
 VERIL4_OUT   := $(BUILD_DIR)/verilator4
-VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal \
+# -DPTM_C is in GFLAGS for iverilog; Verilator takes its own flags, and without
+# this the core compiles its digital-array branch against a file list that has
+# the array filtered out.
+VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal   $(if $(filter 1,$(PTM_C)),-DPTM_C) \
   -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL \
   --top-module c930_soc4_verilator
@@ -358,7 +361,7 @@ verilate-soc4: $(SW_HEX)
 # oss-cad-suite verilator_bin.exe only generates C++; firmware paths are
 # relative, so run from the c930 dir).
 verilate-soc4-run: verilate-soc4
-	@bash synth_xilinx/build_soc4_verilator_wsl.sh run quad
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run quad $(VERIL4_OUT)
 
 # Test-4 firmware images for the suite harness (extracted from the SV TB so
 # the Verilator suite mode and the iverilog full-SoC suite stay in lockstep).
@@ -471,6 +474,93 @@ driver_test: $(OUT_DRV)
 	$(VVP) $(OUT_DRV)
 
 # ---------------------------------------------------------------------------
+# The M unit's result hold (a CPU fix, found by C4(a)'s firmware)
+#
+# sw/mul_store_test.S is nine instructions that deadlocked the CPU: the booth
+# and non-restoring datapaths present their result for one cycle and their FSM
+# restarts the operation if the pipeline was stalled in it, and a store in MEM
+# stalls it for ever -- stall_mem holds the store while the M unit is busy, and
+# the held store re-requests the D-cache every time it completes.  A `mulw` two
+# instructions ahead of a `sw` spun at a constant PC for 8 million cycles.
+#
+#   make mul_store              the reproducer: must finish, five values right
+#   make mul_store NO_MUL=1     the control, with addw, which always passed
+#
+# Both run on the Verilator four-core SoC, which is the only full-SoC harness
+# that finishes at a usable speed.
+# ---------------------------------------------------------------------------
+# The two variants are different images, so they are different files: one name
+# would be cached across a change of NO_MUL and the control would run the
+# multiply image against the control's numbers.
+MS_VAR    := $(if $(filter 1,$(NO_MUL)),_nomul,)
+MS_SW_ELF := sw/mul_store_test$(MS_VAR).elf
+MS_SW_BIN := sw/mul_store_test$(MS_VAR).bin
+MS_SW_HEX := sw/mul_store_prog$(MS_VAR).hex
+MS_FLAGS  := $(if $(filter 1,$(NO_MUL)),-DNO_MUL,)
+MS_ENV    := MULSTORE_FW=$(MS_SW_HEX)$(if $(filter 1,$(NO_MUL)), MULSTORE_NOMUL=1,)
+
+$(MS_SW_HEX): sw/mul_store_test.S sw/bin2hex.py
+	$(GCC) -march=rv64ima -mabi=lp64 -nostdlib -ffreestanding $(MS_FLAGS) \
+	  -Wl,--build-id=none -Ttext=0 -o $(MS_SW_ELF) -x assembler-with-cpp $<
+	$(OBJCOPY) -O binary $(MS_SW_ELF) $(MS_SW_BIN)
+	$(PYTHON) sw/bin2hex.py $(MS_SW_BIN) $@
+
+.PHONY: mul_store
+mul_store: $(MS_SW_HEX) verilate-soc4
+	bash synth_xilinx/build_soc4_verilator_wsl.sh run mulstore \
+	  $(VERIL4_OUT) "$(MS_ENV)"
+
+# ---------------------------------------------------------------------------
+# The PTA register block, driven by firmware (phase C4(a))
+#
+# sw/pta_test.c configures the tile through the block at 0x4000_0100 and checks
+# seven things: the decode, the two counters against a GEMM's shape, the tile
+# answering an impairment, a calibration, a START during one, MODEL_RST, and the
+# MZM_NL refusal.  It runs on the Verilator four-core SoC, because that is the
+# only full-SoC harness that finishes at a usable speed -- iverilog manages tens
+# of cycles a second on the L2 + 4 cores, which is what verilate-soc4 exists for.
+#
+#   make pta_fw PTM_C=1     the modelled tile: all seven checks
+#   make pta_fw             the digital array, which refuses every impairment
+#
+# Three things had to be fixed before this could pass, and none of them was the
+# register block:
+#
+#   * the CPU deadlocked.  A multiply finishing into a stalled pipeline loses
+#     its result and restarts, and a store in MEM stalls it for ever -- see
+#     doc/m_extension_result_hold.md and `make mul_store`.
+#   * C cannot be cleared from the CPU.  c930_l2.sv records a sharer on a read
+#     fill and drops the line on a write, so a line the CPU has written is one
+#     the L2 no longer tracks: the NPU DMA's write to it invalidates nobody and
+#     the CPU reads its own stale value.  This test only ever reads C.
+#   * PTA_CAL_CFG.amp is an absolute bit position, valid only in
+#     [DIN_W - B_a, DIN_W - 2], and no register reports DIN_W.  The bench's 6 is
+#     right for its 8-bit tile and refused by this SoC's 16-bit one, so the
+#     firmware finds one the tile accepts the way a driver would have to.
+#
+# `make npu` checks the same seven things over AXI-Lite (tb_c930_npu.sv's
+# test_pta_regs); this is the same seven driven by a RISC-V program through the
+# crossbar, the D-cache and the DMA, which is what a driver does.
+# ---------------------------------------------------------------------------
+PTA_SW_ELF := sw/pta_test.elf
+PTA_SW_BIN := sw/pta_test.bin
+PTA_SW_HEX := sw/pta_prog.hex
+
+$(PTA_SW_ELF): sw/start.S sw/pta_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/pta_test.c sw/c930_npu_driver.c
+
+$(PTA_SW_BIN): $(PTA_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(PTA_SW_HEX): $(PTA_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(PTA_SW_BIN) $(PTA_SW_HEX)
+
+pta_fw: $(PTA_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT)
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
 HOST_CC     ?= gcc
@@ -494,3 +584,4 @@ clean:
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
 	rm -f $(TILE_SW_ELF) $(TILE_SW_BIN) $(TILE_SW_HEX)
 	rm -f $(DRV_SW_ELF) $(DRV_SW_BIN) $(DRV_SW_HEX)
+	rm -f sw/mul_store_test*.elf sw/mul_store_test*.bin sw/mul_store_prog*.hex

@@ -29,6 +29,12 @@
 //                  S = 24 - B, clamp to [-2^(B-1), 2^(B-1)-1], B in 1..15
 //            C   <- sat32(c <<< min(YSHIFT, 32)), sign-extended to ACC_W
 //
+// Stage 6 is written as an AND and a clamp against pre-shifted bounds rather
+// than as the two shifts above, because S and the bounds come from the
+// configuration and `(x >>> S) << S` only clears x's low S bits.  Same values --
+// sim/act_stage6_equiv.py -- and one variable shift instead of three:
+// A-synth had this cone at 24.2 ns over 37 levels before.
+//
 // isqrt4(a), for a in [0, 2^23]: 0 when a = 0; otherwise with p the index of
 // a's top set bit and e = p >> 1, t = a << (22 - 2e) lies in [2^22, 2^24),
 // i = t[23:22] - 1 picks a segment of {2048, 2896, 3547, 4096} (round of
@@ -107,6 +113,12 @@ module c930_npu_act
       xshift_r      <= 6'd0;
       yshift_r      <= 6'd0;
       k_shot_r      <= 16'd0;
+      sh_r          <= 5'd0;
+      round_r       <= 29'sd0;
+      mask_r        <= 29'sd0;
+      hi_s_r        <= 29'sd0;
+      lo_s_r        <= 29'sd0;
+      ys_r          <= 6'd0;
       for (int j = 0; j < NUM_COLS; j++) begin
         xs_r[j] <= 32'd0;
         r_r[j]  <= 16'd0;
@@ -118,12 +130,36 @@ module c930_npu_act
       xshift_r      <= i_xshift;
       yshift_r      <= i_yshift;
       k_shot_r      <= i_k_shot;
+      // Stage 6's shift distances and clamp bounds: see the declarations.
+      sh_r    <= 5'(5'd24 - {1'b0, i_adc_bits});
+      round_r <= 29'sd1 <<< (5'(5'd24 - {1'b0, i_adc_bits}) - 5'd1);
+      mask_r  <= ~((29'sd1 <<< 5'(5'd24 - {1'b0, i_adc_bits})) - 29'sd1);
+      hi_s_r  <= ((29'sd1 <<< (i_adc_bits - 4'd1)) - 29'sd1)
+                   <<< 5'(5'd24 - {1'b0, i_adc_bits});
+      lo_s_r  <= (-(29'sd1 <<< (i_adc_bits - 4'd1)))
+                   <<< 5'(5'd24 - {1'b0, i_adc_bits});
+      ys_r    <= (i_yshift > 6'd32) ? 6'd32 : i_yshift;
       for (int j = 0; j < NUM_COLS; j++) begin
         xs_r[j] <= i_xs[32*j +: 32];
         r_r[j]  <= i_r[16*j +: 16];
       end
     end
   end
+
+  // Stage 6's constants, computed once per GEMM instead of in every element's
+  // path.  A-synth (doc/npu_act_stage_design_note.md §5) measured the cone that
+  // computed them per element at 24.2 ns over 37 logic levels on the 200T, which
+  // is 41 MHz: the shift distances and clamp bounds come from the configuration,
+  // so they do not belong there.  Two of the three shifts also cancel --
+  // `(x >>> sh) <<< sh` clears x's low sh bits, so it is an AND with `mask_r`,
+  // and the clamp commutes with the left shift, so its bounds are held already
+  // shifted.  sim/act_stage6_equiv.py is the equivalence argument.
+  logic [4:0]          sh_r;      // 24 - B_adc, kept for the requant path
+  logic signed [28:0]  round_r;   // 1 <<< (sh - 1), the round-half-up addend
+  logic signed [28:0]  mask_r;    // ~((1 <<< sh) - 1), the quantiser's mask
+  logic signed [28:0]  hi_s_r;    // ((1 <<< (B-1)) - 1) <<< sh
+  logic signed [28:0]  lo_s_r;    // -(1 <<< (B-1)) <<< sh
+  logic [5:0]          ys_r;      // min(YSHIFT, 32)
 
   // ---- breakpoint table -----------------------------------------------------
   // Two synchronous reads, i and i+1, and a write port used only while idle:
@@ -324,28 +360,27 @@ module c930_npu_act
   logic [C_AW-1:0]     idx5;
 
   // ---- stage 6: detune, requantise, scale ---------------------------------------
+  // The arithmetic of the header's stage 6, with everything the configuration
+  // fixes lifted out of it: t6 is `(yr + round) >>> sh <<< sh` as a mask, the
+  // clamp is against bounds already shifted, and one variable shift is left.
   logic signed [40:0]  prod6;
   logic signed [28:0]  yr6;
-  logic [4:0]          sh6;
-  logic signed [28:0]  q6, qc6, c6;
+  logic signed [28:0]  t6, tc6, c6;
   logic signed [63:0]  wide6;
-  logic [5:0]          ys6;
   logic signed [31:0]  out6;
   logic                sat6;
   always_comb begin
     prod6 = y5 * $signed({1'b0, r_r[col5]});
     yr6   = 29'(prod6 >>> 12);
-    sh6   = 5'(5'd24 - {1'b0, adc_bits_r});
-    q6    = (yr6 + (29'sd1 <<< (sh6 - 5'd1))) >>> sh6;
-    if (q6 > ((29'sd1 <<< (adc_bits_r - 4'd1)) - 29'sd1))
-      qc6 = (29'sd1 <<< (adc_bits_r - 4'd1)) - 29'sd1;
-    else if (q6 < -(29'sd1 <<< (adc_bits_r - 4'd1)))
-      qc6 = -(29'sd1 <<< (adc_bits_r - 4'd1));
+    t6    = (yr6 + round_r) & mask_r;
+    if (t6 > hi_s_r)
+      tc6 = hi_s_r;
+    else if (t6 < lo_s_r)
+      tc6 = lo_s_r;
     else
-      qc6 = q6;
-    c6    = requant_r ? (qc6 <<< sh6) : yr6;
-    ys6   = (yshift_r > 6'd32) ? 6'd32 : yshift_r;
-    wide6 = 64'($signed(c6)) <<< ys6;
+      tc6 = t6;
+    c6    = requant_r ? tc6 : yr6;
+    wide6 = 64'($signed(c6)) <<< ys_r;
     sat6  = 1'b0;
     if (wide6 > 64'sh7fffffff) begin
       out6 = 32'sh7fffffff; sat6 = 1'b1;
