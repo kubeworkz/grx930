@@ -15,14 +15,23 @@
 set -e
 
 PTM_C=0
+PTM_B=0
 if [ "${1:-}" = "PTM_C=1" ]; then PTM_C=1; shift; fi
+# PTM_B implies PTM_C, as the Makefile has it: the broadside tile is the same
+# arithmetic with BROADSIDE = 1 and a shot-and-wait schedule around it.
+if [ "${1:-}" = "PTM_B=1" ]; then PTM_B=1; PTM_C=1; shift; fi
 DO_RUN="${1:-}"
 [ "$DO_RUN" = "run" ] && shift || true
 
 C930="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$C930"
 
-if [ "$PTM_C" = 1 ]; then
+if [ "$PTM_B" = 1 ]; then
+  OUT=build/ptm_b/verilator_core
+  ARRAY="rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_ptm_b.sv rtl/pta/c930_pta_cal.sv"
+  DEFS="+define+PTM_C +define+PTM_B"
+  CDEFS="-DPTM_C -DPTM_B"
+elif [ "$PTM_C" = 1 ]; then
   OUT=build/ptm_c/verilator_core
   ARRAY="rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_pta_cal.sv"
   DEFS="+define+PTM_C"
@@ -52,18 +61,13 @@ toolchain/oss-cad-suite/bin/verilator_bin.exe \
 C930_WSL="$(cygpath -w "$(pwd)" 2>/dev/null | sed 's|^\([A-Za-z]\):|/mnt/\L\1|' | tr '\\' '/')"
 [ -z "$C930_WSL" ] && C930_WSL="$(pwd)"
 
-wsl.exe -e bash -c "
-set -e
-cd '$C930_WSL/$OUT'
-VERI_INC='$C930_WSL/toolchain/oss-cad-suite/share/verilator/include'
-g++ -std=c++17 -O2 -pthread $CDEFS -I\"\$VERI_INC\" -I. -I'$C930_WSL/sim' \
-  -c '$C930_WSL/sim/tb_core_verilator.cc' -o tb_core_verilator.o
-gcc -O2 $CDEFS -I'$C930_WSL/sim' -c '$C930_WSL/sim/pta_tile_model.c' -o pta_tile_model.o
-g++ -std=c++17 -O2 -pthread -I\"\$VERI_INC\" -I. \
-  -o tb_core_verilator *.cpp tb_core_verilator.o pta_tile_model.o \
-  \"\$VERI_INC\"/verilated.cpp \"\$VERI_INC\"/verilated_threads.cpp
-echo '[verilator_core] build OK'
-"
+# The compile lives in its own script (sim/build_core_objs.sh) rather than a
+# double-quoted here-string: it compiles Verilator's ~68 generated files four at a
+# time and skips the ones that have not changed, which is not worth writing
+# through two layers of shell escaping.
+wsl.exe -e bash -c "bash '$C930_WSL/sim/build_core_objs.sh' \
+  '$C930_WSL/$OUT' '$C930_WSL/sim' \
+  '$C930_WSL/toolchain/oss-cad-suite/share/verilator/include' $CDEFS"
 
 if [ "$DO_RUN" = "run" ] || [ -n "${1:-}" ]; then
   wsl.exe -e bash -c "cd '$C930_WSL' && ./$OUT/tb_core_verilator $*"

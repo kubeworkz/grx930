@@ -171,6 +171,10 @@ module c930_npu_core
   // on top of the scan itself, so Tw = NUM_ROWS * NUM_COLS + i_pta_tw and a
   // GEMM's total is affine in it (pta_cpu_integration.md 6.2).  Zero is free.
   input  logic [31:0]                 i_pta_tw,
+  // The emulation's shot latency, spent by the broadside tile (PTM_B).  The
+  // floor is a hop, not a cycle: the tile captures on hop edges and this core
+  // runs a half-rate hop, so section 6.2's Ts = 1 points are Ts = 2 here.
+  input  logic [31:0]                 i_pta_ts,
   input  logic                        i_pta_cal_bank,     // the bank to calibrate
   input  logic [3:0]                  i_pta_trim_log2,    // the weight DAC's step, Q.8
   input  logic [15:0]                 i_pta_trim_max,     // ... and its clamp
@@ -624,9 +628,22 @@ module c930_npu_core
       hop_phase <= ~hop_phase;
   end
 
+`ifdef PTM_B
+  // The broadside shot is asked for once, on the cycle S_RUN is entered.
+  logic [2:0] state_q;
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) state_q <= S_IDLE;
+    else          state_q <= state;
+  end
+  wire bs_shot_req = (state == S_RUN) && (state_q != S_RUN);
+  logic bs_valid;                       // the tile's o_valid
+`endif
+
   always_comb begin
     act_comb   = '0;
     ps_in_comb = '0;
+    a_act_flat = 0;      // a scratch index, not state: give it a default so it
+                         // does not lint as an inferred latch
 
     if (cal_busy) begin
       // The probe's stimulus goes through the same hop-gated registers the
@@ -634,6 +651,20 @@ module c930_npu_core
       // seeds are zero: a probe accumulates nothing.
       act_comb = cal_act;
     end else if (state == S_RUN) begin
+`ifdef PTM_B
+      // Broadside: the whole K-tile vector and every column's seed, held for the
+      // shot.  There is no skew to emulate, which is the tile's point.
+      for (int r = 0; r < NUM_ROWS; r++) begin
+        if (r < kr_reg) begin
+          a_act_flat = m_base + k_base_reg + r;
+          act_comb[r*DIN_W +: DIN_W] = i_bank_sel
+            ? a_bank1[a_act_flat % A_SUBS][a_act_flat / A_SUBS]
+            : a_bank0[a_act_flat % A_SUBS][a_act_flat / A_SUBS];
+        end
+      end
+      for (int n = 0; n < NUM_COLS; n++)
+        ps_in_comb[n*ACC_W +: ACC_W] = acc[n];
+`else
       // Row r's activation A[m][k_base_reg + r] pulses at cycle r (skew by r).
       for (int r = 0; r < NUM_ROWS; r++) begin
         if ((t == 2*r) && (r < kr_reg)) begin
@@ -656,6 +687,7 @@ module c930_npu_core
         if (t == 2*n)
           ps_in_comb[n*ACC_W +: ACC_W] = acc[n];
       end
+`endif
     end
   end
 
@@ -767,6 +799,74 @@ module c930_npu_core
   wire              pta_shot_start = (state == S_RUN) && (t == 0);
   assign tile_shot_start = cal_busy ? cal_shot_start : pta_shot_start;
 
+`ifdef PTM_B
+  // PTM-B (pta_cpu_integration.md 4.2): the same arithmetic with BROADSIDE = 1
+  // inside it, and a shot-and-wait schedule around it.  The whole K-tile vector
+  // goes in at once and every column comes back together, so the core's run is
+  // a shot and a wait instead of a skewed drain.
+  c930_ptm_b #(
+    .NUM_ROWS (NUM_ROWS),
+    .NUM_COLS (NUM_COLS),
+    .DIN_W    (DIN_W),
+    .ACC_W    (ACC_W),
+    .TRIM_W   (24)
+  ) u_tile_b (
+    .i_clk           (i_clk),
+    .i_rst_n         (i_rst_n),
+    .i_wen           (w_load_active),
+    .i_wbank         (w_load_bank),
+    .i_wrow          (w_load_row),
+    .i_wcol          (w_load_col),
+    .i_wdata         (w_load_data),
+    .i_bank_sel      (cal_busy ? cal_bank : bank_sel),
+    .i_act           (act),
+    .i_ps_in         (ps_in),
+    .i_row_en        (row_en),
+    .i_precision     (i_precision),
+    .i_shot_start    (bs_shot_req),
+    .i_ts            (i_pta_ts),
+    .i_cal_busy      (cal_busy),
+    .i_cal_shot_start (cal_shot_start),
+    .i_cal_shot      (cal_shot),
+    .i_cal_shot_col  (cal_shot_col),
+    .o_valid         (bs_valid),
+    .o_ps_out        (ps_out),
+    .i_pta_cfg_load  (start_ok),
+    .i_pta_impair    (i_pta_impair),
+    .i_pta_act_bits  (i_pta_act_bits),
+    .i_pta_w_bits    (i_pta_w_bits),
+    .i_pta_adc_bits  (i_pta_adc_bits),
+    .i_pta_adc_shift (i_pta_adc_shift),
+    .i_pta_seed      (i_pta_seed),
+    .i_pta_sigma_th  (i_pta_sigma_th),
+    .i_pta_k_shot    (i_pta_k_shot),
+    .i_pta_sigma_pr  (i_pta_sigma_pr),
+    .i_pta_drift_sigma (i_pta_drift_sigma),
+    .i_pta_drift_log2  (i_pta_drift_log2),
+    .i_pta_drift_max   (i_pta_drift_max),
+    .i_pta_xtalk       (i_pta_xtalk),
+    .i_pta_model_rst   (i_pta_model_rst && (state == S_IDLE)),
+    .o_pta_sat_count (o_pta_sat_count),
+    .i_pta_trim_wen     (cal_trim_wen || i_pta_trim_wen),
+    .i_pta_trim_bank    (cal_trim_wen ? cal_trim_bank : i_pta_trim_bank),
+    .i_pta_trim_row     (cal_trim_wen ? cal_trim_row  : i_pta_trim_row),
+    .i_pta_trim_col     (cal_trim_wen ? cal_trim_col  : i_pta_trim_col),
+    .i_pta_trim_data    (cal_trim_wen ? cal_trim_data : i_pta_trim_data),
+    .i_pta_trim_log2    (i_pta_trim_log2),
+    .i_pta_trim_max     (i_pta_trim_max),
+    .o_pta_trim_rdata   (cal_trim_rdata),
+    .o_pta_trim_clamped (cal_trim_clamped),
+    .i_pta_cal_wen      (i_pta_aff_wen),
+    .i_pta_cal_col      (i_pta_aff_col),
+    .i_pta_cal_gain     (i_pta_aff_gain),
+    .i_pta_cal_offs     (i_pta_aff_offs),
+    .i_pta_cal_rst      (i_pta_cal_rst),
+    .i_pta_cal_shift_en (cal_shift_en),
+    .i_pta_cal_shift    (cal_shift),
+    .i_pta_cal_load     (cal_load),
+    .i_pta_cal_seed     (cal_seed)
+  );
+`else
   c930_ptm_c #(
     .NUM_ROWS   (NUM_ROWS),
     .NUM_COLS   (NUM_COLS),
@@ -825,9 +925,13 @@ module c930_npu_core
     .i_pta_cal_load     (cal_load),
     .i_pta_cal_seed     (cal_seed)
   );
+`endif
 
   // The engine.  It owns the probe, the estimator and the schedulers; the core
-  // owns only the grant and putting the weights back afterwards.
+  // owns only the grant and putting the weights back afterwards.  Shared by
+  // both tiles: it drives the weight port through the same muxes, so leaving it
+  // out of one branch leaves cal_wen undriven and w_load_active x -- which is
+  // exactly how the broadside tile first came up with zero weights.
   c930_pta_cal #(
     .NUM_ROWS (NUM_ROWS),
     .NUM_COLS (NUM_COLS),
@@ -1151,6 +1255,21 @@ module c930_npu_core
         // The FP16 accumulator is internally pipelined (stage1/stage2) with
         // both stages free-running inside one hop window.
         S_RUN: begin
+`ifdef PTM_B
+          // Shot-and-wait (pta_cpu_integration.md 4.2).  bs_shot_req pulses on
+          // the cycle this state is entered, the tile takes the shot on its next
+          // hop and spends PTA_TS, and o_valid brings every column back at once.
+          // Ts is that hop plus the dilation, against the 2 * (NUM_ROWS +
+          // NUM_COLS) hop windows the skewed drain walks -- the variant's point.
+          if (bs_valid) begin
+            for (int n = 0; n < NUM_COLS; n++)
+              if (n < nc) acc[n] <= ps_out[n*ACC_W +: ACC_W];
+            t     <= 0;
+            n_cnt <= 0;
+            act_t <= 0;
+            state <= (act_en_r && kt_reg == num_k_tiles - 1) ? S_ACT : S_WRITE;
+          end
+`else
           // Advance the run schedule only on hop edges (old value 1 -- the
           // same edges on which the PEs' stream registers load, so seeds
           // presented during a hop window are captured at the next edge,
@@ -1182,6 +1301,7 @@ module c930_npu_core
             t <= t + 1;
           end
           end // hop_phase
+`endif
         end
 
         // Write C[m_reg][n_base + n_cnt] = acc[n_cnt] for n_cnt in 0..nc-1.
@@ -1320,7 +1440,15 @@ module c930_npu_core
       shot_cnt  <= 32'd0;
       wload_cnt <= 32'd0;
     end else begin
+`ifdef PTM_B
+      // One shot a run, counted where the tile answers: broadside, t never
+      // leaves 0, so the skewed `t == 0` start is asserted for the whole state
+      // and would count a shot a hop.
+      if (bs_valid || (hop_phase && cal_busy && cal_shot_start))
+        shot_cnt <= shot_cnt + 32'd1;
+`else
       if (hop_phase && tile_shot_start) shot_cnt  <= shot_cnt + 32'd1;
+`endif
       if (wload_done)                   wload_cnt <= wload_cnt + 32'd1;
     end
   end

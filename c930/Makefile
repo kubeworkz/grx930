@@ -63,11 +63,19 @@ NPU_RTL := \
 # NPU benches must catch.
 PTM_C_RTL     := rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_pta_cal.sv
 NPU_RTL_ARRAY := $(NPU_RTL)
+# PTM_B=1 is PTM-B, the broadside tile (grxcp pta_cpu_integration.md 4.2): the
+# same arithmetic as PTM-C with BROADSIDE = 1 inside it, and the core's S_RUN a
+# shot-and-wait instead of a skewed drain.  It implies PTM_C, so the PTA block,
+# the calibration engine and the muxes are the ones already gated.
+ifeq ($(PTM_B),1)
+PTM_C     := 1
+endif
+
 ifeq ($(PTM_C),1)
 NPU_RTL   := $(filter-out rtl/c930_systolic_array.sv rtl/c930_tensor_pe.sv,$(NPU_RTL)) \
-             $(PTM_C_RTL)
-BUILD_DIR := build/ptm_c$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
-GFLAGS    += -DPTM_C $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
+             $(PTM_C_RTL) $(if $(filter 1,$(PTM_B)),rtl/pta/c930_ptm_b.sv)
+BUILD_DIR := build/ptm_$(if $(filter 1,$(PTM_B)),b,c)$(if $(PTM_C_ABLATE_ROW),_ablate$(PTM_C_ABLATE_ROW))
+GFLAGS    += -DPTM_C $(if $(filter 1,$(PTM_B)),-DPTM_B) $(if $(PTM_C_ABLATE_ROW),-DPTM_C_ABLATE_ROW=$(PTM_C_ABLATE_ROW))
 endif
 
 SOC_RTL := $(NPU_RTL) \
@@ -503,11 +511,16 @@ driver_fw: $(DRV_SW_HEX) verilate-soc4
 # DMA, which is why a 3-million-cycle sweep finishes in seconds.
 #
 #   make core_tw      C2: a GEMM's cycles are affine in PTA_TW, slope Nt * Kt
+#   make core_c2      C2's exit gate: section 2.1's cost model, term by term,
+#                     on the broadside tile (PTM-B) at section 6.2's points
 #   make core_act     A1 and A2: the activation stage, cycles and bit-exactness
 # ---------------------------------------------------------------------------
-.PHONY: core_tw core_act
+.PHONY: core_tw core_c2 core_act
 core_tw:
 	@bash sim/build_core_verilator_wsl.sh run --tw
+
+core_c2:
+	@bash sim/build_core_verilator_wsl.sh PTM_B=1 run --c2
 
 core_act:
 	@bash sim/build_core_verilator_wsl.sh run --sweep --act identity

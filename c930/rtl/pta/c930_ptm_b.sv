@@ -60,6 +60,14 @@ module c930_ptm_b
   input  logic [2:0]                               i_precision,
   input  logic                                     i_shot_start,
   input  logic [31:0]                              i_ts,       // PTA_TS, dilation
+  // The calibration engine drives the tile directly while it holds it, one
+  // column a shot, so its strobes pass through ahead of the schedule below.
+  // Broadside a probe shot still illuminates every column -- which is what the
+  // tile does -- so the draws advance per column as they do for a GEMM.
+  input  logic                                     i_cal_busy,
+  input  logic                                     i_cal_shot_start,
+  input  logic                                     i_cal_shot,
+  input  logic [$clog2(NUM_COLS)-1:0]              i_cal_shot_col,
   output logic                                     o_valid,
   output logic signed [ACC_W*NUM_COLS-1:0]         o_ps_out,
 
@@ -113,14 +121,20 @@ module c930_ptm_b
   typedef enum logic [1:0] { S_IDLE, S_SHOT, S_WAIT, S_DONE } state_e;
   state_e      st;
   logic [31:0] wait_cnt;
+  logic        operands_in;       // the core's hop-gated feed has landed
   logic        shot_now;          // this hop takes the shot
 
-  assign shot_now = (st == S_SHOT) && hop;
+  // The core registers i_act and i_ps_in on a hop edge, so they are not visible
+  // until after one.  The shot is taken on the NEXT hop: taking it on the first
+  // would multiply the previous window's operands, which reads as C = 0 on the
+  // first K tile because the feed is still zero.
+  assign shot_now = (st == S_SHOT) && hop && operands_in;
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       st           <= S_IDLE;
       wait_cnt     <= 32'd0;
+      operands_in  <= 1'b0;
       o_valid      <= 1'b0;
     end else begin
       o_valid <= 1'b0;
@@ -132,8 +146,12 @@ module c930_ptm_b
         // be shorter than a hop and Ts has a floor of two cycles on this core.
         S_SHOT: begin
           if (hop) begin
-            wait_cnt <= 32'd0;
-            st       <= (i_ts > 32'd1) ? S_WAIT : S_DONE;
+            if (!operands_in) begin
+              operands_in <= 1'b1;        // the feed lands on this edge
+            end else begin
+              wait_cnt <= 32'd0;
+              st       <= (i_ts > 32'd1) ? S_WAIT : S_DONE;
+            end
           end
         end
         // The modelled shot latency, beyond the hop the capture already cost.
@@ -142,8 +160,9 @@ module c930_ptm_b
           else                          wait_cnt <= wait_cnt + 32'd1;
         end
         S_DONE: begin
-          o_valid <= 1'b1;
-          st      <= S_IDLE;
+          o_valid     <= 1'b1;
+          operands_in <= 1'b0;
+          st          <= S_IDLE;
         end
         default: st <= S_IDLE;
       endcase
@@ -192,9 +211,9 @@ module c930_ptm_b
     .i_pta_drift_max    (i_pta_drift_max),
     .i_pta_xtalk        (i_pta_xtalk),
     .i_pta_model_rst    (i_pta_model_rst),
-    .i_pta_shot_start   (shot_now),
-    .i_pta_shot         (shot_now),
-    .i_pta_shot_col     ('0),
+    .i_pta_shot_start   (i_cal_busy ? i_cal_shot_start : shot_now),
+    .i_pta_shot         (i_cal_busy ? i_cal_shot       : shot_now),
+    .i_pta_shot_col     (i_cal_busy ? i_cal_shot_col   : '0),
     .o_pta_sat_count    (o_pta_sat_count),
     .i_pta_trim_wen     (i_pta_trim_wen),
     .i_pta_trim_bank    (i_pta_trim_bank),
