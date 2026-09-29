@@ -50,7 +50,7 @@
 //                   stored beside the weight (Q.8, weight LSB)
 //   shot start      i_pta_shot_start marks each shot's first window (one core
 //                   run).  In a GEMM with DRIFT set the drift clock counts it;
-//                   on reaching 2^k it restarts, and every cell of both banks
+//                   on reaching 2^k it restarts, and every cell of every bank
 //                   steps, bank, then row, then column:
 //                     d = clamp(d + ((sigma_d*gs + 2^15) >>> 16), +-d_max)
 //   captured shot   i_pta_shot names the column the core captures from this
@@ -112,6 +112,14 @@ module c930_ptm_c
   parameter int ACC_W      = 48,  // accumulator width
   parameter int ABLATE_ROW = -1,  // C0's ablation: this row's de-skew one window late
   parameter int TRIM_W     = 24,  // C3's trim as asked for, before the DAC rounds it
+  // Resident weight banks.  Two is the double buffer the DMA has always used --
+  // compute from one while the next is staged.  Step MB (pta_cpu_integration.md
+  // 6.2, 8 item 3) needs Nt*Kt of them, so 6.2's EO-res point can be measured
+  // instead of modelled: a weight program becomes a bank select.
+  parameter int NUM_BANKS  = 2,
+  // Derived, not meant to be overridden.  Two banks keep a 1-bit select, so
+  // every existing port width and instantiation is unchanged.
+  parameter int BANK_W     = (NUM_BANKS <= 2) ? 1 : $clog2(NUM_BANKS),
   // PTM-B's readout (pta_cpu_integration.md 4.2): the whole activation vector
   // arrives at once, so there is no skew to undo, and every column is captured
   // on one shot instead of one per window.  The arithmetic is the same -- that is
@@ -123,12 +131,12 @@ module c930_ptm_c
   input  logic                                     i_rst_n,
 
   input  logic                                     i_wen,
-  input  logic                                     i_wbank,
+  input  logic [BANK_W-1:0]                        i_wbank,
   input  logic [$clog2(NUM_ROWS)-1:0]              i_wrow,
   input  logic [$clog2(NUM_COLS)-1:0]              i_wcol,
   input  logic signed [DIN_W-1:0]                  i_wdata,
 
-  input  logic                                     i_bank_sel,
+  input  logic [BANK_W-1:0]                        i_bank_sel,
 
   input  logic signed [NUM_ROWS*DIN_W-1:0]         i_act,
   input  logic signed [NUM_COLS*ACC_W-1:0]         i_ps_in,
@@ -162,7 +170,7 @@ module c930_ptm_c
 
   // ---- C3's correction (see the header) ----
   input  logic                                     i_pta_trim_wen,   // one cell's trim
-  input  logic                                     i_pta_trim_bank,
+  input  logic [BANK_W-1:0]                        i_pta_trim_bank,
   input  logic [$clog2(NUM_ROWS)-1:0]              i_pta_trim_row,
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_trim_col,
   input  logic signed [TRIM_W-1:0]                 i_pta_trim_data,  // asked for, Q.8 weight LSB
@@ -215,16 +223,14 @@ module c930_ptm_c
 `include "c930_pta_contract.svh"
 
   // ---- Weight banks, written as the array's PEs write theirs ----
-  logic signed [DIN_W-1:0] w_bank0 [0:R-1][0:C-1];
-  logic signed [DIN_W-1:0] w_bank1 [0:R-1][0:C-1];
-  logic signed [19:0]      e_bank0 [0:R-1][0:C-1];   // programming error, Q.8
-  logic signed [19:0]      e_bank1 [0:R-1][0:C-1];
+  localparam int NB = (NUM_BANKS < 2) ? 2 : NUM_BANKS;
+  logic signed [DIN_W-1:0] w_bank [0:NB-1][0:R-1][0:C-1];
+  logic signed [19:0]      e_bank [0:NB-1][0:R-1][0:C-1];  // programming error, Q.8
 
   // ---- C3's correction stores ----
-  // A trim per cell of both banks, as the weight DAC holds it, and an affine
+  // A trim per cell of every bank, as the weight DAC holds it, and an affine
   // per column of the tile.  Written from outside; the model never moves them.
-  logic signed [TRIM_W-1:0] trim0 [0:R-1][0:C-1];   // Q.8 weight LSB
-  logic signed [TRIM_W-1:0] trim1 [0:R-1][0:C-1];
+  logic signed [TRIM_W-1:0] trim [0:NB-1][0:R-1][0:C-1];  // Q.8 weight LSB
   logic signed [17:0]       gain_q [0:C-1];          // Q8.8, 256 is unity
   logic signed [31:0]       offs_q [0:C-1];
 
@@ -253,11 +259,10 @@ module c930_ptm_c
   always_ff @(posedge i_clk or negedge i_rst_n) begin : b_cal
     logic signed [TRIM_W:0] tw;
     if (!i_rst_n || i_pta_cal_rst) begin
-      for (int r = 0; r < R; r++)
-        for (int c = 0; c < C; c++) begin
-          trim0[r][c] <= '0;
-          trim1[r][c] <= '0;
-        end
+      for (int b = 0; b < NB; b++)
+        for (int r = 0; r < R; r++)
+          for (int c = 0; c < C; c++)
+            trim[b][r][c] <= '0;
       for (int c = 0; c < C; c++) begin
         gain_q[c] <= 18'sd256;
         offs_q[c] <= '0;
@@ -267,8 +272,7 @@ module c930_ptm_c
       o_pta_trim_clamped <= 1'b0;
       if (i_pta_trim_wen) begin
         tw = trim_dac(i_pta_trim_data);
-        if (i_pta_trim_bank) trim1[i_pta_trim_row][i_pta_trim_col] <= tw[TRIM_W-1:0];
-        else                 trim0[i_pta_trim_row][i_pta_trim_col] <= tw[TRIM_W-1:0];
+        trim[i_pta_trim_bank][i_pta_trim_row][i_pta_trim_col] <= tw[TRIM_W-1:0];
         o_pta_trim_clamped <= tw[TRIM_W];
       end
       if (i_pta_cal_wen) begin
@@ -278,8 +282,7 @@ module c930_ptm_c
     end
   end
 
-  assign o_pta_trim_rdata = i_pta_trim_bank ? trim1[i_pta_trim_row][i_pta_trim_col]
-                                            : trim0[i_pta_trim_row][i_pta_trim_col];
+  assign o_pta_trim_rdata = trim[i_pta_trim_bank][i_pta_trim_row][i_pta_trim_col];
 
   // ---- Error-model configuration and generators ----
   logic [6:0]  impair_r;
@@ -327,21 +330,15 @@ module c930_ptm_c
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      for (int r = 0; r < R; r++)
-        for (int c = 0; c < C; c++) begin
-          w_bank0[r][c] <= '0;
-          w_bank1[r][c] <= '0;
-          e_bank0[r][c] <= '0;
-          e_bank1[r][c] <= '0;
-        end
+      for (int b = 0; b < NB; b++)
+        for (int r = 0; r < R; r++)
+          for (int c = 0; c < C; c++) begin
+            w_bank[b][r][c] <= '0;
+            e_bank[b][r][c] <= '0;
+          end
     end else if (i_wen) begin
-      if (i_wbank) begin
-        w_bank1[i_wrow][i_wcol] <= i_wdata;
-        e_bank1[i_wrow][i_wcol] <= e_new;
-      end else begin
-        w_bank0[i_wrow][i_wcol] <= i_wdata;
-        e_bank0[i_wrow][i_wcol] <= e_new;
-      end
+      w_bank[i_wbank][i_wrow][i_wcol] <= i_wdata;
+      e_bank[i_wbank][i_wrow][i_wcol] <= e_new;
     end
   end
 
@@ -447,7 +444,7 @@ module c930_ptm_c
         localparam int REN_TAP = 2*(R - gr) - 1;
 
         wire signed [DIN_W-1:0] a = act_h[gr][ACT_TAP];
-        wire signed [DIN_W-1:0] w = i_bank_sel ? w_bank1[gr][gc] : w_bank0[gr][gc];
+        wire signed [DIN_W-1:0] w = w_bank[i_bank_sel][gr][gc];
         wire [15:0]             fa = fp_mode ? a[15:0] : 16'h0;
         wire [15:0]             fw = fp_mode ? w[15:0] : 16'h0;
         wire [31:0]             fp_prod;
@@ -471,10 +468,13 @@ module c930_ptm_c
   endgenerate
 
   // ---- Drift: device state, stepped on the drift clock ----
-  // Every physical cell of both banks drifts, written or not; a weight write
+  // Every physical cell of every bank drifts, written or not; a weight write
   // leaves its cell's drift alone.  Only a model reset clears it.
-  logic signed [16:0] d_bank0 [0:R-1][0:C-1];     // Q8.8 weight LSB
-  logic signed [16:0] d_bank1 [0:R-1][0:C-1];
+  //
+  // A step draws once a cell, so its cost in draws is NB * R * C: a tile with
+  // more banks has more cells and they all drift, which is the physics, but it
+  // also means a run at one bank count is not bitwise comparable with another.
+  logic signed [16:0] d_bank [0:NB-1][0:R-1][0:C-1];   // Q8.8 weight LSB
   logic [31:0]        rng_dr;
   logic [31:0]        dcnt;                       // shots counted since the last step
 
@@ -484,11 +484,10 @@ module c930_ptm_c
     logic signed [20:0] dstep;
     logic signed [21:0] dnew, dlim;
     if (!i_rst_n) begin
-      for (int r = 0; r < R; r++)
-        for (int c = 0; c < C; c++) begin
-          d_bank0[r][c] <= '0;
-          d_bank1[r][c] <= '0;
-        end
+      for (int b = 0; b < NB; b++)
+        for (int r = 0; r < R; r++)
+          for (int c = 0; c < C; c++)
+            d_bank[b][r][c] <= '0;
       rng_dr <= K_DRIFT;
       dcnt   <= 32'd0;
 `ifdef PTM_C_ABLATE_DRIFT
@@ -496,11 +495,10 @@ module c930_ptm_c
 `else
     end else if (i_pta_model_rst) begin
 `endif
-      for (int r = 0; r < R; r++)
-        for (int c = 0; c < C; c++) begin
-          d_bank0[r][c] <= '0;
-          d_bank1[r][c] <= '0;
-        end
+      for (int b = 0; b < NB; b++)
+        for (int r = 0; r < R; r++)
+          for (int c = 0; c < C; c++)
+            d_bank[b][r][c] <= '0;
       rng_dr <= stream_seed(i_pta_seed, K_DRIFT);
       dcnt   <= 32'd0;
     end else if (hop && i_pta_shot_start && impair_r[IMP_DRIFT]) begin
@@ -508,17 +506,16 @@ module c930_ptm_c
         dcnt <= 32'd0;
         ds   = rng_dr;
         dlim = $signed({6'd0, dmax_r});
-        for (int b = 0; b < 2; b++)
+        for (int b = 0; b < NB; b++)
           for (int r = 0; r < R; r++)
             for (int c = 0; c < C; c++) begin
               ds    = xorshift32(ds);
               dp    = $signed({21'd0, dsig_r}) * 37'(gauss(ds));
               dstep = 21'((dp + 37'sd32768) >>> 16);
-              dnew  = 22'((b == 0) ? d_bank0[r][c] : d_bank1[r][c]) + 22'(dstep);
+              dnew  = 22'(d_bank[b][r][c]) + 22'(dstep);
               if (dnew > dlim)  dnew = dlim;
               if (dnew < -dlim) dnew = -dlim;
-              if (b == 0) d_bank0[r][c] <= 17'(dnew);
-              else        d_bank1[r][c] <= 17'(dnew);
+              d_bank[b][r][c] <= 17'(dnew);
             end
         rng_dr <= ds;
       end else begin
@@ -535,10 +532,10 @@ module c930_ptm_c
     logic signed [16:0]       d;
     logic signed [TRIM_W-1:0] tr;
     logic signed [63:0]       wq;
-    w  = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
-    e  = i_bank_sel ? e_bank1[r][c] : e_bank0[r][c];
-    d  = i_bank_sel ? d_bank1[r][c] : d_bank0[r][c];
-    tr = i_bank_sel ? trim1[r][c]   : trim0[r][c];
+    w  = w_bank[i_bank_sel][r][c];
+    e  = e_bank[i_bank_sel][r][c];
+    d  = d_bank[i_bank_sel][r][c];
+    tr = trim  [i_bank_sel][r][c];
     wq = impair_r[IMP_QUANT] ? 64'(quant(int'(w), int'(wbits_r))) : 64'(w);
     analog_w = wq * 64'sd256 + (impair_r[IMP_PROG]  ? 64'(e) : 64'sd0)
                               + (impair_r[IMP_DRIFT] ? 64'(d) : 64'sd0)
@@ -605,7 +602,7 @@ module c930_ptm_c
       tap = 2*(R - r) + 2*c - 1 + ((r == ABLATE_ROW) ? 1 : 0);
       a   = BROADSIDE ? $signed(i_act[r*DIN_W +: DIN_W]) : act_h[r][tap];
       if (!modelled) begin
-        w = i_bank_sel ? w_bank1[r][c] : w_bank0[r][c];
+        w = w_bank[i_bank_sel][r][c];
         y = y + 64'(a) * 64'(w);
       end else begin
         xa = impair_r[IMP_QUANT] ? 64'(quant(int'(a), int'(abits_r))) : 64'(a);

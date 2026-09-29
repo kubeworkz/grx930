@@ -20,24 +20,34 @@ if [ "${1:-}" = "PTM_C=1" ]; then PTM_C=1; shift; fi
 # PTM_B implies PTM_C, as the Makefile has it: the broadside tile is the same
 # arithmetic with BROADSIDE = 1 and a shot-and-wait schedule around it.
 if [ "${1:-}" = "PTM_B=1" ]; then PTM_B=1; PTM_C=1; shift; fi
+# MB (pta_program_plan.md step MB): resident weight banks, one per (N tile,
+# K tile).  Section 6.2's shape is Nt=1, Kt=32, so BANKS=32 is what makes its
+# EO-res point measurable instead of modelled.  The generated model differs, so
+# it gets its own output directory.
+BANKS=2
+case "${1:-}" in BANKS=*) BANKS="${1#BANKS=}"; shift;; esac
 DO_RUN="${1:-}"
 [ "$DO_RUN" = "run" ] && shift || true
 
 C930="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$C930"
 
+# Only a non-default bank count needs its own tree.
+SUF=""
+[ "$BANKS" != 2 ] && SUF="_b$BANKS"
+
 if [ "$PTM_B" = 1 ]; then
-  OUT=build/ptm_b/verilator_core
+  OUT=build/ptm_b$SUF/verilator_core
   ARRAY="rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_ptm_b.sv rtl/pta/c930_pta_cal.sv"
   DEFS="+define+PTM_C +define+PTM_B"
   CDEFS="-DPTM_C -DPTM_B"
 elif [ "$PTM_C" = 1 ]; then
-  OUT=build/ptm_c/verilator_core
+  OUT=build/ptm_c$SUF/verilator_core
   ARRAY="rtl/pta/c930_fp32_add.sv rtl/pta/c930_ptm_c.sv rtl/pta/c930_pta_cal.sv"
   DEFS="+define+PTM_C"
   CDEFS="-DPTM_C"
 else
-  OUT=build/verilator_core
+  OUT=build$SUF/verilator_core
   ARRAY="rtl/c930_tensor_pe.sv rtl/c930_systolic_array.sv"
   DEFS=""
   CDEFS=""
@@ -53,7 +63,7 @@ mkdir -p "$OUT"
 # The vendored binary looks for its own share/ tree unless told where it is.
 VERILATOR_ROOT=toolchain/oss-cad-suite/share/verilator \
 toolchain/oss-cad-suite/bin/verilator_bin.exe \
-  --cc --exe -O3 --top-module c930_npu_core -GMAX_N=12 \
+  --cc --exe -O3 --top-module c930_npu_core -GMAX_N=12 -GNUM_BANKS=$BANKS \
   -Wall -Wno-DECLFILENAME -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-PINMISSING -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Irtl/pta \
   $DEFS --Mdir "$OUT" $CORE_RTL $ARRAY sim/tb_core_verilator.cc

@@ -328,6 +328,14 @@ uint32_t g_pta_tw = 0;
 // the --c2 gate is sweeping it; the skewed tile ignores it.
 uint32_t g_pta_ts = 0;
 
+// MB: resident weights.  g_resident addresses a bank per (N tile, K tile);
+// g_wload_en = 0 says the banks already hold the weights, so S_WLOAD keeps its
+// bookkeeping and skips the scan.  Both off is the shipped behaviour.
+int g_resident = 0;
+int g_wload_en = 1;
+// MB: the loop order.  0 is the interchanged nest as shipped; 1 is m-outer.
+int g_morder = 0;
+
 
 void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_impair    = cfg.impair;
@@ -345,6 +353,9 @@ void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_xtalk       = cfg.xtalk;
     dut->i_pta_tw          = g_pta_tw;
     dut->i_pta_ts          = g_pta_ts;
+    dut->i_pta_resident    = g_resident;
+    dut->i_pta_wload_en    = g_wload_en;
+    dut->i_pta_morder      = g_morder;
 }
 
 // The modelled device.  Drift outlives a GEMM, so the model's state does too,
@@ -793,12 +804,14 @@ int main(int argc, char** argv) {
     std::string pta_mode = "off", tile = "array";
     bool tw_gate = false;
     bool c2_gate = false;
+    bool mb_gate = false;
     int  perturb = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg == "--sweep") sweep = true;
         else if (arg == "--tw") tw_gate = true;
         else if (arg == "--c2") c2_gate = true;
+        else if (arg == "--mb") mb_gate = true;
         else if (arg == "--dw" && i + 1 < argc) dw = std::atoi(argv[++i]);
         else if (arg == "--act" && i + 1 < argc) act_mode = argv[++i];
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
@@ -966,6 +979,173 @@ int main(int argc, char** argv) {
         drift_case("drift, held", 0, 0, dM * dN * 9 / 10, dM * dN, &last);
         model_reset(0x0D1F7u);
         drift_case("drift, after a reset", 5, 0xFFFF, 0, 0, nullptr);
+    } else if (mb_gate) {
+        // MB's exit gate (pta_program_plan.md step MB, CPU document 6.2 EO-res).
+        // Needs a build with Nt*Kt banks: BANKS=32 for 6.2's shape.
+        const int SHOT_FLOOR = 6;
+        printf("[MB] resident weights: a bank per (N tile, K tile)\n");
+
+        auto run_res = [&](int M, int N, int K, uint32_t tw, uint32_t ts,
+                           int resident, int wload,
+                           const std::vector<int>* ain = nullptr,
+                           const std::vector<int>* bin = nullptr,
+                           int morder = 0) {
+            g_pta_tw = tw; g_pta_ts = ts;
+            g_resident = resident; g_wload_en = wload; g_morder = morder;
+            const Result r = run_case(M, N, K, dw, false, ActCfg{}, PTA_OFF, ain, bin);
+            g_pta_tw = 0; g_pta_ts = 0; g_resident = 0; g_wload_en = 1; g_morder = 0;
+            return r;
+        };
+
+        // 1. The refusal.  A shape with more tiles than banks must raise o_error
+        //    and stay idle, the way a bad dimension does, rather than run and
+        //    alias two tiles onto one bank.  Checked at the start strobe: going
+        //    through run_case() would wait 50 M cycles for a done that, correctly,
+        //    never comes.
+        {
+            // i_pta_resident is driven straight at the DUT here: g_resident is
+            // only pushed by apply_pta(), which run_case() calls, and this test
+            // deliberately does not go through run_case().
+            dut->i_pta_resident = 1;
+            dut->i_dim_m = 4; dut->i_dim_n = 12; dut->i_dim_k = 256;  // Nt*Kt = 64
+            dut->i_start = 1; tick();
+            dut->i_start = 0; tick();
+            const bool refused = dut->o_error && !dut->o_busy;
+            dut->i_pta_resident = 0;
+            // The next valid GEMM clears it, so the refusal is not sticky.
+            const Result after = run_case(4, 8, 16, dw, false, ActCfg{});
+            const bool ok = refused && after.ok && !dut->o_error;
+            if (!ok) ++failures;
+            printf("[MB]   Nt*Kt=64 with 32 banks: %s, then a valid GEMM %s  %s\n",
+                   refused ? "refused" : "NOT refused",
+                   after.ok ? "passes" : "fails", ok ? "PASS" : "FAIL");
+        }
+
+        // 2. EO-res at 6.2's shape, in the interchanged order.
+        const int M6 = 64, N6 = 8, K6 = 256;
+        const int nt6 = (N6 + NUM_COLS - 1) / NUM_COLS;
+        const int kt6 = (K6 + NUM_ROWS - 1) / NUM_ROWS;
+        const int Q6  = nt6 * kt6;
+        {
+            // One set of operands for both: the banks keep the fill's weights, so
+            // the resident GEMM has to be asked for the same product.  Letting
+            // run_case() draw fresh ones would check the fill's weights against a
+            // different B, which is a bug in the test and not in the tile.
+            std::vector<int> a6(static_cast<size_t>(M6) * K6);
+            std::vector<int> b6(static_cast<size_t>(K6) * N6);
+            for (auto& v : a6) v = rnd(dw);
+            for (auto& v : b6) v = rnd(dw);
+
+            // The fill: resident addressing, weights scanned.  Its cost is the
+            // N*K the scan has always been, and it is reported, not hidden.
+            const Result fill = run_res(M6, N6, K6, 0, 1, 1, 1, &a6, &b6);
+            // The measured GEMM: the banks already hold every tile's weights.
+            const Result res  = run_res(M6, N6, K6, 0, 1, 1, 0, &a6, &b6);
+
+            const long w_fill = (long)N6 * K6;
+            const long w_rest = (long)M6 * (kt6 - 1) * N6;
+            const long w_wr   = (long)M6 * kt6 * N6;
+            const long shots  = (long)M6 * Q6;
+            // Tw is the select's own cycle, which is what the plan counts it as.
+            const long sel    = Q6;
+            const long hi     = sel + w_rest + w_wr + shots * (1 + SHOT_FLOOR);
+            const bool ok = res.ok && fill.ok &&
+                            ((long)res.cycles <= hi) &&
+                            ((long)res.cycles >= hi - shots);
+            if (!ok) ++failures;
+            printf("[MB]   fill (weights scanned)      %u cycles, C %s\n",
+                   fill.cycles, fill.ok ? "ok" : "WRONG");
+            printf("[MB]   EO-res (banks resident)     %u cycles, C %s  model "
+                   "%ld..%ld  %s\n", res.cycles, res.ok ? "ok" : "WRONG",
+                   hi - shots, hi, ok ? "PASS" : "FAIL");
+            printf("[MB]     select %-6ld restore %-7ld write %-7ld shot %-8ld\n",
+                   sel, w_rest, w_wr, (long)res.cycles - sel - w_rest - w_wr);
+            printf("[MB]     the scan the fill paid and this GEMM does not: "
+                   "%ld cycles\n", w_fill);
+            printf("[MB]     6.2's EO-res column says 18,432 with the restore "
+                   "folded and Ts = 1\n");
+        }
+
+        // 3. EO-res in the m-outer order, which is the order 2.1 says a resident
+        //    tile wants: the weight cost it amortised is gone, so multiplying row
+        //    writes by Kt is no longer worth it.  Same operands, and C has to come
+        //    out the same -- the orders sum the same products in a different
+        //    sequence, and in integer arithmetic that is not an excuse.
+        {
+            const int M = 64, N = 8, K = 256;
+            const int nt = (N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (K + NUM_ROWS - 1) / NUM_ROWS;
+            std::vector<int> a(static_cast<size_t>(M) * K);
+            std::vector<int> b(static_cast<size_t>(K) * N);
+            for (auto& v : a) v = rnd(dw);
+            for (auto& v : b) v = rnd(dw);
+
+            // Fill the banks, then measure each order against them.
+            const Result fill = run_res(M, N, K, 0, 1, 1, 1, &a, &b, 0);
+            const Result inter = run_res(M, N, K, 0, 1, 1, 0, &a, &b, 0);
+            const Result outer = run_res(M, N, K, 0, 1, 1, 0, &a, &b, 1);
+
+            // 2.1, shipped order, with Tw the select's cycle and Td the row write:
+            //   M*Nt*(Kt*(Tw + Ts) + Td)
+            const long shots_o = (long)M * nt * kt;
+            const long hi_o = (long)M * nt * ((long)kt * (1 + (1 + SHOT_FLOOR)) + N);
+            const bool ok_o = outer.ok && ((long)outer.cycles <= hi_o) &&
+                              ((long)outer.cycles >= hi_o - shots_o);
+            if (!ok_o || !inter.ok || !fill.ok) ++failures;
+            printf("[MB]   m-outer   %u cycles, C %s  model %ld..%ld  %s\n",
+                   outer.cycles, outer.ok ? "ok" : "WRONG",
+                   hi_o - shots_o, hi_o, ok_o ? "PASS" : "FAIL");
+            printf("[MB]   the two orders at EO-res: m-outer %u, interchanged %u"
+                   "  -- %.2fx to the shipped order\n",
+                   outer.cycles, inter.cycles,
+                   (double)inter.cycles / (double)outer.cycles);
+            printf("[MB]     both computed C correctly from the same banks, so the "
+                   "orders agree: %s\n",
+                   (inter.ok && outer.ok) ? "PASS" : "FAIL");
+        }
+
+        // 4. C is bit-identical between the filling GEMM and the resident one,
+        //    on directed operands so it is the same arithmetic both times.
+        {
+            const int M = 8, N = 8, K = 64;      // Nt*Kt = 8
+            std::vector<int> a(M * K), b(K * N);
+            for (int i = 0; i < M * K; ++i) a[i] = rnd(dw);
+            for (int i = 0; i < K * N; ++i) b[i] = rnd(dw);
+            g_resident = 1; g_wload_en = 1;
+            const Result f = run_case(M, N, K, dw, false, ActCfg{}, PTA_OFF, &a, &b);
+            g_wload_en = 0;
+            const Result r = run_case(M, N, K, dw, false, ActCfg{}, PTA_OFF, &a, &b);
+            g_resident = 0; g_wload_en = 1;
+            const bool ok = f.ok && r.ok;
+            if (!ok) ++failures;
+            printf("[MB]   the same C from the fill and from the banks "
+                   "(M=%d N=%d K=%d): %s\n", M, N, K, ok ? "PASS" : "FAIL");
+        }
+        // 5. m-outer without resident banks: the weights are reloaded per (row,
+        //    N tile, K tile), which is 2.1's "as shipped" column and M times the
+        //    weight traffic.  Small shape, because that is M*Nt*Kt scans.
+        {
+            const int M = 4, N = 8, K = 32;
+            const int nt = (N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (K + NUM_ROWS - 1) / NUM_ROWS;
+            std::vector<int> a(static_cast<size_t>(M) * K);
+            std::vector<int> b(static_cast<size_t>(K) * N);
+            for (auto& v : a) v = rnd(dw);
+            for (auto& v : b) v = rnd(dw);
+            const Result o = run_res(M, N, K, 0, 1, 0, 1, &a, &b, 1);
+            const Result i2 = run_res(M, N, K, 0, 1, 0, 1, &a, &b, 0);
+            // Every (row, N tile, K tile) scans nc*kr cells, so M times what the
+            // interchanged order loads.
+            const long scans = (long)M * nt * kt * NUM_COLS * NUM_ROWS;
+            const bool ok = o.ok && i2.ok && ((long)o.stall >= scans);
+            if (!ok) ++failures;
+            printf("[MB]   m-outer, weights not resident (M=%d N=%d K=%d): "
+                   "%u cycles, weight movement %u (>= M*Nt*Kt*nc*kr = %ld), C %s"
+                   "  %s\n", M, N, K, o.cycles, o.stall, scans,
+                   o.ok ? "ok" : "WRONG", ok ? "PASS" : "FAIL");
+            printf("[MB]     the interchanged order on the same shape: %u cycles, "
+                   "weight movement %u\n", i2.cycles, i2.stall);
+        }
     } else if (c2_gate) {
         // C2's exit gate: pta_cpu_integration.md 2.1's cost model, checked term
         // by term against the counters that make it up, with nothing fitted.

@@ -513,14 +513,21 @@ driver_fw: $(DRV_SW_HEX) verilate-soc4
 #   make core_tw      C2: a GEMM's cycles are affine in PTA_TW, slope Nt * Kt
 #   make core_c2      C2's exit gate: section 2.1's cost model, term by term,
 #                     on the broadside tile (PTM-B) at section 6.2's points
+#   make core_mb      MB's exit gate: resident weight banks, one per (N tile,
+#                     K tile), so section 6.2's EO-res point is measured
 #   make core_act     A1 and A2: the activation stage, cycles and bit-exactness
 # ---------------------------------------------------------------------------
-.PHONY: core_tw core_c2 core_act
+.PHONY: core_tw core_c2 core_mb core_act
 core_tw:
 	@bash sim/build_core_verilator_wsl.sh run --tw
 
 core_c2:
 	@bash sim/build_core_verilator_wsl.sh PTM_B=1 run --c2
+
+# 32 banks is section 6.2's Nt*Kt at M=64 N=8 K=256, which is what makes its
+# EO-res point measurable instead of modelled.
+core_mb:
+	@bash sim/build_core_verilator_wsl.sh PTM_B=1 BANKS=32 run --mb
 
 core_act:
 	@bash sim/build_core_verilator_wsl.sh run --sweep --act identity

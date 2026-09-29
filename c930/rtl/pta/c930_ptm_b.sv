@@ -39,7 +39,10 @@ module c930_ptm_b
   parameter int NUM_COLS   = 8,
   parameter int DIN_W      = 8,
   parameter int ACC_W      = 48,
-  parameter int TRIM_W     = 24
+  parameter int TRIM_W     = 24,
+  // Passed to the tile.  Two keeps every port a single bit; step MB wants Nt*Kt.
+  parameter int NUM_BANKS  = 2,
+  parameter int BANK_W     = (NUM_BANKS <= 2) ? 1 : $clog2(NUM_BANKS)
 )
 (
   input  logic                                     i_clk,
@@ -47,11 +50,11 @@ module c930_ptm_b
 
   // Weight port, as the array's and PTM-C's: one cell a beat.
   input  logic                                     i_wen,
-  input  logic                                     i_wbank,
+  input  logic [BANK_W-1:0]                        i_wbank,
   input  logic [$clog2(NUM_ROWS)-1:0]              i_wrow,
   input  logic [$clog2(NUM_COLS)-1:0]              i_wcol,
   input  logic signed [DIN_W-1:0]                  i_wdata,
-  input  logic                                     i_bank_sel,
+  input  logic [BANK_W-1:0]                        i_bank_sel,
 
   // The shot.  i_act is the whole K-tile vector, i_ps_in the seed to add.
   input  logic signed [NUM_ROWS*DIN_W-1:0]         i_act,
@@ -89,7 +92,7 @@ module c930_ptm_b
   input  logic                                     i_pta_model_rst,
   output logic [31:0]                              o_pta_sat_count,
   input  logic                                     i_pta_trim_wen,
-  input  logic                                     i_pta_trim_bank,
+  input  logic [BANK_W-1:0]                        i_pta_trim_bank,
   input  logic [$clog2(NUM_ROWS)-1:0]              i_pta_trim_row,
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_trim_col,
   input  logic signed [TRIM_W-1:0]                 i_pta_trim_data,
@@ -181,6 +184,7 @@ module c930_ptm_b
     .ACC_W      (ACC_W),
     .ABLATE_ROW (-1),
     .TRIM_W     (TRIM_W),
+    .NUM_BANKS  (NUM_BANKS),
     .BROADSIDE  (1'b1)
   ) u_tile (
     .i_clk              (i_clk),
