@@ -333,6 +333,8 @@ uint32_t g_pta_ts = 0;
 // bookkeeping and skips the scan.  Both off is the shipped behaviour.
 int g_resident = 0;
 int g_wload_en = 1;
+// MB: the loop order.  0 is the interchanged nest as shipped; 1 is m-outer.
+int g_morder = 0;
 
 
 void apply_pta(const pta_cfg& cfg) {
@@ -353,6 +355,7 @@ void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_ts          = g_pta_ts;
     dut->i_pta_resident    = g_resident;
     dut->i_pta_wload_en    = g_wload_en;
+    dut->i_pta_morder      = g_morder;
 }
 
 // The modelled device.  Drift outlives a GEMM, so the model's state does too,
@@ -985,11 +988,12 @@ int main(int argc, char** argv) {
         auto run_res = [&](int M, int N, int K, uint32_t tw, uint32_t ts,
                            int resident, int wload,
                            const std::vector<int>* ain = nullptr,
-                           const std::vector<int>* bin = nullptr) {
+                           const std::vector<int>* bin = nullptr,
+                           int morder = 0) {
             g_pta_tw = tw; g_pta_ts = ts;
-            g_resident = resident; g_wload_en = wload;
+            g_resident = resident; g_wload_en = wload; g_morder = morder;
             const Result r = run_case(M, N, K, dw, false, ActCfg{}, PTA_OFF, ain, bin);
-            g_pta_tw = 0; g_pta_ts = 0; g_resident = 0; g_wload_en = 1;
+            g_pta_tw = 0; g_pta_ts = 0; g_resident = 0; g_wload_en = 1; g_morder = 0;
             return r;
         };
 
@@ -1062,7 +1066,45 @@ int main(int argc, char** argv) {
                    "folded and Ts = 1\n");
         }
 
-        // 3. C is bit-identical between the filling GEMM and the resident one,
+        // 3. EO-res in the m-outer order, which is the order 2.1 says a resident
+        //    tile wants: the weight cost it amortised is gone, so multiplying row
+        //    writes by Kt is no longer worth it.  Same operands, and C has to come
+        //    out the same -- the orders sum the same products in a different
+        //    sequence, and in integer arithmetic that is not an excuse.
+        {
+            const int M = 64, N = 8, K = 256;
+            const int nt = (N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (K + NUM_ROWS - 1) / NUM_ROWS;
+            std::vector<int> a(static_cast<size_t>(M) * K);
+            std::vector<int> b(static_cast<size_t>(K) * N);
+            for (auto& v : a) v = rnd(dw);
+            for (auto& v : b) v = rnd(dw);
+
+            // Fill the banks, then measure each order against them.
+            const Result fill = run_res(M, N, K, 0, 1, 1, 1, &a, &b, 0);
+            const Result inter = run_res(M, N, K, 0, 1, 1, 0, &a, &b, 0);
+            const Result outer = run_res(M, N, K, 0, 1, 1, 0, &a, &b, 1);
+
+            // 2.1, shipped order, with Tw the select's cycle and Td the row write:
+            //   M*Nt*(Kt*(Tw + Ts) + Td)
+            const long shots_o = (long)M * nt * kt;
+            const long hi_o = (long)M * nt * ((long)kt * (1 + (1 + SHOT_FLOOR)) + N);
+            const bool ok_o = outer.ok && ((long)outer.cycles <= hi_o) &&
+                              ((long)outer.cycles >= hi_o - shots_o);
+            if (!ok_o || !inter.ok || !fill.ok) ++failures;
+            printf("[MB]   m-outer   %u cycles, C %s  model %ld..%ld  %s\n",
+                   outer.cycles, outer.ok ? "ok" : "WRONG",
+                   hi_o - shots_o, hi_o, ok_o ? "PASS" : "FAIL");
+            printf("[MB]   the two orders at EO-res: m-outer %u, interchanged %u"
+                   "  -- %.2fx to the shipped order\n",
+                   outer.cycles, inter.cycles,
+                   (double)inter.cycles / (double)outer.cycles);
+            printf("[MB]     both computed C correctly from the same banks, so the "
+                   "orders agree: %s\n",
+                   (inter.ok && outer.ok) ? "PASS" : "FAIL");
+        }
+
+        // 4. C is bit-identical between the filling GEMM and the resident one,
         //    on directed operands so it is the same arithmetic both times.
         {
             const int M = 8, N = 8, K = 64;      // Nt*Kt = 8
@@ -1078,6 +1120,31 @@ int main(int argc, char** argv) {
             if (!ok) ++failures;
             printf("[MB]   the same C from the fill and from the banks "
                    "(M=%d N=%d K=%d): %s\n", M, N, K, ok ? "PASS" : "FAIL");
+        }
+        // 5. m-outer without resident banks: the weights are reloaded per (row,
+        //    N tile, K tile), which is 2.1's "as shipped" column and M times the
+        //    weight traffic.  Small shape, because that is M*Nt*Kt scans.
+        {
+            const int M = 4, N = 8, K = 32;
+            const int nt = (N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (K + NUM_ROWS - 1) / NUM_ROWS;
+            std::vector<int> a(static_cast<size_t>(M) * K);
+            std::vector<int> b(static_cast<size_t>(K) * N);
+            for (auto& v : a) v = rnd(dw);
+            for (auto& v : b) v = rnd(dw);
+            const Result o = run_res(M, N, K, 0, 1, 0, 1, &a, &b, 1);
+            const Result i2 = run_res(M, N, K, 0, 1, 0, 1, &a, &b, 0);
+            // Every (row, N tile, K tile) scans nc*kr cells, so M times what the
+            // interchanged order loads.
+            const long scans = (long)M * nt * kt * NUM_COLS * NUM_ROWS;
+            const bool ok = o.ok && i2.ok && ((long)o.stall >= scans);
+            if (!ok) ++failures;
+            printf("[MB]   m-outer, weights not resident (M=%d N=%d K=%d): "
+                   "%u cycles, weight movement %u (>= M*Nt*Kt*nc*kr = %ld), C %s"
+                   "  %s\n", M, N, K, o.cycles, o.stall, scans,
+                   o.ok ? "ok" : "WRONG", ok ? "PASS" : "FAIL");
+            printf("[MB]     the interchanged order on the same shape: %u cycles, "
+                   "weight movement %u\n", i2.cycles, i2.stall);
         }
     } else if (c2_gate) {
         // C2's exit gate: pta_cpu_integration.md 2.1's cost model, checked term

@@ -186,6 +186,10 @@ module c930_npu_core
   // sampled at a start.
   input  logic                        i_pta_resident,   // bank per tile
   input  logic                        i_pta_wload_en,   // 0: banks already loaded
+  // The loop order.  0 is the interchanged nest as shipped -- (N tile, K tile)
+  // outer, output row inner.  1 restores m-outer: row, then N tile, then K tile,
+  // with the running sum held in acc[] across the K loop so a row is written once.
+  input  logic                        i_pta_morder,
   // The bank to calibrate.  Widens with NUM_BANKS; the CSR still drives one bit,
   // zero-extended, until a resident tile needs the rest of the field (C4).
   input  logic [BANK_W-1:0]           i_pta_cal_bank,
@@ -437,6 +441,7 @@ module c930_npu_core
   logic        bank_sel;           // which weight bank is active for compute
   logic        resident_r;         // MB: address banks by tile, sampled at start
   logic        wload_en_r;         // MB: 0 if the banks already hold the weights
+  logic        morder_r;           // MB: 1 = m-outer, sampled at start
 
   // Snapshot of i_bank_sel captured at GEMM start.  Used for all B memory
   // reads (weight loading) so the read bank is stable even if
@@ -753,6 +758,17 @@ module c930_npu_core
   // settle preserves the phase, so a GEMM pays exactly Nt * Kt * PTA_TW.  Every
   // point in pta_cpu_integration.md 6.2 is even (100,000, 1,000, 0); an odd
   // value costs one cycle more than it asks for, per program.
+  // m-outer walks the K loop inside S_RUN's exit, so the next tile's extent is
+  // wanted in two places.  Registered inputs only, so this is a plain wire.
+  wire [31:0] k_base_next = 32'((kt_reg + 1) * NUM_ROWS);
+  wire [31:0] kr_next     = ((i_dim_k - (kt_reg + 1) * NUM_ROWS) >= NUM_ROWS)
+                            ? 32'(NUM_ROWS)
+                            : 32'(i_dim_k - (kt_reg + 1) * NUM_ROWS);
+  wire [31:0] kr_first    = (i_dim_k >= NUM_ROWS) ? 32'(NUM_ROWS) : 32'(i_dim_k);
+  // m-outer: every K tile but the last goes back for the next one instead of
+  // writing, because the running sum is still in acc[].
+  wire        run_more_k  = morder_r && (kt_reg != num_k_tiles - 1);
+
   logic [31:0] settle_cnt;
   wire [31:0]  tw_eff = i_pta_tw + {31'd0, i_pta_tw[0]};
   // Resident with the banks already loaded: there is nothing to scan, so the
@@ -1159,6 +1175,7 @@ module c930_npu_core
       kt_reg      <= 0;
       resident_r  <= 1'b0;
       wload_en_r  <= 1'b1;
+      morder_r    <= 1'b0;
       t           <= 0;
       w_r         <= 0;
       w_n         <= 0;
@@ -1214,6 +1231,7 @@ module c930_npu_core
               kt_reg     <= 0;
               resident_r <= i_pta_resident;
               wload_en_r <= i_pta_wload_en;
+              morder_r   <= i_pta_morder;
               t          <= 0;
               w_r        <= 0;
               w_n        <= 0;
@@ -1252,12 +1270,23 @@ module c930_npu_core
               state      <= cal_resume_st;
             end else begin
             t      <= 0;
-            m_reg  <= 0;
-            m_base <= 0;
+            // The interchanged order enters this state once per (N tile, K tile)
+            // and sweeps every output row inside it, so it starts that sweep here.
+            // m-outer enters it once per (row, N tile, K tile) -- the row is the
+            // OUTER loop -- so resetting the row here would restart the GEMM at
+            // row 0 for ever.  Its row advance lives at the end of the write.
+            if (!morder_r) begin
+              m_reg  <= 0;
+              m_base <= 0;
+            end
             if (kt_reg == 0) begin
               // First K tile: the accumulator starts at zero, so there is
               // nothing to restore -- this is the m-outer order's behaviour.
               for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
+              state <= S_RUN;
+            end else if (morder_r) begin
+              // m-outer holds the running sum in acc[] across the K loop, so
+              // there is nothing in C to restore on any tile.
               state <= S_RUN;
             end else begin
               state <= S_ACCLD;
@@ -1303,7 +1332,16 @@ module c930_npu_core
             t     <= 0;
             n_cnt <= 0;
             act_t <= 0;
-            state <= (act_en_r && kt_reg == num_k_tiles - 1) ? S_ACT : S_WRITE;
+            if (run_more_k) begin
+              kt_reg     <= kt_reg + 1;
+              k_base_reg <= k_base_next;
+              kr_reg     <= kr_next;
+              w_r        <= 0;
+              w_n        <= 0;
+              state      <= S_WLOAD;
+            end else begin
+              state <= (act_en_r && kt_reg == num_k_tiles - 1) ? S_ACT : S_WRITE;
+            end
           end
 `else
           // Advance the run schedule only on hop edges (old value 1 -- the
@@ -1330,9 +1368,19 @@ module c930_npu_core
             t     <= 0;
             n_cnt <= 0;
             act_t <= 0;
+            if (run_more_k) begin
+              // m-outer: the sum stays in acc[] and the next K tile is loaded.
+              kt_reg     <= kt_reg + 1;
+              k_base_reg <= k_base_next;
+              kr_reg     <= kr_next;
+              w_r        <= 0;
+              w_n        <= 0;
+              state      <= S_WLOAD;
+            end else begin
             // Only the last K tile's sums are complete; an earlier tile's are
             // partial and go to C unactivated, to be restored by S_ACCLD.
             state <= (act_en_r && kt_reg == num_k_tiles - 1) ? S_ACT : S_WRITE;
+            end
           end else begin
             t <= t + 1;
           end
@@ -1403,7 +1451,35 @@ module c930_npu_core
       // inherits every step in S_WRITE's order -- in particular acc[] is
       // cleared for the next row only after S_ACT has consumed it, which a
       // GEMM with a single K tile, its first and last, depends on.
-      if (row_done) begin
+      if (row_done && morder_r) begin
+        // m-outer: a write ends one (output row, N tile) pair and the K loop is
+        // already finished, so this walks the N tile, then the row.  acc[] is
+        // cleared for the pair that follows.  The calibration hook below is the
+        // interchanged order's: its resume state is derived from that advance, so
+        // it is not taken here (pta_cpu_integration.md 5.1 keeps the shadow
+        // scheduler on the shipped order).
+        n_cnt      <= 0;
+        act_t      <= 0;
+        t          <= 0;
+        kt_reg     <= 0;
+        k_base_reg <= 0;
+        kr_reg     <= kr_first;
+        w_r        <= 0;
+        w_n        <= 0;
+        for (int n = 0; n < NUM_COLS; n++) acc[n] <= '0;
+        if (nt_reg != num_n_tiles - 1) begin
+          nt_reg <= nt_reg + 1;
+          state  <= S_WLOAD;
+        end else if (m_reg != i_dim_m - 1) begin
+          nt_reg <= 0;
+          m_reg  <= m_reg + 1;
+          m_base <= m_base + i_dim_k;
+          state  <= (arow_free || (m_reg + 1) < i_a_rows_ready) ? S_WLOAD : S_AROW;
+        end else begin
+          // o_done is driven by done_cond (see above)
+          state <= S_IDLE;
+        end
+      end else if (row_done) begin
         n_cnt <= 0;
         act_t <= 0;
         if (m_reg != i_dim_m - 1) begin
