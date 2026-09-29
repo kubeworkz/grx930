@@ -642,6 +642,8 @@ module c930_npu_core
   always_comb begin
     act_comb   = '0;
     ps_in_comb = '0;
+    a_act_flat = 0;      // a scratch index, not state: give it a default so it
+                         // does not lint as an inferred latch
 
     if (cal_busy) begin
       // The probe's stimulus goes through the same hop-gated registers the

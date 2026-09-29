@@ -322,6 +322,11 @@ const pta_cfg PTA_OFF = {};
 // A core input rather than a tile one: the core spends it, the tile never sees
 // it.  Zero unless the --tw gate is sweeping it.
 uint32_t g_pta_tw = 0;
+// The emulation's shot latency (PTA_TS), spent by the broadside tile.  The floor
+// is a hop, not a cycle: the tile captures on hop edges and this core runs a
+// half-rate hop, so section 6.2's Ts = 1 points are Ts = 2 here.  Zero unless
+// the --c2 gate is sweeping it; the skewed tile ignores it.
+uint32_t g_pta_ts = 0;
 
 
 void apply_pta(const pta_cfg& cfg) {
@@ -339,6 +344,7 @@ void apply_pta(const pta_cfg& cfg) {
     dut->i_pta_drift_max   = cfg.drift_max;
     dut->i_pta_xtalk       = cfg.xtalk;
     dut->i_pta_tw          = g_pta_tw;
+    dut->i_pta_ts          = g_pta_ts;
 }
 
 // The modelled device.  Drift outlives a GEMM, so the model's state does too,
@@ -786,11 +792,13 @@ int main(int argc, char** argv) {
     std::string act_mode = "off", table_path;
     std::string pta_mode = "off", tile = "array";
     bool tw_gate = false;
+    bool c2_gate = false;
     int  perturb = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg == "--sweep") sweep = true;
         else if (arg == "--tw") tw_gate = true;
+        else if (arg == "--c2") c2_gate = true;
         else if (arg == "--dw" && i + 1 < argc) dw = std::atoi(argv[++i]);
         else if (arg == "--act" && i + 1 < argc) act_mode = argv[++i];
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
@@ -958,6 +966,181 @@ int main(int argc, char** argv) {
         drift_case("drift, held", 0, 0, dM * dN * 9 / 10, dM * dN, &last);
         model_reset(0x0D1F7u);
         drift_case("drift, after a reset", 5, 0xFFFF, 0, 0, nullptr);
+    } else if (c2_gate) {
+        // C2's exit gate: pta_cpu_integration.md 2.1's cost model, checked term
+        // by term against the counters that make it up, with nothing fitted.
+        //
+        //   S_WLOAD = N*K + Nt*Kt*tw_eff     the scan walks nc columns by kr rows
+        //   S_ACCLD = M*(Kt-1)*N             2.3's unfolded restore
+        //   S_WRITE = M*Kt*N                 the write walks nc columns
+        //   S_RUN   = M*Nt*Kt*(PTA_TS + 6)   +- one cycle a shot of hop alignment
+        //
+        // The first three are exact: they walk counters and have no hop
+        // dependence, so they are gated with equality.  The shot does have one --
+        // its feed is hop-gated going in and its capture lands on a hop -- so a
+        // shot costs PTA_TS + 6 cycles or one less depending on the phase S_RUN is
+        // entered on, and that phase depends on what ran before it.  Gated as the
+        // bound it is, with the observed per-shot cost printed beside it.
+        //
+        // which is 2.1's Nt*Kt*(Tw + M*(Ts + Td)) + M*Nt*(Kt-1)*Td with
+        // Tw = nc*kr + PTA_TW and Td = nc.  2.1's 64 and 8 are those two at a
+        // full tile; a ragged N tile is cheaper, and summing over tiles is what
+        // turns them into N*K and M*Kt*N.
+        //
+        // o_stall_count is S_WLOAD + S_ACCLD together, so those two are gated as
+        // a sum; S_WRITE is the residual of the decomposition, which also closes
+        // doc/c930_architecture.md's accounting identity here.
+        struct Shape { int M, N, K; const char *what; };
+        const Shape shapes[] = {
+            {  8,  8,  16, "two K tiles"                 },
+            {  4,  8,  32, "four K tiles"                },
+            {  5,  8,   8, "one K tile, no restore"      },
+            { 16,  8,  64, "eight K tiles"               },
+            {  3, 12,  24, "a ragged N tile, nc 8 and 4" },
+            {  5, 11,   8, "a ragged N tile, nc 8 and 3" },
+        };
+        const int SHOT_FLOOR = 6;       // the hop in, the capture, the registered valid
+
+        auto run_at = [&](int M, int N, int K, uint32_t tw, uint32_t ts) {
+            g_pta_tw = tw; g_pta_ts = ts;
+            const Result r = run_case(M, N, K, dw, false, ActCfg{});
+            g_pta_tw = 0;  g_pta_ts = 0;
+            return r;
+        };
+
+        for (const Shape& c : shapes) {
+            const int nt = (c.N + NUM_COLS - 1) / NUM_COLS;
+            const int kt = (c.K + NUM_ROWS - 1) / NUM_ROWS;
+            const int Q  = nt * kt;
+            // Whether the hop's entry parity is stable: an N tile with an odd nc
+            // makes S_WRITE odd, which flips it from row to row.
+            bool all_even = true;
+            for (int nb = 0; nb < c.N; nb += NUM_COLS) {
+                const int nc = std::min(NUM_COLS, c.N - nb);
+                if (nc % 2) all_even = false;
+            }
+            printf("[C2] M=%-2d N=%-2d K=%-3d Nt=%d Kt=%-2d  %s%s\n",
+                   c.M, c.N, c.K, nt, kt, c.what,
+                   all_even ? "" : ", entry parity alternates");
+
+            bool shape_ok = true;
+            for (uint32_t tw : {0u, 2u, 7u, 64u, 1000u}) {
+                for (uint32_t ts : {2u, 3u, 4u, 5u, 11u}) {
+                    const Result r = run_at(c.M, c.N, c.K, tw, ts);
+                    const uint32_t twe = tw + (tw & 1u);        // settle rounds up
+                    const int run  = (int)(r.ops / (NUM_ROWS * NUM_COLS));
+                    const int wr   = (int)r.cycles - (int)r.stall - run -
+                                     (int)r.act_cycles;
+                    // The three parity-free terms, exact.
+                    const int want_stall = c.N * c.K + Q * (int)twe +
+                                           c.M * (kt - 1) * c.N;
+                    const int want_wr    = c.M * kt * c.N;
+                    // The shot, as the bound the hop makes it.
+                    const int run_hi     = c.M * Q * ((int)ts + SHOT_FLOOR);
+                    const int run_lo     = c.M * Q * ((int)ts + SHOT_FLOOR - 1);
+                    const int want_run   = run_hi;
+                    const int want_cyc   = want_stall + want_wr + want_run;
+                    const bool ok_stall = (int)r.stall == want_stall;
+                    const bool ok_wr    = wr == want_wr;
+                    const bool ok_run   = (run >= run_lo) && (run <= run_hi);
+                    const bool ok_cyc   = ((int)r.cycles >= want_stall + want_wr + run_lo) &&
+                                          ((int)r.cycles <= want_stall + want_wr + run_hi);
+                    const bool ok = r.ok && ok_stall && ok_wr && ok_run && ok_cyc;
+                    if (!ok) { shape_ok = false; ++failures;
+                        printf("[C2]   TW=%-5u TS=%-2u stall %d/%d %s  write %d/%d %s"
+                               "  run %d/%d %s  total %d/%d %s  C %s\n",
+                               tw, ts, r.stall, want_stall, ok_stall ? "ok" : "BAD",
+                               wr, want_wr, ok_wr ? "ok" : "BAD",
+                               run, want_run, ok_run ? "ok" : "BAD",
+                               r.cycles, want_cyc, ok_cyc ? "ok" : "BAD",
+                               r.ok ? "ok" : "WRONG"); }
+                }
+            }
+            {   // Where in the shot's one-cycle band this shape actually sits.
+                const Result rs = run_at(c.M, c.N, c.K, 0, 4);
+                const int run4 = (int)(rs.ops / (NUM_ROWS * NUM_COLS));
+                printf("[C2]   the scan, the restore and the write are exact; the "
+                       "shot costs %.2f cycles at PTA_TS=4 (bound 9..10)\n",
+                       (double)run4 / (double)(c.M * Q));
+            }
+            printf("[C2]   2.1 with Tw = nc*kr + PTA_TW and Td = nc, 25 (TW,TS) "
+                   "points: %s\n", shape_ok ? "PASS" : "FAIL");
+            // What 2.1's own constants would have said, for the record.
+            const Result r0 = run_at(c.M, c.N, c.K, 0, 2);
+            const int flat = Q * (NUM_ROWS * NUM_COLS) + Q * c.M * (2 + 8) +
+                             c.M * nt * (kt - 1) * 8;
+            printf("[C2]   2.1 as written (Tw=64, Td=8, Ts=PTA_TS) would say %d, "
+                   "measured %u, delta %+d\n", flat, r0.cycles,
+                   (int)r0.cycles - flat);
+        }
+
+        // ---- The shot's floor and its quantisation -------------------------
+        // One shot, so S_RUN is entered once and o_op_count/64 IS the shot.
+        printf("[C2] the shot, M=1 N=%d K=%d (one shot):\n", NUM_COLS, NUM_ROWS);
+        {
+            bool q_ok = true;
+            for (uint32_t ts = 1; ts <= 12; ++ts) {
+                const Result r = run_at(1, NUM_COLS, NUM_ROWS, 0, ts);
+                const int run  = (int)(r.ops / (NUM_ROWS * NUM_COLS));
+                const int hi   = (int)ts + SHOT_FLOOR;
+                const bool ok  = r.ok && (run >= hi - 1) && (run <= hi);
+                if (!ok) { q_ok = false; ++failures; }
+                printf("[C2]   PTA_TS %-2u -> %d cycles (bound %d..%d) %s\n",
+                       ts, run, hi - 1, hi, ok ? "" : " FAIL");
+            }
+            printf("[C2]   the shot is PTA_TS + %d, within one cycle of the hop: "
+                   "%s\n", SHOT_FLOOR, q_ok ? "PASS" : "FAIL");
+            printf("[C2]   so 6.2's Ts is understated by %d cycles a shot: the "
+                   "hop-gated feed, the hop-aligned capture and the registered "
+                   "valid are not in its model\n", SHOT_FLOOR);
+        }
+
+        // ---- Section 6.2's runnable points ---------------------------------
+        // At the shape 6.2 names.  EO-res needs Nt*Kt resident banks and the
+        // tile has two, so it stays a formula there and here.
+        printf("[C2] section 6.2, at M=64 N=8 K=256 (Nt=1, Kt=32, a full tile).\n"
+               "[C2]   The model's band is one cycle a shot, so 2048 wide here.\n");
+        {
+            const int M6 = 64, N6 = 8, K6 = 256;
+            const int nt6 = (N6 + NUM_COLS - 1) / NUM_COLS;
+            const int kt6 = (K6 + NUM_ROWS - 1) / NUM_ROWS;
+            const int Q6  = nt6 * kt6;
+            struct Pt { const char *name; uint32_t tw, ts; long doc; };
+            const Pt pts[] = {
+                { "TO-1ms ", 100000, 5, 3228672 },
+                { "TO-10us",   1000, 5,   60672 },
+                { "EO-scan",      0, 1,   20480 },
+            };
+            for (const Pt& p : pts) {
+                const Result r = run_at(M6, N6, K6, p.tw, p.ts);
+                const uint32_t twe = p.tw + (p.tw & 1u);
+                const long w_scan = (long)N6 * K6 + (long)Q6 * twe;
+                const long w_rest = (long)M6 * (kt6 - 1) * N6;
+                const long w_wr   = (long)M6 * kt6 * N6;
+                const long w_run  = (long)r.ops / (NUM_ROWS * NUM_COLS);
+                const long hi     = (long)M6 * Q6 * ((long)p.ts + SHOT_FLOOR);
+                const long want   = w_scan + w_rest + w_wr + hi;
+                const bool ok = r.ok && ((long)r.cycles <= want) &&
+                                ((long)r.cycles >= want - (long)M6 * Q6);
+                if (!ok) ++failures;
+                printf("[C2]   %s TW=%-6u TS=%u  measured %-9u model %ld..%ld  %s\n",
+                       p.name, p.tw, p.ts, r.cycles, want - (long)M6 * Q6, want,
+                       ok ? "PASS" : "FAIL");
+                printf("[C2]     scan+settle %-8ld restore %-7ld write %-7ld "
+                       "shot %-8ld (%ld a shot)\n", w_scan, w_rest, w_wr, w_run,
+                       w_run / ((long)M6 * Q6));
+                // Why it is not 6.2's number.  Both differences are structural
+                // and both are the document's, not the core's.
+                const long doc_shot = (long)M6 * Q6 * p.ts;
+                (void)0;
+                printf("[C2]     6.2 says %-9ld delta %+ld = the restore 2.3 adds "
+                       "and 6.2's table omits (%ld) + what a shot really costs "
+                       "above 6.2's Ts (%ld)\n",
+                       p.doc, (long)r.cycles - p.doc, w_rest, w_run - doc_shot);
+            }
+            printf("[C2]   EO-res not run: it needs Nt*Kt resident banks and the "
+                   "tile has two (6.2)\n");
+        }
     } else if (tw_gate) {
         // C2: the core spends PTA_TW as the tile's settle, held after a weight
         // program's last write (pta_cpu_integration.md 6.2, where Tw is the

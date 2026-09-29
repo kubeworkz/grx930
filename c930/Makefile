@@ -511,11 +511,16 @@ driver_fw: $(DRV_SW_HEX) verilate-soc4
 # DMA, which is why a 3-million-cycle sweep finishes in seconds.
 #
 #   make core_tw      C2: a GEMM's cycles are affine in PTA_TW, slope Nt * Kt
+#   make core_c2      C2's exit gate: section 2.1's cost model, term by term,
+#                     on the broadside tile (PTM-B) at section 6.2's points
 #   make core_act     A1 and A2: the activation stage, cycles and bit-exactness
 # ---------------------------------------------------------------------------
-.PHONY: core_tw core_act
+.PHONY: core_tw core_c2 core_act
 core_tw:
 	@bash sim/build_core_verilator_wsl.sh run --tw
+
+core_c2:
+	@bash sim/build_core_verilator_wsl.sh PTM_B=1 run --c2
 
 core_act:
 	@bash sim/build_core_verilator_wsl.sh run --sweep --act identity
