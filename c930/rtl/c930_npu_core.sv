@@ -33,7 +33,13 @@ module c930_npu_core
   // reads NUM_ROWS consecutive elements per cycle, so writing the same number
   // makes a_mem's two ports the same shape, which is what a future banked
   // a_mem would need.
-  parameter int WR_LANES = 8
+  parameter int WR_LANES = 8,
+  // MB (pta_cpu_integration.md 6.2, 8 item 3): resident weight banks, one per
+  // (N tile, K tile), so 6.2's EO-res point can be measured instead of modelled.
+  // Two is the DMA's double buffer, which is what every build has had.
+  parameter int NUM_BANKS = 2,
+  // Derived.  Two banks keep a 1-bit select, so no port width moves by default.
+  parameter int BANK_W    = (NUM_BANKS <= 2) ? 1 : $clog2(NUM_BANKS)
 )
 (
   input  logic                        i_clk,
@@ -175,7 +181,14 @@ module c930_npu_core
   // floor is a hop, not a cycle: the tile captures on hop edges and this core
   // runs a half-rate hop, so section 6.2's Ts = 1 points are Ts = 2 here.
   input  logic [31:0]                 i_pta_ts,
-  input  logic                        i_pta_cal_bank,     // the bank to calibrate
+  // MB (pta_cpu_integration.md 6.2, 8 item 3).  Resident weights: the tile holds
+  // a bank per (N tile, K tile), so a weight program is a select.  Both are
+  // sampled at a start.
+  input  logic                        i_pta_resident,   // bank per tile
+  input  logic                        i_pta_wload_en,   // 0: banks already loaded
+  // The bank to calibrate.  Widens with NUM_BANKS; the CSR still drives one bit,
+  // zero-extended, until a resident tile needs the rest of the field (C4).
+  input  logic [BANK_W-1:0]           i_pta_cal_bank,
   input  logic [3:0]                  i_pta_trim_log2,    // the weight DAC's step, Q.8
   input  logic [15:0]                 i_pta_trim_max,     // ... and its clamp
   input  logic [31:0]                 i_pta_cal_seed,     // the calibration's noise seed
@@ -393,7 +406,7 @@ module c930_npu_core
   logic                             cal_shot_start;
   logic                             cal_shot;
   logic [$clog2(NUM_COLS)-1:0]      cal_shot_col;
-  logic                             cal_bank;
+  logic [BANK_W-1:0]                cal_bank;
   // Set while the calibration interrupted a GEMM: the weights it zeroed have
   // to be reloaded before the GEMM can go on, and o_busy stays high because
   // the GEMM really is still in flight.
@@ -422,6 +435,8 @@ module c930_npu_core
   // (N tile, K tile) pass.  The array's second bank is left unused here; the
   // DMA still uses i_bank_sel for its own A/B double-buffering across GEMMs.
   logic        bank_sel;           // which weight bank is active for compute
+  logic        resident_r;         // MB: address banks by tile, sampled at start
+  logic        wload_en_r;         // MB: 0 if the banks already hold the weights
 
   // Snapshot of i_bank_sel captured at GEMM start.  Used for all B memory
   // reads (weight loading) so the read bank is stable even if
@@ -475,12 +490,19 @@ module c930_npu_core
                   (i_precision == 3'd2) || (i_precision == 3'd3) ||
                   (i_pta_adc_shift > 6'd40));
 
+  // MB: resident mode needs a bank per (N tile, K tile).  A shape with more
+  // tiles than banks would alias two of them onto one bank and return a quietly
+  // wrong C, so it is refused like a bad dimension is.
+  wire banks_bad = i_pta_resident &&
+                   ((num_n_tiles * num_k_tiles) > NUM_BANKS);
+
   // S_ACT refuses the float modes too (see the activation stage below).
   wire act_fp   = i_act_en && (i_precision == 3'd2 || i_precision == 3'd3);
 
   // The cycle a start is accepted: S_ACT and the tile sample their
   // configuration here.
-  wire start_ok = (state == S_IDLE) && i_start && dims_ok && !act_fp && !pta_bad;
+  wire start_ok = (state == S_IDLE) && i_start && dims_ok && !act_fp && !pta_bad &&
+                  !banks_bad;
 
   // ---------------------------------------------------------------------------
   // o_done: separated from FSM always_ff to break t[25] critical path.
@@ -733,9 +755,17 @@ module c930_npu_core
   // value costs one cycle more than it asks for, per program.
   logic [31:0] settle_cnt;
   wire [31:0]  tw_eff = i_pta_tw + {31'd0, i_pta_tw[0]};
-  wire         scan_done = (w_n == nc - 1) && (w_r == kr_reg - 1);
+  // Resident with the banks already loaded: there is nothing to scan, so the
+  // state exists only for its bookkeeping and the settle.
+  wire         scan_done = !wload_en_r || ((w_n == nc - 1) && (w_r == kr_reg - 1));
   wire         settling  = (state == S_WLOAD) && scan_done && (settle_cnt != 32'd0);
-  logic        w_load_bank;
+  // Which bank holds this tile's weights.  In the shipped mode that is the DMA's
+  // double-buffer select, unchanged; resident, it is the tile's own index, which
+  // is what makes a weight program a select and nothing more.
+  wire [BANK_W-1:0] tile_bank = resident_r
+      ? BANK_W'(kt_reg * num_n_tiles + nt_reg)
+      : BANK_W'(bank_sel);
+  logic [BANK_W-1:0] w_load_bank;
   logic [$clog2(NUM_ROWS)-1:0] w_load_row;
   logic [$clog2(NUM_COLS)-1:0] w_load_col;
   logic signed [DIN_W-1:0]     w_load_data;
@@ -744,8 +774,8 @@ module c930_npu_core
   // redraws each cell's programming error (rtl/pta/c930_pta_cal.sv).
   // Not while settling: a weight write steps the PROG_ERR stream, so holding the
   // port open would redraw the last cell's error once per settle cycle.
-  assign w_load_active = ((state == S_WLOAD) && !settling) || cal_wen;
-  assign w_load_bank   = cal_wen ? cal_bank : bank_sel;
+  assign w_load_active = ((state == S_WLOAD) && !settling && wload_en_r) || cal_wen;
+  assign w_load_bank   = cal_wen ? cal_bank : tile_bank;
   assign w_load_row    = cal_wen ? cal_wrow : w_r[$clog2(NUM_ROWS)-1:0];
   assign w_load_col    = cal_wen ? cal_wcol : w_n[$clog2(NUM_COLS)-1:0];
   // Double-buffered B read: select bank via b_bank_sel (snapshot of
@@ -809,7 +839,8 @@ module c930_npu_core
     .NUM_COLS (NUM_COLS),
     .DIN_W    (DIN_W),
     .ACC_W    (ACC_W),
-    .TRIM_W   (24)
+    .TRIM_W   (24),
+    .NUM_BANKS (NUM_BANKS)
   ) u_tile_b (
     .i_clk           (i_clk),
     .i_rst_n         (i_rst_n),
@@ -818,7 +849,7 @@ module c930_npu_core
     .i_wrow          (w_load_row),
     .i_wcol          (w_load_col),
     .i_wdata         (w_load_data),
-    .i_bank_sel      (cal_busy ? cal_bank : bank_sel),
+    .i_bank_sel      (cal_busy ? cal_bank : tile_bank),
     .i_act           (act),
     .i_ps_in         (ps_in),
     .i_row_en        (row_en),
@@ -872,7 +903,8 @@ module c930_npu_core
     .NUM_COLS   (NUM_COLS),
     .DIN_W      (DIN_W),
     .ACC_W      (ACC_W),
-    .ABLATE_ROW (PTM_ABLATE_ROW)
+    .ABLATE_ROW (PTM_ABLATE_ROW),
+    .NUM_BANKS  (NUM_BANKS)
   ) u_array (
     .i_clk           (i_clk),
     .i_rst_n         (i_rst_n),
@@ -881,7 +913,7 @@ module c930_npu_core
     .i_wrow          (w_load_row),
     .i_wcol          (w_load_col),
     .i_wdata         (w_load_data),
-    .i_bank_sel      (cal_busy ? cal_bank : bank_sel),
+    .i_bank_sel      (cal_busy ? cal_bank : tile_bank),
     .i_act           (act),
     .i_ps_in         (ps_in),
     .o_ps_out        (ps_out),
@@ -1028,7 +1060,7 @@ module c930_npu_core
   assign cal_shot_start = 1'b0;
   assign cal_shot       = 1'b0;
   assign cal_shot_col   = '0;
-  assign cal_bank       = 1'b0;
+  assign cal_bank       = '0;
   assign cal_eng_err     = 1'b0;
   assign tile_shot_start = 1'b0;
   assign o_pta_cal_busy    = 1'b0;
@@ -1125,6 +1157,8 @@ module c930_npu_core
       m_base      <= 0;
       nt_reg      <= 0;
       kt_reg      <= 0;
+      resident_r  <= 1'b0;
+      wload_en_r  <= 1'b1;
       t           <= 0;
       w_r         <= 0;
       w_n         <= 0;
@@ -1170,7 +1204,7 @@ module c930_npu_core
             cal_resume_st <= S_IDLE;
             state         <= S_CAL;
           end else if (i_start) begin
-            if (!dims_ok || act_fp || pta_bad) begin
+            if (!dims_ok || act_fp || pta_bad || banks_bad) begin
               o_error <= 1'b1;          // stay IDLE
             end else begin
               o_error    <= 1'b0;
@@ -1178,6 +1212,8 @@ module c930_npu_core
               m_base     <= 0;
               nt_reg     <= 0;
               kt_reg     <= 0;
+              resident_r <= i_pta_resident;
+              wload_en_r <= i_pta_wload_en;
               t          <= 0;
               w_r        <= 0;
               w_n        <= 0;

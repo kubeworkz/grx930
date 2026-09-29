@@ -410,6 +410,12 @@ module c930_npu_top
     .i_pta_cal_passes  (pta_cal_passes),
     .i_pta_tw          (pta_tw),
     .i_pta_ts          (pta_ts),
+    // MB's resident weights are a core-bench knob for now: the exit gate is on
+    // the core (pta_program_plan.md step MB), and C4(c) is what puts them on the
+    // CSR beside PTA_TW and PTA_TS for the SoC sweep.  Tied to the shipped
+    // behaviour here -- one bank per compute, scanned every tile.
+    .i_pta_resident    (1'b0),
+    .i_pta_wload_en    (1'b1),
     .i_pta_cal_bank    (pta_cal_bank),
     .i_pta_trim_log2   (pta_trim_log2),
     .i_pta_trim_max    (pta_trim_max),
