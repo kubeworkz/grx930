@@ -271,6 +271,27 @@ module c930_pta_cal
   wire        in_shot = (cs == C_SHOT);
   wire [15:0] amp     = 16'd1 << i_amp_log2;
 
+`ifdef PTM_B
+  // Broadside (pta_cpu_integration.md 4.2): one shot illuminates the row and every
+  // column is latched on the same hop edge, so there is no stagger to walk.  The row
+  // is HELD for the whole state rather than pulsed at one t: PTM-C under BROADSIDE
+  // reads i_act directly instead of from the de-skew history, and the core's
+  // hop-gated act register would have taken a zero back before the shot otherwise.
+  always_comb begin
+    o_act = '0;
+    if (in_shot)
+      for (int r = 0; r < R; r++)
+        if (int'(shot) == r)
+          o_act[r*DIN_W +: DIN_W] = DIN_W'(amp);
+  end
+
+  // t = 0 presents the row, t = 1 is the hop the act register needs, t = 2 takes
+  // the shot and t = 3 reads every column back -- the same "shot at t, capture at
+  // t+1" the skewed schedule uses, with the walk removed.
+  assign o_shot_start = in_shot && (t == 16'd0);
+  assign o_shot       = in_shot && (t == 16'd2);
+  assign o_shot_col   = '0;          // broadside: no column is singled out
+`else
   always_comb begin
     o_act = '0;
     if (in_shot)
@@ -282,6 +303,7 @@ module c930_pta_cal
   assign o_shot_start = in_shot && (t == 16'd0);
   assign o_shot       = in_shot && (t >= 16'(2*R)) && !t[0] && (t < 16'(2*R + 2*C));
   assign o_shot_col   = CW'((t - 16'(2*R)) >> 1);
+`endif
   assign o_shift_en   = o_busy;
   assign o_shift      = shift_r;
 
@@ -453,6 +475,24 @@ module c930_pta_cal
         // One shot: row `shot` at the probe amplitude, every column captured.
         C_SHOT: begin
           if (i_hop) begin
+`ifdef PTM_B
+            // Broadside: the shot was taken on the previous hop edge and every
+            // column is in i_ps_out at once, so one t step collects the row.
+            if (t == 16'd3) begin
+              for (int c = 0; c < C; c++)
+                sum[KW'(int'(shot) * C + c)] <= sum[KW'(int'(shot) * C + c)] +
+                    SUM_W'($signed(i_ps_out[c*ACC_W +: ACC_W]));
+              t <= 16'd0;
+              if (int'(shot) == R - 1) begin
+                cidx <= '0;
+                cs   <= C_NEXT;
+              end else begin
+                shot <= shot + (RW+1)'(1);
+              end
+            end else begin
+              t <= t + 16'd1;
+            end
+`else
             if (t >= 16'(2*R + 1) && t[0]) begin
               cap_col = (int'(t) - 2*R - 1) / 2;
               sum[KW'(int'(shot) * C + cap_col)] <= sum[KW'(int'(shot) * C + cap_col)] +
@@ -469,6 +509,7 @@ module c930_pta_cal
             end else begin
               t <= t + 16'd1;
             end
+`endif
           end
         end
 

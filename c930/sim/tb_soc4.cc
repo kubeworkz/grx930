@@ -640,19 +640,9 @@ static int run_pta(Vc930_soc4_verilator *top) {
         {0x040, "T7 MZM_NL refused, then cleared"},
     };
     int fails = 0;
-    // A broadside tile has no staggered readout for the calibration engine's probe
-    // to walk, so the firmware sets T4/T5 to keep RESULT meaningful and flags why.
-    // Printing those two as PASS would be a test reporting on something it did not
-    // do, so they print as SKIP with the reason.
-    const bool bcal = (diag & 0x200) != 0;
     for (int i = 0; i < 7; i++) {
         bool ok = (diag & checks[i].bit) != 0;
-        const bool skipped = bcal && (checks[i].bit == 0x008 || checks[i].bit == 0x010);
-        printf("[TB]   %s %s%s\n", skipped ? "[SKIP]" : ok ? "[PASS]" : "[FAIL]",
-               checks[i].what,
-               skipped ? " -- the engine's probe is PTM-C's staggered readout,"
-                         " which this tile has none of; a broadside probe is owed"
-                       : "");
+        printf("[TB]   %s %s\n", ok ? "[PASS]" : "[FAIL]", checks[i].what);
         if (!ok) fails++;
     }
     if (res != PASS_MAGIC) { printf("[TB]   [FAIL] RESULT is not PASS\n"); fails++; }

@@ -67,13 +67,6 @@ typedef unsigned int u32;
 #define T6_OK       0x020u
 #define T7_OK       0x040u
 #define DIGITAL     0x100u   /* the array build: nothing to impair */
-/* The broadside tile (PTM-B).  c930_pta_cal.sv's probe walks PTM-C's staggered
- * readout -- C_SHOT drives t to 2R+2C-1 and captures column (t-2R-1)/2 on odd t --
- * and a broadside tile has no such stagger, so the probe measures nothing and the
- * residual comes back zero.  tb_c930_npu SKIPs the same test for the same reason.
- * A broadside probe is owed; until it exists this says so rather than failing a
- * test that measured nothing. */
-#define BROADSIDE   0x200u
 
 #define NUM_COLS    8
 #define NUM_ROWS    8
@@ -268,13 +261,7 @@ int main(void)
 
     /* ---- T4 and T5: a calibration, and a START during it ---------------- */
     wr(PHASE_ADDR, 6);
-#ifdef PTM_B
-    /* The probe is PTM-C's; see BROADSIDE above. */
-    diag |= T4_OK | T5_OK | BROADSIDE;
-    if (0) {
-#else
     if (!digital) {
-#endif
         u32 ct0, ct1, st;
         int guard_ok = 0;
         int cal_amp;
@@ -291,7 +278,19 @@ int main(void)
         wr(PTA_REG_DRIFT, 0x00000200u);          /* sigma 2.0, a step every shot */
         wr(PTA_REG_DRIFT_MAX, 0x0C00);
         wr(PTA_REG_TRIM, PTA_TRIM_FIELDS(2, 0x2000));
-        wr(PTA_REG_CAL_CFG, PTA_CAL_CFG_FIELDS(cal_amp, 0, 3, 0));
+        /* Three doublings of the repeat count, not one repeat.
+         *
+         * T5 below needs the calibration to still be running when its START
+         * lands, and the only thing between CAL_NOW and that START is the
+         * descriptor -- eight MMIO writes.  With the broadside probe the shot
+         * phase is eight times shorter than the skewed one (one shot a row
+         * instead of a walk over 2R+2C windows), which took the whole
+         * calibration below the time those writes take: CAL_BUSY was already
+         * clear, nothing queued, and T5 failed while the guard it tests was
+         * perfectly intact.  Repeats put the time back where the race is
+         * winnable on either tile, and they average the probe's noise, which
+         * costs T4 nothing. */
+        wr(PTA_REG_CAL_CFG, PTA_CAL_CFG_FIELDS(cal_amp, 3, 3, 0));
         wr(PTA_REG_CAL_SEED, 0x00CA11B0u);
         wr(PTA_REG_CAL_PER, 0);
         wr(PTA_REG_CTRL, PTA_CTRL_EN);           /* the engine, scheduler off */
