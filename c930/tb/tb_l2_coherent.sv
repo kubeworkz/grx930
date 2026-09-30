@@ -199,8 +199,14 @@ module tb_l2_coherent;
 
     // ---- Test 5: a write to an UNTOUCHED line must NOT invalidate the
     //              sharers of a different line ----
+    // The address has to be in a line no earlier test has touched, and 0x30 was
+    // not one: LINE_BYTES is 32, so 0x30 sits in the SAME line as the 0x20 above.
+    // This passed only while a write wiped the directory entry -- src1 wrote 0x28
+    // at T3 and kept the line in its L1, the directory forgot, and so this write
+    // found nothing to invalidate.  That was the bug rather than a pass; T10 now
+    // asserts the opposite.  0x80 is clear of 0x20, 0x40 and 0x60.
     inv_seen = 8'h00;
-    write_word(64'h30, 64'h1111222233334444, 4'd10);
+    write_word(64'h80, 64'h1111222233334444, 4'd10);
     if (inv_seen[0] || inv_seen[1] || inv_seen[4]) begin
       $display("FAIL T5 spurious invalidation seen=%0h", inv_seen);
       errs++;
@@ -271,6 +277,48 @@ module tb_l2_coherent;
       errs++;
     end else
       $display("PASS T9 a hit racing a write does not resurrect the dropped line");
+
+    // ---- Test 10: a line its own writer still holds must be invalidated when
+    //               somebody else writes it ----
+    // A write is write-through with no allocate: the L2 drops its copy of the
+    // data, but the writer's L1 keeps the line.  The directory therefore has to
+    // go on recording the writer, or the next write to that line invalidates
+    // nobody and the writer reads its own stale copy for as long as the line
+    // survives.  That is what cost C4(a) its firmware half -- a driver that
+    // cleared C before a GEMM read its own zeros back afterwards.
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'hA0, 4'd0, w0, w1, w2, w3);          // src0: miss -> alloc, sharer
+    write_word(64'hA0, 64'h7878787878787878, 4'd0);   // src0 writes its own line
+    inv_seen = 8'h00;
+    write_word(64'hA8, 64'h9A9A9A9A9A9A9A9A, 4'd10);  // src10 writes the same line
+    if (!inv_seen[0]) begin
+      $display("FAIL T10 the writer's own line was not invalidated: inv_seen=%0h",
+               inv_seen);
+      errs++;
+    end else
+      $display("PASS T10 a line its writer still holds is invalidated");
+
+    // ---- Test 11: a writer's record must survive another core refilling the
+    //               same line ----
+    // Keeping the directory entry past a write-through is not enough on its own.
+    // A read miss checks the data's validity, which a dir-only entry has
+    // cleared, so without care it allocates the same tag into another way and
+    // the set ends up holding one line twice with its sharers split.  A later
+    // write then invalidates whichever entry its lookup found and leaves the
+    // other core stale -- the original bug, one step removed.
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'hC0, 4'd0, w0, w1, w2, w3);          // src0: alloc, sharer {0}
+    write_word(64'hC0, 64'hB1B1B1B1B1B1B1B1, 4'd0);   // src0 writes: dir-only {0}
+    got_first = 0; got_second = 0; got_third = 0;
+    read_line(64'hC0, 4'd1, w0, w1, w2, w3);          // src1: refills the SAME line
+    inv_seen = 8'h00;
+    write_word(64'hC8, 64'hB2B2B2B2B2B2B2B2, 4'd10);  // src10 writes it
+    if (!(inv_seen[0] && inv_seen[1])) begin
+      $display("FAIL T11 the set split one line's sharers: inv_seen=%0h (want 0 and 1)",
+               inv_seen);
+      errs++;
+    end else
+      $display("PASS T11 a writer's record survives another core's refill");
 
     if (errs == 0)
       $display("ALL L2 TESTS PASSED");

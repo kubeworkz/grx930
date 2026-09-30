@@ -649,6 +649,33 @@ $(SWP_SW_BIN): $(SWP_SW_ELF)
 $(SWP_SW_HEX): $(SWP_SW_BIN) sw/bin2hex.py
 	$(PYTHON) sw/bin2hex.py $(SWP_SW_BIN) $(SWP_SW_HEX)
 
+# ---------------------------------------------------------------------------
+# The L2 directory's blind spot.  A line the CPU has written leaves the
+# directory, so a later DMA write to it invalidates nobody and the CPU reads its
+# own stale value -- which is what cost C4(a) its firmware half.  The rule
+# "firmware must not write a buffer the accelerator writes" has lived in comments
+# in two firmwares since; this is it as a test.
+# ---------------------------------------------------------------------------
+L2C_SW_ELF := sw/l2_coh_test.elf
+L2C_SW_BIN := sw/l2_coh_test.bin
+L2C_SW_HEX := sw/l2_coh_prog.hex
+
+$(L2C_SW_ELF): sw/start.S sw/l2_coh_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/l2_coh_test.c sw/c930_npu_driver.c
+
+$(L2C_SW_BIN): $(L2C_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(L2C_SW_HEX): $(L2C_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(L2C_SW_BIN) $(L2C_SW_HEX)
+
+.PHONY: l2_coh
+l2_coh: $(L2C_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run l2coh $(VERIL4_OUT) \
+	  "PTA_FW=$(L2C_SW_HEX)"
+
 .PHONY: pta_sweep
 pta_sweep: $(SWP_SW_HEX) verilate-soc4
 	@bash synth_xilinx/build_soc4_verilator_wsl.sh run sweep $(VERIL4_OUT)

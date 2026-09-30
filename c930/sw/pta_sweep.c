@@ -93,15 +93,14 @@ static int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
 // One GEMM through the driver.  Returns 0 if the engine refused it; drain is a
 // status code, not a predicate, which is the mistake pta_test.c records.
-// C is READ-ONLY from the CPU, and each point writes its own block.
+// C is read-only from the CPU, and each point writes its own block.
 //
-// The L2 records a sharer only on a read fill and is write-through/no-allocate, so
-// a line the CPU has written leaves the directory and a later DMA write
-// invalidates nobody (CPU document 3.3, found at C4(a)).  Clearing C from firmware
-// would therefore make every readback stale.  Reading it is safe the first time --
-// the line is fetched fresh -- but only the first time, so a point reusing an
-// earlier point's C would be checking the earlier point's arithmetic.  Each point
-// gets its own C block, which keeps every check a real one.
+// Both began as workarounds for the L2 dropping a written line's directory entry
+// (CPU document 3.3, found at C4(a)); c930_l2.sv keeps the writer now, so neither
+// is load-bearing for coherence any more. The block-per-point stays for its own
+// reason: every point computes the same C, so a point reading a block an earlier
+// one had already pulled into the L1 would be checking the earlier point's
+// arithmetic and would pass however wrong this point was.
 static u32 c_base_of(int p) { return C_ADDR + 0x200u * (u32)p; }
 
 // Returns 1 on success, or a negative code saying which step failed, so a point
