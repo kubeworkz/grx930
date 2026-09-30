@@ -108,6 +108,12 @@ extern "C" {
 #define PTA_REG_SIGMA_PR    (PTA_BASE + 0x5c)   // RW: programming error sigma, Q8.8 weight LSB
 #define PTA_REG_DRIFT       (PTA_BASE + 0x60)   // RW: [15:0] sigma Q8.8, [20:16] log2 shots a step
 #define PTA_REG_XTALK       (PTA_BASE + 0x64)   // RW: [7:0] chi, Q0.8
+/* An NPU counter in the PTA block's spare space: cycles the core spent starved of
+ * A rows (S_AROW).  NPU0's own counter window (0x00-0x3C) is full and 0x40 upward
+ * is NPU1's.  F2 wants it because being starved of operands is a host problem, not
+ * a tile one -- see the CPU document's 6.2, where C4(c) could only reach it by
+ * subtraction. */
+#define NPU_REG_AROW_CT     (PTA_BASE + 0xe0)   // R: cycles waiting for an A row
 #define PTA_REG_TW          (PTA_BASE + 0x68)   // RW: settle after a program, core cycles (C2 tile)
 #define PTA_REG_TS          (PTA_BASE + 0x6c)   // RW: shot + ADC latency, core cycles (C2 tile)
 #define PTA_REG_CAL_PER     (PTA_BASE + 0x70)   // RW: the periodic period, and the floor on the others
