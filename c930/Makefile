@@ -604,18 +604,12 @@ mul_store: $(MS_SW_HEX) verilate-soc4
 # test_pta_regs); this is the same seven driven by a RISC-V program through the
 # crossbar, the D-cache and the DMA, which is what a driver does.
 # ---------------------------------------------------------------------------
-# The image carries -DPTM_B now, so PTM-C and PTM-B cannot share one file: make
-# would reuse whichever was built last, and the other build would report the wrong
-# tile's skips.  A suffix per tile, and the harness is told which to load.
-PTA_SW_SUF := $(if $(filter 1,$(PTM_B)),_b,)
-PTA_SW_ELF := sw/pta_test$(PTA_SW_SUF).elf
-PTA_SW_BIN := sw/pta_test$(PTA_SW_SUF).bin
-PTA_SW_HEX := sw/pta_prog$(PTA_SW_SUF).hex
+PTA_SW_ELF := sw/pta_test.elf
+PTA_SW_BIN := sw/pta_test.bin
+PTA_SW_HEX := sw/pta_prog.hex
 
-# PTM_B reaches the firmware so it can skip the calibration test: the engine's
-# probe is PTM-C's staggered readout, which a broadside tile does not have.
 $(PTA_SW_ELF): sw/start.S sw/pta_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
-	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib 	  $(if $(filter 1,$(PTM_B)),-DPTM_B) \
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
 	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
 	  -o $@ sw/start.S sw/pta_test.c sw/c930_npu_driver.c
 
