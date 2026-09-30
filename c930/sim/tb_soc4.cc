@@ -302,6 +302,158 @@ static int run_suite(Vc930_soc4_verilator *top) {
 // found -- and insists on which build it is looking at, since a firmware pass
 // would mean nothing otherwise.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// C4(c): section 6.2's sweep, run on the SoC by sw/pta_sweep.c
+// ---------------------------------------------------------------------------
+// The firmware drives the points through MMIO and leaves a table in DDR; this
+// reads it and checks the two things the plan asks of C4(c): that every point ran
+// and returned the right C, and that EO-res is measured rather than modelled.
+//
+// The shape is the SoC's.  This NPU is MAX_M=8, MAX_K=16, MAX_N=12 and cannot be
+// asked for section 6.2's M=64 N=8 K=256 at all -- the same gap section 6.1 records
+// about its baseline -- so what carries over is the points, which are ratios, and
+// not the shape they were tabulated at.  Said in the output too, because a cycle
+// count with the wrong shape attached to it is worse than no cycle count.
+static int run_sweep(Vc930_soc4_verilator *top) {
+    const int M = 8, N = 12, K = 16;     // 2 N tiles (8 and 4 wide), 2 K tiles
+    const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t DIAG = 0x9480, PHASE = 0x9490, SWEEP = 0x9500;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+    const int NPTS = 5;
+
+    printf("[TB] 4-core SoC -- C4(c): section 6.2's sweep, driven by firmware\n");
+    printf("[TB] shape M=%d N=%d K=%d: this SoC's NPU, not 6.2's -- MAX_M=8, "
+           "MAX_K=16, MAX_N=12 cannot be asked for M=64 N=8 K=256 (6.1)\n",
+           M, N, K);
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("PTA_FW");
+    preload_words_at(top, fw ? fw : "sw/pta_sweep_prog.hex", 0x0000, 8192);
+
+    for (int i = 0; i < M * K; i++) preload_byte(top, A + i, 1);
+    for (int i = 0; i < K * N; i++) preload_byte(top, B + i, 1);
+    // A C block per point, 0x200 apart.  The firmware never writes C from the
+    // CPU -- the L2 stops tracking a line the CPU wrote, so the DMA's write
+    // would not invalidate it -- and a point reusing an earlier point's C
+    // would be checking the earlier point's arithmetic.
+    for (int p = 0; p < NPTS; p++)
+        for (int i = 0; i < M * N; i++)
+            preload_word(top, C + 0x200 * p + i * 4, 0);
+    preload_word(top, DIMS + 0, (uint32_t)M);
+    preload_word(top, DIMS + 4, (uint32_t)N);
+    preload_word(top, DIMS + 8, (uint32_t)K);
+    preload_word(top, DIMS + 12, 0);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, DIAG, 0);
+    preload_word(top, PHASE, 0);
+    for (int i = 0; i < 8 * (NPTS + 1); i++) preload_word(top, SWEEP + i * 4, 0);
+
+    printf("[TB] image preloaded, all operands 1 so every C element is K=%d. "
+           "Booting CPU0.\n", K);
+    reset_release(top);
+
+    // TO-1ms alone is Nt*Kt * 100,000 cycles of settle, so this runs longer than
+    // the other firmware modes by an order of magnitude.
+    int c = -1;
+    for (int t = 0; t < 20000000; t++) {
+        clock_n(top, 1);
+        if ((t % 2000000) == 0 || t == 20000000 - 1)
+            printf("[TB]   t=%-9d pc=0x%08llx npu=%d/%d dma=%d phase=0x%02x\n",
+                   t, (unsigned long long)top->o_hart0_pc,
+                   (int)top->o_npu0_busy, (int)top->o_npu0_done,
+                   (int)top->o_dma0_phase, ddr_word(top, PHASE));
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c >= 0) printf("[TB] sweep: done after %d cycles\n", c);
+    else {
+        printf("[TB] sweep: TIMEOUT after 20000000 cycles, PHASE=0x%02x\n",
+               ddr_word(top, PHASE));
+        return 1;
+    }
+
+    struct Row { const char *name; const char *what; };
+    const Row rows[NPTS] = {
+        { "TO-1ms ",      "thermo-optic, 1 ms settle"      },
+        { "TO-10us",      "thermo-optic, 10 us settle"     },
+        { "EO-scan",      "Pockels, scanned"               },
+        { "EO-res fill",  "Pockels, resident: the fill"    },
+        { "EO-res ",      "Pockels, resident: measured"    },
+    };
+    auto slot = [&](int p, int i) {
+        return ddr_word(top, SWEEP + 32u * (uint32_t)p + 4u * (uint32_t)i);
+    };
+
+    const uint32_t nt = ddr_word(top, SWEEP + 32u * NPTS + 0);
+    const uint32_t kt = ddr_word(top, SWEEP + 32u * NPTS + 4);
+    printf("[TB]   Nt=%u Kt=%u, so Nt*Kt=%u weight banks resident at EO-res\n",
+           nt, kt, nt * kt);
+    printf("[TB]   %-12s %-9s %-9s %-8s %-7s %-7s %-6s %s\n",
+           "point", "cycles", "DMA busy", "wmove", "shots", "progs", "C",
+           "DMA/core");
+
+    int bad = 0;
+    for (int p = 0; p < NPTS; p++) {
+        const uint32_t cyc = slot(p, 0), dma = slot(p, 1), wmove = slot(p, 3);
+        const uint32_t shots = slot(p, 4), progs = slot(p, 5);
+        const uint32_t cok = slot(p, 6);
+        const int      ran = (int)slot(p, 7);
+        // DMA busy against core cycles.  NOT a share of the whole GEMM: the two
+        // counters overlap, since the DMA fetches before and during the core's
+        // run, so the ratio passes one when the fetch is the longer of the two.
+        // That is what section 6.2 means by "DMA_CT is part of the result", and
+        // it is the reading that matters at the Pockels-class end.
+        const double ratio = cyc ? (double)dma / (double)cyc : 0.0;
+        if (ran != 1) {
+            const char *why = ran == -1 ? "submit refused"
+                            : ran == -2 ? "drain timed out"
+                            : ran == -3 ? "o_error after the run"
+                                        : "did not run";
+            printf("[TB]   %-12s -- %s\n", rows[p].name, why);
+            ++bad;
+            continue;
+        }
+        printf("[TB]   %-12s %-9u %-9u %-8u %-7u %-7u %-6s %.2f\n",
+               rows[p].name, cyc, dma, wmove, shots, progs,
+               cok ? "ok" : "WRONG", ratio);
+        if (!cok) { ++bad; }
+    }
+
+    // What the sweep exists to show: the ratio across the range, and what the
+    // resident point costs against the scanned one it replaces.
+    const uint32_t c_to1 = slot(0, 0), c_to10 = slot(1, 0);
+    const uint32_t c_scan = slot(2, 0), c_fill = slot(3, 0), c_res = slot(4, 0);
+    if (c_scan && c_res) {
+        printf("[TB]   the range: TO-1ms %u to EO-scan %u, %.0fx\n",
+               c_to1, c_scan, (double)c_to1 / (double)c_scan);
+        printf("[TB]   EO-res %u against EO-scan %u: %.2fx, and the fill it "
+               "amortises cost %u\n", c_res, c_scan,
+               (double)c_scan / (double)c_res, c_fill);
+        printf("[TB]   weight movement, EO-scan %u -> EO-res %u\n",
+               slot(2, 3), slot(4, 3));
+    }
+    if (!c_to10) ++bad;
+
+    const uint32_t diag = ddr_word(top, DIAG);
+    const uint32_t res  = ddr_word(top, RESULT);
+    printf("[TB]   DIAG=0x%02x RESULT=0x%08x\n", diag, res);
+    if (res != PASS_MAGIC) {
+        printf("[TB] FAIL: the firmware did not report every point good\n");
+        return 1;
+    }
+    if (bad) {
+        printf("[TB] FAIL: %d point(s) did not run or returned the wrong C\n", bad);
+        return 1;
+    }
+    printf("[TB] PASS: section 6.2's four points measured on the SoC, EO-res "
+           "included, in %d cycles\n", c);
+    return 0;
+}
+
 static int run_pta(Vc930_soc4_verilator *top) {
     const int M = 8, N = 8, K = 16;          // 1 N tile, 2 K tiles
     const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
@@ -581,6 +733,8 @@ int main(int argc, char **argv) {
         rc = run_suite(top);
     else if (mode == "pta")
         rc = run_pta(top);
+    else if (mode == "sweep")
+        rc = run_sweep(top);
     else if (mode == "mulstore")
         rc = run_mulstore(top);
     else if (mode == "driver")

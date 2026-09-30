@@ -620,6 +620,37 @@ pta_fw: $(PTA_SW_HEX) verilate-soc4
 	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT)
 
 # ---------------------------------------------------------------------------
+# C4(c): section 6.2's sweep, on the SoC, driven by a RISC-V program.
+#
+# Four points -- TO-1ms, TO-10us, EO-scan, EO-res -- each setting PTA_TW, PTA_TS
+# and MB's PTA_CTRL modes through MMIO, then reporting core cycles, the DMA's busy
+# cycles, weight movement, shots and programmings.  EO-res is measured rather than
+# modelled, which is what this step was waiting on MB for.
+#
+# The shape is this SoC's NPU (MAX_M=8, MAX_K=16, MAX_N=12), not section 6.2's
+# M=64 N=8 K=256, which this build cannot be asked for at all -- the same gap
+# section 6.1 records.  What carries over is the points, which are ratios.
+# ---------------------------------------------------------------------------
+SWP_SW_ELF := sw/pta_sweep.elf
+SWP_SW_BIN := sw/pta_sweep.bin
+SWP_SW_HEX := sw/pta_sweep_prog.hex
+
+$(SWP_SW_ELF): sw/start.S sw/pta_sweep.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/pta_sweep.c sw/c930_npu_driver.c
+
+$(SWP_SW_BIN): $(SWP_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(SWP_SW_HEX): $(SWP_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(SWP_SW_BIN) $(SWP_SW_HEX)
+
+.PHONY: pta_sweep
+pta_sweep: $(SWP_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run sweep $(VERIL4_OUT)
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
 HOST_CC     ?= gcc

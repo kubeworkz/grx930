@@ -169,6 +169,11 @@ module c930_npu_csr
   output logic [7:0]  o_pta_xtalk,
   output logic [31:0] o_pta_tw,            // the emulation's settle and shot
   output logic [31:0] o_pta_ts,            // latency; the tile takes them at C2
+  // MB's modes, PTA_CTRL bits 9:7.  All zero is the shipped behaviour: one bank
+  // per compute, scanned every tile, interchanged loop order.
+  output logic        o_pta_resident,      // PTA_CTRL.RESIDENT, a bank per tile
+  output logic        o_pta_wskip,         // PTA_CTRL.WSKIP, banks already loaded
+  output logic        o_pta_morder,        // PTA_CTRL.MORDER, m-outer
   output logic [31:0] o_pta_cal_per,
   output logic [23:0] o_pta_cal_thr,
   output logic [3:0]  o_pta_cal_amp,
@@ -266,6 +271,9 @@ module c930_npu_csr
   // ---- The PTA block's own registers (C4(a)) ----
   logic        pta_en;
   logic [1:0]  pta_sched;
+  logic        pta_resident;
+  logic        pta_wskip;
+  logic        pta_morder;
   logic [6:0]  pta_impair;
   logic [3:0]  pta_abits, pta_wbits, pta_adcbits;
   logic [5:0]  pta_shift;
@@ -320,6 +328,9 @@ module c930_npu_csr
   assign o_pta_xtalk       = pta_xtalk;
   assign o_pta_tw          = pta_tw;
   assign o_pta_ts          = pta_ts;
+  assign o_pta_resident    = pta_resident;
+  assign o_pta_wskip       = pta_wskip;
+  assign o_pta_morder      = pta_morder;
   assign o_pta_cal_per     = pta_cal_per;
   assign o_pta_cal_thr     = pta_cal_thr;
   assign o_pta_cal_amp     = pta_cal_amp;
@@ -637,6 +648,9 @@ module c930_npu_csr
       precision     <= 3'd0;
       done_latch    <= 1'b0;
       pta_en        <= 1'b0;
+      pta_resident <= 1'b0;
+      pta_wskip    <= 1'b0;
+      pta_morder   <= 1'b0;
       pta_sched     <= 2'd0;
       pta_impair    <= 7'd0;
       pta_abits     <= 4'd0;
@@ -718,6 +732,11 @@ module c930_npu_csr
           A_PTA_CTRL: if (s_axi_wstrb[0]) begin
             pta_en    <= s_axi_wdata[0];
             pta_sched <= s_axi_wdata[5:4];      // bit 6 of CAL_SCHED is reserved
+            // MB's modes.  Latched, not strobed: they are sampled by the core at
+            // each GEMM start, so firmware sets them once for a sweep point.
+            pta_resident <= s_axi_wdata[7];
+            pta_wskip    <= s_axi_wdata[8];
+            pta_morder   <= s_axi_wdata[9];
             if (s_axi_wdata[1]) pta_now_q  <= 1'b1;
             if (s_axi_wdata[3]) pta_mrst_q <= 1'b1;
             // MODEL_RST clears the correction in the tile, so this file's copy
@@ -808,7 +827,12 @@ module c930_npu_csr
           ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
           ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
           ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
-          A_PTA_CTRL:      s_axi_rdata <= {25'd0, pta_sched, 3'd0, pta_en};
+          // 22 + 3 + 1 + 2 + 3 + 1 = 32.  The old form concatenated to 31 and
+          // relied on the zero-extension; MB's bits are not going on top of that.
+          A_PTA_CTRL:      s_axi_rdata <= {22'd0,
+                                           pta_morder, pta_wskip, pta_resident,
+                                           1'b0,            // CAL_SCHED bit 6
+                                           pta_sched, 3'd0, pta_en};
           // One read is the whole snapshot: bit4 BUSY as the chiplet's map has
           // it, bit5 CAL_ERR because this SoC has no interrupt block, and the
           // residual in [23:8] as the CPU document's 3.1 asks.

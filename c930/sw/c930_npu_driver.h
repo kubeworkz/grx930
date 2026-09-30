@@ -132,6 +132,13 @@ extern "C" {
 #define PTA_CTRL_CAL_NOW    0x02u   // write 1: one calibration, as soon as the tile is free
 #define PTA_CTRL_MODEL_RST  0x08u   // write 1: drift to zero AND the correction cleared
 #define PTA_CTRL_SCHED(s)   (((s) & 3u) << 4)
+/* MB's modes (step MB, measured by C4(c)).  All zero is the shipped behaviour:
+ * one weight bank per compute, scanned every tile, interchanged loop order.
+ * They are latched, and the core samples them at each GEMM start, so firmware
+ * sets them once for a sweep point rather than per GEMM. */
+#define PTA_CTRL_RESIDENT   0x080u  /* a weight bank per (N tile, K tile) */
+#define PTA_CTRL_WSKIP      0x100u  /* the banks already hold the weights */
+#define PTA_CTRL_MORDER     0x200u  /* m-outer loop order */
 #define PTA_SCHED_OFF       0u
 #define PTA_SCHED_PERIODIC  1u
 #define PTA_SCHED_PREDICT   2u

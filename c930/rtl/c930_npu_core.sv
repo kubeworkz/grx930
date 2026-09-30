@@ -1545,7 +1545,13 @@ module c930_npu_core
   // which is what makes this the chiplet map's "optical shots issued" rather
   // than "shots a GEMM asked for".  A programming is one pass through S_WLOAD:
   // the quantity PTA_TW's slope multiplies in the section 2.1 model.
-  wire wload_done = (state == S_WLOAD) && (w_n == nc - 1) && (w_r == kr_reg - 1);
+  // The state's EXIT, not the condition that holds while it settles.  w_n and w_r
+  // hold at the last cell for the whole settle, so the old level form counted
+  // PTA_TW programmings per program -- 3,004 where the shape had four, which is
+  // what C4(c)'s sweep read off the register.  This is also what makes the count
+  // right under MB's resident mode, where the scan is skipped and the bank select
+  // is the programming.
+  wire wload_done = (state == S_WLOAD) && scan_done && !(settle_cnt < tw_eff);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin

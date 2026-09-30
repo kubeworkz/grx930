@@ -97,6 +97,12 @@ module c930_soc_top
   output logic [7:0]  o_tb_rd_data
 );
 
+  // MB: resident weight banks.  ceil(MAX_N/NUM_COLS) * ceil(MAX_K/NUM_ROWS)
+  // is every (N tile, K tile) pair the widest runnable shape has, which is what
+  // section 6.2's EO-res point needs resident at once.
+  localparam int NPU_BANKS = ((MAX_N + NUM_COLS - 1) / NUM_COLS) *
+                             ((MAX_K + NUM_ROWS - 1) / NUM_ROWS);
+
   localparam logic [63:0] MMIO_BASE = 64'h4000_0000;
 
   // =========================================================================
@@ -1798,7 +1804,11 @@ module c930_soc_top
     .ACC_W    (48),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    // MB: a weight bank per (N tile, K tile) of the widest shape this NPU can be
+    // asked for, so C4(c) can measure section 6.2's EO-res point on the SoC.  The
+    // parameter reaches only the PTA tile, so a digital-array build pays nothing.
+    .NUM_BANKS (NPU_BANKS)
   ) u_npu (
     .i_clk         (core_clk),
     .i_rst_n       (core_rst_n),
@@ -1954,7 +1964,11 @@ module c930_soc_top
     .ACC_W    (48),
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
-    .MAX_N    (MAX_N)
+    .MAX_N    (MAX_N),
+    // MB: a weight bank per (N tile, K tile) of the widest shape this NPU can be
+    // asked for, so C4(c) can measure section 6.2's EO-res point on the SoC.  The
+    // parameter reaches only the PTA tile, so a digital-array build pays nothing.
+    .NUM_BANKS (NPU_BANKS)
   ) u_npu1 (
     .i_clk         (core_clk),
     .i_rst_n       (core_rst_n),
