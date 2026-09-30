@@ -80,13 +80,14 @@ static int ceil_div(int a, int b) { return (a + b - 1) / b; }
 /* Every element of C equal to want?  The operands are all ones, so "want" is a
  * number the contract gives, not a reference computed here.
  *
- * C is never written from here, only read.  It cannot be: c930_l2.sv records a
- * sharer on a read fill and drops the line on a write, so a line the CPU has
- * written is one the L2 no longer tracks -- the NPU DMA's write to it then
- * invalidates nobody and the CPU reads its own stale value for ever.  Clearing
- * C first is therefore the one thing this test must not do; each GEMM writes
- * every element anyway, so a check that C *became* the expected value is
- * stronger than one against a cleared buffer. */
+ * C is never written from here, only read.  That began as a workaround: the L2
+ * used to drop a line's directory entry on a write, so a line the CPU had written
+ * was one the DMA's later write invalidated nobody for, and the CPU read its own
+ * value back for ever.  c930_l2.sv keeps the writer in its directory now
+ * (tb_l2_coherent T10 and T11, and make l2_coh), so clearing C would no longer
+ * lie -- but it is still not worth doing.  Each GEMM writes every element anyway,
+ * and a check that C *became* the expected value is stronger than one against a
+ * buffer this test cleared itself. */
 static int c_all(int m, int n, int want)
 {
     int i;

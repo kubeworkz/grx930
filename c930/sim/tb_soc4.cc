@@ -314,6 +314,104 @@ static int run_suite(Vc930_soc4_verilator *top) {
 // about its baseline -- so what carries over is the points, which are ratios, and
 // not the shape they were tabulated at.  Said in the output too, because a cycle
 // count with the wrong shape attached to it is worse than no cycle count.
+// ---------------------------------------------------------------------------
+// The L2 directory's blind spot (sw/l2_coh_test.c)
+// ---------------------------------------------------------------------------
+// A line the CPU has written is outside c930_l2.sv's directory: a write is
+// write-through with no allocate, so the L2 invalidates the sharers it knows of
+// except the writer and then drops the line -- valid and sharers both cleared.
+// A later write by anyone else finds it not resident and invalidates nobody, and
+// the CPU keeps its stale copy.  The rule "firmware must not write a buffer the
+// accelerator writes" has lived in comments in two firmwares since C4(a); this
+// turns it into a test.
+static int run_l2coh(Vc930_soc4_verilator *top) {
+    const int M = 8, N = 8, K = 16;
+    const uint32_t A = 0x1000, B = 0x2000;
+    const uint32_t C1 = 0x3000, C2 = 0x3400, C3 = 0x3800;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t REC = 0x9430, DIAG = 0x9480, PHASE = 0x9490;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+
+    printf("[TB] 4-core SoC -- the L2 directory's blind spot, driven by firmware\n");
+    printf("[TB] every operand is 1, so every C element should read back as K=%d\n", K);
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("PTA_FW");
+    preload_words_at(top, fw ? fw : "sw/l2_coh_prog.hex", 0x0000, 8192);
+
+    for (int i = 0; i < M * K; i++) preload_byte(top, A + i, 1);
+    for (int i = 0; i < K * N; i++) preload_byte(top, B + i, 1);
+    for (uint32_t base : { C1, C2, C3 })
+        for (int i = 0; i < M * N; i++) preload_word(top, base + i * 4, 0);
+    preload_word(top, DIMS + 0, (uint32_t)M);
+    preload_word(top, DIMS + 4, (uint32_t)N);
+    preload_word(top, DIMS + 8, (uint32_t)K);
+    preload_word(top, DIMS + 12, 0);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, DIAG, 0);
+    preload_word(top, PHASE, 0);
+    for (int i = 0; i < 16; i++) preload_word(top, REC + i * 4, 0);
+
+    reset_release(top);
+
+    int c = -1;
+    for (int t = 0; t < 8000000; t++) {
+        clock_n(top, 1);
+        if ((t % 1000000) == 0)
+            printf("[TB]   t=%-8d pc=0x%08llx npu=%d/%d phase=%u\n", t,
+                   (unsigned long long)top->o_hart0_pc, (int)top->o_npu0_busy,
+                   (int)top->o_npu0_done, ddr_word(top, PHASE));
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c < 0) {
+        printf("[TB] l2coh: TIMEOUT, PHASE=%u\n", ddr_word(top, PHASE));
+        return 1;
+    }
+    printf("[TB] l2coh: done after %d cycles\n", c);
+
+    const uint32_t diag = ddr_word(top, DIAG);
+    const uint32_t res  = ddr_word(top, RESULT);
+    const uint32_t total = ddr_word(top, REC + 12);
+    struct Row { uint32_t bit; int good_slot, bad_slot; const char *what; };
+    const Row rows[3] = {
+        { 0x002, 4, 5, "T2 control: C untouched by the CPU before the GEMM" },
+        { 0x004, 7, 8, "T3 a line the CPU READ is invalidated" },
+        { 0x001, 0, 1, "T1 a line the CPU WROTE is invalidated" },
+    };
+    int fails = 0;
+    for (const Row& r : rows) {
+        const bool ok = (diag & r.bit) != 0;
+        const uint32_t good = ddr_word(top, REC + 4 * r.good_slot);
+        const uint32_t bad  = ddr_word(top, REC + 4 * r.bad_slot);
+        printf("[TB]   %s %s -- %u/%u elements right", ok ? "[PASS]" : "[FAIL]",
+               r.what, good, total);
+        if (!ok) {
+            ++fails;
+            if (bad == 0x0BADC0DE)
+                printf(", and the first wrong one held the CPU's own poison:"
+                       " the stale L1 line was never invalidated");
+            else
+                printf(", first wrong value 0x%08x -- not the poison, so this is"
+                       " not the directory", bad);
+        }
+        printf("\n");
+    }
+    if (res != PASS_MAGIC && fails == 0) {
+        printf("[TB]   [FAIL] RESULT is not PASS\n");
+        ++fails;
+    }
+    if (fails) {
+        printf("[TB] FAIL: %d check(s)\n", fails);
+        return 1;
+    }
+    printf("[TB] PASS: the directory tracks a line the CPU wrote\n");
+    return 0;
+}
+
 static int run_sweep(Vc930_soc4_verilator *top) {
     const int M = 8, N = 12, K = 16;     // 2 N tiles (8 and 4 wide), 2 K tiles
     const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
@@ -817,6 +915,8 @@ int main(int argc, char **argv) {
         rc = run_pta(top);
     else if (mode == "sweep")
         rc = run_sweep(top);
+    else if (mode == "l2coh")
+        rc = run_l2coh(top);
     else if (mode == "mulstore")
         rc = run_mulstore(top);
     else if (mode == "driver")

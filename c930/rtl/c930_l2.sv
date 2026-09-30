@@ -6,6 +6,12 @@
 // data caches are WRITE-THROUGH (they never hold dirty data), the protocol is
 // a simplified MSI with no Modified state:
 //
+//   * Every L1 line is a clean copy of an L2 line, EXCEPT between a
+//     write-through and the writer's next miss: the writer's L1 then holds data
+//     this L2 does not.  dir_mem is what keeps the directory honest across that
+//     window -- the tag and sharer vector outlive valid_mem, so a later write to
+//     the line still finds the writer and invalidates it.  Without it the writer
+//     read its own stale copy for as long as the line survived.
 //   * Every L1 line is a clean copy of an L2 line.  The L2 directory records
 //     which L1s hold each line (a 16-bit sharer vector indexed by SOURCE_ID,
 //     see c930_soc_top.sv for the source-id map).
@@ -189,6 +195,12 @@ module c930_l2
   endgenerate
   wire [TAG_BITS-1:0]            tag_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic                          valid_mem  [0:NUM_WAYS-1][0:NUM_SETS-1];
+  // The directory's own validity, separate from the data's.  A write-through
+  // leaves the L2 without the line's data but with an L1 that still holds it, so
+  // the tag and the sharer vector have to outlive valid_mem or the next write to
+  // the line invalidates nobody.  Set wherever valid_mem is set; kept when a
+  // write-through clears it.
+  logic                          dir_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
   // Line data storage: one simple-dual-port BRAM per (way, word) - 16 total
   // for the default geometry.  As flops this array alone is
   // NUM_WAYS*NUM_SETS*WORDS_PER_LINE*DATA_WIDTH = 524,288 FFs (4x the
@@ -240,6 +252,7 @@ module c930_l2
     for (i = 0; i < NUM_WAYS; i++)
       for (j = 0; j < NUM_SETS; j++) begin
         valid_mem[i][j] = 1'b0;
+        dir_mem[i][j]   = 1'b0;
         sharers[i][j]   = '0;
       end
     // Round-robin victim pointers must start defined (X indices on first
@@ -387,14 +400,37 @@ module c930_l2
             rd_state <= RD_HIT_SERVE;
             rd_beat  <= '0;   // single-writer: serve counter restarts here
           end else begin
-            // Miss: pick the round-robin victim.
-            rd_way <= victim_cnt[rd_set];
-            if (valid_mem[victim_cnt[rd_set]][rd_set] &&
-                sharers[victim_cnt[rd_set]][rd_set] != '0) begin
-              rd_evict_mask <= inv_mask_of_sharers(sharers[victim_cnt[rd_set]][rd_set]);
-              rd_state      <= RD_EVICT_INV;
-            end else begin
-              rd_state <= RD_REFILL_AR;
+            // Miss.  A dir-only entry for this very tag is the one way that must
+            // be reused rather than passed over: allocating the tag elsewhere
+            // would leave the set holding one line twice, its sharers split
+            // between the two entries, and a later write would invalidate only
+            // the entry its lookup happened to find.  No eviction for that case
+            // -- it is the same line, so the sharer's copy is still current, a
+            // write-through having put the same bytes in DDR that this refill is
+            // about to bring back.
+            begin
+              logic [WAY_BITS-1:0] pick;
+              logic                same_tag;
+              same_tag = 1'b0;
+              pick     = victim_cnt[rd_set];
+              for (int w = 0; w < NUM_WAYS; w++)
+                if (dir_mem[w][rd_set] && tag_mem[w][rd_set] == rd_tag) begin
+                  same_tag = 1'b1;
+                  pick     = w[WAY_BITS-1:0];
+                end
+              rd_way <= pick;
+              // Either kind of entry occupies a way it is taking over.  A
+              // dir-only line holds no data but does hold a sharer, and reusing
+              // its way for another tag without invalidating that sharer loses
+              // the entry exactly as the write-through used to.
+              if (!same_tag &&
+                  (valid_mem[pick][rd_set] || dir_mem[pick][rd_set]) &&
+                  sharers[pick][rd_set] != '0) begin
+                rd_evict_mask <= inv_mask_of_sharers(sharers[pick][rd_set]);
+                rd_state      <= RD_EVICT_INV;
+              end else begin
+                rd_state <= RD_REFILL_AR;
+              end
             end
           end
         end
@@ -515,6 +551,7 @@ module c930_l2
       for (int w = 0; w < NUM_WAYS; w++)
         for (int j = 0; j < NUM_SETS; j++) begin
           valid_mem[w][j] <= 1'b0;
+          dir_mem[w][j]   <= 1'b0;
           sharers[w][j]   <= '0;
         end
     end else begin
@@ -526,6 +563,7 @@ module c930_l2
       end
       if (rd_state == RD_EVICT_INV && (i_inv_ack & rd_evict_mask) == rd_evict_mask) begin
         valid_mem[rd_way][rd_set] <= 1'b0;
+        dir_mem[rd_way][rd_set]   <= 1'b0;
         sharers[rd_way][rd_set]   <= '0;
       end
       // Install a refilled line.  Only a miss allocates.  A hit reaches
@@ -540,7 +578,14 @@ module c930_l2
       // guard), so only valid/sharers are installed here.
       if (rd_state == RD_ALLOC && !rd_hit) begin
         valid_mem[rd_way][rd_set] <= 1'b1;
-        sharers[rd_way][rd_set]   <= (1 << rd_src);
+        dir_mem[rd_way][rd_set]   <= 1'b1;
+        // OR, not replace.  When this way already held the tag as a dir-only
+        // entry, its sharer is the earlier writer and still holds the line, so
+        // dropping it here would put the original bug back one step removed.  A
+        // way taken for a different tag has had its sharers invalidated and
+        // cleared by RD_EVICT_INV before this runs, and a free way's set is
+        // already empty, so the OR costs those cases nothing.
+        sharers[rd_way][rd_set]   <= sharers[rd_way][rd_set] | (1 << rd_src);
         // Line data: written by the g_way/g_word generate banks (one bank
         // captures rd_stage[gb] when rd_way matches its way).
       end
@@ -549,8 +594,21 @@ module c930_l2
       // Only a line that was actually resident is dropped; a miss has no way
       // or set worth touching (wr_way/wr_set still hold the previous line).
       if (wr_state == WR_INV && wr_hit && (i_inv_ack & wr_inv_mask) == wr_inv_mask) begin
+        // The data goes: after a write-through the L2's copy is stale.
         valid_mem[wr_way][wr_set] <= 1'b0;
-        sharers[wr_way][wr_set]   <= '0;
+        // The directory stays, and says what is true -- the writer holds this
+        // line in its L1 and nobody else does.  Clearing it here is what let a
+        // later write invalidate nobody, so a driver that cleared C before a GEMM
+        // read its own zeros back afterwards (CPU document 3.3).
+        if (inv_port_of_src[wr_id] != '0) begin
+          dir_mem[wr_way][wr_set] <= 1'b1;
+          sharers[wr_way][wr_set] <= (1 << wr_id);
+        end else begin
+          // A writer with no L1 to invalidate -- the NPU's DMA -- is not worth an
+          // entry, so the way is left genuinely free.
+          dir_mem[wr_way][wr_set] <= 1'b0;
+          sharers[wr_way][wr_set] <= '0;
+        end
       end
     end
   end
@@ -705,7 +763,10 @@ module c930_l2
             wr_hit      <= 1'b0;
             wr_inv_mask <= '0;
             for (int w = 0; w < NUM_WAYS; w++)
-              if (valid_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] &&
+              // dir_mem, not valid_mem: a line whose data this L2 dropped on an
+              // earlier write-through is still one whose sharers it must
+              // invalidate.  That is the whole fix.
+              if (dir_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] &&
                   tag_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] == wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS]) begin
                 hit         = 1'b1;
                 wr_hit      <= 1'b1;
