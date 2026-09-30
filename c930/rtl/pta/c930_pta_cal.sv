@@ -288,8 +288,11 @@ module c930_pta_cal
   // t = 0 presents the row, t = 1 is the hop the act register needs, t = 2 takes
   // the shot and t = 3 reads every column back -- the same "shot at t, capture at
   // t+1" the skewed schedule uses, with the walk removed.
-  assign o_shot_start = in_shot && (t == 16'd0);
-  assign o_shot       = in_shot && (t == 16'd2);
+  // One cycle each, not one hop window.  The tile's THERMAL and SHOT streams and
+  // its drift clock step on these strobes under BROADSIDE rather than on a hop, so
+  // a strobe held for a whole window would draw twice per shot.
+  assign o_shot_start = in_shot && (t == 16'd0) && i_hop;
+  assign o_shot       = in_shot && (t == 16'd2) && i_hop;
   assign o_shot_col   = '0;          // broadside: no column is singled out
 `else
   always_comb begin

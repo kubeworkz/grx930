@@ -982,7 +982,12 @@ int main(int argc, char** argv) {
     } else if (mb_gate) {
         // MB's exit gate (pta_program_plan.md step MB, CPU document 6.2 EO-res).
         // Needs a build with Nt*Kt banks: BANKS=32 for 6.2's shape.
-        const int SHOT_FLOOR = 6;
+        // The register at the tile's input and the register at its output.
+        // It was six until the hop came out of the broadside path: the core
+        // fed the tile on half-rate hop edges and the capture waited for
+        // one, because that is what PTM-C needs to emulate a systolic
+        // array and PTM-B was borrowing it.
+        const int SHOT_FLOOR = 2;
         printf("[MB] resident weights: a bank per (N tile, K tile)\n");
 
         auto run_res = [&](int M, int N, int K, uint32_t tw, uint32_t ts,
@@ -1049,15 +1054,15 @@ int main(int argc, char** argv) {
             // Tw is the select's own cycle, which is what the plan counts it as.
             const long sel    = Q6;
             const long hi     = sel + w_rest + w_wr + shots * (1 + SHOT_FLOOR);
-            const bool ok = res.ok && fill.ok &&
-                            ((long)res.cycles <= hi) &&
-                            ((long)res.cycles >= hi - shots);
+            // Exactly.  The shot lost its hop, so nothing in this total jitters.
+            const bool ok = res.ok && fill.ok && ((long)res.cycles == hi);
+            (void)shots;
             if (!ok) ++failures;
             printf("[MB]   fill (weights scanned)      %u cycles, C %s\n",
                    fill.cycles, fill.ok ? "ok" : "WRONG");
             printf("[MB]   EO-res (banks resident)     %u cycles, C %s  model "
-                   "%ld..%ld  %s\n", res.cycles, res.ok ? "ok" : "WRONG",
-                   hi - shots, hi, ok ? "PASS" : "FAIL");
+                   "%ld  %s\n", res.cycles, res.ok ? "ok" : "WRONG",
+                   hi, ok ? "PASS" : "FAIL");
             printf("[MB]     select %-6ld restore %-7ld write %-7ld shot %-8ld\n",
                    sel, w_rest, w_wr, (long)res.cycles - sel - w_rest - w_wr);
             printf("[MB]     the scan the fill paid and this GEMM does not: "
@@ -1089,12 +1094,12 @@ int main(int argc, char** argv) {
             //   M*Nt*(Kt*(Tw + Ts) + Td)
             const long shots_o = (long)M * nt * kt;
             const long hi_o = (long)M * nt * ((long)kt * (1 + (1 + SHOT_FLOOR)) + N);
-            const bool ok_o = outer.ok && ((long)outer.cycles <= hi_o) &&
-                              ((long)outer.cycles >= hi_o - shots_o);
+            const bool ok_o = outer.ok && ((long)outer.cycles == hi_o);
+            (void)shots_o;
             if (!ok_o || !inter.ok || !fill.ok) ++failures;
-            printf("[MB]   m-outer   %u cycles, C %s  model %ld..%ld  %s\n",
+            printf("[MB]   m-outer   %u cycles, C %s  model %ld  %s\n",
                    outer.cycles, outer.ok ? "ok" : "WRONG",
-                   hi_o - shots_o, hi_o, ok_o ? "PASS" : "FAIL");
+                   hi_o, ok_o ? "PASS" : "FAIL");
             printf("[MB]   the two orders at EO-res: m-outer %u, interchanged %u"
                    "  -- %.2fx to the shipped order\n",
                    outer.cycles, inter.cycles,
@@ -1179,7 +1184,12 @@ int main(int argc, char** argv) {
             {  3, 12,  24, "a ragged N tile, nc 8 and 4" },
             {  5, 11,   8, "a ragged N tile, nc 8 and 3" },
         };
-        const int SHOT_FLOOR = 6;       // the hop in, the capture, the registered valid
+        // The register at the tile's input and the register at its output.
+        // It was six until the hop came out of the broadside path: the core
+        // fed the tile on half-rate hop edges and the capture waited for
+        // one, because that is what PTM-C needs to emulate a systolic
+        // array and PTM-B was borrowing it.
+        const int SHOT_FLOOR = 2;
 
         auto run_at = [&](int M, int N, int K, uint32_t tw, uint32_t ts) {
             g_pta_tw = tw; g_pta_ts = ts;
@@ -1215,16 +1225,17 @@ int main(int argc, char** argv) {
                     const int want_stall = c.N * c.K + Q * (int)twe +
                                            c.M * (kt - 1) * c.N;
                     const int want_wr    = c.M * kt * c.N;
-                    // The shot, as the bound the hop makes it.
-                    const int run_hi     = c.M * Q * ((int)ts + SHOT_FLOOR);
-                    const int run_lo     = c.M * Q * ((int)ts + SHOT_FLOOR - 1);
-                    const int want_run   = run_hi;
+                    // The shot, exactly.  It used to be a bound because the hop's
+                    // entry parity moved it a cycle either way; with the hop out of
+                    // the broadside path there is nothing left to move it, so every
+                    // term of section 2.1 is now an equality here and the whole
+                    // total with them.
+                    const int want_run   = c.M * Q * ((int)ts + SHOT_FLOOR);
                     const int want_cyc   = want_stall + want_wr + want_run;
                     const bool ok_stall = (int)r.stall == want_stall;
                     const bool ok_wr    = wr == want_wr;
-                    const bool ok_run   = (run >= run_lo) && (run <= run_hi);
-                    const bool ok_cyc   = ((int)r.cycles >= want_stall + want_wr + run_lo) &&
-                                          ((int)r.cycles <= want_stall + want_wr + run_hi);
+                    const bool ok_run   = run == want_run;
+                    const bool ok_cyc   = (int)r.cycles == want_cyc;
                     const bool ok = r.ok && ok_stall && ok_wr && ok_run && ok_cyc;
                     if (!ok) { shape_ok = false; ++failures;
                         printf("[C2]   TW=%-5u TS=%-2u stall %d/%d %s  write %d/%d %s"
@@ -1262,17 +1273,21 @@ int main(int argc, char** argv) {
             for (uint32_t ts = 1; ts <= 12; ++ts) {
                 const Result r = run_at(1, NUM_COLS, NUM_ROWS, 0, ts);
                 const int run  = (int)(r.ops / (NUM_ROWS * NUM_COLS));
-                const int hi   = (int)ts + SHOT_FLOOR;
-                const bool ok  = r.ok && (run >= hi - 1) && (run <= hi);
+                // Exactly, not within a cycle.  Nothing in the broadside path
+                // waits for a hop any more, so the shot is deterministic --
+                // and holding it to equality is what would catch a hop
+                // dependence being reintroduced, which is how the six cycles
+                // got there in the first place.
+                const int want = (int)ts + SHOT_FLOOR;
+                const bool ok  = r.ok && (run == want);
                 if (!ok) { q_ok = false; ++failures; }
-                printf("[C2]   PTA_TS %-2u -> %d cycles (bound %d..%d) %s\n",
-                       ts, run, hi - 1, hi, ok ? "" : " FAIL");
+                printf("[C2]   PTA_TS %-2u -> %d cycles (want %d) %s\n",
+                       ts, run, want, ok ? "" : " FAIL");
             }
-            printf("[C2]   the shot is PTA_TS + %d, within one cycle of the hop: "
-                   "%s\n", SHOT_FLOOR, q_ok ? "PASS" : "FAIL");
+            printf("[C2]   the shot is exactly PTA_TS + %d, with no hop alignment "
+                   "left in it: %s\n", SHOT_FLOOR, q_ok ? "PASS" : "FAIL");
             printf("[C2]   so 6.2's Ts is understated by %d cycles a shot: the "
-                   "hop-gated feed, the hop-aligned capture and the registered "
-                   "valid are not in its model\n", SHOT_FLOOR);
+                   "register in and the register out\n", SHOT_FLOOR);
         }
 
         // ---- Section 6.2's runnable points ---------------------------------

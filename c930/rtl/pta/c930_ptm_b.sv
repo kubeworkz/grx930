@@ -26,11 +26,18 @@
 //                   ratio it sets against PTA_TW is the experiment.
 //   o_valid         one cycle, with o_ps_out holding every column.
 //
-// The floor is two cycles, not one.  grx930's array runs on a half-rate hop and
-// the tile captures on hop edges, so a shot cannot be shorter than one hop.
-// Section 6.2's EO points assume Ts = 1; on this core they are Ts = 2.  That is a
-// property of the host, like the 64-cycle weight scan the same section refuses to
-// design out, and it is reported rather than hidden.
+// The floor is two cycles: the register at the tile's input and the register at
+// its output.  It was six until the hop came out -- the core fed this tile on
+// half-rate hop edges and the capture waited for one, because that is what PTM-C
+// needs to emulate a systolic array.  A broadside tile is not emulating one, so
+// nothing here waits for a hop now, and what is left will not go without making
+// the tile combinational.  C4(b) already showed that is the wrong direction: the
+// activation stage's Fmax is what the board plan's 100 MHz rests on.
+//
+// Section 6.2's EO points assume Ts = 1; on this core they are Ts = 3 -- the two
+// registers plus the register that takes the start strobe.  That is a property of
+// the host, like the weight scan the same section refuses to design out, and it is
+// reported rather than hidden.
 // -----------------------------------------------------------------------------
 
 module c930_ptm_b
@@ -115,29 +122,24 @@ module c930_ptm_b
   // The tile captures on hop edges, so a shot is taken on the first hop at or
   // after i_shot_start and the dilation is counted from there.  One cycle of
   // o_valid follows; the core reads o_ps_out on it.
-  logic        hop;
-  always_ff @(posedge i_clk or negedge i_rst_n) begin
-    if (!i_rst_n) hop <= 1'b0;
-    else          hop <= ~hop;
-  end
-
-  typedef enum logic [1:0] { S_IDLE, S_SHOT, S_WAIT, S_DONE } state_e;
+  typedef enum logic [1:0] { S_IDLE, S_SHOT, S_WAIT } state_e;
   state_e      st;
   logic [31:0] wait_cnt;
-  logic        operands_in;       // the core's hop-gated feed has landed
-  logic        shot_now;          // this hop takes the shot
+  logic        shot_now;          // this cycle takes the shot
 
-  // The core registers i_act and i_ps_in on a hop edge, so they are not visible
-  // until after one.  The shot is taken on the NEXT hop: taking it on the first
-  // would multiply the previous window's operands, which reads as C = 0 on the
-  // first K tile because the feed is still zero.
-  assign shot_now = (st == S_SHOT) && hop && operands_in;
+  // S_SHOT is exactly one cycle, so this is a one-cycle strobe -- which it has to
+  // be, because the tile's streams step on the shot now rather than on a hop.
+  //
+  // It needs no hop and no operands_in handshake.  The core registers its broadside
+  // feed every cycle (there is no skew to build, so nothing to build at half rate),
+  // and act_comb is already valid on the cycle S_RUN is entered, so the operands
+  // are at the tile by the time this state is.
+  assign shot_now = (st == S_SHOT);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       st           <= S_IDLE;
       wait_cnt     <= 32'd0;
-      operands_in  <= 1'b0;
       o_valid      <= 1'b0;
     end else begin
       o_valid <= 1'b0;
@@ -145,27 +147,26 @@ module c930_ptm_b
         S_IDLE: begin
           if (i_shot_start) st <= S_SHOT;
         end
-        // Held until a hop edge: the capture happens on one, so the shot cannot
-        // be shorter than a hop and Ts has a floor of two cycles on this core.
+        // One cycle.  The tile captures on it, and o_valid is raised as this state
+        // is left rather than from a state of its own -- ps_out_q and o_valid then
+        // land on the same cycle, which is the one the core reads.
         S_SHOT: begin
-          if (hop) begin
-            if (!operands_in) begin
-              operands_in <= 1'b1;        // the feed lands on this edge
-            end else begin
-              wait_cnt <= 32'd0;
-              st       <= (i_ts > 32'd1) ? S_WAIT : S_DONE;
-            end
+          if (i_ts > 32'd1) begin
+            wait_cnt <= 32'd0;
+            st       <= S_WAIT;
+          end else begin
+            o_valid <= 1'b1;
+            st      <= S_IDLE;
           end
         end
-        // The modelled shot latency, beyond the hop the capture already cost.
+        // The modelled shot latency, on top of the cycle the shot itself cost.
         S_WAIT: begin
-          if (wait_cnt >= i_ts - 32'd2) st <= S_DONE;
-          else                          wait_cnt <= wait_cnt + 32'd1;
-        end
-        S_DONE: begin
-          o_valid     <= 1'b1;
-          operands_in <= 1'b0;
-          st          <= S_IDLE;
+          if (wait_cnt >= i_ts - 32'd2) begin
+            o_valid <= 1'b1;
+            st      <= S_IDLE;
+          end else begin
+            wait_cnt <= wait_cnt + 32'd1;
+          end
         end
         default: st <= S_IDLE;
       endcase
