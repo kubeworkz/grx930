@@ -33,7 +33,10 @@ module c930_npu_dma
   // Elements written per cycle on the wide preload port.  Must be >=
   // AXI_DATA_W/8 (the INT8 elements-per-beat) and must match the core's
   // WR_LANES.
-  parameter int WR_LANES   = 8
+  parameter int WR_LANES   = 8,
+  // The tile's shape, so the watchdog can count the weight programs a GEMM makes.
+  parameter int NUM_ROWS   = 8,
+  parameter int NUM_COLS   = 8
 )
 (
   input  logic        i_clk,
@@ -41,6 +44,11 @@ module c930_npu_dma
 
   // ---- Control (from the CSR via the top) ----
   input  logic        i_start,
+  // The emulation's settle and shot dilation (PTA_TW, PTA_TS).  The watchdog is
+  // the only thing here that wants them: they are cycles the core legitimately
+  // spends, and a bound computed from the shape alone reads them as a hang.
+  input  logic [31:0]                  i_pta_tw,
+  input  logic [31:0]                  i_pta_ts,
   input  logic [15:0] i_dim_m,
   input  logic [15:0] i_dim_n,
   input  logic [15:0] i_dim_k,
@@ -253,6 +261,14 @@ module c930_npu_dma
   // ---- Core timeout watchdog ----
   // If i_core_done does not fire within dm*dn*dk*2 cycles of o_core_start,
   // the core is hung.  Raise o_error and abort to prevent infinite stalls.
+  // Tiles the shape makes, for the watchdog's PTA terms.  The same ceil-divide
+  // the core uses for num_n_tiles / num_k_tiles.
+  // Variables with a continuous assign, not nets: `int` is 2-state and a net has
+  // to be 4-state.  The same shape the core declares num_n_tiles / num_k_tiles in.
+  int n_tiles, k_tiles;
+  assign n_tiles = (int'(i_dim_n) + NUM_COLS - 1) / NUM_COLS;
+  assign k_tiles = (int'(i_dim_k) + NUM_ROWS - 1) / NUM_ROWS;
+
   int  watchdog_cnt;       // countdown, armed when core starts
   int  watchdog_limit;     // dm * dn * dk * 2 (loaded in P_IDLE)
   logic watchdog_active;   // 1 while counting down in P_LAUNCH
@@ -475,8 +491,16 @@ module c930_npu_dma
               // so the safety margin scales accordingly.  Use M*N*K*8 + M*N*64 + 512
               // as a safe upper bound covering K-dependent compute, M×N tiling
               // overhead, and DMA round-trips.
+              // The shape's own bound, plus what the emulation is allowed to
+              // spend on top of it.  Without the two PTA terms, section 6.2's
+              // thermo-optic points look like a hung core: TO-1ms is 100,000
+              // cycles of settle per weight program, against a bound of 18,944
+              // at this shape (C4(c)).  A weight program per (N tile, K tile),
+              // and a shot per (output row, N tile, K tile).
               watchdog_limit <= i_dim_m * i_dim_n * i_dim_k * 8 +
-                                i_dim_m * i_dim_n * 64 + 512;
+                                i_dim_m * i_dim_n * 64 + 512 +
+                                n_tiles * k_tiles * int'(i_pta_tw) +
+                                i_dim_m * n_tiles * k_tiles * int'(i_pta_ts);
               // INT4: nibble-packing means rows share bytes, read all A upfront.
               // INT8/16/FP16/BF16: read first row only, prefetch rest during compute.
               if (i_precision == 3'd4) begin

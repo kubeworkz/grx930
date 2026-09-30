@@ -21,7 +21,10 @@ module c930_npu_top
   parameter int MAX_K    = 256,
   parameter int MAX_N    = 8,
   // Elements the DMA writes into the core per cycle on the wide preload port.
-  parameter int WR_LANES = 8
+  parameter int WR_LANES = 8,
+  // MB: resident weight banks.  The SoC wants Nt*Kt of them for its own shape so
+  // C4(c) can measure section 6.2's EO-res point; two is the DMA's double buffer.
+  parameter int NUM_BANKS = 2
 )
 (
   input  logic        i_clk,
@@ -125,6 +128,7 @@ module c930_npu_top
   logic [3:0]  pta_act_bits, pta_w_bits, pta_adc_bits;
   logic [5:0]  pta_adc_shift;
   logic [31:0] pta_seed, pta_tw, pta_ts, pta_cal_per, pta_cal_seed;
+  logic        pta_resident, pta_wskip, pta_morder;   // MB's modes, PTA_CTRL 9:7
   logic [15:0] pta_sigma_th, pta_k_shot, pta_sigma_pr, pta_drift_sigma, pta_drift_max;
   logic [4:0]  pta_drift_log2;
   logic [7:0]  pta_xtalk;
@@ -198,6 +202,9 @@ module c930_npu_top
     .o_pta_xtalk       (pta_xtalk),
     .o_pta_tw          (pta_tw),
     .o_pta_ts          (pta_ts),
+    .o_pta_resident    (pta_resident),
+    .o_pta_wskip       (pta_wskip),
+    .o_pta_morder      (pta_morder),
     .o_pta_cal_per     (pta_cal_per),
     .o_pta_cal_thr     (pta_cal_thr),
     .o_pta_cal_amp     (pta_cal_amp),
@@ -245,11 +252,18 @@ module c930_npu_top
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
     .MAX_N    (MAX_N),
-    .WR_LANES (WR_LANES)
+    .WR_LANES (WR_LANES),
+    .NUM_ROWS (NUM_ROWS),
+    .NUM_COLS (NUM_COLS)
   ) u_dma (
     .i_clk         (i_clk),
     .i_rst_n       (i_rst_n),
     .i_start       (start),
+    // The watchdog's PTA terms: the settle and the shot dilation are cycles the
+    // core legitimately spends, and a bound from the shape alone reads them as a
+    // hang (C4(c)).
+    .i_pta_tw      (pta_tw),
+    .i_pta_ts      (pta_ts),
     .i_dim_m       (dim_m),
     .i_dim_n       (dim_n),
     .i_dim_k       (dim_k),
@@ -328,7 +342,8 @@ module c930_npu_top
     .MAX_M    (MAX_M),
     .MAX_K    (MAX_K),
     .MAX_N    (MAX_N),
-    .WR_LANES (WR_LANES)
+    .WR_LANES (WR_LANES),
+    .NUM_BANKS (NUM_BANKS)
   ) u_core (
     .i_clk      (i_clk),
     .i_rst_n    (i_rst_n),
@@ -410,13 +425,13 @@ module c930_npu_top
     .i_pta_cal_passes  (pta_cal_passes),
     .i_pta_tw          (pta_tw),
     .i_pta_ts          (pta_ts),
-    // MB's resident weights are a core-bench knob for now: the exit gate is on
-    // the core (pta_program_plan.md step MB), and C4(c) is what puts them on the
-    // CSR beside PTA_TW and PTA_TS for the SoC sweep.  Tied to the shipped
-    // behaviour here -- one bank per compute, scanned every tile.
-    .i_pta_resident    (1'b0),
-    .i_pta_wload_en    (1'b1),
-    .i_pta_morder      (1'b0),
+    // MB's modes, now from PTA_CTRL bits 9:7 (C4(c)).  WSKIP is inverted here
+    // on purpose: the core's input reads "do the scan" and defaults to 1, while a
+    // CSR bit has to default to 0 and mean the shipped behaviour, so the register
+    // asks for the exception.
+    .i_pta_resident    (pta_resident),
+    .i_pta_wload_en    (!pta_wskip),
+    .i_pta_morder      (pta_morder),
     .i_pta_cal_bank    (pta_cal_bank),
     .i_pta_trim_log2   (pta_trim_log2),
     .i_pta_trim_max    (pta_trim_max),
