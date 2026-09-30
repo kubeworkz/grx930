@@ -354,7 +354,10 @@ VERIL4_OUT   := $(BUILD_DIR)/verilator4
 # -DPTM_C is in GFLAGS for iverilog; Verilator takes its own flags, and without
 # this the core compiles its digital-array branch against a file list that has
 # the array filtered out.
-VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal   $(if $(filter 1,$(PTM_C)),-DPTM_C) \
+# PTM_B has to be defined here as well as PTM_C, or the file list carries
+# c930_ptm_b.sv while the core still elaborates PTM-C -- which is what made
+# section 6.2's Ts axis unreachable on the SoC until step SoC-B.
+VERIL4_FLAGS := --cc --exe -Wall -Wno-DECLFILENAME -Wno-fatal   $(if $(filter 1,$(PTM_C)),-DPTM_C) $(if $(filter 1,$(PTM_B)),-DPTM_B) \
   -Wno-EOFNEWLINE -Wno-REDEFMACRO -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-PINMISSING -Wno-UNOPTFLAT --threads 0 -I../rv64imac/RTL -Irtl/pta \
   --top-module c930_soc4_verilator
@@ -601,12 +604,18 @@ mul_store: $(MS_SW_HEX) verilate-soc4
 # test_pta_regs); this is the same seven driven by a RISC-V program through the
 # crossbar, the D-cache and the DMA, which is what a driver does.
 # ---------------------------------------------------------------------------
-PTA_SW_ELF := sw/pta_test.elf
-PTA_SW_BIN := sw/pta_test.bin
-PTA_SW_HEX := sw/pta_prog.hex
+# The image carries -DPTM_B now, so PTM-C and PTM-B cannot share one file: make
+# would reuse whichever was built last, and the other build would report the wrong
+# tile's skips.  A suffix per tile, and the harness is told which to load.
+PTA_SW_SUF := $(if $(filter 1,$(PTM_B)),_b,)
+PTA_SW_ELF := sw/pta_test$(PTA_SW_SUF).elf
+PTA_SW_BIN := sw/pta_test$(PTA_SW_SUF).bin
+PTA_SW_HEX := sw/pta_prog$(PTA_SW_SUF).hex
 
+# PTM_B reaches the firmware so it can skip the calibration test: the engine's
+# probe is PTM-C's staggered readout, which a broadside tile does not have.
 $(PTA_SW_ELF): sw/start.S sw/pta_test.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
-	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib 	  $(if $(filter 1,$(PTM_B)),-DPTM_B) \
 	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
 	  -o $@ sw/start.S sw/pta_test.c sw/c930_npu_driver.c
 
@@ -617,7 +626,7 @@ $(PTA_SW_HEX): $(PTA_SW_BIN) sw/bin2hex.py
 	$(PYTHON) sw/bin2hex.py $(PTA_SW_BIN) $(PTA_SW_HEX)
 
 pta_fw: $(PTA_SW_HEX) verilate-soc4
-	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT)
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT) 	  "PTA_FW=$(PTA_SW_HEX)"
 
 # ---------------------------------------------------------------------------
 # C4(c): section 6.2's sweep, on the SoC, driven by a RISC-V program.
