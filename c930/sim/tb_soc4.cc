@@ -320,7 +320,7 @@ static int run_sweep(Vc930_soc4_verilator *top) {
     const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
     const uint32_t DIAG = 0x9480, PHASE = 0x9490, SWEEP = 0x9500;
     const uint32_t PASS_MAGIC = 0x0BADBEEF;
-    const int NPTS = 5;
+    const int NPTS = 5, STRIDE = 16;
 
     printf("[TB] 4-core SoC -- C4(c): section 6.2's sweep, driven by firmware\n");
     printf("[TB] shape M=%d N=%d K=%d: this SoC's NPU, not 6.2's -- MAX_M=8, "
@@ -351,7 +351,8 @@ static int run_sweep(Vc930_soc4_verilator *top) {
     preload_word(top, RESULT, 0);
     preload_word(top, DIAG, 0);
     preload_word(top, PHASE, 0);
-    for (int i = 0; i < 8 * (NPTS + 1); i++) preload_word(top, SWEEP + i * 4, 0);
+    for (int i = 0; i < STRIDE * (NPTS + 1); i++)
+        preload_word(top, SWEEP + i * 4, 0);
 
     printf("[TB] image preloaded, all operands 1 so every C element is K=%d. "
            "Booting CPU0.\n", K);
@@ -385,21 +386,24 @@ static int run_sweep(Vc930_soc4_verilator *top) {
         { "EO-res ",      "Pockels, resident: measured"    },
     };
     auto slot = [&](int p, int i) {
-        return ddr_word(top, SWEEP + 32u * (uint32_t)p + 4u * (uint32_t)i);
+        return ddr_word(top, SWEEP + 4u * STRIDE * (uint32_t)p + 4u * (uint32_t)i);
     };
 
-    const uint32_t nt = ddr_word(top, SWEEP + 32u * NPTS + 0);
-    const uint32_t kt = ddr_word(top, SWEEP + 32u * NPTS + 4);
+    const uint32_t nt = ddr_word(top, SWEEP + 4u * STRIDE * NPTS + 0);
+    const uint32_t kt = ddr_word(top, SWEEP + 4u * STRIDE * NPTS + 4);
     printf("[TB]   Nt=%u Kt=%u, so Nt*Kt=%u weight banks resident at EO-res\n",
            nt, kt, nt * kt);
-    printf("[TB]   %-12s %-9s %-9s %-8s %-7s %-7s %-6s %s\n",
-           "point", "cycles", "DMA busy", "wmove", "shots", "progs", "C",
-           "DMA/core");
+    printf("[TB]   %-12s %-9s %-9s %-8s %-7s %-7s %-7s %-6s %s\n",
+           "point", "cycles", "DMA busy", "wmove", "A-row", "shots",
+           "progs", "C", "DMA/core");
 
     int bad = 0;
     for (int p = 0; p < NPTS; p++) {
         const uint32_t cyc = slot(p, 0), dma = slot(p, 1), wmove = slot(p, 3);
-        const uint32_t shots = slot(p, 4), progs = slot(p, 5);
+        // Absolute readings; the first point's own delta is against zero,
+        // since nothing has run before it.
+        const uint32_t shots = slot(p, 4) - (p ? slot(p - 1, 4) : 0);
+        const uint32_t progs = slot(p, 5) - (p ? slot(p - 1, 5) : 0);
         const uint32_t cok = slot(p, 6);
         const int      ran = (int)slot(p, 7);
         // DMA busy against core cycles.  NOT a share of the whole GEMM: the two
@@ -417,8 +421,8 @@ static int run_sweep(Vc930_soc4_verilator *top) {
             ++bad;
             continue;
         }
-        printf("[TB]   %-12s %-9u %-9u %-8u %-7u %-7u %-6s %.2f\n",
-               rows[p].name, cyc, dma, wmove, shots, progs,
+        printf("[TB]   %-12s %-9u %-9u %-8u %-7u %-7u %-7u %-6s %.2f\n",
+               rows[p].name, cyc, dma, wmove, slot(p, 8), shots, progs,
                cok ? "ok" : "WRONG", ratio);
         if (!cok) { ++bad; }
     }
@@ -437,6 +441,39 @@ static int run_sweep(Vc930_soc4_verilator *top) {
                slot(2, 3), slot(4, 3));
     }
     if (!c_to10) ++bad;
+
+    // What F2 wanted this counter for.  C4(c) could only say that cycles sat
+    // outside section 2.1's terms; now it can say what they were.  The model's
+    // terms carry C2's nc-exact constants and take the shot at the band's low
+    // end, so a cycle or two a shot of hop alignment stays unattributed.
+    printf("[TB]   section 2.1's terms against the measurement, with PTM-C's 64-cycle drain:\n");
+    printf("[TB]   %-12s %-10s %-10s %-10s %s\n", "point", "model",
+           "measured", "outside", "A-row (S_AROW)");
+    for (int p = 0; p < NPTS; p++) {
+        const uint32_t pc = slot(p, 0), arow = slot(p, 8);
+        if (!pc) continue;
+        const int nti = (int)nt, kti = (int)kt;
+        const long shots_n = (long)M * nti * kti;
+        const uint32_t tw = p == 0 ? 100000u : p == 1 ? 1000u : 0u;
+        // PTA_TS does not appear: this SoC builds PTM-C, whose drain is the
+        // skewed readout -- t walks 0 .. 2R+2C-1 on hop edges, so a run costs
+        // 2 * 2 * (NUM_ROWS + NUM_COLS) cycles whatever PTA_TS says.  The Ts
+        // axis of section 6.2's sweep needs PTM-B, which the SoC does not
+        // build; the Tw axis is real and is what moves above.
+        const long drain = 2L * 2L * (8 + 8);
+        // The measured point (4) finds its weights resident; the fill (3)
+        // still scans them, as every other point does.
+        const long scan = (p == 4)
+                            ? (long)nti * kti
+                            : (long)N * K
+                              + (long)nti * kti * (tw + (tw & 1u));
+        const long model = scan + (long)M * (kti - 1) * N
+                         + (long)M * kti * N
+                         + shots_n * drain;
+        const long outside = (long)pc - model;
+        printf("[TB]   %-12s %-10ld %-10u %-10ld %u\n",
+               rows[p].name, model, pc, outside, arow);
+    }
 
     const uint32_t diag = ddr_word(top, DIAG);
     const uint32_t res  = ddr_word(top, RESULT);

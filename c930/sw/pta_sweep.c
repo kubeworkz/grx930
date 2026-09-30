@@ -53,15 +53,18 @@ typedef unsigned int u32;
 #define PASS_MAGIC  0x0BADBEEFu
 #define FAIL_MAGIC  0x0BADF00Du
 
-// One row of the table per point.  Eight words, so the harness can index it.
+// One row of the table per point.  Sixteen words, so the harness can index it and
+// there is room for a counter the next step wants.
 #define SW_CYCLES   0
 #define SW_DMA_CT   1
 #define SW_DMA_LAST 2
 #define SW_STALL    3
-#define SW_SHOTS    4
-#define SW_WLOADS   5
+#define SW_SHOTS    4      /* PTA_SHOT_CT, absolute */
+#define SW_WLOADS   5      /* PTA_WLOAD_CT, absolute */
 #define SW_COK      6
 #define SW_RAN      7
+#define SW_AROW     8      /* cycles the core waited for an A row */
+#define SW_STRIDE   16     /* words a point */
 
 #define P_TO1MS     0
 #define P_TO10US    1
@@ -78,7 +81,7 @@ static void wr(u32 a, u32 v) { *(volatile u32 *)a = v; }
 
 static void sw_put(int p, int slot, u32 v)
 {
-    wr(SWEEP_ADDR + 32u * (u32)p + 4u * (u32)slot, v);
+    wr(SWEEP_ADDR + 4u * SW_STRIDE * (u32)p + 4u * (u32)slot, v);
 }
 
 static int ceil_div(int a, int b) { return (a + b - 1) / b; }
@@ -128,7 +131,7 @@ static int c_exact(int p, int m, int n, int k)
 // Run one point and record it.  `modes` are the PTA_CTRL bits MB added.
 static int point(int p, int m, int n, int k, u32 tw, u32 ts, u32 modes)
 {
-    u32 shots0, wloads0, ran;
+    u32 ran;
 
     wr(PHASE_ADDR, 0x10u + (u32)p);
     wr(PTA_REG_TW, tw);
@@ -136,9 +139,6 @@ static int point(int p, int m, int n, int k, u32 tw, u32 ts, u32 modes)
     // The engine stays off: this sweep is about the loop nest's cost, and a
     // calibration inside a point would add its own cycles to the total.
     wr(PTA_REG_CTRL, modes);
-
-    shots0  = rd(PTA_REG_SHOT_CT);
-    wloads0 = rd(PTA_REG_WLOAD_CT);
 
     ran = (u32)run_gemm(p, m, n, k);
     sw_put(p, SW_RAN, ran);
@@ -149,8 +149,12 @@ static int point(int p, int m, int n, int k, u32 tw, u32 ts, u32 modes)
     sw_put(p, SW_DMA_CT,   rd(NPU_REG_DMA_CT));
     sw_put(p, SW_DMA_LAST, rd(NPU_REG_DMA_LAST));
     sw_put(p, SW_STALL,    rd(NPU_REG_STALL_CT));
-    sw_put(p, SW_SHOTS,    rd(PTA_REG_SHOT_CT) - shots0);
-    sw_put(p, SW_WLOADS,   rd(PTA_REG_WLOAD_CT) - wloads0);
+    // Absolute, not deltas.  These counters only clear on reset, so the harness
+    // can difference them -- and a delta computed here once read as -12, which a
+    // monotonic counter cannot produce, so the raw sequence is what gets stored.
+    sw_put(p, SW_SHOTS,    rd(PTA_REG_SHOT_CT));
+    sw_put(p, SW_WLOADS,   rd(PTA_REG_WLOAD_CT));
+    sw_put(p, SW_AROW,     rd(NPU_REG_AROW_CT));
     sw_put(p, SW_COK,      (u32)c_exact(p, m, n, k));
     return 1;
 }
@@ -187,15 +191,16 @@ int main(void)
         diag |= 1u << P_EORES;
 
     // What the shape was, so the harness does not have to assume it.
-    wr(SWEEP_ADDR + 32u * N_POINTS + 0u, (u32)nt);
-    wr(SWEEP_ADDR + 32u * N_POINTS + 4u, (u32)kt);
+    wr(SWEEP_ADDR + 4u * SW_STRIDE * N_POINTS + 0u, (u32)nt);
+    wr(SWEEP_ADDR + 4u * SW_STRIDE * N_POINTS + 4u, (u32)kt);
 
     // Every point ran and every one returned the right C.
     {
         int all = 1;
         for (p = 0; p < N_POINTS; p++) {
             if (!(diag & (1u << p))) all = 0;
-            if (rd(SWEEP_ADDR + 32u * (u32)p + 4u * SW_COK) != 1u) all = 0;
+            if (rd(SWEEP_ADDR + 4u * SW_STRIDE * (u32)p + 4u * SW_COK) != 1u)
+                all = 0;
         }
         wr(RESULT_ADDR, all ? PASS_MAGIC : FAIL_MAGIC);
     }
