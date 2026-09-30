@@ -71,7 +71,12 @@ typedef unsigned int u32;
 #define P_EOSCAN    2
 #define P_EORES_FIL 3
 #define P_EORES     4
-#define N_POINTS    5
+/* SoC-B: the same shape at EO-scan's settings with PTA_TS swept, so the shot's
+ * slope can be measured.  On PTM-C these five are identical -- its drain takes no
+ * dilation, which is why section 6.2's Ts axis needed a PTM-B build. */
+#define P_TS0       5
+#define N_TS        5
+#define N_POINTS    (P_TS0 + N_TS)
 
 // DDR is flat and identity-mapped for this program, and the addresses above are
 // absolute -- the same idiom pta_test.c uses.  Indexing from a null base would be
@@ -189,6 +194,16 @@ int main(void)
         diag |= 1u << P_EORES_FIL;
     if (point(P_EORES, m, n, k, 0u, 1u, PTA_CTRL_RESIDENT | PTA_CTRL_WSKIP))
         diag |= 1u << P_EORES;
+
+    // SoC-B: PTA_TS swept at EO-scan's other settings.  The harness takes the
+    // slope; nothing here assumes which tile answered.
+    {
+        static const u32 ts_list[N_TS] = { 1u, 2u, 4u, 8u, 16u };
+        int i;
+        for (i = 0; i < N_TS; i++)
+            if (point(P_TS0 + i, m, n, k, 0u, ts_list[i], 0u))
+                diag |= 1u << (P_TS0 + i);
+    }
 
     // What the shape was, so the harness does not have to assume it.
     wr(SWEEP_ADDR + 4u * SW_STRIDE * N_POINTS + 0u, (u32)nt);

@@ -320,7 +320,9 @@ static int run_sweep(Vc930_soc4_verilator *top) {
     const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
     const uint32_t DIAG = 0x9480, PHASE = 0x9490, SWEEP = 0x9500;
     const uint32_t PASS_MAGIC = 0x0BADBEEF;
-    const int NPTS = 5, STRIDE = 16;
+    // Five named points, then PTA_TS swept at EO-scan's other settings.
+    const int NAMED = 5, NTS = 5, NPTS = NAMED + NTS, STRIDE = 16;
+    const uint32_t TS_LIST[NTS] = { 1, 2, 4, 8, 16 };
 
     printf("[TB] 4-core SoC -- C4(c): section 6.2's sweep, driven by firmware\n");
     printf("[TB] shape M=%d N=%d K=%d: this SoC's NPU, not 6.2's -- MAX_M=8, "
@@ -384,6 +386,8 @@ static int run_sweep(Vc930_soc4_verilator *top) {
         { "EO-scan",      "Pockels, scanned"               },
         { "EO-res fill",  "Pockels, resident: the fill"    },
         { "EO-res ",      "Pockels, resident: measured"    },
+        { "TS=1",  "" }, { "TS=2",  "" }, { "TS=4",  "" },
+        { "TS=8",  "" }, { "TS=16", "" },
     };
     auto slot = [&](int p, int i) {
         return ddr_word(top, SWEEP + 4u * STRIDE * (uint32_t)p + 4u * (uint32_t)i);
@@ -398,7 +402,7 @@ static int run_sweep(Vc930_soc4_verilator *top) {
            "progs", "C", "DMA/core");
 
     int bad = 0;
-    for (int p = 0; p < NPTS; p++) {
+    for (int p = 0; p < NAMED; p++) {
         const uint32_t cyc = slot(p, 0), dma = slot(p, 1), wmove = slot(p, 3);
         // Absolute readings; the first point's own delta is against zero,
         // since nothing has run before it.
@@ -442,37 +446,78 @@ static int run_sweep(Vc930_soc4_verilator *top) {
     }
     if (!c_to10) ++bad;
 
-    // What F2 wanted this counter for.  C4(c) could only say that cycles sat
-    // outside section 2.1's terms; now it can say what they were.  The model's
-    // terms carry C2's nc-exact constants and take the shot at the band's low
-    // end, so a cycle or two a shot of hop alignment stays unattributed.
-    printf("[TB]   section 2.1's terms against the measurement, with PTM-C's 64-cycle drain:\n");
-    printf("[TB]   %-12s %-10s %-10s %-10s %s\n", "point", "model",
-           "measured", "outside", "A-row (S_AROW)");
-    for (int p = 0; p < NPTS; p++) {
-        const uint32_t pc = slot(p, 0), arow = slot(p, 8);
-        if (!pc) continue;
+    // The shot's cost, derived rather than assumed: the total less the scan,
+    // the restore and the write, over the number of runs.  This works whichever
+    // tile answered -- PTM-C's skewed drain reports 2*2*(R+C) = 64 and takes no
+    // dilation, PTM-B's shot reports PTA_TS plus its handshake -- and it is the
+    // physical quantity, so nothing here needs a compile-time define.
+    auto shot_of = [&](int p, uint32_t tw, bool resident) {
         const int nti = (int)nt, kti = (int)kt;
-        const long shots_n = (long)M * nti * kti;
-        const uint32_t tw = p == 0 ? 100000u : p == 1 ? 1000u : 0u;
-        // PTA_TS does not appear: this SoC builds PTM-C, whose drain is the
-        // skewed readout -- t walks 0 .. 2R+2C-1 on hop edges, so a run costs
-        // 2 * 2 * (NUM_ROWS + NUM_COLS) cycles whatever PTA_TS says.  The Ts
-        // axis of section 6.2's sweep needs PTM-B, which the SoC does not
-        // build; the Tw axis is real and is what moves above.
-        const long drain = 2L * 2L * (8 + 8);
-        // The measured point (4) finds its weights resident; the fill (3)
-        // still scans them, as every other point does.
-        const long scan = (p == 4)
-                            ? (long)nti * kti
-                            : (long)N * K
-                              + (long)nti * kti * (tw + (tw & 1u));
-        const long model = scan + (long)M * (kti - 1) * N
-                         + (long)M * kti * N
-                         + shots_n * drain;
-        const long outside = (long)pc - model;
-        printf("[TB]   %-12s %-10ld %-10u %-10ld %u\n",
-               rows[p].name, model, pc, outside, arow);
+        const long scan = resident ? (long)nti * kti
+                                   : (long)N * K
+                                     + (long)nti * kti * (tw + (tw & 1u));
+        const long other = scan + (long)M * (kti - 1) * N + (long)M * kti * N;
+        const long runs  = (long)M * nti * kti;
+        return (double)((long)slot(p, 0) - other) / (double)runs;
+    };
+
+    printf("[TB]   the shot, derived from each total (section 2.1's other terms removed):\n");
+    printf("[TB]   %-12s %-9s %-9s %s\n", "point", "cycles", "a run", "A-row");
+    {
+        const uint32_t tws[NAMED] = { 100000, 1000, 0, 0, 0 };
+        for (int p = 0; p < NAMED; p++)
+            printf("[TB]   %-12s %-9u %-9.2f %u\n", rows[p].name,
+                   slot(p, 0), shot_of(p, tws[p], p == 4), slot(p, 8));
+    }
+
+    // SoC-B's gate.  A shot dilated by PTA_TS costs one more cycle a run per
+    // unit, so the total's slope is the number of runs.  On PTM-C the drain
+    // ignores the register and the slope is zero, which is exactly why
+    // section 6.2's Ts axis needed this build.
+    printf("[TB]   PTA_TS swept at EO-scan's settings:\n");
+    printf("[TB]   %-8s %-9s %-9s %s\n", "PTA_TS", "cycles", "a run", "step");
+    {
+        const long runs = (long)M * (int)nt * (int)kt;
+        long prev = 0, first = 0, last = 0;
+        int steps_ok = 1;
+        for (int i = 0; i < NTS; i++) {
+            const int p = NAMED + i;
+            const long cyc = (long)slot(p, 0);
+            if (!cyc) { ++bad; continue; }
+            const long step = i ? cyc - prev : 0;
+            const long want = i ? runs * (long)(TS_LIST[i] - TS_LIST[i - 1]) : 0;
+            // PTA_TS = 1 is below the shot's floor -- C2 measured six cycles there
+            // -- so the step out of it is not on the line and is not checked as if
+            // it were.  The slope is taken from PTA_TS = 2 upward.
+            const bool on_line = (i >= 2);
+            if (!i)
+                printf("[TB]   %-8u %-9ld %-9.2f %s\n", TS_LIST[i], cyc,
+                       shot_of(p, 0, false), "-- the shot's floor (C2)");
+            else
+                printf("[TB]   %-8u %-9ld %-9.2f %+ld (want %+ld)%s\n",
+                       TS_LIST[i], cyc, shot_of(p, 0, false), step, want,
+                       on_line ? "" : "  -- out of the floor, not on the line");
+            if (on_line && labs(step - want) > runs) steps_ok = 0;
+            if (i == 1) first = cyc;          // PTA_TS = 2, the line's start
+            if (i == NTS - 1) last = cyc;
+            prev = cyc;
+        }
+        // The span across the linear part, which is what distinguishes a tile
+        // whose shot takes the register from one whose drain ignores it.
+        const long span = last - first;
+        const long want_span = runs * (long)(TS_LIST[NTS - 1] - TS_LIST[1]);
+        printf("[TB]   PTA_TS 2 to %u: %+ld cycles, want %+ld\n",
+               TS_LIST[NTS - 1], span, want_span);
+        if (labs(span) <= runs) {
+            printf("[TB]   PTA_TS does not move the shot -- this build's drain"
+                   " ignores it, so it is PTM-C and 6.2's Ts axis is not reachable"
+                   " here (plan step SoC-B)\n");
+        } else if (labs(span - want_span) > runs || !steps_ok) {
+            printf("[TB]   FAIL: the shot moves with PTA_TS but not by the number of runs\n");
+            ++bad;
+        } else {
+            printf("[TB]   the shot is PTA_TS plus a fixed handshake, and the total's slope is %ld a unit: SoC-B PASS\n", runs);
+        }
     }
 
     const uint32_t diag = ddr_word(top, DIAG);
@@ -595,9 +640,19 @@ static int run_pta(Vc930_soc4_verilator *top) {
         {0x040, "T7 MZM_NL refused, then cleared"},
     };
     int fails = 0;
+    // A broadside tile has no staggered readout for the calibration engine's probe
+    // to walk, so the firmware sets T4/T5 to keep RESULT meaningful and flags why.
+    // Printing those two as PASS would be a test reporting on something it did not
+    // do, so they print as SKIP with the reason.
+    const bool bcal = (diag & 0x200) != 0;
     for (int i = 0; i < 7; i++) {
         bool ok = (diag & checks[i].bit) != 0;
-        printf("[TB]   %s %s\n", ok ? "[PASS]" : "[FAIL]", checks[i].what);
+        const bool skipped = bcal && (checks[i].bit == 0x008 || checks[i].bit == 0x010);
+        printf("[TB]   %s %s%s\n", skipped ? "[SKIP]" : ok ? "[PASS]" : "[FAIL]",
+               checks[i].what,
+               skipped ? " -- the engine's probe is PTM-C's staggered readout,"
+                         " which this tile has none of; a broadside probe is owed"
+                       : "");
         if (!ok) fails++;
     }
     if (res != PASS_MAGIC) { printf("[TB]   [FAIL] RESULT is not PASS\n"); fails++; }
