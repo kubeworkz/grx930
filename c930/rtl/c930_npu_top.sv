@@ -231,6 +231,7 @@ module c930_npu_top
     .i_cycle_count (cycle_count),
     .i_op_count    (op_count),
     .i_stall_count (stall_count),
+    .i_arow_stall_count (o_arow_stall_count),
     .i_dma_cycle_count (dma_cycle_count),
     .i_dma_last_count  (dma_last_count),
     .o_fifo_valid    (fifo_valid),

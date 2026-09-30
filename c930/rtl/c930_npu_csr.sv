@@ -143,6 +143,10 @@ module c930_npu_csr
   input  logic [31:0] i_cycle_count,
   input  logic [31:0] i_op_count,
   input  logic [31:0] i_stall_count,
+  // Cycles the core spent starved of A rows (S_AROW).  Weight movement and
+  // operand starvation are different problems with different fixes, which is why
+  // the core keeps them apart, and F2 is about the second one.
+  input  logic [31:0] i_arow_stall_count,
   input  logic [31:0] i_dma_cycle_count,
   input  logic [31:0] i_dma_last_count,
 
@@ -257,6 +261,11 @@ module c930_npu_csr
   localparam logic [7:0] A_PTA_TRIM      = 8'h76;
   localparam logic [7:0] A_PTA_CAL_SEED  = 8'h77;
   localparam logic [7:0] A_PTA_ERR_FOUND = 8'h7C; // 0x1F0
+  // An NPU counter, not a PTA one, in the PTA block's spare space: NPU0's own
+  // counter window (0x00-0x3C) is full and 0x40 upward is NPU1's.  Named for what
+  // it counts rather than where it sits -- being starved of operands is a host
+  // problem, not a tile one, which is why F2 wants it.
+  localparam logic [7:0] A_NPU_AROW_CT   = 8'h78; // 0x1E0
 
   localparam int CW = $clog2(NUM_COLS);
 
@@ -823,6 +832,7 @@ module c930_npu_csr
           ADDR_CYCLE_LO:   s_axi_rdata <= i_cycle_count;
           ADDR_OP_COUNT:   s_axi_rdata <= i_op_count;
           ADDR_STALL_CT:   s_axi_rdata <= i_stall_count;
+          A_NPU_AROW_CT:   s_axi_rdata <= i_arow_stall_count;
           ADDR_DMA_CT:     s_axi_rdata <= i_dma_cycle_count;
           ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
           ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
