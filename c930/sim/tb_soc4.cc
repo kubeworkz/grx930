@@ -659,12 +659,14 @@ static int run_feed(Vc930_soc4_verilator *top) {
     const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
     const uint32_t DIAG = 0x9480, PHASE = 0x9490, TABLE = 0x9500;
     const uint32_t PASS_MAGIC = 0x0BADBEEF;
-    // 1 warm-up + (1+4+1+4) + 1 fill + (1+4+1+4) + 1 odd-tail GEMMs
-    const int NPTS = 11, STRIDE = 16, NBLK = 23;
+    // 1 warm-up + (1+4+1+4+1+4) + 1 fill + (1+4+1+4+1+4) + 1 odd-tail GEMMs
+    const int NPTS = 15, STRIDE = 16, NBLK = 33;
     const int ODD_M = 3, ODD_N = 5, ODD_K = 16;   // the only odd M*N here
 
-    enum { P_WARM, P_SCAN_Q1, P_SCAN_Q4, P_SCAN_S1, P_SCAN_S4, P_FILL,
-           P_RES_Q1, P_RES_Q4, P_RES_S1, P_RES_S4, P_ODD };
+    enum { P_WARM, P_SCAN_Q1, P_SCAN_Q4, P_SCAN_S1, P_SCAN_S4,
+           P_SCAN_P1, P_SCAN_P4, P_FILL,
+           P_RES_Q1, P_RES_Q4, P_RES_S1, P_RES_S4,
+           P_RES_P1, P_RES_P4, P_ODD };
     enum { FD_WALL, FD_CYCLES, FD_DMA_CT, FD_DMA_LAST, FD_STALL, FD_AROW,
            FD_SHOTS, FD_WLOADS, FD_COK, FD_RAN, FD_Q };
 
@@ -729,11 +731,15 @@ static int run_feed(Vc930_soc4_verilator *top) {
         { "scan Q=4",  "EO-scan, feed as built, queued" },
         { "scan S Q=1","EO-scan, STAGE_A"              },
         { "scan S Q=4","EO-scan, STAGE_A, queued"      },
+        { "scan P Q=1","EO-scan, PF2_OFF (a no-op)"     },
+        { "scan P Q=4","EO-scan, PF2_OFF, queued"      },
         { "res fill",  "the resident fill"             },
         { "res Q=1",   "EO-res, feed as built"         },
         { "res Q=4",   "EO-res, feed as built, queued" },
         { "res S Q=1", "EO-res, STAGE_A"               },
         { "res S Q=4", "EO-res, STAGE_A, queued"       },
+        { "res P Q=1", "EO-res, PF2_OFF (a no-op)"     },
+        { "res P Q=4", "EO-res, PF2_OFF, queued"       },
         { "odd tail",  "M*N odd, the half-full beat"   },
     };
     auto slot = [&](int p, int i) {
@@ -841,14 +847,16 @@ static int run_feed(Vc930_soc4_verilator *top) {
     // What queueing buys, measured: four separate GEMMs against four queued.
     printf("[TB]   what the queue buys (4*wall(Q=1) - wall(Q=4)):\n");
     struct Pair { const char *name; int one, four; };
-    const Pair pairs[4] = {
+    const Pair pairs[6] = {
         { "EO-scan, as built", P_SCAN_Q1, P_SCAN_Q4 },
         { "EO-scan, STAGE_A ", P_SCAN_S1, P_SCAN_S4 },
+        { "EO-scan, PF2_OFF ", P_SCAN_P1, P_SCAN_P4 },
         { "EO-res,  as built", P_RES_Q1,  P_RES_Q4  },
         { "EO-res,  STAGE_A ", P_RES_S1,  P_RES_S4  },
+        { "EO-res,  PF2_OFF ", P_RES_P1,  P_RES_P4  },
     };
-    long gain[4];
-    for (int i = 0; i < 4; i++) {
+    long gain[6];
+    for (int i = 0; i < 6; i++) {
         const long serial = 4L * (long)slot(pairs[i].one, FD_WALL);
         const long queued = (long)slot(pairs[i].four, FD_WALL);
         gain[i] = serial - queued;
@@ -856,22 +864,53 @@ static int run_feed(Vc930_soc4_verilator *top) {
                pairs[i].name, serial, queued, gain[i],
                serial ? 100.0 * (double)gain[i] / (double)serial : 0.0);
     }
-    printf("[TB]   PF2 is the difference between the two rows of each level: "
-           "STAGE_A turns it off, so its rows keep only the submit-and-poll "
-           "saving. F0 measured PF2 as a net loss at its own shape.\n");
+    printf("[TB]   PF2_OFF's row is the direct reading; STAGE_A's is not, because"
+           " it turns PF1 off too. Inferring PF2's cost from STAGE_A's refund"
+           " gives about -22 cycles a GEMM and is WRONG: it prices STAGE_A by its"
+           " DMA_CT delta (+28) when its wall cost is +12, the rest hiding behind"
+           " the host's ~1,090 cycles of submit and poll.\n");
+    // What this harness can actually resolve.  The core and DMA counters are
+    // exact and repeat across runs; the wall does not -- inserting batches
+    // ahead of a batch moved its wall by up to 45 cycles with every counter
+    // unchanged, because the C block addresses and the cache state move with
+    // execution history.  PF2 only affects a GEMM that has a next one queued,
+    // and the only queued-batch instrument here is the wall, so PF2's cost is
+    // below this harness's floor.  tb_npu_feed.sv measures it properly: its
+    // per-phase counters put the abandoned burst's P_DONE drain at 3 cycles
+    // (done=4 against done=1, drain_beats=3 against 0).
+    printf("[TB]   RESOLUTION: the wall moved up to 45 cycles between runs for"
+           " batches with different history and identical counters, so a wall"
+           " difference under ~50 cycles says nothing. PF2's effect is inside"
+           " that. Use tb_npu_feed.sv's phase counters for PF2.\n");
 
-    // The choice, by the gate's own measure: total cycles for four GEMMs.
+    // The choice, by the gate's own measure: total cycles for four GEMMs, over
+    // every feed the engine can now be asked for.
     {
-        int best_scan = (slot(P_SCAN_Q4, FD_WALL) <= slot(P_SCAN_S4, FD_WALL))
-                        ? P_SCAN_Q4 : P_SCAN_S4;
-        int best_res  = (slot(P_RES_Q4, FD_WALL) <= slot(P_RES_S4, FD_WALL))
-                        ? P_RES_Q4 : P_RES_S4;
-        printf("[TB]   chosen by measured total cycles, four GEMMs: EO-scan %s "
-               "(%u against %u), EO-res %s (%u against %u)\n",
-               rows[best_scan].name, slot(best_scan, FD_WALL),
-               slot(best_scan == P_SCAN_Q4 ? P_SCAN_S4 : P_SCAN_Q4, FD_WALL),
-               rows[best_res].name, slot(best_res, FD_WALL),
-               slot(best_res == P_RES_Q4 ? P_RES_S4 : P_RES_Q4, FD_WALL));
+        const int cand[2][3] = { { P_SCAN_Q4, P_SCAN_S4, P_SCAN_P4 },
+                                 { P_RES_Q4,  P_RES_S4,  P_RES_P4  } };
+        const char *lvl[2] = { "EO-scan", "EO-res " };
+        for (int L = 0; L < 2; L++) {
+            int best = cand[L][0];
+            for (int i = 1; i < 3; i++)
+                if (slot(cand[L][i], FD_WALL) < slot(best, FD_WALL))
+                    best = cand[L][i];
+            // Anything within the wall's own drift is a tie, not a win.
+            int tied = 0;
+            for (int i = 0; i < 3; i++)
+                if (cand[L][i] != best &&
+                    (long)slot(cand[L][i], FD_WALL) - (long)slot(best, FD_WALL) < 50)
+                    ++tied;
+            printf("[TB]   chosen at %s, four GEMMs: %-11s %u%s", lvl[L],
+                   rows[best].name, slot(best, FD_WALL),
+                   tied ? " -- but see RESOLUTION: " : "   ");
+            for (int i = 0; i < 3; i++)
+                if (cand[L][i] != best)
+                    printf("(%s %u) ", rows[cand[L][i]].name,
+                           slot(cand[L][i], FD_WALL));
+            if (tied)
+                printf("within the wall's drift, so %d of these are ties", tied);
+            printf("\n");
+        }
     }
 
     // ---- Gates ------------------------------------------------------------
@@ -925,7 +964,57 @@ static int run_feed(Vc930_soc4_verilator *top) {
         printf("[TB]   the odd tail: M=%d N=%d, %d words = %d beats with the "
                "last half full, C exact\n", ODD_M, ODD_N, ODD_M * ODD_N,
                (ODD_M * ODD_N + 1) / 2);
-    // 5. STAGE_A is not inert.  Reading all M rows before launch has to cost
+    // 5. PF2_OFF is a no-op at Q = 1, exactly.  With an empty queue
+    //    i_next_valid is low and PF2 never starts, so a bit that moved these
+    //    numbers would not be doing what it says.  The core and the GEMM are
+    //    held to equality; the wall is the CPU's and allowed to jitter.
+    {
+        const int np[2][2] = { { P_SCAN_Q1, P_SCAN_P1 }, { P_RES_Q1, P_RES_P1 } };
+        for (int i = 0; i < 2; i++) {
+            if ((int)slot(np[i][0], FD_RAN) != 1 ||
+                (int)slot(np[i][1], FD_RAN) != 1) continue;
+            const uint32_t a_gemm = slot(np[i][0], FD_DMA_CT);
+            const uint32_t b_gemm = slot(np[i][1], FD_DMA_CT);
+            const uint32_t a_core = slot(np[i][0], FD_CYCLES);
+            const uint32_t b_core = slot(np[i][1], FD_CYCLES);
+            if (a_gemm != b_gemm || a_core != b_core) {
+                printf("[TB]   FAIL: PF2_OFF changed %s at Q=1 (GEMM %u vs %u, "
+                       "core %u vs %u) -- it must be a no-op with nothing "
+                       "queued\n", rows[np[i][1]].name, a_gemm, b_gemm,
+                       a_core, b_core);
+                ++bad;
+            } else {
+                printf("[TB]   PF2_OFF is a no-op at %s: GEMM %u and core %u "
+                       "both unchanged, wall %u against %u\n",
+                       rows[np[i][1]].name, b_gemm, b_core,
+                       slot(np[i][1], FD_WALL), slot(np[i][0], FD_WALL));
+            }
+        }
+    }
+    // 6. And it is not inert at Q = 4, where PF2 does have a next GEMM to
+    //    prefetch.  Which way it moves the wall is the measurement -- F0 and F2
+    //    both priced PF2 negative, so gating the sign would be gating the
+    //    answer -- but it has to move something, or bit 11 is not arriving.
+    {
+        const int qp[2][2] = { { P_SCAN_Q4, P_SCAN_P4 }, { P_RES_Q4, P_RES_P4 } };
+        for (int i = 0; i < 2; i++) {
+            if ((int)slot(qp[i][0], FD_RAN) != 1 ||
+                (int)slot(qp[i][1], FD_RAN) != 1) continue;
+            const long d = (long)slot(qp[i][1], FD_WALL)
+                         - (long)slot(qp[i][0], FD_WALL);
+            if (d == 0) {
+                printf("[TB]   FAIL: PF2_OFF changed nothing at %s -- "
+                       "PTA_CTRL bit 11 is not reaching the DMA\n",
+                       rows[qp[i][1]].name);
+                ++bad;
+            } else {
+                printf("[TB]   PF2_OFF at %s: %+ld cycles over four GEMMs, "
+                       "%+.1f a GEMM -- what PF2 was costing\n",
+                       rows[qp[i][1]].name, d, (double)d / 4.0);
+            }
+        }
+    }
+    // 7. STAGE_A is not inert.  Reading all M rows before launch has to cost
     //    more DMA than reading row 0, or the bit is not reaching the DMA -- the
     //    failure SoC-B hit with PTA_TS, reported rather than passed quietly.
     {

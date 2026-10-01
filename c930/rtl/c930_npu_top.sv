@@ -131,6 +131,7 @@ module c930_npu_top
   logic [31:0] pta_seed, pta_tw, pta_ts, pta_cal_per, pta_cal_seed;
   logic        pta_resident, pta_wskip, pta_morder;   // MB's modes, PTA_CTRL 9:7
   logic        pta_stage_a;                           // F2's option, PTA_CTRL 10
+  logic        pta_pf2_off;                           // F2's option, PTA_CTRL 11
   logic [15:0] pta_sigma_th, pta_k_shot, pta_sigma_pr, pta_drift_sigma, pta_drift_max;
   logic [4:0]  pta_drift_log2;
   logic [7:0]  pta_xtalk;
@@ -208,6 +209,7 @@ module c930_npu_top
     .o_pta_wskip       (pta_wskip),
     .o_pta_morder      (pta_morder),
     .o_pta_stage_a     (pta_stage_a),
+    .o_pta_pf2_off     (pta_pf2_off),
     .o_pta_cal_per     (pta_cal_per),
     .o_pta_cal_thr     (pta_cal_thr),
     .o_pta_cal_amp     (pta_cal_amp),
@@ -271,6 +273,8 @@ module c930_npu_top
     // F2: read every A row before launching the core, instead of row 0 up front
     // and the rest on PF1 during compute.
     .i_pta_stage_a (pta_stage_a),
+    // F2: no cross-GEMM prefetch, PF1 untouched.
+    .i_pta_pf2_off (pta_pf2_off),
     .i_dim_m       (dim_m),
     .i_dim_n       (dim_n),
     .i_dim_k       (dim_k),
