@@ -520,7 +520,7 @@ driver_fw: $(DRV_SW_HEX) verilate-soc4
 #                     K tile), so section 6.2's EO-res point is measured
 #   make core_act     A1 and A2: the activation stage, cycles and bit-exactness
 # ---------------------------------------------------------------------------
-.PHONY: core_tw core_c2 core_mb core_act
+.PHONY: core_tw core_c2 core_mb core_act core_act_chain
 core_tw:
 	@bash sim/build_core_verilator_wsl.sh run --tw
 
@@ -534,6 +534,19 @@ core_mb:
 
 core_act:
 	@bash sim/build_core_verilator_wsl.sh run --sweep --act identity
+
+# A3 (grxcp pta_program_plan.md, track A; npu_act_stage_design_note.md 6): how
+# many all-optical activations chain before a digital reset is needed, against
+# the photons each carries and against fabrication detuning.  Reported, not
+# gated: the only thing that can fail is the per-layer bitwise check, which says
+# the RTL and the C reference still agree.  The sweep drives one build rather
+# than rebuilding per point, and reads each photon count's i_act_k_shot out of
+# the generator's own .json instead of recomputing it.
+#
+#   make core_act_chain              the full sweep, 4 shapes x 4 photon counts
+#   make core_act_chain A3=--quick   two photon counts and one shape
+core_act_chain:
+	@$(PYTHON) sim/act_chain_sweep.py --layers 12 $(A3)
 
 # ---------------------------------------------------------------------------
 # The M unit's result hold (a CPU fix, found by C4(a)'s firmware)

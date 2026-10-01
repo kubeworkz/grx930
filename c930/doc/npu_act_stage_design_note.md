@@ -477,8 +477,163 @@ review §6.2 is evaluated on.
 3. ~~**RTL and C reference**, through gates A0, A1 and A2, in that order.~~
    **Done:** `rtl/c930_npu_act.sv`, the S_ACT state, and `--act identity` and
    `--act full` in `sim/tb_core_verilator.cc`.
-4. **Chain mode**, A3.
+4. ~~**Chain mode**, A3.~~ **Built, 2026-10-01**, and measuring: `--act chain`
+   in `sim/tb_core_verilator.cc` with `sim/act_chain_sweep.py` driving the sweep.
+   Five things came out of building it, and four are about the experiment rather
+   than the device.
 5. **Only then** the CSR mapping, the snapshot bit and firmware.
+
+---
+
+## 7.1 What building A3 settled, and what it caught
+
+**The harness is sound, and this is the check that says so.** With sigma = 0 and
+`k_shot` = 0 the measured chain and the reference agree **exactly**, at every
+depth: relative RMS 0.000000 through twelve layers. Anything else would mean the
+chain itself was wrong before any physics entered.
+
+**The operating point is not free, and the first version had it wrong.** A photon
+count means *photons at the knee*, and `k = sqrt(x_knee / n)` is defined there,
+so the activation's input has to land near the knee or the sweep's main axis is
+mislabelled. The generator records `x_knee_table_units` = 2^21 with full scale at
+four knees. Stage 1 computes `x = acc * XS >>> XSHIFT`, so at `XSHIFT` = 0 the
+scale is `XS` itself; with operands and weights uniform on [-7, 7] and K = 8 a
+typical `|acc|` is about 53, and `XS` = 2^15 puts that at 0.83 of a knee. The
+first version inherited A2's gate scale, which sits far below the knee at this
+shape, and reported 19% relative noise at depth 1 for what it labelled 10^5
+photons. That was the label, not the device.
+
+**The transport shift is measured, not chosen.** C maps into the next layer's A
+by one right shift, elementwise, which is why the chain runs N == K. Only
+**>>16** is this chain's fixed point: the activated C has an RMS of 277k at depth
+1, and 2^16 is the only power of two returning operands that reproduce it. The
+chain then settles at ~434k by depth 6 and holds through 12 with no saturation,
+which puts `x` at about 1.25 knees. Shifts of 14 and below **pin the output at
+full scale**, which looks stationary and is not; 18 collapses the chain to zeros
+by depth 3, where the divergence reads a meaningless 0.000000. The window is
+barely one bit wide because a knee makes loop gain steep in amplitude, and that
+is a property of the activation rather than of the harness. Section 8 item 3
+warned the transport rule could mix into the depth axis; it is narrower than that
+warning implies.
+
+**One seed is not a measurement of sigma.** The detuning draw is `NUM_COLS` = 8
+wide. At sigma 7, 10^3 photons, against a calibrated reference, the relative RMS
+at depth 6 ranged **0.056 to 0.284 across five seeds** -- a five-fold spread, and
+wide enough that a single draw inverts the sigma ordering. Every sigma > 0 point
+is therefore run over five seeds and reported as a median with its range.
+
+**The sigma axis needs two references, and the literal one hides the device.**
+Against the ideal unit (`s` = 1) -- which is what "divergence from the noiseless
+digital chain" says literally -- a detuned chain reads **25% at sigma 7 and 57%
+at sigma 14 from depth 1, flat with depth**. That is a fixed transfer-function
+difference, not an accumulating one, and it swamps the photon axis so completely
+that every sigma > 0 cell reads depth 1 regardless of photons or reset interval.
+
+That number answers section 8 item 4 -- *does a scale model detuning well
+enough?* -- with a quantified **no, not at the knee**. `f_s(x) = f(s*x)/s` is
+exact for an efficiency change, and the knee is precisely where the curve's shape
+matters. Far below the knee the same measurement gives 0.3%.
+
+So `--chain-cal` gives the reference the **same** detuning, making the divergence
+the stochastic part alone. That is what "how many activations can chain" means
+for a device whose fixed gain errors have been calibrated out, and the tile has
+gain and offset correction with phase C3's engine behind it. Both references are
+reported; neither is the whole answer.
+
+## 7.2 What A3 caught that A2 did not cover
+
+**`f(x) * r_j` overflows the output stage once `r_j` reaches Q4.12's limit.** The
+output factor `r_j = 1/s_j` is Q4.12, so it represents at most 16, which floors
+`s_j` at 1/16. At that floor `r_j` **is** 16, and `f(x) * 16` passes 2^23: the
+RTL returns a large negative where the C reference expects a large positive
+(`C[0][0] = -4435688 expected 8671568`). The two disagree, and the per-layer
+bitwise check catches it.
+
+It reaches the amplitude encoding first, because the loaded scale there is
+`sqrt(s)` rather than `s`, so `x` lands higher for the same detuning. 64 of the
+full sweep's 400 runs are excluded for it, all `c4-5db-6mm ff amplitude` at
+specific seeds, and the sweep lists each with its seed rather than averaging them
+into a curve.
+
+**A2 never drove this region.** Its `full_cfg` runs `xshift` 4 to 8 with
+`xs = 4096 * s`, so `x ~ 16*s*acc` or `256*s*acc` -- orders of magnitude below
+A3's operating point at the knee. The gate was never wrong; the region was never
+visited.
+
+**Which of the two is right is a contract decision, not a harness one.** `yshift`
+is the knob that would buy the headroom, and spending it scales the output down
+and moves the operating point off the knee -- where the photon count is defined.
+That trade belongs with the CSR mapping, so it is **A-CSR's** to settle, and this
+note records the mechanism rather than picking for it.
+
+*An attempt that made it worse, recorded because the instinct will recur.* The
+harness first **refused** every point where a column hit the floor, on the theory
+that clamping predicted the overflow. It does not: power encoding at sigma 14
+clamps and passes cleanly. The refusal discarded the whole sigma 14 row for all
+four presets and the driver counted 320 refusals as gate failures. Predicting
+what a gate will catch is not the same as letting it catch things. The clamp is
+now a warning, the gate runs, and the sweep excludes the points it fails.
+
+---
+
+## 7.3 A3's curve, measured
+
+`python3 sim/act_chain_sweep.py --layers 12`. 400 points measured, every layer
+bitwise against the C reference; 64 excluded for §7.2's overflow, each listed
+with its seed. The depth the chain reaches before 5% relative RMS, at sigma = 0,
+which is the axis with no detuning draw in it:
+
+| shape | 10^3 | 10^4 | 10^5 | 10^6 |
+|---|---|---|---|---|
+| `tpaqcn-built-2mm` (2 mm, the built device) | 2 | 4–6 | 8+ | 8+ |
+| `c4-5db-6mm` power (6 mm) | 1–2 | 2–8 | 3–8+ | 3–8+ |
+| `c4-5db-6mm` **amplitude** | 1–2 | 1–4 | 2–4 | **4** |
+| `tfln-1cm` (1 cm) | 1–3 | 1–3 | 4–10+ | 10–12+ |
+
+Ranges are across the reset interval N; a `+` is "held all twelve layers". The
+sigma > 0 tables are in the sweep's own output, against a calibrated reference
+and with five-seed ranges.
+
+**Five readings, in the order they matter.**
+
+**1. The chain is photon-limited and loss-limited, not reset-limited.** `N` = 4, 8
+and infinity give nearly the same depth everywhere. Past about four layers between
+resets the requantisation interval stops being the variable, and the photon count
+and the loss budget are.
+
+**2. Requantising every layer is actively harmful.** `N` = 1 is the worst column in
+every shape and at nearly every photon count — 1 to 3 layers where `N` >= 4
+reaches 2 to 12. The 6-bit ADC reset costs more accuracy than the analog chain
+accumulates over several layers, so a digital reset is not a free safety net. The
+naive instinct to reset often is backwards here.
+
+**3. The crossover is 10^4 photons at the knee, and it moves with length.** Below
+it the chain is 1 to 3 layers, which closes the all-optical branch; above it 4 to
+12, which does not. The 2 mm device crosses between 10^3 and 10^4; `tfln-1cm`
+needs ten times more, crossing between 10^4 and 10^5. That is the shape axis doing
+exactly what §5 says it is for — a curve's shape depends on loss x length, and
+kappa reaches the experiment only through the photon count at the knee.
+
+**4. Power chains deeper than amplitude.** The same device read as optical power
+reaches 8 or more layers where the amplitude encoding saturates at 4. §8 item 2
+asks whether power or amplitude describes the network; for chain depth the answer
+is power, and the amplitude encoding is also where §7.2's overflow bites, because
+its loaded scale is sqrt(s) and `x` lands higher for the same detuning.
+
+**5. So the branch is open at the high end, conditionally.** At 10^5 to 10^6
+photons with power encoding and `N` >= 4, chains of 8 to 12 layers hold. That is a
+**long** reset interval, and `pta_cpu_integration.md` §4.4 makes a long one the
+trigger for its reopening clause: the chi(2) platform starts to matter and poled
+lithium niobate leads there. At 10^3 photons it is 1 to 3 layers and the branch
+closes, with the mainline's electronic nonlinearity untouched. Both of §4.4's
+branches are live, and the photon budget picks between them.
+
+Two conditions on reading 5 as a result. It holds against a **calibrated**
+reference at sigma > 0: uncalibrated detuning costs 25 to 57% from depth 1
+(§7.1), so a long chain assumes the gain errors are corrected, which the tile
+can do and C3 built the engine for. And these are synthetic operands from the
+xorshift stream, which is deliberate — the mechanism before any dataset. The
+small MLP `pta_cpu_integration.md` §9 asks for is A3's second stage and needs D3.
 
 ---
 
