@@ -55,6 +55,11 @@ module c930_npu_dma
   // makes rows share bytes; here it is asked for at a precision that does not
   // need it, so the feed's placement can be measured against PF1's.
   input  logic                         i_pta_stage_a,
+  // F2's other option (PTA_CTRL.PF2_OFF): do not prefetch the next queued
+  // GEMM's operands during this one's C writeback.  PF1 is untouched, which
+  // is what distinguishes this from STAGE_A.  At Q = 1 it changes nothing --
+  // i_next_valid is low, so PF2 never starts anyway.
+  input  logic                         i_pta_pf2_off,
   input  logic [15:0] i_dim_m,
   input  logic [15:0] i_dim_n,
   input  logic [15:0] i_dim_k,
@@ -873,7 +878,8 @@ module c930_npu_dma
           // discarded at the next dispatch (P_IDLE below), so prefetching it
           // would only spend DDR bandwidth and a P_DONE drain on data this mode
           // has already decided not to use.
-          if (next_valid && pf_state == PF_IDLE && !i_pta_stage_a &&
+          if (next_valid && pf_state == PF_IDLE &&
+              !i_pta_stage_a && !i_pta_pf2_off &&
               !(next_a_ready && next_b_ready)) begin
             case (pf2_state)
               PF2_IDLE: begin

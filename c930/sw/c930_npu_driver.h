@@ -150,6 +150,14 @@ extern "C" {
  * during compute, PF2 during the previous writeback) are off.  It is the path
  * INT4 takes of necessity, asked for at a precision that does not need it. */
 #define PTA_CTRL_STAGE_A    0x400u  /* read all of A before launching */
+/* F2 found PF2 -- the cross-GEMM prefetch that runs during C writeback -- to be
+ * a net loss of about 22 cycles a queued GEMM, at two shapes.  STAGE_A turns it
+ * off, but only as a side effect of turning PF1 off too, which its correctness
+ * requires.  This bit turns off PF2 alone, so the configuration F2's arithmetic
+ * points at -- PF1 on, PF2 off, queued -- can be run and measured.
+ * At Q = 1 it is a no-op by construction: with no next GEMM queued there is
+ * nothing for PF2 to prefetch, and the gate checks that. */
+#define PTA_CTRL_PF2_OFF    0x800u  /* no cross-GEMM prefetch */
 #define PTA_SCHED_OFF       0u
 #define PTA_SCHED_PERIODIC  1u
 #define PTA_SCHED_PREDICT   2u
