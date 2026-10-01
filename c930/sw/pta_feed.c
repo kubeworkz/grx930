@@ -9,7 +9,8 @@
 // at EO-res is a few hundred cycles rather than a few thousand, which is where a
 // fixed feed cost starts to show.
 //
-// THE THREE OPTIONS, and how each is reached here:
+// THE THREE OPTIONS IN F2'S BRIEF, and how each is reached here -- plus a
+// fourth that the first three's measurements pointed at:
 //
 //   1. PF1 and PF2 as built.  The DMA reads A row 0 and all of B before launch,
 //      streams rows 1..M-1 during compute (PF1), and during C writeback
@@ -28,6 +29,18 @@
 //      packing makes rows share bytes); the bit asks for it at INT8, where PF1
 //      is otherwise available, so the feed's placement can be measured instead
 //      of argued.
+//
+//   4. PF1 as built, PF2 off.  PTA_CTRL.PF2_OFF, added after the first three
+//      were measured: F2 priced PF2 at about -22 cycles a queued GEMM, twice,
+//      and the only way to not pay it was STAGE_A, which pays more by turning
+//      PF1 off as well.  So the cheapest feed this engine can be asked for was
+//      not expressible, and the arithmetic saying so was a difference of
+//      differences rather than a reading.  This bit makes it a reading.
+//
+//      It is run at Q = 4, where PF2 has a next GEMM to prefetch, and at Q = 1,
+//      where it must change nothing at all -- i_next_valid is low with an empty
+//      queue, so PF2 never starts.  That no-op is a gate: a bit that moved the
+//      Q = 1 numbers would not be doing what it says.
 //
 // WHY EACH REGIME IS RUN AT TWO BATCH SIZES.  Every per-GEMM counter in this
 // engine -- CYCLE_LO, DMA_CT, STALL_CT, AROW_CT -- resets on START, so a drained
@@ -103,13 +116,17 @@ typedef unsigned int u32;
 #define P_SCAN_Q4   2
 #define P_SCAN_S1   3
 #define P_SCAN_S4   4
-#define P_FILL      5
-#define P_RES_Q1    6
-#define P_RES_Q4    7
-#define P_RES_S1    8
-#define P_RES_S4    9
-#define P_ODD       10     /* an odd M*N, for the writeback's tail beat */
-#define N_POINTS    11
+#define P_SCAN_P1   5      /* PF2_OFF: a no-op at Q=1, and the gate says so */
+#define P_SCAN_P4   6
+#define P_FILL      7
+#define P_RES_Q1    8
+#define P_RES_Q4    9
+#define P_RES_S1    10
+#define P_RES_S4    11
+#define P_RES_P1    12
+#define P_RES_P4    13
+#define P_ODD       14     /* an odd M*N, for the writeback's tail beat */
+#define N_POINTS    15
 
 /* The odd-tail shape.  M*N must be odd for the C write burst's last beat to
  * carry one word instead of two (c_odd / wstrb 0x0F in c930_npu_dma.sv), and
@@ -294,6 +311,12 @@ int main(void)
     if (batch(P_SCAN_S1, m, n, k, 0u, 1u, PTA_CTRL_STAGE_A, 1)) diag |= 1u << P_SCAN_S1;
     if (batch(P_SCAN_S4, m, n, k, 0u, 1u, PTA_CTRL_STAGE_A, 4)) diag |= 1u << P_SCAN_S4;
 
+    // PF2 off, PF1 left alone -- the configuration F2's arithmetic pointed at
+    // and no bit could express.  Q=1 is run too, where it must change nothing:
+    // with no next GEMM queued, i_next_valid is low and PF2 never starts.
+    if (batch(P_SCAN_P1, m, n, k, 0u, 1u, PTA_CTRL_PF2_OFF, 1)) diag |= 1u << P_SCAN_P1;
+    if (batch(P_SCAN_P4, m, n, k, 0u, 1u, PTA_CTRL_PF2_OFF, 4)) diag |= 1u << P_SCAN_P4;
+
     // The fill: every (N tile, K tile) written to its own bank at the scan's
     // usual cost.  One GEMM, and the four EO-res batches below all skip the
     // load, so the banks stay valid across them.
@@ -303,6 +326,8 @@ int main(void)
     if (batch(P_RES_Q4, m, n, k, 0u, 1u, RES, 4)) diag |= 1u << P_RES_Q4;
     if (batch(P_RES_S1, m, n, k, 0u, 1u, RES | PTA_CTRL_STAGE_A, 1)) diag |= 1u << P_RES_S1;
     if (batch(P_RES_S4, m, n, k, 0u, 1u, RES | PTA_CTRL_STAGE_A, 4)) diag |= 1u << P_RES_S4;
+    if (batch(P_RES_P1, m, n, k, 0u, 1u, RES | PTA_CTRL_PF2_OFF, 1)) diag |= 1u << P_RES_P1;
+    if (batch(P_RES_P4, m, n, k, 0u, 1u, RES | PTA_CTRL_PF2_OFF, 4)) diag |= 1u << P_RES_P4;
 
     // The writeback's tail beat, at the only shape here with an odd M*N.  Not a
     // timing point -- a correctness one, and it is in this program because this
