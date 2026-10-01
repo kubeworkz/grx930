@@ -584,28 +584,30 @@ static int run_sweep(Vc930_soc4_verilator *top) {
             if (!cyc) { ++bad; continue; }
             const long step = i ? cyc - prev : 0;
             const long want = i ? runs * (long)(TS_LIST[i] - TS_LIST[i - 1]) : 0;
-            // PTA_TS = 1 is below the shot's floor -- C2 measured six cycles there
-            // -- so the step out of it is not on the line and is not checked as if
-            // it were.  The slope is taken from PTA_TS = 2 upward.
-            const bool on_line = (i >= 2);
+            // Every step is on the line now.  PTA_TS = 1 used to sit below the
+            // shot's six-cycle floor, so the step out of it was not checked as if
+            // it were on the line; with the hop out of the broadside path the shot
+            // is PTA_TS + 2 from PTA_TS = 1 upward and the whole sweep is straight.
+            const bool on_line = (i >= 1);
             if (!i)
                 printf("[TB]   %-8u %-9ld %-9.2f %s\n", TS_LIST[i], cyc,
-                       shot_of(p, 0, false), "-- the shot's floor (C2)");
+                       shot_of(p, 0, false), "-- the line's first point");
             else
-                printf("[TB]   %-8u %-9ld %-9.2f %+ld (want %+ld)%s\n",
-                       TS_LIST[i], cyc, shot_of(p, 0, false), step, want,
-                       on_line ? "" : "  -- out of the floor, not on the line");
-            if (on_line && labs(step - want) > runs) steps_ok = 0;
-            if (i == 1) first = cyc;          // PTA_TS = 2, the line's start
+                printf("[TB]   %-8u %-9ld %-9.2f %+ld (want %+ld)\n",
+                       TS_LIST[i], cyc, shot_of(p, 0, false), step, want);
+            // Exactly, not within a cycle a run: the broadside shot has no hop
+            // left in it, so a step that is off by anything is a real change.
+            if (on_line && step != want) steps_ok = 0;
+            if (!i) first = cyc;
             if (i == NTS - 1) last = cyc;
             prev = cyc;
         }
-        // The span across the linear part, which is what distinguishes a tile
-        // whose shot takes the register from one whose drain ignores it.
+        // The span, which is what distinguishes a tile whose shot takes the
+        // register from one whose drain ignores it.
         const long span = last - first;
-        const long want_span = runs * (long)(TS_LIST[NTS - 1] - TS_LIST[1]);
-        printf("[TB]   PTA_TS 2 to %u: %+ld cycles, want %+ld\n",
-               TS_LIST[NTS - 1], span, want_span);
+        const long want_span = runs * (long)(TS_LIST[NTS - 1] - TS_LIST[0]);
+        printf("[TB]   PTA_TS %u to %u: %+ld cycles, want %+ld\n",
+               TS_LIST[0], TS_LIST[NTS - 1], span, want_span);
         if (labs(span) <= runs) {
             printf("[TB]   PTA_TS does not move the shot -- this build's drain"
                    " ignores it, so it is PTM-C and 6.2's Ts axis is not reachable"

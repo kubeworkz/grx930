@@ -730,11 +730,20 @@ module c930_npu_core
   //   ps_in[n]: comb pulses during window 2n    -> visible during window 2n+1
   // which is exactly when PE[0][n] multiplies A[0] (window 1+2n), so every
   // PE[r][n] meets A[r] and column n's partial at window 2r+1+2n.
+  // The skewed feed has to be built on hop edges: that is what makes row r's
+  // activation arrive r windows after row 0's, which is the array PTM-C emulates.
+  // A broadside tile takes the whole vector at once, so there is no skew to build
+  // and nothing to build it at half rate -- registering every cycle is what lets
+  // the shot happen on the cycle after S_RUN is entered instead of two hops later.
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       act   <= '0;
       ps_in <= '0;
+`ifdef PTM_B
+    end else begin
+`else
     end else if (hop_phase) begin
+`endif
       act   <= act_comb;
       ps_in <= ps_in_comb;
     end

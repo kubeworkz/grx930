@@ -349,7 +349,13 @@ module c930_ptm_c
     else          hop <= ~hop;
   end
 
-  wire shot_step = hop && i_pta_shot;
+  // Broadside has no half-rate array to emulate, so nothing here waits for a hop:
+  // the shot is one cycle and everything that steps with it steps then.  The three
+  // ticks below are `hop` unchanged for PTM-C, which must stay bit-identical to the
+  // systolic array (C0), and the shot itself for BROADSIDE.
+  wire shot_step  = BROADSIDE ? i_pta_shot       : (hop && i_pta_shot);
+  wire cap_tick   = BROADSIDE ? i_pta_shot       : hop;
+  wire drift_tick = BROADSIDE ? i_pta_shot_start : (hop && i_pta_shot_start);
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -501,7 +507,7 @@ module c930_ptm_c
             d_bank[b][r][c] <= '0;
       rng_dr <= stream_seed(i_pta_seed, K_DRIFT);
       dcnt   <= 32'd0;
-    end else if (hop && i_pta_shot_start && impair_r[IMP_DRIFT]) begin
+    end else if (drift_tick && impair_r[IMP_DRIFT]) begin
       if (dcnt + 32'd1 >= (32'd1 << dlog2_r)) begin
         dcnt <= 32'd0;
         ds   = rng_dr;
@@ -668,7 +674,11 @@ module c930_ptm_c
     end else begin
       if (i_pta_cfg_load)
         sat_cnt <= 32'd0;
-      if (hop) begin
+      // cap_tick, not hop: broadside captures on the shot.  Gating on the shot
+      // rather than on every cycle is what makes ps_out_q HOLD the result until the
+      // next one -- with `modelled` false the unmodelled path would overwrite it
+      // with a plain sum of whatever the feed happened to be showing.
+      if (cap_tick) begin
         for (int c = 0; c < C; c++) begin
           if (fp_mode) begin
             ps_out_q[c*ACC_W +: ACC_W] <= {{(ACC_W-32){1'b0}}, y_fp[c]};
