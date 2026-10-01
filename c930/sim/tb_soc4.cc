@@ -17,6 +17,14 @@
 //                     and checks the firmware's per-GEMM error masks at
 //                     DDR[0x300/0x308/0x310/0x318] are all zero (all C
 //                     elements read back through the CPU D-cache + L2).
+//   "sweep"         : C4(c) -- boots sw/pta_sweep.c, which runs section 6.2's
+//                     points through MMIO and records what each cost.
+//   "feed"          : F2 -- boots sw/pta_feed.c, which measures the feed's
+//                     options at the two Pockels points. Wants PTM_B=1: on
+//                     PTM-C the drain hides the fetch and the options converge.
+//   "l2coh"         : the L2 directory's blind spot, as a test.
+//   "mulstore"      : a multiply retiring while a store sits in MEM.
+//   "driver"        : the NPU driver's own smoke test.
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -497,7 +505,7 @@ static int run_sweep(Vc930_soc4_verilator *top) {
            nt, kt, nt * kt);
     printf("[TB]   %-12s %-9s %-9s %-8s %-7s %-7s %-7s %-6s %s\n",
            "point", "cycles", "DMA busy", "wmove", "A-row", "shots",
-           "progs", "C", "DMA/core");
+           "progs", "C", "feed/core");
 
     int bad = 0;
     for (int p = 0; p < NAMED; p++) {
@@ -508,12 +516,13 @@ static int run_sweep(Vc930_soc4_verilator *top) {
         const uint32_t progs = slot(p, 5) - (p ? slot(p - 1, 5) : 0);
         const uint32_t cok = slot(p, 6);
         const int      ran = (int)slot(p, 7);
-        // DMA busy against core cycles.  NOT a share of the whole GEMM: the two
-        // counters overlap, since the DMA fetches before and during the core's
-        // run, so the ratio passes one when the fetch is the longer of the two.
-        // That is what section 6.2 means by "DMA_CT is part of the result", and
-        // it is the reading that matters at the Pockels-class end.
-        const double ratio = cyc ? (double)dma / (double)cyc : 0.0;
+        // DMA_CT counts every cycle with phase != P_IDLE, and P_LAUNCH -- the
+        // core's whole compute -- is one of those phases.  So DMA busy is the
+        // GEMM, from the first AR to o_done, not the fetch, and the fetch is
+        // the difference.  This column used to print DMA/core and call it the
+        // fetch against the core; that reading is 1 + feed/core, which is why it
+        // could never drop below one.  F2 (`make pta_feed`) measures the parts.
+        const double ratio = cyc ? ((double)dma - (double)cyc) / (double)cyc : 0.0;
         if (ran != 1) {
             const char *why = ran == -1 ? "submit refused"
                             : ran == -2 ? "drain timed out"
@@ -633,6 +642,327 @@ static int run_sweep(Vc930_soc4_verilator *top) {
     }
     printf("[TB] PASS: section 6.2's four points measured on the SoC, EO-res "
            "included, in %d cycles\n", c);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// F2: the feed's options at the Pockels points, run on the SoC by sw/pta_feed.c
+// (grxcp pta_program_plan.md, track F).  Nine batches: EO-scan and EO-res, each
+// with the feed as built and with PTA_CTRL.STAGE_A, each of those at Q = 1 and
+// Q = 4, plus the resident fill.  The firmware's header says why two batch
+// sizes -- every per-GEMM counter resets on START, so a drained batch of four
+// reports only its last GEMM, and 4*wall(Q=1) - wall(Q=4) is what queueing buys.
+// ---------------------------------------------------------------------------
+static int run_feed(Vc930_soc4_verilator *top) {
+    const int M = 8, N = 12, K = 16;     // pta_sweep.c's shape, so the numbers compare
+    const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t DIAG = 0x9480, PHASE = 0x9490, TABLE = 0x9500;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+    // 1 warm-up + (1+4+1+4) + 1 fill + (1+4+1+4) + 1 odd-tail GEMMs
+    const int NPTS = 11, STRIDE = 16, NBLK = 23;
+    const int ODD_M = 3, ODD_N = 5, ODD_K = 16;   // the only odd M*N here
+
+    enum { P_WARM, P_SCAN_Q1, P_SCAN_Q4, P_SCAN_S1, P_SCAN_S4, P_FILL,
+           P_RES_Q1, P_RES_Q4, P_RES_S1, P_RES_S4, P_ODD };
+    enum { FD_WALL, FD_CYCLES, FD_DMA_CT, FD_DMA_LAST, FD_STALL, FD_AROW,
+           FD_SHOTS, FD_WLOADS, FD_COK, FD_RAN, FD_Q };
+
+    printf("[TB] 4-core SoC -- F2: the feed's options at the Pockels points, "
+           "driven by firmware\n");
+    printf("[TB] shape M=%d N=%d K=%d: this SoC's NPU, not 6.2's. A is M*K=%d "
+           "bytes (%d beats), of which row 0 is %d -- so STAGE_A moves %d beats "
+           "out of the compute shadow\n", M, N, K, M * K, (M * K + 7) / 8,
+           (K + 7) / 8, (M * K + 7) / 8 - (K + 7) / 8);
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("PTA_FW");
+    preload_words_at(top, fw ? fw : "sw/pta_feed_prog.hex", 0x0000, 8192);
+
+    for (int i = 0; i < M * K; i++) preload_byte(top, A + i, 1);
+    for (int i = 0; i < K * N; i++) preload_byte(top, B + i, 1);
+    // A C block per GEMM, never reused -- see the firmware's c_base_of comment.
+    for (int b = 0; b < NBLK; b++)
+        for (int i = 0; i < M * N; i++)
+            preload_word(top, C + 0x200 * b + i * 4, 0);
+    preload_word(top, DIMS + 0, (uint32_t)M);
+    preload_word(top, DIMS + 4, (uint32_t)N);
+    preload_word(top, DIMS + 8, (uint32_t)K);
+    preload_word(top, DIMS + 12, 0);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, DIAG, 0);
+    preload_word(top, PHASE, 0);
+    for (int i = 0; i < STRIDE * (NPTS + 1); i++)
+        preload_word(top, TABLE + i * 4, 0);
+
+    printf("[TB] image preloaded, all operands 1 so every C element is K=%d. "
+           "Booting CPU0.\n", K);
+    reset_release(top);
+
+    // No thermo-optic point here, so this is far shorter than the sweep: 21
+    // GEMMs of a few hundred cycles each, plus the CPU's submits.
+    int c = -1;
+    for (int t = 0; t < 4000000; t++) {
+        clock_n(top, 1);
+        if ((t % 500000) == 0 || t == 4000000 - 1)
+            printf("[TB]   t=%-9d pc=0x%08llx npu=%d/%d dma=%d phase=0x%02x\n",
+                   t, (unsigned long long)top->o_hart0_pc,
+                   (int)top->o_npu0_busy, (int)top->o_npu0_done,
+                   (int)top->o_dma0_phase, ddr_word(top, PHASE));
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c >= 0) printf("[TB] feed: done after %d cycles\n", c);
+    else {
+        printf("[TB] feed: TIMEOUT after 4000000 cycles, PHASE=0x%02x\n",
+               ddr_word(top, PHASE));
+        return 1;
+    }
+
+    struct Row { const char *name; const char *what; };
+    const Row rows[NPTS] = {
+        { "warm-up",   "discarded: cold I-cache"       },
+        { "scan Q=1",  "EO-scan, feed as built"        },
+        { "scan Q=4",  "EO-scan, feed as built, queued" },
+        { "scan S Q=1","EO-scan, STAGE_A"              },
+        { "scan S Q=4","EO-scan, STAGE_A, queued"      },
+        { "res fill",  "the resident fill"             },
+        { "res Q=1",   "EO-res, feed as built"         },
+        { "res Q=4",   "EO-res, feed as built, queued" },
+        { "res S Q=1", "EO-res, STAGE_A"               },
+        { "res S Q=4", "EO-res, STAGE_A, queued"       },
+        { "odd tail",  "M*N odd, the half-full beat"   },
+    };
+    auto slot = [&](int p, int i) {
+        return ddr_word(top, TABLE + 4u * STRIDE * (uint32_t)p + 4u * (uint32_t)i);
+    };
+
+    const uint32_t nt = ddr_word(top, TABLE + 4u * STRIDE * NPTS + 0);
+    const uint32_t kt = ddr_word(top, TABLE + 4u * STRIDE * NPTS + 4);
+    const uint32_t blks = ddr_word(top, TABLE + 4u * STRIDE * NPTS + 8);
+    printf("[TB]   Nt=%u Kt=%u, so %u shots and (scanned) %u weight programs a "
+           "GEMM; %u C blocks used of %d preloaded\n",
+           nt, kt, (uint32_t)M * nt * kt, nt * kt, blks, NBLK);
+
+    int bad = 0;
+    printf("[TB]   %-11s %-3s %-9s %-8s %-8s %-8s %-7s %-7s %-6s %-6s %-5s %s\n",
+           "batch", "Q", "wall", "core", "DMA", "DMAlast", "A-row", "wmove",
+           "shots", "banks", "C", "wall/GEMM");
+    for (int p = 0; p < NPTS; p++) {
+        const int ran = (int)slot(p, FD_RAN);
+        if (ran != 1) {
+            const char *why = ran == -1 ? "submit refused"
+                            : ran == -2 ? "drain timed out"
+                            : ran == -3 ? "o_error after the batch"
+                            : ran == -4 ? "queue never had room"
+                            : ran == -5 ? "a C block was wrong"
+                                        : "did not run";
+            printf("[TB]   %-11s -- %s\n", rows[p].name, why);
+            ++bad;
+            continue;
+        }
+        const uint32_t q = slot(p, FD_Q);
+        printf("[TB]   %-11s %-3u %-9u %-8u %-8u %-8u %-7u %-7u %-6u %-6u %-5s %.1f\n",
+               rows[p].name, q, slot(p, FD_WALL), slot(p, FD_CYCLES),
+               slot(p, FD_DMA_CT), slot(p, FD_DMA_LAST), slot(p, FD_AROW),
+               slot(p, FD_STALL), slot(p, FD_SHOTS), slot(p, FD_WLOADS),
+               slot(p, FD_COK) ? "ok" : "WRONG",
+               q ? (double)slot(p, FD_WALL) / (double)q : 0.0);
+        if (!slot(p, FD_COK)) ++bad;
+    }
+    printf("[TB]   core, DMA, DMAlast, A-row and wmove are the batch's LAST "
+           "GEMM: they reset on START. wall, shots and banks are the whole "
+           "batch.\n");
+    printf("[TB]   \"banks\" is PTA_WLOAD_CT, which counts LEAVING S_WLOAD "
+           "(wload_done), one per (N tile, K tile) -- a bank selection, not an "
+           "array programming. Under WSKIP the state is still entered and left, "
+           "so the count stands and the CYCLES (wmove) are what residency "
+           "saves.\n");
+
+    // ---- What F2 is choosing between -------------------------------------
+    // DMA_CT counts every cycle with phase != P_IDLE, and P_LAUNCH -- the core's
+    // whole compute -- is one of those phases.  So DMA_CT is not the fetch: it
+    // is the GEMM, from the first AR to o_done, and the fetch is DMA_CT - core.
+    // (pta_sweep.c's harness prints the raw DMA/core ratio and calls it "the
+    // fetch against the core"; that reading is 1 + feed/core, which is why it
+    // never drops below one.)
+    printf("[TB]   the feed against the core, per GEMM (Q=1). DMA_CT counts "
+           "P_LAUNCH too, so it is the whole GEMM and feed = DMA_CT - core:\n");
+    printf("[TB]   %-16s %-8s %-8s %-8s %-9s %s\n",
+           "point", "core", "GEMM", "feed", "feed/GEMM", "wall");
+    const int q1[4] = { P_SCAN_Q1, P_SCAN_S1, P_RES_Q1, P_RES_S1 };
+    for (int i = 0; i < 4; i++) {
+        const int p = q1[i];
+        const uint32_t cyc = slot(p, FD_CYCLES), dma = slot(p, FD_DMA_CT);
+        const long feed = (long)dma - (long)cyc;
+        printf("[TB]   %-16s %-8u %-8u %-8ld %-9.1f%% %u\n", rows[p].what, cyc,
+               dma, feed, dma ? 100.0 * (double)feed / (double)dma : 0.0,
+               slot(p, FD_WALL));
+    }
+    // Where the feed goes, from the DMA's own structure.  P_READ_A and P_READ_B
+    // are 2 cycles a beat (RS_R latches, RS_UNPACK writes the whole beat through
+    // the wide port); the C write burst is 1 (WS_STREAM places a beat a cycle
+    // from c_mem's two read ports), plus the AW/B handshakes and one cycle of
+    // pipeline fill.  It was 5 before F2 rebuilt it.
+    {
+        const int a_beats = (K + 7) / 8;            // row 0, as built
+        const int b_beats = (K * N + 7) / 8;
+        const int c_beats = (M * N + 1) / 2;
+        const double rest = 2.0 * a_beats + 2 + 2.0 * b_beats + 2 + 3 + 1;
+        printf("[TB]   the feed's parts at this shape, from the DMA's own "
+               "structure: A row 0 %d beats x2+2 = %d, B %d x2+2 = %d, "
+               "C %d beats x1+4 = %d (was x5+3 = %d), hand-off 3, done 1 -- "
+               "writeback is %.0f%% of the feed, was %.0f%%\n",
+               a_beats, 2 * a_beats + 2, b_beats, 2 * b_beats + 2,
+               c_beats, c_beats + 4, 5 * c_beats + 3,
+               100.0 * (c_beats + 4.0) / (rest + c_beats + 4.0),
+               100.0 * (5.0 * c_beats + 3.0) / (rest + 5.0 * c_beats + 3.0));
+    }
+
+    // What is left once the feed is cut: the host's own cost.  The wall clock is
+    // the CPU's, so wall - GEMM is what the submit writes and the drain polling
+    // spend outside the engine entirely.  Printed because F3 has to say what
+    // binds this SoC, and after F2 it is not the fabric.
+    printf("[TB]   the host's share, per GEMM (Q=1): wall - GEMM, which is the "
+           "submit MMIO writes and the drain poll:\n");
+    for (int i = 0; i < 4; i++) {
+        const int p = q1[i];
+        const long over = (long)slot(p, FD_WALL) - (long)slot(p, FD_DMA_CT);
+        printf("[TB]   %-16s wall %-7u GEMM %-7u host %-7ld (%.0f%% of the wall, "
+               "%.1fx the GEMM)\n", rows[p].what, slot(p, FD_WALL),
+               slot(p, FD_DMA_CT), over,
+               slot(p, FD_WALL) ? 100.0 * (double)over / (double)slot(p, FD_WALL) : 0.0,
+               slot(p, FD_DMA_CT) ? (double)over / (double)slot(p, FD_DMA_CT) : 0.0);
+    }
+
+    // What queueing buys, measured: four separate GEMMs against four queued.
+    printf("[TB]   what the queue buys (4*wall(Q=1) - wall(Q=4)):\n");
+    struct Pair { const char *name; int one, four; };
+    const Pair pairs[4] = {
+        { "EO-scan, as built", P_SCAN_Q1, P_SCAN_Q4 },
+        { "EO-scan, STAGE_A ", P_SCAN_S1, P_SCAN_S4 },
+        { "EO-res,  as built", P_RES_Q1,  P_RES_Q4  },
+        { "EO-res,  STAGE_A ", P_RES_S1,  P_RES_S4  },
+    };
+    long gain[4];
+    for (int i = 0; i < 4; i++) {
+        const long serial = 4L * (long)slot(pairs[i].one, FD_WALL);
+        const long queued = (long)slot(pairs[i].four, FD_WALL);
+        gain[i] = serial - queued;
+        printf("[TB]   %-18s serial %-8ld queued %-8ld %+ld (%+.1f%%)\n",
+               pairs[i].name, serial, queued, gain[i],
+               serial ? 100.0 * (double)gain[i] / (double)serial : 0.0);
+    }
+    printf("[TB]   PF2 is the difference between the two rows of each level: "
+           "STAGE_A turns it off, so its rows keep only the submit-and-poll "
+           "saving. F0 measured PF2 as a net loss at its own shape.\n");
+
+    // The choice, by the gate's own measure: total cycles for four GEMMs.
+    {
+        int best_scan = (slot(P_SCAN_Q4, FD_WALL) <= slot(P_SCAN_S4, FD_WALL))
+                        ? P_SCAN_Q4 : P_SCAN_S4;
+        int best_res  = (slot(P_RES_Q4, FD_WALL) <= slot(P_RES_S4, FD_WALL))
+                        ? P_RES_Q4 : P_RES_S4;
+        printf("[TB]   chosen by measured total cycles, four GEMMs: EO-scan %s "
+               "(%u against %u), EO-res %s (%u against %u)\n",
+               rows[best_scan].name, slot(best_scan, FD_WALL),
+               slot(best_scan == P_SCAN_Q4 ? P_SCAN_S4 : P_SCAN_Q4, FD_WALL),
+               rows[best_res].name, slot(best_res, FD_WALL),
+               slot(best_res == P_RES_Q4 ? P_RES_S4 : P_RES_Q4, FD_WALL));
+    }
+
+    // ---- Gates ------------------------------------------------------------
+    // Only what must hold. Which option wins, and whether PF2 pays, are the
+    // measurement -- F0 already found PF2 negative at its shape, so gating its
+    // sign would be gating the answer.
+    for (int p = 0; p < NPTS; p++) {
+        if ((int)slot(p, FD_RAN) != 1) continue;
+        // 1. The premise, checked rather than assumed: PF1 never makes the core
+        //    wait at this shape, so staging cannot help by removing a wait.
+        if (slot(p, FD_AROW) != 0) {
+            printf("[TB]   FAIL: %s waited %u cycles for an A row -- PF1 binds "
+                   "here after all, and F2's reasoning below assumes it does not\n",
+                   rows[p].name, slot(p, FD_AROW));
+            ++bad;
+        }
+        // 2. A shot per (output row, N tile, K tile), every batch, every mode.
+        //    The odd-tail point is a different shape, so it gets its own tiles.
+        const uint32_t pm = (p == P_ODD) ? (uint32_t)ODD_M : (uint32_t)M;
+        const uint32_t pnt = (p == P_ODD) ? (uint32_t)((ODD_N + 7) / 8) : nt;
+        const uint32_t pkt = (p == P_ODD) ? (uint32_t)((ODD_K + 7) / 8) : kt;
+        const uint32_t want_shots = pm * pnt * pkt * slot(p, FD_Q);
+        if (slot(p, FD_SHOTS) != want_shots) {
+            printf("[TB]   FAIL: %s fired %u shots, want %u\n",
+                   rows[p].name, slot(p, FD_SHOTS), want_shots);
+            ++bad;
+        }
+    }
+    // 3. Residency saves weight-movement CYCLES.  Not the bank count: see the
+    //    note above the table -- PTA_WLOAD_CT counts leaving S_WLOAD, which
+    //    WSKIP still does.  Without this check a resident point that quietly
+    //    rescanned the array would still look fast enough to win.
+    if ((int)slot(P_RES_Q1, FD_RAN) == 1 && (int)slot(P_SCAN_Q1, FD_RAN) == 1) {
+        const uint32_t res_mv = slot(P_RES_Q1, FD_STALL);
+        const uint32_t scan_mv = slot(P_SCAN_Q1, FD_STALL);
+        if (res_mv >= scan_mv) {
+            printf("[TB]   FAIL: WSKIP did not cut weight movement -- EO-res "
+                   "spent %u cycles against EO-scan's %u\n", res_mv, scan_mv);
+            ++bad;
+        } else {
+            printf("[TB]   WSKIP cuts weight movement %u -> %u cycles a GEMM, "
+                   "which is the %u-cycle gap between the two cores\n",
+                   scan_mv, res_mv,
+                   slot(P_SCAN_Q1, FD_CYCLES) - slot(P_RES_Q1, FD_CYCLES));
+        }
+    }
+    // 4. The writeback's tail beat.  M*N odd means the last beat carries one
+    //    word under m_axi_wstrb = 0x0F; every other shape on this SoC is even,
+    //    so without this point the restructured burst (F2) never writes one.
+    if ((int)slot(P_ODD, FD_RAN) == 1 && slot(P_ODD, FD_COK))
+        printf("[TB]   the odd tail: M=%d N=%d, %d words = %d beats with the "
+               "last half full, C exact\n", ODD_M, ODD_N, ODD_M * ODD_N,
+               (ODD_M * ODD_N + 1) / 2);
+    // 5. STAGE_A is not inert.  Reading all M rows before launch has to cost
+    //    more DMA than reading row 0, or the bit is not reaching the DMA -- the
+    //    failure SoC-B hit with PTA_TS, reported rather than passed quietly.
+    {
+        const int sa[2][2] = { { P_SCAN_Q1, P_SCAN_S1 }, { P_RES_Q1, P_RES_S1 } };
+        for (int i = 0; i < 2; i++) {
+            if ((int)slot(sa[i][0], FD_RAN) != 1 ||
+                (int)slot(sa[i][1], FD_RAN) != 1) continue;
+            const uint32_t as_built = slot(sa[i][0], FD_DMA_LAST);
+            const uint32_t staged   = slot(sa[i][1], FD_DMA_LAST);
+            if (staged <= as_built) {
+                printf("[TB]   FAIL: STAGE_A did not lengthen the DMA at %s "
+                       "(%u against %u) -- PTA_CTRL bit 10 is not reaching the "
+                       "DMA, so the staged rows are not being read\n",
+                       rows[sa[i][1]].name, staged, as_built);
+                ++bad;
+            } else {
+                printf("[TB]   STAGE_A costs %+d DMA cycles at %s, for %d more "
+                       "beats of A read before launch\n",
+                       (int)staged - (int)as_built, rows[sa[i][1]].name,
+                       (M * K + 7) / 8 - (K + 7) / 8);
+            }
+        }
+    }
+
+    const uint32_t diag = ddr_word(top, DIAG);
+    const uint32_t res  = ddr_word(top, RESULT);
+    printf("[TB]   DIAG=0x%03x RESULT=0x%08x\n", diag, res);
+    if (res != PASS_MAGIC) {
+        printf("[TB] FAIL: the firmware did not report every batch good\n");
+        return 1;
+    }
+    if (bad) {
+        printf("[TB] FAIL: %d check(s) failed\n", bad);
+        return 1;
+    }
+    printf("[TB] PASS: F2's feed options measured at both Pockels points, "
+           "A-row wait included, in %d cycles\n", c);
     return 0;
 }
 
@@ -917,6 +1247,8 @@ int main(int argc, char **argv) {
         rc = run_pta(top);
     else if (mode == "sweep")
         rc = run_sweep(top);
+    else if (mode == "feed")
+        rc = run_feed(top);
     else if (mode == "l2coh")
         rc = run_l2coh(top);
     else if (mode == "mulstore")

@@ -178,6 +178,10 @@ module c930_npu_csr
   output logic        o_pta_resident,      // PTA_CTRL.RESIDENT, a bank per tile
   output logic        o_pta_wskip,         // PTA_CTRL.WSKIP, banks already loaded
   output logic        o_pta_morder,        // PTA_CTRL.MORDER, m-outer
+  // F2's third feed option, PTA_CTRL bit 10.  It goes to the DMA, not the tile:
+  // every A row is read before the core is launched, instead of row 0 up front
+  // and rows 1..M-1 streamed during compute (PF1).
+  output logic        o_pta_stage_a,       // PTA_CTRL.STAGE_A, A staged in full
   output logic [31:0] o_pta_cal_per,
   output logic [23:0] o_pta_cal_thr,
   output logic [3:0]  o_pta_cal_amp,
@@ -283,6 +287,7 @@ module c930_npu_csr
   logic        pta_resident;
   logic        pta_wskip;
   logic        pta_morder;
+  logic        pta_stage_a;
   logic [6:0]  pta_impair;
   logic [3:0]  pta_abits, pta_wbits, pta_adcbits;
   logic [5:0]  pta_shift;
@@ -340,6 +345,7 @@ module c930_npu_csr
   assign o_pta_resident    = pta_resident;
   assign o_pta_wskip       = pta_wskip;
   assign o_pta_morder      = pta_morder;
+  assign o_pta_stage_a     = pta_stage_a;
   assign o_pta_cal_per     = pta_cal_per;
   assign o_pta_cal_thr     = pta_cal_thr;
   assign o_pta_cal_amp     = pta_cal_amp;
@@ -660,6 +666,7 @@ module c930_npu_csr
       pta_resident <= 1'b0;
       pta_wskip    <= 1'b0;
       pta_morder   <= 1'b0;
+      pta_stage_a  <= 1'b0;
       pta_sched     <= 2'd0;
       pta_impair    <= 7'd0;
       pta_abits     <= 4'd0;
@@ -746,6 +753,8 @@ module c930_npu_csr
             pta_resident <= s_axi_wdata[7];
             pta_wskip    <= s_axi_wdata[8];
             pta_morder   <= s_axi_wdata[9];
+            // F2's option, latched the same way and read by the DMA at START.
+            pta_stage_a  <= s_axi_wdata[10];
             if (s_axi_wdata[1]) pta_now_q  <= 1'b1;
             if (s_axi_wdata[3]) pta_mrst_q <= 1'b1;
             // MODEL_RST clears the correction in the tile, so this file's copy
@@ -837,9 +846,11 @@ module c930_npu_csr
           ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
           ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
           ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
-          // 22 + 3 + 1 + 2 + 3 + 1 = 32.  The old form concatenated to 31 and
-          // relied on the zero-extension; MB's bits are not going on top of that.
-          A_PTA_CTRL:      s_axi_rdata <= {22'd0,
+          // 21 + 4 + 1 + 2 + 3 + 1 = 32.  The old form concatenated to 31 and
+          // relied on the zero-extension; MB's bits are not going on top of that,
+          // and F2's stage_a widened the field rather than the padding.
+          A_PTA_CTRL:      s_axi_rdata <= {21'd0,
+                                           pta_stage_a,
                                            pta_morder, pta_wskip, pta_resident,
                                            1'b0,            // CAL_SCHED bit 6
                                            pta_sched, 3'd0, pta_en};

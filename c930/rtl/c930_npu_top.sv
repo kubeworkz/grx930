@@ -111,6 +111,7 @@ module c930_npu_top
   logic signed [DIN_W-1:0] staging_wdata;
   logic [15:0]             c_raddr;
   logic signed [31:0]      c_rdata;   // always 32-bit (normalized by core)
+  logic signed [31:0]      c_rdata_hi; // c_mem[c_raddr + 1]: the beat's other word
   logic                    core_done, core_error;
   logic [31:0]             cycle_count, op_count, stall_count, dma_cycle_count, dma_last_count;
   logic                    dma_bank_sel;
@@ -129,6 +130,7 @@ module c930_npu_top
   logic [5:0]  pta_adc_shift;
   logic [31:0] pta_seed, pta_tw, pta_ts, pta_cal_per, pta_cal_seed;
   logic        pta_resident, pta_wskip, pta_morder;   // MB's modes, PTA_CTRL 9:7
+  logic        pta_stage_a;                           // F2's option, PTA_CTRL 10
   logic [15:0] pta_sigma_th, pta_k_shot, pta_sigma_pr, pta_drift_sigma, pta_drift_max;
   logic [4:0]  pta_drift_log2;
   logic [7:0]  pta_xtalk;
@@ -205,6 +207,7 @@ module c930_npu_top
     .o_pta_resident    (pta_resident),
     .o_pta_wskip       (pta_wskip),
     .o_pta_morder      (pta_morder),
+    .o_pta_stage_a     (pta_stage_a),
     .o_pta_cal_per     (pta_cal_per),
     .o_pta_cal_thr     (pta_cal_thr),
     .o_pta_cal_amp     (pta_cal_amp),
@@ -265,6 +268,9 @@ module c930_npu_top
     // hang (C4(c)).
     .i_pta_tw      (pta_tw),
     .i_pta_ts      (pta_ts),
+    // F2: read every A row before launching the core, instead of row 0 up front
+    // and the rest on PF1 during compute.
+    .i_pta_stage_a (pta_stage_a),
     .i_dim_m       (dim_m),
     .i_dim_n       (dim_n),
     .i_dim_k       (dim_k),
@@ -308,6 +314,7 @@ module c930_npu_top
     .i_core_error  (core_error),
     .o_c_raddr     (c_raddr),
     .i_c_rdata     (c_rdata),
+    .i_c_rdata_hi  (c_rdata_hi),
     .m_axi_araddr  (m_axi_araddr),
     .m_axi_arlen   (m_axi_arlen),
     .m_axi_arsize  (m_axi_arsize),
@@ -369,6 +376,7 @@ module c930_npu_top
     .o_error    (core_error),
     .i_c_raddr  (c_raddr),
     .o_c_rdata  (c_rdata),
+    .o_c_rdata_hi (c_rdata_hi),
     .i_a_rows_ready (a_rows_ready),
     .i_wwen     (dma_wwen),
     .i_wwsel    (dma_wwsel),

@@ -36,4 +36,4 @@ if [ \"$DO_RUN\" = \"run\" ]; then
   cd '$C930_WSL'
   env $RUN_ENV ./$GEN_DIR/Vc930_soc4_verilator '$MODE'
 fi
-" 2>&1 | tail -20
+" 2>&1 | tail -${TAIL_LINES:-120}

@@ -49,6 +49,12 @@ module c930_npu_dma
   // spends, and a bound computed from the shape alone reads them as a hang.
   input  logic [31:0]                  i_pta_tw,
   input  logic [31:0]                  i_pta_ts,
+  // F2's third feed option (PTA_CTRL.STAGE_A).  Read every A row before pulsing
+  // the core's start, instead of row 0 up front and rows 1..M-1 on PF1 during
+  // compute.  This is the path INT4 has always taken, because nibble packing
+  // makes rows share bytes; here it is asked for at a precision that does not
+  // need it, so the feed's placement can be measured against PF1's.
+  input  logic                         i_pta_stage_a,
   input  logic [15:0] i_dim_m,
   input  logic [15:0] i_dim_n,
   input  logic [15:0] i_dim_k,
@@ -117,6 +123,10 @@ module c930_npu_dma
   input  logic                    i_core_error,
   output logic [15:0]             o_c_raddr,
   input  logic signed [31:0]      i_c_rdata,   // always 32-bit (normalized by core)
+  // c_mem[o_c_raddr + 1], the other INT32 of the 64-bit beat.  Both reads are
+  // asynchronous, so one address yields a whole beat and WS_STREAM can place
+  // one a cycle (F2).
+  input  logic signed [31:0]      i_c_rdata_hi,
 
   // ---- AXI4 master: read address ----
   output logic [AXI_ADDR_W-1:0] m_axi_araddr,
@@ -211,12 +221,15 @@ module c930_npu_dma
   localparam [1:0] RS_UNPACK = 2'd2;
 
   // ---- Write sub-states ----
-  localparam [2:0] WS_AW    = 3'd0;  // issue AXI write address
-  localparam [2:0] WS_ADDR  = 3'd1;  // set core C read address
-  localparam [2:0] WS_DATA  = 3'd2;  // latch C value (high or low)
-  localparam [2:0] WS_PACK  = 3'd3;  // pack second C value into high word
-  localparam [2:0] WS_DRIVE = 3'd4;  // drive AXI write data
-  localparam [2:0] WS_B     = 3'd5;  // wait for write response
+  localparam [2:0] WS_AW     = 3'd0;  // issue AXI write address
+  localparam [2:0] WS_STREAM = 3'd1;  // one beat a cycle while the slave takes them
+  localparam [2:0] WS_B      = 3'd5;  // wait for write response
+  // WS_ADDR / WS_DATA / WS_PACK / WS_DRIVE are gone (F2).  They walked one C
+  // word per cycle and then spent two more driving the beat: five cycles to put
+  // 8 bytes on a channel that takes 8 bytes a cycle, which at F0's shape was
+  // 1,283 cycles of an 1,867-cycle feed.  c_mem's second read port
+  // (o_c_rdata_hi) fills a whole beat from one address, so WS_STREAM replaces
+  // all four.
 
   logic [2:0] phase;
   logic [1:0] rd_sub;
@@ -247,14 +260,17 @@ module c930_npu_dma
   // INT4 walks a beat one nibble per cycle; every other precision drains the
   // whole beat in a single cycle on the wide port.
   wire rs_beat_done;
-  int  c_idx;         // C element index
+  int  c_idx;         // next C pair to fetch for the write burst
   int  c_beat;        // AXI beat counter for C writes
-  logic [31:0] c_lo;  // low 32 bits of packed pair
   logic        c_odd; // last beat is odd (wstrb = 0x0F)
+  // c_lo is gone with WS_PACK: a pair came one word at a time and needed
+  // somewhere to hold the first.  i_c_rdata_hi delivers both at once (F2).
   assign rs_beat_done = is_int4 ? (unpack_idx == elems_per_beat - 1) : 1'b1;
 
   logic [AXI_DATA_W-1:0] rword;
-  logic [AXI_DATA_W-1:0] wdata_reg;
+  // wdata_reg is gone with WS_DRIVE: the beat was assembled into it a word at a
+  // time and then copied to m_axi_wdata, which cost a cycle of its own.
+  // WS_STREAM drives m_axi_wdata directly from the two read ports (F2).
   logic wsel_reg;     // 0 = reading A, 1 = reading B
   logic launched;
 
@@ -502,7 +518,9 @@ module c930_npu_dma
                                 n_tiles * k_tiles * int'(i_pta_tw) +
                                 i_dim_m * n_tiles * k_tiles * int'(i_pta_ts);
               // INT4: nibble-packing means rows share bytes, read all A upfront.
-              // INT8/16/FP16/BF16: read first row only, prefetch rest during compute.
+              // INT8/16/FP16/BF16: read first row only, prefetch rest during
+              // compute -- unless STAGE_A (F2) asks for INT4's behaviour at a
+              // precision that does not need it.
               if (i_precision == 3'd4) begin
                 total_elems <= i_dim_m * i_dim_k;  // all rows (nibble packing)
                 pf_row      <= i_dim_m;             // disable prefetch
@@ -512,29 +530,41 @@ module c930_npu_dma
                 rd_beats   <= ((i_dim_m * i_dim_k + 1) / 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
                 pf_rd_beats <= 0;
               end else if (i_precision == 3'd0) begin
-                total_elems <= i_dim_k;  // first row only (rest prefetched)
-                pf_row      <= 1;        // prefetch starts at row 1
+                // STAGE_A (F2) takes INT4's shape here: all of A before launch,
+                // prefetch disabled.  o_a_rows_ready is pf_row, so setting it to
+                // M both turns PF1 off and tells the core every row is present.
+                total_elems <= i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k;
+                pf_row      <= i_pta_stage_a ? int'(i_dim_m) : 1;
                 elem_size    <= 3'd1;     // INT8: 1 byte per element
                 elems_per_beat <= 8;      // 8 INT8 per 64-bit word
-                elem_cnt   <= i_dim_k;
-                rd_beats   <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
-                pf_rd_beats <= (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                elem_cnt   <= i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k;
+                rd_beats   <= ((i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k)
+                               + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf_rd_beats <= i_pta_stage_a ? 0
+                               : (i_dim_k + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
               end else begin
-                total_elems <= i_dim_k;  // first row only (rest prefetched)
-                pf_row      <= 1;        // prefetch starts at row 1
+                total_elems <= i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k;
+                pf_row      <= i_pta_stage_a ? int'(i_dim_m) : 1;
                 elem_size    <= 3'd2;     // INT16/FP16/BF16: 2 bytes per element
                 elems_per_beat <= 4;      // 4 INT16/FP16/BF16 per 64-bit word
-                elem_cnt   <= i_dim_k * 2;
-                rd_beats   <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
-                pf_rd_beats <= (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                elem_cnt   <= (i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k) * 2;
+                rd_beats   <= ((i_pta_stage_a ? i_dim_m * i_dim_k : i_dim_k) * 2
+                               + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
+                pf_rd_beats <= i_pta_stage_a ? 0
+                               : (i_dim_k * 2 + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
               end
               rd_beat    <= 0;
               flat_idx   <= 0;
               unpack_idx <= 0;
               wsel_reg   <= 1'b0;                           // A first
               rd_sub     <= RS_AR;
-              // If PF2 staging buffers are ready, load them into core first
-              if (staging_ready) begin
+              // If PF2 staging buffers are ready, load them into core first.
+              // STAGE_A (F2) must not take this path: P_STAGING goes straight to
+              // P_LAUNCH, and at INT8/INT16 it stages row 0 only, so a core told
+              // by o_a_rows_ready that all M rows are present would read rows
+              // 1..M-1 before anything wrote them.  Under STAGE_A the staged
+              // data is discarded and every row is read in P_READ_A instead.
+              if (staging_ready && !i_pta_stage_a) begin
                 staging_load_a <= 1'b1;
                 staging_cnt    <= 0;
                 // INT4: PF2 prefetched ALL of A (nibble-packed, dm*dk elements).
@@ -544,8 +574,9 @@ module c930_npu_dma
                                                         : i_dim_k;
                 staging_ready  <= 1'b0;  // consumed
                 phase          <= P_STAGING;
-    
+
               end else begin
+                staging_ready <= 1'b0;   // discarded, if STAGE_A skipped it
                 phase <= P_READ_A;
               end
               // Reset cross-GEMM prefetch state
@@ -837,7 +868,12 @@ module c930_npu_dma
           // full, PF2 stays idle until the next dispatch consumes them and
           // clears the flags.  Without this guard, PF2 re-reads A then B every
           // ~140 cycles forever while the next GEMM is still queued.
-          if (next_valid && pf_state == PF_IDLE &&
+          // STAGE_A (F2) turns PF2 off as well.  Its whole point is that nothing
+          // is fetched behind the core's back: PF2's staged row 0 would be
+          // discarded at the next dispatch (P_IDLE below), so prefetching it
+          // would only spend DDR bandwidth and a P_DONE drain on data this mode
+          // has already decided not to use.
+          if (next_valid && pf_state == PF_IDLE && !i_pta_stage_a &&
               !(next_a_ready && next_b_ready)) begin
             case (pf2_state)
               PF2_IDLE: begin
@@ -947,7 +983,13 @@ module c930_npu_dma
               if (m_axi_awvalid && m_axi_awready) begin
                 c_idx  <= 0;
                 c_odd  <= ((dm * dn) % 2) != 0;
-                wr_sub <= WS_ADDR;
+                // Present the first pair's address now, so WS_STREAM's first
+                // cycle already has its data: o_c_raddr is a register and
+                // c_mem is read asynchronously, so the pair for address n is on
+                // i_c_rdata / i_c_rdata_hi throughout the cycle after o_c_raddr
+                // takes n.
+                o_c_raddr <= 16'd0;
+                wr_sub <= WS_STREAM;
               end else begin
                 m_axi_awvalid <= 1'b1;
                 // Two INT32 values packed per 64-bit beat
@@ -958,51 +1000,42 @@ module c930_npu_dma
               end
             end
 
-            WS_ADDR: begin
-              // c_idx always points to the first element of the pair
-              o_c_raddr <= c_idx[15:0];
-              wr_sub    <= WS_DATA;
-            end
-
-            WS_DATA: begin
-              // Latch low word (first element of pair)
-              c_lo <= i_c_rdata;
-              if (c_idx + 1 < dm * dn) begin
-                // Second element exists: request it next cycle
-                o_c_raddr <= c_idx + 1;
-                wr_sub <= WS_PACK;
-              end else begin
-                // Single remaining element (odd count): pack low only
-                wdata_reg <= {32'b0, i_c_rdata};
-                wr_sub <= WS_DRIVE;
-              end
-            end
-
-            WS_PACK: begin
-              // Pack: {c_high[31:0], c_lo[31:0]} into 64-bit word
-              wdata_reg <= {i_c_rdata, c_lo};
-              wr_sub    <= WS_DRIVE;
-            end
-
-            WS_DRIVE: begin
-              if (m_axi_wvalid && m_axi_wready) begin
-                // Advance to next pair.  c_idx still points to the first
-                // element of the pair we just wrote (WS_DATA incremented
-                // the address wire but not c_idx, so c_idx is correct).
-                // Check if next pair would be past the end:
-                if (c_idx + 2 >= dm * dn) begin
-                  wr_sub       <= WS_B;
-                  m_axi_bready <= 1'b1;
-                end else begin
-                  c_idx  <= c_idx + 2;
-                  wr_sub <= WS_ADDR;
-                end
-              end else begin
+            // One beat a cycle for as long as the slave takes them (F2).
+            //
+            // c_idx is the next pair to FETCH, and o_c_raddr already holds it,
+            // so i_c_rdata / i_c_rdata_hi are this pair's two words right now.
+            // The bus register is loaded whenever it is free -- nothing
+            // outstanding, or the slave taking what is -- and c_idx and
+            // o_c_raddr move with it.  Nothing needs a skid buffer: when wready
+            // drops, the load is simply not taken, and because the address did
+            // not move the same pair is still on the read port next cycle.
+            WS_STREAM: begin
+              // m_axi_wvalid defaults low every cycle (see the defaults at the
+              // head of this process), so an outstanding beat is re-driven.
+              if (m_axi_wvalid && !m_axi_wready)
                 m_axi_wvalid <= 1'b1;
-                m_axi_wdata  <= wdata_reg;
-                // Odd last element: only lower 32 bits valid
+
+              if ((!m_axi_wvalid || m_axi_wready) && c_idx < dm * dn) begin
+                m_axi_wvalid <= 1'b1;
+                // The high lane is zeroed rather than left to the strobe on an
+                // odd M*N: i_c_rdata_hi is clamped in the core, so it would be
+                // a real word from index 0, and sending a masked-off stale
+                // value is worse to debug than sending a masked-off zero.
+                m_axi_wdata  <= {(c_idx + 1 < dm * dn) ? i_c_rdata_hi : 32'd0,
+                                 i_c_rdata};
                 m_axi_wstrb  <= (c_idx + 1 >= dm * dn && c_odd) ? 8'h0F : 8'hFF;
                 m_axi_wlast  <= (c_idx + 2 >= dm * dn);
+                c_idx        <= c_idx + 2;
+                o_c_raddr    <= 16'(c_idx + 2);
+              end
+
+              // The last beat has been taken.  c_idx is past the end by now, so
+              // the load above cannot fire in this cycle and nothing fights over
+              // m_axi_wvalid.
+              if (m_axi_wvalid && m_axi_wready && m_axi_wlast) begin
+                m_axi_wvalid <= 1'b0;
+                wr_sub       <= WS_B;
+                m_axi_bready <= 1'b1;
               end
             end
 
@@ -1012,6 +1045,12 @@ module c930_npu_dma
               else
                 m_axi_bready <= 1'b1;
             end
+
+            // WS_ADDR / WS_DATA / WS_PACK / WS_DRIVE used to be codes 1-4 and
+            // are gone (F2).  wr_sub is only ever written WS_AW, WS_STREAM or
+            // WS_B, so these are unreachable; naming them keeps an unreachable
+            // state from parking the write burst silently.
+            default: wr_sub <= WS_AW;
           endcase
         end
 

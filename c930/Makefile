@@ -681,6 +681,43 @@ pta_sweep: $(SWP_SW_HEX) verilate-soc4
 	@bash synth_xilinx/build_soc4_verilator_wsl.sh run sweep $(VERIL4_OUT)
 
 # ---------------------------------------------------------------------------
+# F2 (grxcp pta_program_plan.md, track F): the feed's options at the Pockels
+# points, measured on the SoC.  EO-scan and EO-res, each with the feed as built
+# (PF1 during compute, PF2 during the previous writeback) and with
+# PTA_CTRL.STAGE_A, which reads all of A before launch and turns both prefetches
+# off.  Each regime at Q = 1, where every per-GEMM counter is exact, and at
+# Q = 4, where the wall clock prices what queueing buys.
+#
+# PTM_B=1 is the point: with PTM-C's 64-cycle drain the fetch finishes in the
+# drain's shadow and every feed option measures the same, which is why F2 had to
+# wait for SoC-B.  Run it on PTM-C as well and the options should converge.
+# ---------------------------------------------------------------------------
+FD_SW_ELF := sw/pta_feed.elf
+FD_SW_BIN := sw/pta_feed.bin
+FD_SW_HEX := sw/pta_feed_prog.hex
+
+# _zicsr, which the other firmwares do not ask for: this one reads the CPU's
+# cycle counter (CSR 0xC00) to time a whole batch, and at plain rv64ima the
+# assembler rejects csrr as an unknown opcode.  The core has always implemented
+# it (riscv_core_csr_unit.sv); npu_test.c reaches its CSRs by .word encoding for
+# want of this flag.
+$(FD_SW_ELF): sw/start.S sw/pta_feed.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima_zicsr -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/pta_feed.c sw/c930_npu_driver.c
+
+$(FD_SW_BIN): $(FD_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(FD_SW_HEX): $(FD_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(FD_SW_BIN) $(FD_SW_HEX)
+
+.PHONY: pta_feed
+pta_feed: $(FD_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run feed $(VERIL4_OUT) \
+	  "PTA_FW=$(FD_SW_HEX)"
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
 HOST_CC     ?= gcc
