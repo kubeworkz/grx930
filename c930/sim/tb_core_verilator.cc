@@ -115,6 +115,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
@@ -471,10 +472,14 @@ struct Result {
     bool ok;
 };
 
+// c_out, when given, receives the DUT's C -- not the model's.  The bitwise
+// check below runs either way, so a chain propagating c_out is propagating a
+// value that has been verified against the C reference at every layer (A3).
 Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
                 const pta_cfg& pta = PTA_OFF,
                 const std::vector<int>* a_in = nullptr,
-                const std::vector<int>* b_in = nullptr) {
+                const std::vector<int>* b_in = nullptr,
+                std::vector<int32_t>* c_out = nullptr) {
     std::vector<int>     a(static_cast<size_t>(M) * K);
     std::vector<int>     b(static_cast<size_t>(K) * N);
     std::vector<int64_t> cref(static_cast<size_t>(M) * N, 0);
@@ -554,11 +559,13 @@ Result run_case(int M, int N, int K, int width, bool verbose, const ActCfg& act,
              changed, dut->o_pta_sat_count, model_pta_sats, true};
 
     int errs = 0;
+    if (c_out) c_out->assign(static_cast<size_t>(M) * N, 0);
     for (int m = 0; m < M; ++m)
         for (int n = 0; n < N; ++n) {
             dut->i_c_raddr = m * N + n;
             dut->eval();
             const int32_t got = static_cast<int32_t>(dut->o_c_rdata);
+            if (c_out) (*c_out)[m * N + n] = got;
             const int32_t exp = static_cast<int32_t>(cexp[m * N + n] & 0xffffffffll);
             if (got != exp) {
                 if (errs < 5) {
@@ -708,6 +715,224 @@ void reset() {
 
 // Gate A2's operating point.  Fixed, so a run is reproducible; varied by case,
 // so every path through stage 6 and the constant-sigma path are covered.
+// ---------------------------------------------------------------------------
+// A3: chain mode.  How many all-optical activations can run between digital
+// resets (npu_act_stage_design_note.md section 6, A3).
+//
+// Three things the design note fixes, held fixed here so the depth axis measures
+// the activation and not the harness (its section 8):
+//
+//   Transport.  C maps into the next layer's A by one right shift, elementwise,
+//   and nothing else.  Stated once, never swept.  It is elementwise because the
+//   chain runs N == K: C is M x N and the next A is M x K, so any other shape
+//   needs a reshaping rule, and inventing one here would put transport structure
+//   into a depth measurement -- which is the hazard the design note's section 8
+//   item 3 names.
+//
+//   The shift is 16 because that is this chain's FIXED POINT, measured rather
+//   than chosen: with operands and weights uniform on [-7, 7] and K = 8, the
+//   activated C has an RMS of 277k at depth 1, and 2^16 is the only power of two
+//   that returns operands reproducing it.  The chain then settles at an RMS of
+//   ~434k by depth 6 and holds, with no saturation, which puts x at about 1.25
+//   knees -- where the photon count is defined.  Shifts of 14 and below pin the
+//   output at full scale, which looks stationary and is not; 18 collapses the
+//   chain to zeros by depth 3, where the divergence reads a meaningless 0.  The
+//   window is barely a bit wide because a knee makes loop gain steep in
+//   amplitude, and that is a property of the activation, not of the harness.
+//
+//   Detuning.  Physical, so indexed by column and not by output: a real tile
+//   reuses the same activation units.  s(dw) = sinc^2(1.39 * 0.44 * dw /
+//   (FWHM/2)) with FWHM 12 nm, from the published device's anchors (review
+//   5.1), dw drawn Normal(0, sigma).  s rides the input scale and 1/s the
+//   output factor, in the table's own units -- for an amplitude table, sqrt(s)
+//   and 1/sqrt(s).
+//
+//   Noise.  Shot noise on the light entering the unit, k * sqrt(|x|), with
+//   i_act_k_shot supplied per photon count by the table generator rather than
+//   recomputed here.  A photon count IS a k_shot; the mapping lives with the
+//   physics in the .json, and act_chain_sweep.py reads it.
+// ---------------------------------------------------------------------------
+constexpr double ACT_FWHM_NM = 12.0;     // acceptance FWHM, review 5.1
+
+// The operating point, and it is not free to choose.  A photon count means
+// "photons at the knee", and k = sqrt(x_knee / n) is defined there, so the
+// activation's input has to land near the knee or the sweep's main axis is
+// mislabelled.  The generator puts the knee at x = 2^21 table units with full
+// scale at four knees (act_*.json, knee.x_knee_table_units, table.
+// full_scale_knees).  Stage 1 computes x = acc * XS >>> XSHIFT, so at XSHIFT = 0
+// the scale is XS itself.
+//
+// The chain's operands are uniform on [-7, 7] with K = 8, so a typical |acc| is
+// about 53 -- the standard deviation of a sum of eight products of two such.
+// 2^15 puts that at 0.83 of a knee: just below it, where the curve bends, and a
+// power of two so the scale itself rounds nothing.  Peaks saturate, which is
+// real behaviour and is counted.
+constexpr long ACT_X_KNEE     = 1L << 21;
+constexpr int  CHAIN_XSCALE   = 1 << 15;
+constexpr int  CHAIN_ACC_TYP  = 53;
+// r_j = 1/s_j is Q4.12: four integer bits, so 1/s <= 16 and s >= 1/16.
+constexpr double CHAIN_S_MIN  = 1.0 / 16.0;
+
+double detune_scale(double dw_nm) {
+    // sinc^2 in the design note's form.  sinc(0) is 1 by continuity.
+    const double u = 1.39 * 0.44 * dw_nm / (ACT_FWHM_NM / 2.0);
+    if (u == 0.0) return 1.0;
+    const double sn = std::sin(u) / u;
+    return sn * sn;
+}
+
+struct ChainCfg {
+    int      layers      = 16;
+    int      reset_every = 0;     // 0: never requantise -- the design note's N = inf
+    uint16_t k_shot      = 0;
+    double   sigma_nm    = 0.0;
+    bool     amplitude   = false; // the table's encoding
+    uint32_t seed        = 1;
+    int      xshift      = 0;     // x = acc * XS >>> XSHIFT; the scale is XS
+    int      yshift      = 0;
+    int      adc_bits    = 6;
+    int      transport   = 16;    // the fixed shift, C -> next A; see below
+    // The reference chain, and which question it asks.  false: s = 1, the
+    // ideal unit, so the divergence carries the detuning as well as the
+    // noise -- what the design note's "noiseless digital chain" says
+    // literally, and against which a detuned chain reads 25% at sigma 7 from
+    // depth 1, flat, swamping the photon axis.  true: the reference carries
+    // the SAME detuning, so the divergence is the stochastic part alone --
+    // the depth a device whose fixed gain errors have been calibrated out
+    // reaches, and the tile has gain and offset correction with C3's engine
+    // behind it.  Both are measured; neither is the whole answer alone.
+    bool     calibrated  = false;
+};
+
+// Set from the command line in main(), before the mode dispatch reads it.
+ChainCfg g_chain;
+
+// The per-column detuning draw.  Deterministic in the seed, so a sweep point
+// repeats; Irwin-Hall of four uniforms for the normal, as the RTL's noise uses.
+void chain_detune(const ChainCfg& cc, double s_out[NUM_COLS]) {
+    uint32_t st = cc.seed ? cc.seed : 1u;
+    for (int j = 0; j < NUM_COLS; ++j) {
+        double u = 0.0;
+        for (int i = 0; i < 4; ++i) { st = xorshift32(st); u += (st >> 8) / 16777216.0; }
+        // Irwin-Hall(4) has mean 2 and variance 1/3.
+        const double z  = (u - 2.0) * std::sqrt(3.0);
+        s_out[j] = cc.sigma_nm > 0.0 ? detune_scale(z * cc.sigma_nm) : 1.0;
+        // Floored at 1/16, which is a FORMAT limit and not a judgement: the
+        // output factor r_j = 1/s_j is Q4.12, so it represents at most 16, and
+        // a smaller s cannot be expressed.  The first version floored at 1e-3,
+        // sixty times outside that, and r_j silently wrapped -- which is what
+        // put 64 runs of the full sweep past the bitwise check.  A draw that
+        // needs clamping is counted and reported, because at sigma 14 it
+        // happens and the point then describes a device the harness cannot
+        // express rather than the one asked for.
+        if (s_out[j] < CHAIN_S_MIN) s_out[j] = CHAIN_S_MIN;
+    }
+}
+
+// layer indexes the NOISE only.  Detuning is drawn from cc.seed alone and so is
+// identical at every layer: it is fabrication, and a real tile reuses the same
+// activation units (design note, Detuning).  Shot noise is per shot, so it has to
+// move, or a chain would add the same perturbation L times and measure nothing.
+ActCfg chain_act_cfg(const ChainCfg& cc, bool noiseless, bool requant_now,
+                     int layer) {
+    // noiseless means "this is the reference".  Whether the reference is
+    // detuned is cc.calibrated.
+    const bool ideal = noiseless && !cc.calibrated;
+    double sj[NUM_COLS];
+    chain_detune(cc, sj);
+    ActCfg c;
+    c.en          = true;
+    c.requant     = requant_now;
+    c.adc_bits    = cc.adc_bits;
+    c.xshift      = cc.xshift;
+    c.yshift      = cc.yshift;
+    c.k_shot      = noiseless ? 0 : cc.k_shot;
+    // An amplitude table's shot noise is constant in x: sqrt(P) on P = x^2, the
+    // square root bypassed to 2^12 by i_act_noise_const (design note, Noise).
+    c.noise_const = cc.amplitude;
+    c.seed        = cc.seed ^ (0x9e3779b9u * static_cast<uint32_t>(layer + 1));
+    for (int j = 0; j < NUM_COLS; ++j) {
+        // The noiseless chain is the ideal unit: no detuning either, since a
+        // detuned unit is part of what A3 is measuring the cost of.
+        const double s = ideal ? 1.0
+                                   : (cc.amplitude ? std::sqrt(sj[j]) : sj[j]);
+        c.xs[j] = static_cast<uint32_t>(CHAIN_XSCALE * s + 0.5);
+        c.r[j]  = static_cast<uint16_t>(4096.0 / s + 0.5);   // Q4.12
+    }
+    return c;
+}
+
+// One chain.  Returns the RMS divergence from the noiseless chain at each depth,
+// as a fraction of the noiseless chain's own RMS -- a relative error, so the
+// numbers compare across photon counts and depths.
+struct ChainPoint { double rel_rms; double max_rel; int sats; double ref_rms; };
+
+std::vector<ChainPoint> run_chain(int M, int N, int K, int dw, const ChainCfg& cc,
+                                  int& failures) {
+    std::vector<ChainPoint> out;
+    // The chain's transport is elementwise, which needs N == K.  Checked rather
+    // than assumed: a caller that changed the shape would otherwise get a
+    // silently different experiment.
+    if (N != K) {
+        fprintf(stderr, "chain mode needs N == K for elementwise transport"
+                        " (got N=%d K=%d)\n", N, K);
+        exit(2);
+    }
+    // One weight set, held for the whole chain: A3 measures depth, and redrawing
+    // B every layer would mix a new operand distribution into it.
+    std::vector<int> b(static_cast<size_t>(K) * N);
+    uint32_t wst = cc.seed ^ 0x5bf03635u;
+    for (auto& v : b) { wst = xorshift32(wst); v = static_cast<int>(wst % 15u) - 7; }
+
+    std::vector<int> a_rtl(static_cast<size_t>(M) * K);
+    std::vector<int> a_ref = a_rtl;
+    uint32_t ast = cc.seed ^ 0x9e3779b9u;
+    for (auto& v : a_rtl) { ast = xorshift32(ast); v = static_cast<int>(ast % 15u) - 7; }
+    a_ref = a_rtl;
+
+    std::vector<int32_t> c_rtl(static_cast<size_t>(M) * N);
+    std::vector<int32_t> c_ref(static_cast<size_t>(M) * N);
+
+    for (int L = 1; L <= cc.layers; ++L) {
+        const bool requant = cc.reset_every > 0 && (L % cc.reset_every) == 0;
+
+        const ActCfg hot  = chain_act_cfg(cc, false, requant, L);
+        const Result rr   = run_case(M, N, K, dw, false, hot, PTA_OFF,
+                                     &a_rtl, &b, &c_rtl);
+        if (!rr.ok) ++failures;          // the per-layer bitwise check still runs
+
+        const ActCfg cold = chain_act_cfg(cc, true, requant, L);
+        const Result rc   = run_case(M, N, K, dw, false, cold, PTA_OFF,
+                                     &a_ref, &b, &c_ref);
+        if (!rc.ok) ++failures;
+
+        double num = 0.0, den = 0.0, mx = 0.0;
+        for (size_t e = 0; e < c_rtl.size(); ++e) {
+            const double d = static_cast<double>(c_rtl[e]) - c_ref[e];
+            num += d * d;
+            den += static_cast<double>(c_ref[e]) * c_ref[e];
+            const double r = std::fabs(static_cast<double>(c_ref[e])) > 1.0
+                           ? std::fabs(d) / std::fabs(static_cast<double>(c_ref[e]))
+                           : 0.0;
+            if (r > mx) mx = r;
+        }
+        const double rel = den > 0.0 ? std::sqrt(num / den) : 0.0;
+        // The reference chain's own RMS.  A chain whose signal is dying or
+        // exploding is not measuring depth, it is measuring the transport shift,
+        // so this column is printed and read before any curve is believed.
+        const double ref_rms = std::sqrt(den / static_cast<double>(c_ref.size()));
+        out.push_back({rel, mx, static_cast<int>(rr.act_sats), ref_rms});
+
+        // Transport: one shift, elementwise, both chains, the same rule
+        // (design note section 8 item 3).  N == K, checked above.
+        for (size_t e = 0; e < c_rtl.size(); ++e) {
+            a_rtl[e] = c_rtl[e] >> cc.transport;
+            a_ref[e] = c_ref[e] >> cc.transport;
+        }
+    }
+    return out;
+}
+
 ActCfg full_cfg(int case_idx) {
     // Detuning per physical column, s in (0, 1]: the input scale carries s and
     // the output factor carries 1/s, in the table's own units.
@@ -801,6 +1026,7 @@ int main(int argc, char** argv) {
     bool sweep = false;
     int  dw    = 8;
     std::string act_mode = "off", table_path;
+    ChainCfg    chain_opt;
     std::string pta_mode = "off", tile = "array";
     bool tw_gate = false;
     bool c2_gate = false;
@@ -815,6 +1041,20 @@ int main(int argc, char** argv) {
         else if (arg == "--dw" && i + 1 < argc) dw = std::atoi(argv[++i]);
         else if (arg == "--act" && i + 1 < argc) act_mode = argv[++i];
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
+        else if (arg == "--chain-layers" && i + 1 < argc)
+            chain_opt.layers = std::atoi(argv[++i]);
+        else if (arg == "--chain-reset" && i + 1 < argc)
+            chain_opt.reset_every = std::atoi(argv[++i]);
+        else if (arg == "--act-k-shot" && i + 1 < argc)
+            chain_opt.k_shot = static_cast<uint16_t>(std::atoi(argv[++i]));
+        else if (arg == "--act-sigma-nm" && i + 1 < argc)
+            chain_opt.sigma_nm = std::atof(argv[++i]);
+        else if (arg == "--act-amplitude") chain_opt.amplitude = true;
+        else if (arg == "--chain-cal") chain_opt.calibrated = true;
+        else if (arg == "--chain-seed" && i + 1 < argc)
+            chain_opt.seed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 0));
+        else if (arg == "--chain-transport" && i + 1 < argc)
+            chain_opt.transport = std::atoi(argv[++i]);
         else if (arg == "--perturb" && i + 1 < argc) perturb = std::atoi(argv[++i]);
         else if (arg == "--pta" && i + 1 < argc) pta_mode = argv[++i];
         else if (arg == "--tile" && i + 1 < argc) tile = argv[++i];
@@ -833,14 +1073,16 @@ int main(int argc, char** argv) {
         fprintf(stderr, "--pta %s needs a PTM-C build (--tile ptm_c)\n", pta_mode.c_str());
         return 2;
     }
-    if (act_mode != "off" && act_mode != "identity" && act_mode != "full") {
-        fprintf(stderr, "--act must be off, identity or full\n");
+    if (act_mode != "off" && act_mode != "identity" && act_mode != "full" &&
+        act_mode != "chain") {
+        fprintf(stderr, "--act must be off, identity, full or chain\n");
         return 2;
     }
-    if (act_mode == "full" && table_path.empty()) {
-        fprintf(stderr, "--act full needs --table\n");
+    if ((act_mode == "full" || act_mode == "chain") && table_path.empty()) {
+        fprintf(stderr, "--act %s needs --table\n", act_mode.c_str());
         return 2;
     }
+    g_chain = chain_opt;
 
     reset();
     {
@@ -1973,6 +2215,82 @@ int main(int argc, char** argv) {
                    ok ? "PASS" : "FAIL");
             if (!ok) ++failures;
         }
+    } else if (act_mode == "chain") {
+        // A3 is REPORTED, not gated: the only failure that counts is the
+        // per-layer bitwise check inside run_case, which says the RTL and the C
+        // reference still agree.  The divergence numbers are the measurement.
+        printf("[A3] chain: L=%d reset_every=%s k_shot=%u sigma=%.1f nm "
+               "encoding=%s transport=>>%d seed=0x%08x%s",
+               g_chain.layers,
+               g_chain.reset_every ? std::to_string(g_chain.reset_every).c_str() : "never",
+               g_chain.k_shot, g_chain.sigma_nm,
+               g_chain.amplitude ? "amplitude" : "power",
+               g_chain.transport, g_chain.seed, "\n");
+        printf("[A3] reference: %s\n", g_chain.calibrated
+               ? "the same detuning, calibrated out -- divergence is the noise alone"
+               : "the ideal unit (s=1) -- divergence carries detuning AND noise");
+        {
+            double sj[NUM_COLS];
+            chain_detune(g_chain, sj);
+            int clamped = 0;
+            for (int j = 0; j < NUM_COLS; ++j)
+                if (sj[j] <= CHAIN_S_MIN) ++clamped;
+            printf("[A3] detuning s per column:");
+            for (int j = 0; j < NUM_COLS; ++j) printf(" %.3f", sj[j]);
+            printf("\n");
+            if (clamped) {
+                // WARNED, not refused.  An earlier version refused every point
+                // where a column clamped, on the theory that clamping predicted
+                // the overflow below.  It does not: power encoding at sigma 14
+                // clamps and passes.  Predicting what the gate will catch threw
+                // away whole rows that were fine, so the gate runs and reports
+                // for itself, and the sweep excludes the points it fails.
+                //
+                // What the clamp means: r_j = 1/s_j reaches 16 at the floor,
+                // and the output stage has no headroom for that gain: f(x)*16
+                // passes 2^23 and the RTL and the C reference then disagree,
+                // which is what 64 runs of the full sweep hit.  Whether the
+                // RTL or the model is right in that overflow is an A2-class
+                // question in a region A2 never drove -- yshift is the knob
+                // that would give the headroom, and spending it moves the
+                // operating point off the knee, so it is a contract decision
+                // and not a harness one.  Until it is made, this point is a
+                // gap A3 reports rather than a number A3 invents.
+                printf("[A3] CLAMPED: %d of %d columns hit the s >= 1/16 floor that"
+                       " Q4.12 sets on r_j = 1/s_j. This point is a device the"
+                       " harness can only partly express; the bitwise check below"
+                       " says whether it still holds.\n",
+                       clamped, NUM_COLS);
+            }
+        }
+        // N == K, so the activated C maps onto the next A elementwise.
+        const int M = 8, N = 8, K = 8;
+        printf("[A3] shape M=%d N=%d K=%d, one weight set held for the chain,"
+               " transport elementwise\n", M, N, K);
+        printf("[A3] operating point: XS=%d at XSHIFT=0, so a typical |acc| of %d"
+               " lands at %.2f of the knee (x_knee=%ld)\n",
+               CHAIN_XSCALE, CHAIN_ACC_TYP,
+               static_cast<double>(CHAIN_ACC_TYP) * CHAIN_XSCALE / ACT_X_KNEE,
+               ACT_X_KNEE);
+        printf("[A3] %-6s %-12s %-12s %-8s %s\n",
+               "depth", "rel_rms", "max_rel", "sats", "ref_rms");
+        const std::vector<ChainPoint> pts = run_chain(M, N, K, dw, g_chain, failures);
+        for (size_t i = 0; i < pts.size(); ++i)
+            printf("[A3] %-6zu %-12.6f %-12.6f %-8d %.1f\n",
+                   i + 1, pts[i].rel_rms, pts[i].max_rel, pts[i].sats,
+                   pts[i].ref_rms);
+        // The one number the sweep collects: the depth at which the chain's
+        // relative RMS first passes a stated threshold.  Reported, not gated.
+        const double THRESH = 0.05;
+        size_t knee = 0;
+        for (size_t i = 0; i < pts.size(); ++i)
+            if (pts[i].rel_rms > THRESH) { knee = i + 1; break; }
+        printf("[A3] RESULT cal=%d k_shot=%u sigma_nm=%.1f reset=%s depth_at_5pct=%s "
+               "rel_rms_final=%.6f\n",
+               g_chain.calibrated ? 1 : 0, g_chain.k_shot, g_chain.sigma_nm,
+               g_chain.reset_every ? std::to_string(g_chain.reset_every).c_str() : "inf",
+               knee ? std::to_string(knee).c_str() : "none",
+               pts.empty() ? 0.0 : pts.back().rel_rms);
     } else if (act_mode == "full") {
         int idx = 0;
         for (auto& c : cases) {
