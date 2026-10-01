@@ -542,44 +542,65 @@ reported; neither is the whole answer.
 
 ## 7.2 What A3 caught that A2 did not cover
 
-**`f(x) * r_j` overflows the output stage once `r_j` reaches Q4.12's limit.** The
-output factor `r_j = 1/s_j` is Q4.12, so it represents at most 16, which floors
-`s_j` at 1/16. At that floor `r_j` **is** 16, and `f(x) * 16` passes 2^23: the
-RTL returns a large negative where the C reference expects a large positive
-(`C[0][0] = -4435688 expected 8671568`). The two disagree, and the per-layer
-bitwise check catches it.
+**The RTL and the C reference disagree once the activation saturates.** 64 of the
+full sweep's 400 runs fail the per-layer bitwise check, all of them
+`c4-5db-6mm ff amplitude`, and the divergence tracks the saturation count and
+nothing else:
 
-It reaches the amplitude encoding first, because the loaded scale there is
-`sqrt(s)` rather than `s`, so `x` lands higher for the same detuning. 64 of the
-full sweep's 400 runs are excluded for it, all `c4-5db-6mm ff amplitude` at
-specific seeds, and the sweep lists each with its seed rather than averaging them
-into a curve.
+| | depth 1 | 2 | 3 | 4 | bitwise |
+|---|---|---|---|---|---|
+| `ff power`, sigma 14 | 0 | 0 | 0 | 5 | passes |
+| `ff amplitude`, sigma 14 | 0 | **12** | **44** | **52** | **fails** |
 
-**A2 never drove this region.** Its `full_cfg` runs `xshift` 4 to 8 with
-`xs = 4096 * s`, so `x ~ 16*s*acc` or `256*s*acc` -- orders of magnitude below
-A3's operating point at the knee. The gate was never wrong; the region was never
-visited.
+It reaches the amplitude encoding first because the loaded scale there is
+`sqrt(s)` rather than `s`, so `XS[j]` is about four times larger at the same
+detuning and `x` reaches the table's top far more often. Nothing about the
+amplitude encoding is wrong; it is the encoding that gets there.
 
-**Which of the two is right is a contract decision, not a harness one.** `yshift`
-is the knob that would buy the headroom, and spending it scales the output down
-and moves the operating point off the knee -- where the photon count is defined.
-That trade belongs with the CSR mapping, so it is **A-CSR's** to settle, and this
-note records the mechanism rather than picking for it.
+**Where in the path is not yet localised, and this note will not guess.**
+Saturation is counted at three sites -- stage 1, stage 3 and stage 6 (section 3)
+-- and `o_act_sat_count` aggregates them, so the counter that correlates does not
+say which one diverges. One candidate worth checking first, offered as a
+hypothesis and not a finding: stage 4 reads `BRAM[i]` and `BRAM[i+1]`, and with
+1025 breakpoints an `i` of 1024 indexes 1025, one past the end. A model that
+clamps that read and an RTL that does not would diverge exactly at full scale.
 
-*An attempt that made it worse, recorded because the instinct will recur.* The
-harness first **refused** every point where a column hit the floor, on the theory
-that clamping predicted the overflow. It does not: power encoding at sigma 14
-clamps and passes cleanly. The refusal discarded the whole sigma 14 row for all
-four presets and the driver counted 320 refusals as gate failures. Predicting
-what a gate will catch is not the same as letting it catch things. The clamp is
-now a warning, the gate runs, and the sweep excludes the points it fails.
+**A2's gate was never wrong; the regime was never visited.** Its `full_cfg` runs
+`xshift` 4 to 8 with `xs = 4096 * s`, so `x ~ 16*s*acc` or `256*s*acc`. Every
+seventh case is deliberately hot and does saturate, but at an `x` scale orders of
+magnitude below A3's operating point at the knee. A3 is the first thing to drive
+the saturation path with `x` near the table's full scale.
+
+**So this is A2's to close, not A-CSR's.** An earlier version of this section had
+it as a `yshift` contract decision for A-CSR, on the theory that `f(x) * r_j`
+overflowed the output stage once `r_j` reached Q4.12's limit and that `yshift`
+would buy the headroom. Both halves of that were wrong:
+
+- `YSHIFT` is a **left** shift -- section 3's stage 6 is
+  `C <- sat32(c <<< YSHIFT)` -- so it amplifies the output and could never have
+  bought headroom. It would make an overflow worse.
+- Stage 6a holds the detune product in 29 bits signed (`yr6a_c = 29'(prod6a
+  >>> 12)`), and `y * r >> 12` peaks at 2^27 with a 24-bit table and `r` under
+  16. That width is not the clip.
+
+The symptom that suggested it -- the failures clustering where `s` hits its floor
+-- is explained by the floor being where `XS[j]` is largest for the amplitude
+encoding, which is the same saturation story.
+
+**One real bug did come out of looking there,** unrelated to the mismatch and
+fixed in the harness. Q4.12's largest representable value is 65535/4096 =
+15.9998, **not** 16. So `s` = 1/16 exactly needs `r_j` = 65536, which wraps a
+`uint16_t` to **zero** and silently turns that column off. Section 4's "Q4.12 (so
+`s >= 1/16`)" is right about the format and off by one at the boundary: the
+smallest usable `s` is 4096/65535. Anything programming `i_act_r` from a
+reciprocal needs that bound, which now includes the CSR path (A-CSR).
 
 ---
 
 ## 7.3 A3's curve, measured
 
 `python3 sim/act_chain_sweep.py --layers 12`. 400 points measured, every layer
-bitwise against the C reference; 64 excluded for §7.2's overflow, each listed
+bitwise against the C reference; 64 excluded for §7.2's saturation disagreement, each listed
 with its seed. The depth the chain reaches before 5% relative RMS, at sigma = 0,
 which is the axis with no detuning draw in it:
 
@@ -617,8 +638,10 @@ kappa reaches the experiment only through the photon count at the knee.
 **4. Power chains deeper than amplitude.** The same device read as optical power
 reaches 8 or more layers where the amplitude encoding saturates at 4. §8 item 2
 asks whether power or amplitude describes the network; for chain depth the answer
-is power, and the amplitude encoding is also where §7.2's overflow bites, because
-its loaded scale is sqrt(s) and `x` lands higher for the same detuning.
+is power. The amplitude encoding is also where §7.2's saturation disagreement
+bites, and for the same reason it chains less deeply: its loaded scale is
+sqrt(s), so `x` lands higher for the same detuning and the curve's top is
+reached sooner.
 
 **5. So the branch is open at the high end, conditionally.** At 10^5 to 10^6
 photons with power encoding and `N` >= 4, chains of 8 to 12 layers hold. That is a

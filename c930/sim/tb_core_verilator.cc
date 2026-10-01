@@ -770,8 +770,12 @@ constexpr double ACT_FWHM_NM = 12.0;     // acceptance FWHM, review 5.1
 constexpr long ACT_X_KNEE     = 1L << 21;
 constexpr int  CHAIN_XSCALE   = 1 << 15;
 constexpr int  CHAIN_ACC_TYP  = 53;
-// r_j = 1/s_j is Q4.12: four integer bits, so 1/s <= 16 and s >= 1/16.
-constexpr double CHAIN_S_MIN  = 1.0 / 16.0;
+// r_j = 1/s_j is Q4.12, and its largest REPRESENTABLE value is 65535/4096 =
+// 15.9998, not 16.  So s = 1/16 exactly needs r = 65536, which wraps a uint16_t
+// to ZERO and silently turns the column off.  The floor is the smallest s whose
+// reciprocal still fits, which is 4096/65535.  The design note's "so s >= 1/16"
+// is right to a boundary it does not state.
+constexpr double CHAIN_S_MIN  = 4096.0 / 65535.0;
 
 double detune_scale(double dw_nm) {
     // sinc^2 in the design note's form.  sinc(0) is 1 by continuity.
