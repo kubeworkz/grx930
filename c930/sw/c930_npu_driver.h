@@ -145,6 +145,11 @@ extern "C" {
 #define PTA_CTRL_RESIDENT   0x080u  /* a weight bank per (N tile, K tile) */
 #define PTA_CTRL_WSKIP      0x100u  /* the banks already hold the weights */
 #define PTA_CTRL_MORDER     0x200u  /* m-outer loop order */
+/* F2's third feed option.  Unlike the three above this one is the DMA's, not the
+ * tile's: every A row is read before the core's start, and both prefetches (PF1
+ * during compute, PF2 during the previous writeback) are off.  It is the path
+ * INT4 takes of necessity, asked for at a precision that does not need it. */
+#define PTA_CTRL_STAGE_A    0x400u  /* read all of A before launching */
 #define PTA_SCHED_OFF       0u
 #define PTA_SCHED_PERIODIC  1u
 #define PTA_SCHED_PREDICT   2u

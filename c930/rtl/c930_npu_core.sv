@@ -112,6 +112,7 @@ module c930_npu_core
   // ---- Result readback ----
   input  logic [15:0]                 i_c_raddr,
   output logic signed [31:0]          o_c_rdata,  // always 32-bit (normalized FP32 or INT32)
+  output logic signed [31:0]          o_c_rdata_hi, // c_mem[i_c_raddr + 1], for a 64-bit beat
 
   // ---- Performance counters ----
   output logic [31:0]                 o_cycle_count,  // free-running cycles while busy
@@ -277,6 +278,20 @@ module c930_npu_core
   (* ram_style = "distributed" *) logic signed [ACC_W-1:0] c_mem [0:MAX_M*MAX_N-1];
 
   assign o_c_rdata = c_mem[i_c_raddr][31:0];
+
+  // A second asynchronous read, one word up, so the DMA can fill a 64-bit AXI
+  // beat -- two INT32 -- from a single address instead of walking two (F2).  The
+  // writeback was five cycles a beat for want of this: WS_ADDR, WS_DATA,
+  // WS_PACK, then WS_DRIVE twice, against a W channel that takes a beat a cycle.
+  // Distributed RAM costs only another read mux for it, which is the whole
+  // reason this array is not block RAM (above).
+  //
+  // The index is clamped.  On an odd M*N the DMA masks the high lane with
+  // m_axi_wstrb, but an out-of-range read of an unpacked array is X, and that X
+  // would still reach the bus register.
+  wire [15:0] c_raddr_hi = i_c_raddr + 16'd1;
+  assign o_c_rdata_hi =
+      c_mem[(c_raddr_hi < 16'(MAX_M * MAX_N)) ? c_raddr_hi : 16'd0][31:0];
 
   // Preload A/B: write port always targets the INACTIVE bank (~i_bank_sel).
   // staging_wen has priority — fires during P_STAGING when the core is
