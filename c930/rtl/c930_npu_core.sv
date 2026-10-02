@@ -866,6 +866,10 @@ module c930_npu_core
   wire              pta_shot     = (state == S_RUN) && (t >= 2*NUM_ROWS) && !t[0] &&
                                    (((t - 2*NUM_ROWS) >>> 1) < nc);
   wire [PTA_CW-1:0] pta_shot_col = PTA_CW'((t - 2*NUM_ROWS) >>> 1);
+  // The valid columns of the current N tile, for the tile's saturation count.
+  // Zero during a calibration, which the tile reads as "all of them": the engine
+  // probes the whole array rather than an N tile.
+  wire [PTA_CW:0]   pta_shot_cols = cal_busy ? '0 : (PTA_CW+1)'(nc);
   wire              pta_shot_start = (state == S_RUN) && (t == 0);
   assign tile_shot_start = cal_busy ? cal_shot_start : pta_shot_start;
 
@@ -898,6 +902,7 @@ module c930_npu_core
     .i_ts            (i_pta_ts),
     .i_cal_busy      (cal_busy),
     .i_cal_shot_start (cal_shot_start),
+    .i_pta_shot_cols (pta_shot_cols),
     .i_cal_shot      (cal_shot),
     .i_cal_shot_col  (cal_shot_col),
     .o_valid         (bs_valid),
@@ -977,6 +982,7 @@ module c930_npu_core
     .i_pta_shot_start  (tile_shot_start),
     .i_pta_shot      (cal_busy ? cal_shot     : pta_shot),
     .i_pta_shot_col  (cal_busy ? cal_shot_col : pta_shot_col),
+    .i_pta_shot_cols (pta_shot_cols),
     .o_pta_sat_count (o_pta_sat_count),
     .i_pta_trim_wen     (cal_trim_wen || i_pta_trim_wen),
     .i_pta_trim_bank    (cal_trim_wen ? cal_trim_bank : i_pta_trim_bank),

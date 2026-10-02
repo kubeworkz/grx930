@@ -166,6 +166,14 @@ module c930_ptm_c
   input  logic                                     i_pta_shot_start, // this window starts a shot
   input  logic                                     i_pta_shot,       // this window's shot is captured
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_shot_col,   // ... for this column
+  // Valid columns in this capture, 1..NUM_COLS.  ZERO MEANS ALL OF THEM, so an
+  // instantiation that does not drive it behaves as it did before this port
+  // existed -- tb_ptm_c_lockstep.sv has three such.  It only reaches the
+  // saturation count: a partial N tile has fewer valid columns than the array,
+  // and broadside models every column on its one capture, so without this the
+  // inactive ones are counted too.  PTM-C never needed it, because i_pta_shot is
+  // already masked by nc in the core and its one modelled column is always valid.
+  input  logic [$clog2(NUM_COLS):0]                i_pta_shot_cols,
   output logic [31:0]                              o_pta_sat_count,
 
   // ---- C3's correction (see the header) ----
@@ -668,6 +676,15 @@ module c930_ptm_c
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin : b_out
     logic [ACC_W:0] col;
+    // Columns that saturated on THIS capture.  Counted in a variable and added
+    // once, because sat_cnt is one scalar and the loop below is unrolled: a
+    // non-blocking `sat_cnt <= sat_cnt + 1` inside it keeps only the last
+    // iteration's assignment, so eight saturating columns advanced the counter by
+    // one.  Under PTM-C that was invisible -- the staggered readout models one
+    // column per capture, so the count could never exceed one anyway -- and under
+    // BROADSIDE, where every column is modelled on the single capture, it was the
+    // whole divergence against the C reference.
+    int unsigned nsat;
     if (!i_rst_n) begin
       ps_out_q <= '0;
       sat_cnt  <= 32'd0;
@@ -679,6 +696,7 @@ module c930_ptm_c
       // next one -- with `modelled` false the unmodelled path would overwrite it
       // with a plain sum of whatever the feed happened to be showing.
       if (cap_tick) begin
+        nsat = 0;
         for (int c = 0; c < C; c++) begin
           if (fp_mode) begin
             ps_out_q[c*ACC_W +: ACC_W] <= {{(ACC_W-32){1'b0}}, y_fp[c]};
@@ -688,10 +706,15 @@ module c930_ptm_c
                                (BROADSIDE || (c == int'(i_pta_shot_col))),
                              BROADSIDE ? c : 0);
             ps_out_q[c*ACC_W +: ACC_W] <= col[ACC_W-1:0];
-            if (col[ACC_W])
-              sat_cnt <= sat_cnt + 32'd1;
+            if (col[ACC_W] &&
+                ((i_pta_shot_cols == '0) || (c < int'(i_pta_shot_cols))))
+              nsat = nsat + 1;
           end
         end
+        // Guarded, so a capture with nothing saturating leaves the counter to
+        // i_pta_cfg_load above exactly as it did before.
+        if (nsat != 0)
+          sat_cnt <= sat_cnt + 32'(nsat);
       end
     end
   end
