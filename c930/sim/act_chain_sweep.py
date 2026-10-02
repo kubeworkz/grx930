@@ -86,7 +86,7 @@ SHAPES_QUICK = (('c4-5db-6mm', 'ff', 'power'),)
 
 RESULT = re.compile(
     r'\[A3\] RESULT cal=(\d) k_shot=(\d+) sigma_nm=([\d.]+) reset=(\S+) '
-    r'depth_at_5pct=(\S+) rel_rms_final=([\d.]+)')
+    r'depth_at_5pct=(\S+) rel_rms_final=([\d.]+) ref_pin=(\S+)')
 # The detuning draw is NUM_COLS = 8 wide, which is a small sample: at sigma 7 the
 # depth a chain reaches varied 5x across five seeds (0.056 to 0.284 relative RMS
 # at depth 6).  So every sigma > 0 point is run over several seeds and reported
@@ -200,15 +200,20 @@ def main():
                 continue
             for sigma in SIGMAS:
                 for reset in RESETS:
-                    # sigma = 0 has no detuning draw, so one seed is the whole
-                    # story there; sigma > 0 needs several (see SEEDS).  Both
-                    # references are run: against the ideal unit, and against
-                    # the same unit calibrated.
-                    seeds = (a.seed,) if sigma == 0.0 else SEEDS
+                    # EVERY row runs every seed, sigma = 0 included.  An
+                    # earlier version ran sigma = 0 on one, reasoning that it has
+                    # no detuning draw -- but the seed draws the weight set and
+                    # the operands too, and the chain holds one weight set for
+                    # its whole length, so a draw of B is a draw of the map being
+                    # iterated.  At sigma = 0 the depth moves further across
+                    # seeds than it does across the reset interval, so one seed
+                    # was not a measurement.  Both references are run: against
+                    # the ideal unit, and against the same unit calibrated.
+                    seeds = SEEDS
                     for cal in (False, True):
                         if sigma == 0.0 and cal:
                             continue        # identical to cal=False at s = 1
-                        depths, finals = [], []
+                        depths, finals, pins = [], [], []
                         for sd in seeds:
                             m, bad = run_point(hexpath, k, sigma, reset,
                                                encoding == 'amplitude', a.layers,
@@ -232,6 +237,10 @@ def main():
                             d = m.group(5)
                             depths.append(a.layers + 1 if d == 'none' else int(d))
                             finals.append(float(m.group(6)))
+                            # The depth the reference chain stopped accumulating
+                            # at, or layers + 1 for "it never did".
+                            p = m.group(7)
+                            pins.append(a.layers + 1 if p == 'none' else int(p))
                         if a.dry_run or not depths:
                             continue
                         med = median(depths)
@@ -240,15 +249,23 @@ def main():
                                          reset='inf' if reset is None else reset,
                                          depth=med, dmin=min(depths), dmax=max(depths),
                                          nseed=len(depths),
+                                         # Seeds whose chain stopped
+                                         # accumulating inside the run: a
+                                         # per-seed fact, so counted and not
+                                         # averaged.
+                                         npin=sum(1 for p in pins
+                                                  if p <= a.layers),
                                          final=sum(finals) / len(finals)))
                         print('  %7g ph  sigma %-5.1f reset %-4s %-4s depth@5%% '
                               'median %-4s range %s-%s (%d seed%s)  rel_rms %.4f'
+                              '  pin %s'
                               % (n, sigma, 'inf' if reset is None else reset,
                                  'cal' if cal else 'ideal', fmt_depth(med, a.layers),
                                  fmt_depth(min(depths), a.layers),
                                  fmt_depth(max(depths), a.layers), len(depths),
                                  '' if len(depths) == 1 else 's',
-                                 sum(finals) / len(finals)))
+                                 sum(finals) / len(finals),
+                                 fmt_depth(median(pins), a.layers)))
 
     if a.dry_run:
         return 0
@@ -259,11 +276,21 @@ def main():
     print("A3's curve: the depth the chain reaches before 5% relative RMS")
     print('(a dash is "never, within %d layers" -- the chain held.  Median over'
           % a.layers)
-    print(' %d seeds with the range in brackets where it differs: the detuning'
+    print(' %d seeds with the range in brackets where it differs: a seed draws'
           % len(SEEDS))
-    print(' draw is 8 columns wide and varies.  sigma > 0 rows are against a')
+    print(' the weight set, the operands AND the 8-column detuning, and the')
+    print(' chain holds one weight set, so all three move.  sigma > 0 rows are')
+    print(' against a')
     print(' CALIBRATED reference, so they are the noise alone; against the ideal')
-    print(' unit a detuned chain reads 25%+ from depth 1 and shows nothing.)')
+    print(' unit a detuned chain reads 25%+ from depth 1 and shows nothing.')
+    print(' A *n is n of the %d seeds whose chain reached a FIXED POINT inside'
+          % len(SEEDS))
+    print(' the run: the reference chain stopped accumulating, so that seed is')
+    print(' the experiment stopping and not the device chaining.  The chain holds')
+    print(' one weight set, and a deterministic map on a finite operand set must')
+    print(' cycle, so this is the weight draw and not the device: the depth it')
+    print(' lands on moves with the seed and mostly does not happen at all.')
+    print(' Read a marked cell as a lower bound.)')
     for preset, out, encoding in shapes:
         sel = [r for r in rows if r['preset'] == preset and r['out'] == out
                and r['encoding'] == encoding]
@@ -292,6 +319,11 @@ def main():
                         if h['nseed'] > 1 and h['dmin'] != h['dmax']:
                             cell += '(%s-%s)' % (fmt_depth(h['dmin'], a.layers),
                                                  fmt_depth(h['dmax'], a.layers))
+                        # Seeds whose chain stopped accumulating inside the
+                        # run, if any: the cell's depth is then drawn partly
+                        # from a run that was no longer chaining.
+                        if h['npin']:
+                            cell += '*%d' % h['npin']
                         print('%10s' % cell, end='')
                 print()
 
