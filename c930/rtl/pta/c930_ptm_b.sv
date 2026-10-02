@@ -218,7 +218,15 @@ module c930_ptm_b
     .i_pta_drift_max    (i_pta_drift_max),
     .i_pta_xtalk        (i_pta_xtalk),
     .i_pta_model_rst    (i_pta_model_rst),
-    .i_pta_shot_start   (i_cal_busy ? i_cal_shot_start : shot_now),
+    // shot_start is the REQUEST, not the shot: inside, BROADSIDE makes
+    // drift_tick i_pta_shot_start and cap_tick i_pta_shot, so driving both from
+    // shot_now put the drift step and the capture on one edge and the capture
+    // read the drift from before the step -- every shot seeing the previous
+    // shot's.  Skewed, drift_tick fires at t = 0 and the captures start at
+    // t = 2R, so the step is an edge ahead; pta_tile_model.c matches that,
+    // calling pta_shot_start() before it computes the shot.  S_SHOT is the cycle
+    // after i_shot_start, so the request restores that ordering.
+    .i_pta_shot_start   (i_cal_busy ? i_cal_shot_start : i_shot_start),
     .i_pta_shot         (i_cal_busy ? i_cal_shot       : shot_now),
     .i_pta_shot_col     (i_cal_busy ? i_cal_shot_col   : '0),
     .i_pta_shot_cols    (i_pta_shot_cols),
