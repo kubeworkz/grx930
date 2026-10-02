@@ -22,6 +22,9 @@
 //   "feed"          : F2 -- boots sw/pta_feed.c, which measures the feed's
 //                     options at the two Pockels points. Wants PTM_B=1: on
 //                     PTM-C the drain hides the fetch and the options converge.
+//   "act"           : A-CSR -- boots sw/act_csr.c, which drives S_ACT entirely
+//                     from the host (the indirect window: table, scales,
+//                     counters) and repeats gate A1's identity check through it.
 //   "l2coh"         : the L2 directory's blind spot, as a test.
 //   "mulstore"      : a multiply retiring while a store sits in MEM.
 //   "driver"        : the NPU driver's own smoke test.
@@ -1323,6 +1326,145 @@ static int run_driver(Vc930_soc4_verilator *top) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// A-CSR: S_ACT reached from the host, gated.  sw/act_csr.c programs the whole
+// activation through the register block -- the 1025-breakpoint table, the
+// per-column scales and the configuration -- and then repeats what gate A1 checks
+// in the core bench: with the identity table and unit scales, C must come back
+// exactly as it does with S_ACT disabled.  Eleven points, every one a PASS/FAIL;
+// the firmware's header says what each is for and why it needs firmware rather
+// than the core bench.
+//
+// Operands are all 1 and K = 16, so the unactivated C is exactly 16 and the
+// identity configuration has to leave it there.  Two of the C blocks are
+// preloaded with a sentinel rather than zero: the requant point expects zeros
+// out of the second GEMM, and a GEMM that never ran would otherwise pass it.
+// ---------------------------------------------------------------------------
+static int run_act(Vc930_soc4_verilator *top) {
+    const int M = 8, N = 12, K = 16;
+    const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
+    const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
+    const uint32_t PHASE = 0x9490, TABLE = 0x9500;
+    const uint32_t PASS_MAGIC = 0x0BADBEEF;
+    const uint32_t SENTINEL = 0xA5A5A5A5;
+    const int NPTS = 12, STRIDE = 8;
+    // One block per GEMM: 2 identity + 1 busy-drop + 1 idle-write + 1 requant
+    // + 2 snapshot, and room over.
+    const int NBLK = 12;
+
+    enum { P_SCALARS, P_XS, P_R, P_OOR, P_TBLRD, P_IDENT, P_COUNT,
+           P_BUSYDROP, P_IDLEWR, P_REQUANT, P_SNAPSHOT, P_RWRAP };
+    enum { AC_RAN, AC_PASS, AC_OBS, AC_WANT, AC_EXTRA, AC_EXTRA2 };
+
+    printf("[TB] 4-core SoC -- A-CSR: S_ACT driven from the host, gate A1's "
+           "identity check through the register block\n");
+    printf("[TB] twelve points; the pairs matter -- busy-drop needs idle-write "
+           "beside it, and snapshot needs requant, or a failure cannot say "
+           "whether the path works at all\n");
+    printf("[TB] shape M=%d N=%d K=%d, every operand 1, so C is exactly K=%d "
+           "both with S_ACT off and through the identity table\n", M, N, K, K);
+
+    top->i_rst_n = 0;
+    top->i_tb_wr_en = 0;
+    top->i_clk = 0; top->eval();
+
+    const char *fw = getenv("PTA_FW");
+    preload_words_at(top, fw ? fw : "sw/act_csr_prog.hex", 0x0000, 8192);
+
+    for (int i = 0; i < M * K; i++) preload_byte(top, A + i, 1);
+    for (int i = 0; i < K * N; i++) preload_byte(top, B + i, 1);
+    for (int b = 0; b < NBLK; b++)
+        for (int i = 0; i < M * N; i++)
+            preload_word(top, C + 0x200 * b + i * 4, SENTINEL);
+    preload_word(top, DIMS + 0, (uint32_t)M);
+    preload_word(top, DIMS + 4, (uint32_t)N);
+    preload_word(top, DIMS + 8, (uint32_t)K);
+    preload_word(top, DIMS + 12, 0);
+    preload_word(top, DONE, 0);
+    preload_word(top, RESULT, 0);
+    preload_word(top, PHASE, 0);
+    for (int i = 0; i < STRIDE * NPTS; i++)
+        preload_word(top, TABLE + i * 4, 0);
+
+    printf("[TB] image preloaded, C blocks seeded 0x%08X. Booting CPU0.\n",
+           SENTINEL);
+    reset_release(top);
+
+    // The table load is 1025 MMIO writes, which at this SoC's ~30 cycles a write
+    // is the bulk of the run; six GEMMs of a few hundred cycles each follow.
+    int c = -1;
+    for (int t = 0; t < 4000000; t++) {
+        clock_n(top, 1);
+        if ((t % 500000) == 0 || t == 4000000 - 1)
+            printf("[TB]   t=%-9d pc=0x%08llx npu=%d/%d dma=%d phase=0x%02x\n",
+                   t, (unsigned long long)top->o_hart0_pc,
+                   (int)top->o_npu0_busy, (int)top->o_npu0_done,
+                   (int)top->o_dma0_phase, ddr_word(top, PHASE));
+        if (ddr_word(top, DONE) == 0xDEADBEEF) { c = t; break; }
+    }
+    if (c >= 0) printf("[TB] act: done after %d cycles\n", c);
+    else {
+        printf("[TB] act: TIMEOUT after 4000000 cycles, PHASE=0x%02x\n",
+               ddr_word(top, PHASE));
+        return 1;
+    }
+
+    auto slot = [&](int p, int sl) {
+        return ddr_word(top, TABLE + 4 * (STRIDE * p + sl));
+    };
+
+    struct Row { const char *name; const char *what; };
+    const Row rows[NPTS] = {
+        { "scalars",  "CFG, SEED and CTRL read back what was written"      },
+        { "IR_XS",    "a distinct scale per column: the write auto-increments" },
+        { "IR_R",     "the same for the 16-bit region"                     },
+        { "index>=8", "an index past NUM_COLS is dropped, not wrapped"     },
+        { "IR_TBL rd","the table is write-only from the host side"         },
+        { "identity", "A1's check through the CSR: C is exactly K"         },
+        { "counters", "activated, saturations and S_ACT cycles"            },
+        { "busy drop","a breakpoint write while the core runs is dropped"  },
+        { "idle wr",  "the same write, idle, does move the curve"          },
+        { "requant",  "requantisation works at all, unqueued"             },
+        { "snapshot", "REQUANT rides the queue entry, not the register"    },
+        { "r=65536",  "Q4.12 cannot hold 16: the register stores 0"        },
+    };
+
+    printf("[TB] A-CSR, twelve points:\n");
+    printf("[TB]   %-11s %-9s %-11s %-11s %s\n",
+           "point", "result", "seen", "wanted", "what it says");
+    int bad = 0;
+    for (int p = 0; p < NPTS; p++) {
+        const uint32_t ran = slot(p, AC_RAN);
+        const uint32_t ok  = slot(p, AC_PASS);
+        const bool good = (ran == 1 && ok == 1);
+        if (!good) bad++;
+        char res[32];
+        if (ran == 1) snprintf(res, sizeof res, "%s", ok ? "PASS" : "FAIL");
+        else snprintf(res, sizeof res, "not run (%d)", (int)(int32_t)ran);
+        printf("[TB]   %-11s %-9s %-11u %-11u %s\n", rows[p].name, res,
+               slot(p, AC_OBS), slot(p, AC_WANT), rows[p].what);
+    }
+    // The two points whose extra columns carry a reading rather than a flag.
+    printf("[TB]   counters: activated %u (want %d), saturations %u (want 0), "
+           "S_ACT cycles %u\n", slot(P_COUNT, AC_EXTRA), M * N,
+           slot(P_COUNT, AC_EXTRA2), slot(P_COUNT, AC_OBS));
+    printf("[TB]   snapshot: the GEMM queued with REQUANT clear read %u, the one "
+           "queued after setting it read %u -- at adc_bits 6 the requantiser "
+           "gives ((%d + 2^17) >> 18) << 18 = 0\n",
+           slot(P_SNAPSHOT, AC_OBS), slot(P_SNAPSHOT, AC_EXTRA), K);
+
+    const uint32_t result = ddr_word(top, RESULT);
+    printf("[TB] act: RESULT=0x%08X, %d of %d points failed\n",
+           result, bad, NPTS);
+    if (bad == 0 && result == PASS_MAGIC) {
+        printf("[TB] act: PASS -- S_ACT is reachable from the host and the "
+               "identity configuration is bit-exact through it\n");
+        return 0;
+    }
+    printf("[TB] act: FAIL\n");
+    return 1;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered for live traces
     Verilated::commandArgs(argc, argv);
@@ -1338,6 +1480,8 @@ int main(int argc, char **argv) {
         rc = run_sweep(top);
     else if (mode == "feed")
         rc = run_feed(top);
+    else if (mode == "act")
+        rc = run_act(top);
     else if (mode == "l2coh")
         rc = run_l2coh(top);
     else if (mode == "mulstore")

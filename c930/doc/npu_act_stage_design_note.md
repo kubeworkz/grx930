@@ -247,14 +247,30 @@ Core-level. Every scalar is sampled at `i_start`, like `i_precision`.
 identity stale, and S_ACT adds a term. The counter is what lets it close again.
 
 **When this reaches the CSR** it goes into the widened decode
-`pta_cpu_integration.md` §3 proposes. The PTA block ends at `0xCC`, which leaves
-twelve words, `0xD0`–`0xFC`: enough for the scalars and counters, with the table
-and the per-column scales behind an indirect address.
+`pta_cpu_integration.md` §3 proposes. This paragraph used to say the PTA block
+ends at `0xCC`, leaving twelve words at `0xD0`-`0xFC` for the scalars and
+counters with the table and the scales behind an indirect address. Half of those
+twelve had been taken by the time A-CSR was built -- `DRIFT_MAX`, `CAL_CFG`,
+`TRIM`, `CAL_SEED`, `ERR_FOUND` and `AROW_CT` -- so what shipped is three scalar
+words (`0xE4` CFG, `0xE8` SEED, `0xEC` CTRL) plus **one** indirect window
+(`0xF4` IADDR, `0xF8` IDATA) carrying everything that is not a scalar: the
+per-column scales, the 1025-entry table and the three counters, selected by
+`IADDR[13:12]`. `0xFC` is left spare on purpose.
+
+Two properties of that window are worth stating because firmware has to know
+them and neither is obvious from the map. **The auto-increment is write-only**:
+writing IDATA advances IADDR, so a run of entries is one address write and n data
+writes, but reading IDATA does not advance it and a readback re-addresses every
+entry. And **the table is write-only from the host**, because the core owns its
+only read port and S_ACT reads it combinationally.
 
 `i_act_requant` is the exception, because it is per command. A live CSR bit
 would apply to whichever command dispatched next — the live-versus-snapshot
 hazard the CSR header's completion contract exists to prevent — so it belongs in
 the command snapshot beside `precision`, taking `CMD_W` from 147 bits to 148.
+Being in the snapshot is not enough on its own: it has to be **latched out of the
+snapshot at dispatch**, like every other field, and the first implementation read
+it live off the FIFO head instead. §7.4 has what that cost.
 
 ---
 
@@ -482,7 +498,11 @@ review §6.2 is evaluated on.
    Five things came out of building it, and four are about the experiment rather
    than the device.  Re-measured 2026-10-01 after the harness fault in 7.2:
    400 points, no exclusions, and 7.3 reading 2 withdrawn.
-5. **Only then** the CSR mapping, the snapshot bit and firmware.
+5. ~~**Only then** the CSR mapping, the snapshot bit and firmware.~~
+   **Done, 2026-10-01**: `rtl/c930_npu_csr.sv`'s scalar words and indirect
+   window, `o_act_requant` riding the command snapshot, and `sw/act_csr.c` with
+   `make act_csr` as its gate. §7.4 -- the firmware found two bugs, one of
+   them in the snapshot path the order exists to protect.
 
 ---
 
@@ -740,6 +760,88 @@ reference at sigma > 0: uncalibrated detuning costs 25 to 57% from depth 1
 (§7.1), so a long chain assumes the gain errors are corrected, which the tile
 can do and C3 built the engine for. And these are synthetic operands from the
 xorshift stream, which is deliberate -- the mechanism before any dataset.
+
+---
+
+## 7.4 A-CSR's firmware, and the two bugs it found
+
+`make act_csr`. `sw/act_csr.c` drives the whole activation from the host -- the
+1025-breakpoint table and the per-column scales through the indirect window, the
+configuration through the scalar words -- and the gate is **A1's, repeated through
+the CSR**: with the identity table and unit scales, C must come back exactly as it
+does with S_ACT disabled. Every operand is 1 and K = 16, so that value is 16.
+
+A1's check is the right one to repeat because it fails on every way the window can
+be wrong -- a region decode landing in the wrong memory, an auto-increment that
+skips or repeats, a breakpoint truncated through `[23:0]`, a scale written to the
+wrong column -- and all of those survive a readback-only test. Twelve points, each
+PASS or FAIL:
+
+| | what it says | why it needs firmware |
+|---|---|---|
+| scalars | CFG, SEED and CTRL read back | -- |
+| IR_XS | a distinct scale per column | the write-side auto-increment |
+| IR_R | the same, 16 bits wide | the narrower region's truncation |
+| index >= 8 | an index past `NUM_COLS` is dropped | the RTL's guard, never shown to hold |
+| IR_TBL read | the table reads as 0 from the host | and so a dropped write is **not** visible |
+| identity | C is exactly K through the CSR | the whole path at once |
+| counters | activated 96, saturations 0, S_ACT cycles 224 | `IR_CNT`, and the cycle identity |
+| busy drop | a breakpoint write while the core runs is dropped | not observable any other way |
+| idle write | the same write, idle, moves C to 1015 | without it the point above passes on nothing |
+| requant | one GEMM, unqueued, comes back requantised | the control for the point below |
+| snapshot | REQUANT rides the queue entry | two commands, one register |
+| r = 65536 | Q4.12 stores 0, not 16 | the trap §7.2 found, on this path too |
+
+**Two of those are pairs on purpose.** Busy-drop is a claim that a write did
+*not* happen, which passes just as well on a write path that never worked, so
+idle-write makes the same write with the core idle and requires C to move.
+Snapshot is a claim about two queued commands, which cannot distinguish the queue
+losing the bit from requantisation not running at all, so the requant point runs
+one unqueued GEMM with the bit set. Both halves are needed, and in the second
+case the second half is what localised the bug.
+
+**Bug 1: `o_act_tbl_wen` was never de-asserted.** It is set in the IR_TBL write
+handler and was cleared only in the reset block -- missing from the
+`// The strobes are one cycle each` list beside `pta_now_q`, `pta_mrst_q` and
+`pta_aff_wen_q`. So after the first breakpoint write it stayed high for ever,
+rewriting the last address with the last data every cycle. The table still loads
+correctly, which is why the lint was clean and a readback would have passed: the
+addresses and data written are right, there are just unboundedly many redundant
+writes after them. What it breaks is the rule the port exists for. "Idle only"
+was enforced by `if (!i_busy)` gating the *set*, and once the enable is already
+high that gate reaches nothing: the write port is held enabled while S_ACT reads
+the table combinationally, which is the read-during-write case the design says it
+avoids.
+
+**Bug 2: `o_act_requant` was read live off the FIFO head.** Every other field of
+a command is captured into a `cur_*` register when the dispatcher takes the
+entry -- dims, bases, precision. requant alone was a continuous
+`assign o_act_requant = fifo_head[CMD_W-1]`, and that does not survive dispatch
+for two separate reasons:
+
+- `fifo_pop` and `start_pulse` are both registered, so in the cycle the core sees
+  `i_start` the read pointer has **already** advanced and `fifo_head` is the next
+  entry. The core samples the following command's bit, or an empty slot's.
+- and the zero-bubble path dispatches straight from the live CSRs without pushing
+  at all, where `fifo_head` was never this command's entry in the first place.
+
+Measured before the fix: two GEMMs queued with REQUANT flipped between them both
+came back **unrequantised** -- the first took the zero-bubble path and read a
+stale slot, the second was popped a cycle before its own start. Latched with the
+other fields now, and from the live register on the path that dispatches from
+live registers.
+
+That is the bug the step existed to find. Being in the command snapshot is what
+§4 asked for and it was there; carrying it to the core was a separate thing, and
+nothing before this firmware had ever read the bit back out.
+
+**What the snapshot turned out to be, once it worked.** §4 calls
+`i_act_requant` snapshotted at `i_start`. The implementation is stronger: the bit
+is captured when the command is **pushed**, so no later write can reach it. At
+`adc_bits` = 6 the requantiser computes `((16 + 2^17) >> 18) << 18` = 0, so the
+pair of queued GEMMs reads 16 and 0. The harness seeds the C blocks with a
+sentinel rather than zero, because a GEMM that never ran would otherwise pass the
+half that expects zeros.
 
 ---
 

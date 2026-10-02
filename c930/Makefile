@@ -731,6 +731,43 @@ pta_feed: $(FD_SW_HEX) verilate-soc4
 	  "PTA_FW=$(FD_SW_HEX)"
 
 # ---------------------------------------------------------------------------
+# A-CSR: S_ACT reached from the host (doc/npu_act_stage_design_note.md 4, 7.4)
+#
+# sw/act_csr.c drives the whole activation through the register block -- the
+# 1025-breakpoint table and the per-column scales through the indirect window at
+# IADDR/IDATA, the configuration through the four scalar words -- and then repeats
+# what gate A1 checks in the core bench: with the identity table and unit scales,
+# C must come back exactly as it does with S_ACT disabled.
+#
+# Eleven points, every one PASS/FAIL.  The six that need firmware rather than the
+# core bench are the ones about the window itself: the auto-increment is
+# write-only, an index past NUM_COLS is dropped, the table is unreadable from the
+# host, a breakpoint write while the core runs is dropped, REQUANT rides the queue
+# entry, and r_j = 65536 wraps to zero.
+#
+#   make act_csr
+# ---------------------------------------------------------------------------
+AC_SW_ELF := sw/act_csr.elf
+AC_SW_BIN := sw/act_csr.bin
+AC_SW_HEX := sw/act_csr_prog.hex
+
+$(AC_SW_ELF): sw/start.S sw/act_csr.c sw/c930_npu_driver.c sw/c930_npu_driver.h sw/link_tile.ld
+	$(GCC) -march=rv64ima -mabi=lp64 -Os -ffreestanding -nostdlib \
+	  -fno-builtin -T sw/link_tile.ld -Wl,--build-id=none \
+	  -o $@ sw/start.S sw/act_csr.c sw/c930_npu_driver.c
+
+$(AC_SW_BIN): $(AC_SW_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(AC_SW_HEX): $(AC_SW_BIN) sw/bin2hex.py
+	$(PYTHON) sw/bin2hex.py $(AC_SW_BIN) $(AC_SW_HEX)
+
+.PHONY: act_csr
+act_csr: $(AC_SW_HEX) verilate-soc4
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run act $(VERIL4_OUT) \
+	  "PTA_FW=$(AC_SW_HEX)"
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
 HOST_CC     ?= gcc
@@ -755,3 +792,4 @@ clean:
 	rm -f $(TILE_SW_ELF) $(TILE_SW_BIN) $(TILE_SW_HEX)
 	rm -f $(DRV_SW_ELF) $(DRV_SW_BIN) $(DRV_SW_HEX)
 	rm -f sw/mul_store_test*.elf sw/mul_store_test*.bin sw/mul_store_prog*.hex
+	rm -f $(AC_SW_ELF) $(AC_SW_BIN) $(AC_SW_HEX)
