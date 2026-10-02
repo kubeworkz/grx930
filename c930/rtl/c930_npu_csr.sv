@@ -416,6 +416,9 @@ module c930_npu_csr
   logic [15:0] cur_dim_m, cur_dim_n, cur_dim_k;
   logic [31:0] cur_a_base, cur_b_base, cur_c_base;
   logic [2:0]  cur_precision;
+  // Latched like the fields above, and for the same reason: fifo_head moves on
+  // when the entry pops, and the zero-bubble path never reads it at all.
+  logic        cur_act_requant;
   logic        start_pulse;
 
   assign o_dim_m     = cur_dim_m;
@@ -483,9 +486,14 @@ module c930_npu_csr
     c_base, b_base, a_base,
     dim_k, dim_n, dim_m
   };
-  // The head's requant bit is the one the core sees, so a queued GEMM carries
-  // the reset it was submitted with rather than whatever the register says now.
-  assign o_act_requant = fifo_head[CMD_W-1];
+  // A queued GEMM carries the reset it was submitted with rather than whatever
+  // the register says now, so the bit rides the command: cmd_snapshot's MSB,
+  // captured into cur_act_requant when the dispatcher takes the entry.  Reading
+  // fifo_head here directly does NOT work -- fifo_pop and start_pulse are both
+  // registered, so by the cycle the core sees i_start the read pointer has moved
+  // and the head is the next entry.  Measured: two GEMMs queued with the bit
+  // flipped between them both ran unrequantised.
+  assign o_act_requant = cur_act_requant;
 
   // Initialize
   integer fi;
@@ -567,6 +575,7 @@ module c930_npu_csr
       cur_b_base    <= 32'd0;
       cur_c_base    <= 32'd0;
       cur_precision <= 3'd0;
+      cur_act_requant <= 1'b0;
     end else begin
       start_pulse <= 1'b0;
       fifo_pop    <= 1'b0;
@@ -587,6 +596,7 @@ module c930_npu_csr
             cur_b_base    <= fifo_head[111:80];
             cur_c_base    <= fifo_head[143:112];
             cur_precision <= fifo_head[146:144];
+            cur_act_requant <= fifo_head[CMD_W-1];
             fifo_pop      <= 1'b1;
             pending_start  <= 1'b0;
             pending_pushed <= 1'b0;
@@ -605,6 +615,7 @@ module c930_npu_csr
               cur_b_base    <= fifo_head[111:80];
               cur_c_base    <= fifo_head[143:112];
               cur_precision <= fifo_head[146:144];
+              cur_act_requant <= fifo_head[CMD_W-1];
               fifo_pop      <= 1'b1;
             end else begin
               // FIFO empty — dispatch directly from live CSRs (zero bubble)
@@ -615,6 +626,9 @@ module c930_npu_csr
               cur_b_base    <= b_base;
               cur_c_base    <= c_base;
               cur_precision <= precision;
+              // This path never pushed, so there is no entry to read: the live
+              // register is the command.
+              cur_act_requant <= act_requant_r;
             end
             start_pulse <= 1'b1;
             disp_state  <= D_WAIT;
@@ -630,6 +644,7 @@ module c930_npu_csr
             cur_b_base    <= fifo_head[111:80];
             cur_c_base    <= fifo_head[143:112];
             cur_precision <= fifo_head[146:144];
+            cur_act_requant <= fifo_head[CMD_W-1];
             fifo_pop      <= 1'b1;
             start_pulse   <= 1'b1;
             disp_state    <= D_WAIT;
@@ -805,6 +820,12 @@ module c930_npu_csr
       pta_now_q     <= 1'b0;
       pta_mrst_q    <= 1'b0;
       pta_aff_wen_q <= 1'b0;
+      // Including the breakpoint write.  Without this it latches high on the
+      // first table word and stays there, rewriting the last address every
+      // cycle: the table still loads correctly, so nothing downstream notices,
+      // but the write port is then held enabled while S_ACT reads the table and
+      // the idle-only rule below is no longer enforced by anything.
+      o_act_tbl_wen <= 1'b0;
 
       if (s_axi_bvalid && s_axi_bready)
         s_axi_bvalid <= 1'b0;
@@ -865,8 +886,11 @@ module c930_npu_csr
                        act_r_mem[act_iaddr[$clog2(NUM_COLS)-1:0]] <= s_axi_wdata[15:0];
               // A breakpoint write is idle-only, as the core's port requires:
               // the table is read combinationally while S_ACT runs.  A write
-              // while busy is dropped rather than queued, and the drop is
-              // visible because the readback will not match.
+              // while busy is dropped rather than queued, and the drop is not
+              // directly observable -- IR_TBL reads return 0 because the core
+              // owns the only read port -- so what shows it is the activation's
+              // own output: a table overwritten while busy leaves C on the old
+              // curve.  sw/act_csr.c checks it that way.
               IR_TBL: if (!i_busy) begin
                         o_act_tbl_wen   <= 1'b1;
                         o_act_tbl_waddr <= act_iaddr;
