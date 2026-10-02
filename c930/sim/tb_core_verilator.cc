@@ -2309,12 +2309,32 @@ int main(int argc, char** argv) {
         size_t knee = 0;
         for (size_t i = 0; i < pts.size(); ++i)
             if (pts[i].rel_rms > THRESH) { knee = i + 1; break; }
+        // ... and the one number that says whether depth_at_5pct means anything.
+        // The reference chain's own RMS stops changing when the chain reaches a
+        // fixed point: a requantised output fed back through one shift into
+        // DIN_W operands has few reachable states, so the chain can land on an
+        // attractor and stop accumulating.  Both chains then sit on the same
+        // attractor, agree exactly, and the 5% threshold never trips -- which
+        // reads as "held every layer" and is the experiment stopping, not the
+        // device chaining.  Three flat layers is the shortest run that is not
+        // just two consecutive depths happening to match.
+        size_t pin = 0;
+        for (size_t i = 0; i + 3 <= pts.size(); ++i) {
+            bool flat = true;
+            for (size_t j = i + 1; j < pts.size(); ++j)
+                if (std::fabs(pts[j].ref_rms - pts[i].ref_rms) > 1e-6) {
+                    flat = false;
+                    break;
+                }
+            if (flat) { pin = i + 1; break; }
+        }
         printf("[A3] RESULT cal=%d k_shot=%u sigma_nm=%.1f reset=%s depth_at_5pct=%s "
-               "rel_rms_final=%.6f\n",
+               "rel_rms_final=%.6f ref_pin=%s\n",
                g_chain.calibrated ? 1 : 0, g_chain.k_shot, g_chain.sigma_nm,
                g_chain.reset_every ? std::to_string(g_chain.reset_every).c_str() : "inf",
                knee ? std::to_string(knee).c_str() : "none",
-               pts.empty() ? 0.0 : pts.back().rel_rms);
+               pts.empty() ? 0.0 : pts.back().rel_rms,
+               pin ? std::to_string(pin).c_str() : "none");
     } else if (act_mode == "full") {
         int idx = 0;
         for (auto& c : cases) {

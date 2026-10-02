@@ -480,7 +480,8 @@ review §6.2 is evaluated on.
 4. ~~**Chain mode**, A3.~~ **Built, 2026-10-01**, and measuring: `--act chain`
    in `sim/tb_core_verilator.cc` with `sim/act_chain_sweep.py` driving the sweep.
    Five things came out of building it, and four are about the experiment rather
-   than the device.
+   than the device.  Re-measured 2026-10-01 after the harness fault in 7.2:
+   400 points, no exclusions, and 7.3 reading 2 withdrawn.
 5. **Only then** the CSR mapping, the snapshot bit and firmware.
 
 ---
@@ -516,11 +517,19 @@ is a property of the activation rather than of the harness. Section 8 item 3
 warned the transport rule could mix into the depth axis; it is narrower than that
 warning implies.
 
-**One seed is not a measurement of sigma.** The detuning draw is `NUM_COLS` = 8
-wide. At sigma 7, 10^3 photons, against a calibrated reference, the relative RMS
-at depth 6 ranged **0.056 to 0.284 across five seeds** -- a five-fold spread, and
-wide enough that a single draw inverts the sigma ordering. Every sigma > 0 point
-is therefore run over five seeds and reported as a median with its range.
+**One seed is not a measurement, and the first version of this got the reason
+half right.** The detuning draw is `NUM_COLS` = 8 wide. At sigma 7, 10^3 photons,
+against a calibrated reference, the relative RMS at depth 6 ranged **0.056 to
+0.284 across five seeds** -- a five-fold spread, wide enough that a single draw
+inverts the sigma ordering. So sigma > 0 was run over five seeds.
+
+Sigma = 0 was not, on the reasoning that it has no detuning draw. That reasoning
+is wrong: a seed draws the **weight set** and the operands as well, and the chain
+holds one weight set for its whole length, so a draw of B is a draw of the map
+being iterated. Measured at sigma = 0, `c4-5db-6mm` power, 10^5 photons, N = 1:
+the depth reads 3, 2, 2, held, 2 over seeds 1 to 5 and the final relative RMS
+0.186, 0.239, 0.343, 0.000, 0.000. That spread is wider than the one across the
+whole reset axis. **Every** row now runs five seeds.
 
 **The sigma axis needs two references, and the literal one hides the device.**
 Against the ideal unit (`s` = 1) -- which is what "divergence from the noiseless
@@ -592,10 +601,16 @@ one at the boundary: the smallest usable `s` is 4096/65535. That bound applies t
 anything programming `i_act_r` from a reciprocal, which now includes the CSR path
 (A-CSR).
 
-**What this owes.** The 64 points excluded from §7.3's curve were excluded for a
-harness fault, so they are valid measurements once re-run, and the amplitude
-column of that curve is the part to re-measure first. The curve's power columns,
-which are where every reading in §7.3 comes from, are unaffected.
+**Re-measured, and the fix is a no-op outside the cells it was excluding.**
+Counted directly: the transport clamps **zero** operands for all three power
+presets, at every photon count, at sigma 0 and sigma 14 alike; it clamps 26 to 28
+at `c4-5db-6mm` amplitude with sigma 14, and zero there at sigma 0. So the clamp
+could only have moved the amplitude-at-sigma>0 cells, which are exactly the 64
+that were excluded, and every other number in §7.3's first version stood as
+measured. The re-run is in §7.3: 400 points, **no exclusions**.
+
+It also found that the fix was not what needed finding most. §7.3's reading 2
+was wrong, and wrong on data that had been in hand all along.
 
 Also worth keeping: a chain that saturates its operands is a real condition, and
 the harness now reports how many it saturated. At the amplitude encoding's fixed
@@ -604,66 +619,127 @@ to what an INT8 datapath can carry.
 
 ---
 
-## 7.3 A3's curve, measured
+## 7.3 A3's curve, re-measured
 
-`python3 sim/act_chain_sweep.py --layers 12`. 400 points measured, every layer
-bitwise against the C reference; 64 excluded for §7.2's harness fault, each listed
-with its seed. The depth the chain reaches before 5% relative RMS, at sigma = 0,
-which is the axis with no detuning draw in it:
+`python3 sim/act_chain_sweep.py --layers 12`. **400 points, no exclusions**, every
+layer bitwise against the C reference, five seeds on every row. This replaces a
+first version whose sigma = 0 row ran one seed (§7.1) and whose reading 2 was
+wrong (below).
 
-| shape | 10^3 | 10^4 | 10^5 | 10^6 |
-|---|---|---|---|---|
-| `tpaqcn-built-2mm` (2 mm, the built device) | 2 | 4–6 | 8+ | 8+ |
-| `c4-5db-6mm` power (6 mm) | 1–2 | 2–8 | 3–8+ | 3–8+ |
-| `c4-5db-6mm` **amplitude** | 1–2 | 1–4 | 2–4 | **4** |
-| `tfln-1cm` (1 cm) | 1–3 | 1–3 | 4–10+ | 10–12+ |
+The depth the chain reaches before 5% relative RMS, at sigma = 0, in the sweep's
+own notation: the median over five seeds, the range across those seeds in
+brackets where it differs, `-` for "held all twelve layers", and `*n` for n seeds
+whose chain reached a fixed point inside the run.
 
-Ranges are across the reset interval N; a `+` is "held all twelve layers". The
-sigma > 0 tables are in the sweep's own output, against a calibrated reference
-and with five-seed ranges.
+| photons | N=1 | N=2 | N=4 | N=8 | N=inf |
+|---|---|---|---|---|---|
+| **`tpaqcn-built-2mm` power** -- 2 mm, the built device | | | | | |
+| 10³ | 2(1-2)*1 | 2(2-4) | 2(2-3) | 2(2-3) | 2(2-3)*1 |
+| 10⁴ | -(2--)*1 | 6(2--) | -(3--) | 7(3--) | 7(3--)*1 |
+| 10⁵ | -*1 | - | -(3--) | -(3--) | -(3--)*1 |
+| 10⁶ | -*1 | - | -(3--) | -(3--) | -(3--)*1 |
+| **`c4-5db-6mm` power** -- 6 mm | | | | | |
+| 10³ | 2(1-2)*1 | 2(2-4) | 2(2-3) | 2(2-3) | 2(2-3) |
+| 10⁴ | 2(2--)*1 | 2(2-10) | 4(3-8) | 8(3-10) | 8(3--) |
+| 10⁵ | 2(2--)*1 | 10(4--) | 10(8--) | -(8--) | -(8--) |
+| 10⁶ | 4(3--)*1 | -(8--) | - | - | - |
+| **`c4-5db-6mm` amplitude** -- the same device, read as amplitude | | | | | |
+| 10³ | 1 | 2 | 2 | 2 | 2 |
+| 10⁴ | 1 | 2(2-4) | 3(2-4) | 3(2-5) | 3(2-5) |
+| 10⁵ | 3(1--) | 3(3-4) | 4(3--) | 4(3--) | 4(3--) |
+| 10⁶ | -(2--) | 4(3-7) | 4(4-9) | 8(4--) | 8(4--) |
+| **`tfln-1cm` power** -- 1 cm | | | | | |
+| 10³ | 1(1-2)*1 | 2 | 3(2-4) | 3(2-5) | 3(2-5) |
+| 10⁴ | 2(1-8)*1 | 4(2-12) | 3(3-9) | 3(3-9) | 3(3--) |
+| 10⁵ | -*1 | 10(4--) | 5(3--) | 6(3--) | 6(3--) |
+| 10⁶ | -*1 | -(4--) | 12(3--) | 9(3--) | 9(3--) |
+
+The grid is printed rather than collapsed into a range across N, because
+collapsing it is what hid reading 2's error. The sigma 7 and sigma 14 tables are
+in the sweep's own output, against a calibrated reference.
 
 **Five readings, in the order they matter.**
 
-**1. The chain is photon-limited and loss-limited, not reset-limited.** `N` = 4, 8
-and infinity give nearly the same depth everywhere. Past about four layers between
-resets the requantisation interval stops being the variable, and the photon count
-and the loss budget are.
+**1. The reset interval does not matter for N >= 2.** In every one of the
+sixteen cells above, the seed ranges for N = 2, 4, 8 and infinity all **overlap**.
+Nothing in A3 distinguishes them, and the medians that do differ (`c4-5db-6mm`
+power at 10⁵ reads 10, 10, held, held) differ by less than one seed's draw.
+The chain is photon-limited and loss-limited, and the requantisation interval is
+not a design variable above 1.
 
-**2. Requantising every layer is actively harmful.** `N` = 1 is the worst column in
-every shape and at nearly every photon count — 1 to 3 layers where `N` >= 4
-reaches 2 to 12. The 6-bit ADC reset costs more accuracy than the analog chain
-accumulates over several layers, so a digital reset is not a free safety net. The
-naive instinct to reset often is backwards here.
+**2. N = 1 is categorically different, and the reset's error is
+all-or-nothing.** This is the correction. The first version of this section said
+requantising every layer was *actively harmful* and the worst column everywhere.
+It is not. At the top of the photon axis N = 1 is sometimes the **best** column,
+holding all twelve layers where N = infinity reaches 6 to 9 (`tfln-1cm` at
+10⁵ and 10⁶, `c4-5db-6mm` amplitude at 10⁶) -- and at the same photon
+counts on another device it is the worst, reaching depth 2 and 4 where
+N = infinity holds
+(`c4-5db-6mm` power). Which one it is does not follow the photon count or the
+loss budget.
 
-**3. The crossover is 10^4 photons at the knee, and it moves with length.** Below
-it the chain is 1 to 3 layers, which closes the all-optical branch; above it 4 to
-12, which does not. The 2 mm device crosses between 10^3 and 10^4; `tfln-1cm`
-needs ten times more, crossing between 10^4 and 10^5. That is the shape axis doing
-exactly what §5 says it is for — a curve's shape depends on loss x length, and
-kappa reaches the experiment only through the photon count at the knee.
+What it actually does is remove the middle of the distribution. Over the 80
+sigma = 0 runs at N = 1 -- four shapes, four photon counts, five seeds -- the
+final relative RMS is **exactly zero in 40 and at least 5% in the other 40, with
+nothing in between**; the smallest non-zero reading in the whole column is 0.088.
+The same 80 runs at N = infinity give **no** exact zeros and 34 readings inside
+(0, 0.05). The mechanism is the ADC: 6 bits on a 24-bit table is an LSB of 2^18,
+shot noise here is a few thousand table units, so a requantised layer almost
+always rounds to the code the clean chain rounds to and the error is *nothing* --
+and when it does not, the error is a whole code at once.
 
-**4. Power chains deeper than amplitude.** The same device read as optical power
-reaches 8 or more layers where the amplitude encoding saturates at 4. §8 item 2
-asks whether power or amplitude describes the network; for chain depth the answer
-is power. The amplitude encoding chains less deeply because its loaded scale
-is sqrt(s), so `x` lands higher for the same detuning and the curve's top is
-reached sooner -- and for the same reason it is the encoding §7.2's harness
-fault reached, so its column is the one to re-measure.
+So the reset is a **regenerator with a cliff**, not a safety net that trades
+accuracy for stability. Designing for N = 1 means designing to stay under the
+code-flip threshold, and under it the chain is exact to any depth. Over it, the
+first flip is already 9% or more. One consequence for this table: *depth at 5%*
+cannot resolve the N = 1 column at all -- with the smallest non-zero reading at
+1.8x the threshold, that column reports the depth of the first code flip and not
+a knee.
 
-**5. So the branch is open at the high end, conditionally.** At 10^5 to 10^6
-photons with power encoding and `N` >= 4, chains of 8 to 12 layers hold. That is a
-**long** reset interval, and `pta_cpu_integration.md` §4.4 makes a long one the
-trigger for its reopening clause: the chi(2) platform starts to matter and poled
-lithium niobate leads there. At 10^3 photons it is 1 to 3 layers and the branch
-closes, with the mainline's electronic nonlinearity untouched. Both of §4.4's
-branches are live, and the photon budget picks between them.
+**3. The crossover is 10⁴ photons at the knee, and it moves with length.**
+Unchanged, and the clearest thing in the table. At N = 4 the 2 mm device goes
+2 -> held across 10³ to 10⁴; `c4-5db-6mm` goes 2, 4, 10, held; `tfln-1cm`
+goes 3, 3, 5, 12 and so needs ten times the photons for the same depth. That is
+the shape axis doing what §5 says it is for -- a curve's shape depends on
+loss × length, and kappa reaches the experiment only through the photon count at
+the knee.
+
+**4. Power chains deeper than amplitude.** The same device at N = infinity:
+power reads 2, 8, held, held across the photon axis where amplitude reads 2, 3, 4,
+8. §8 item 2 asks whether power or amplitude describes the network; for chain
+depth the answer is power. Amplitude's loaded scale is `sqrt(s)`, so `x` lands
+higher for the same detuning and the curve's top is reached sooner -- which is
+also why amplitude is the encoding whose operands outgrew `DIN_W` and produced
+§7.2's 64 exclusions.
+
+**5. So the branch is open at the high end, conditionally.** At 10⁵ to
+10⁶ photons with power encoding, chains of 5 to 12 layers hold at any
+N >= 2, and the 2 mm device holds all twelve. That is a **long** reset interval,
+and `pta_cpu_integration.md` §4.4 makes a long one the trigger for its reopening
+clause: the chi(2) platform starts to matter and poled lithium niobate leads
+there. At 10³ it is 1 to 3 layers and the branch closes, with the mainline's
+electronic nonlinearity untouched. Both of §4.4's branches are live, and the
+photon budget picks between them.
+
+**What bounds this experiment, measured.** 44 of the 240 cells contain exactly one
+seed -- never more -- whose chain reached a fixed point before layer 12: the
+reference chain's own RMS stops changing and both chains sit on the same
+attractor, so they agree exactly and the threshold never trips. That is the held
+weight set, not the device. The chain holds one weight set deliberately (redrawing
+B every layer would mix a new operand distribution into the depth axis), a
+deterministic map on a finite operand set must cycle, and the depth it lands on
+moves with the seed: `c4-5db-6mm` power at 10⁵ pins at layer 8 on seed 1 and
+never on seeds 2 to 5. The bench reports it as `ref_pin` and the sweep marks the
+cell, because a median drawn partly from a stopped run is a lower bound. It also
+says what A3's first stage cannot reach: past roughly depth 8 at N = 1, a held
+weight set stops being a model of a network, which is the second stage's job
+(`pta_cpu_integration.md` §9, needs D3).
 
 Two conditions on reading 5 as a result. It holds against a **calibrated**
 reference at sigma > 0: uncalibrated detuning costs 25 to 57% from depth 1
 (§7.1), so a long chain assumes the gain errors are corrected, which the tile
 can do and C3 built the engine for. And these are synthetic operands from the
-xorshift stream, which is deliberate — the mechanism before any dataset. The
-small MLP `pta_cpu_integration.md` §9 asks for is A3's second stage and needs D3.
+xorshift stream, which is deliberate -- the mechanism before any dataset.
 
 ---
 
