@@ -768,9 +768,71 @@ act_csr: $(AC_SW_HEX) verilate-soc4
 	  "PTA_FW=$(AC_SW_HEX)"
 
 # ---------------------------------------------------------------------------
+# G0: the error model's conformance suite (grxcp pta_program_plan.md, track G)
+#
+# sim/pta_tile_model.c is already vendorable -- C99 with <stdint.h> and
+# <stdlib.h> and nothing else, as decision D1 asked -- but a header another
+# repository can compile is not a contract it can be held to.  sim/pta_vectors.txt
+# is that contract: a deterministic file the gated model emits, which any
+# implementation of the error model must reproduce bit for bit.
+#
+# The chain, and why it has three links:
+#   `make core_pta_gates` holds rtl/pta/c930_ptm_c.sv to sim/pta_tile_model.c,
+#   `make pta_vectors`    emits that model's answers into a committed file,
+#   `make pta_vectors_check` holds the file to the model, and checks that the
+#                         suite is not vacuous.
+# A vendoring repository runs the third link with a C compiler and nothing else:
+# no Verilator, no RTL, no Windows-plus-WSL build.
+#
+# The check does four things, and only the first is a diff: the committed file
+# still reproduces; the clear case equals a plain integer GEMM computed
+# independently; no case is identical to the clear case (a case whose impairment
+# changes nothing cannot catch a copy that ignores it); and every two-GEMM case
+# moves between its GEMMs, since drift is device state and that is the only way
+# to catch a copy that resets per GEMM.
+#
+#   make pta_vectors          regenerate sim/pta_vectors.txt
+#   make pta_vectors_check    the committed file still holds
+#   make core_pta_gates       the RTL against the model, which is why to believe it
+# ---------------------------------------------------------------------------
+# gcc is not on the Windows PATH here -- it is in WSL, which is why
+# build_core_verilator_wsl.sh exists -- so the two programs are built and run
+# there.  The vector FILE is portable; only this build is host-specific, and
+# HOST_CC still overrides on a host where gcc is native.
+HOST_CC   ?= gcc
+VEC_DIR   := build/pta_vectors
+VEC_FILE  := sim/pta_vectors.txt
+VEC_CFLAGS := -std=c99 -Wall -Wextra -O2 -Isim
+
+.PHONY: pta_vectors pta_vectors_check core_pta_gates
+pta_vectors:
+	@wsl.exe -e bash -c "mkdir -p $(VEC_DIR) && \
+	  $(HOST_CC) $(VEC_CFLAGS) -o $(VEC_DIR)/pta_vectors \
+	    sim/pta_vectors.c sim/pta_tile_model.c && \
+	  ./$(VEC_DIR)/pta_vectors $(VEC_FILE)"
+
+pta_vectors_check:
+	@wsl.exe -e bash -c "mkdir -p $(VEC_DIR) && \
+	  $(HOST_CC) $(VEC_CFLAGS) -o $(VEC_DIR)/pta_vectors_check \
+	    sim/pta_vectors_check.c sim/pta_tile_model.c && \
+	  ./$(VEC_DIR)/pta_vectors_check $(VEC_FILE)"
+
+# The P gates, which are why the model is worth vendoring.  The PTM-C build
+# lands in build/ptm_c/verilator_core, NOT build/verilator_core -- running the
+# digital-array binary with --tile ptm_c hangs waiting for a tile that is not
+# there, which is easy to do by hand and is the reason this target exists.
+core_pta_gates:
+	@bash sim/build_core_verilator_wsl.sh PTM_C=1
+	@wsl.exe -e bash -c "\
+	  for m in directed quant thermal shot prog drift xtalk all refuse; do \
+	    echo \"=== --pta \$$m\"; \
+	    ./build/ptm_c/verilator_core/tb_core_verilator --tile ptm_c --pta \$$m \
+	      | tail -3; \
+	  done"
+
+# ---------------------------------------------------------------------------
 # Standalone NPU DPI shim for grxcp (pure C, no Verilator dependency)
 # ---------------------------------------------------------------------------
-HOST_CC     ?= gcc
 NPU_DPI_OBJ := $(BUILD_DIR)/npu_dpi_shim.o
 NPU_DPI_LIB := $(BUILD_DIR)/libnpu_dpi_shim.a
 
@@ -793,3 +855,4 @@ clean:
 	rm -f $(DRV_SW_ELF) $(DRV_SW_BIN) $(DRV_SW_HEX)
 	rm -f sw/mul_store_test*.elf sw/mul_store_test*.bin sw/mul_store_prog*.hex
 	rm -f $(AC_SW_ELF) $(AC_SW_BIN) $(AC_SW_HEX)
+	rm -rf $(VEC_DIR)
