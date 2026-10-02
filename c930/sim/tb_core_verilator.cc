@@ -770,8 +770,12 @@ constexpr double ACT_FWHM_NM = 12.0;     // acceptance FWHM, review 5.1
 constexpr long ACT_X_KNEE     = 1L << 21;
 constexpr int  CHAIN_XSCALE   = 1 << 15;
 constexpr int  CHAIN_ACC_TYP  = 53;
-// r_j = 1/s_j is Q4.12: four integer bits, so 1/s <= 16 and s >= 1/16.
-constexpr double CHAIN_S_MIN  = 1.0 / 16.0;
+// r_j = 1/s_j is Q4.12, and its largest REPRESENTABLE value is 65535/4096 =
+// 15.9998, not 16.  So s = 1/16 exactly needs r = 65536, which wraps a uint16_t
+// to ZERO and silently turns the column off.  The floor is the smallest s whose
+// reciprocal still fits, which is 4096/65535.  The design note's "so s >= 1/16"
+// is right to a boundary it does not state.
+constexpr double CHAIN_S_MIN  = 4096.0 / 65535.0;
 
 double detune_scale(double dw_nm) {
     // sinc^2 in the design note's form.  sinc(0) is 1 by continuity.
@@ -892,6 +896,10 @@ std::vector<ChainPoint> run_chain(int M, int N, int K, int dw, const ChainCfg& c
 
     std::vector<int32_t> c_rtl(static_cast<size_t>(M) * N);
     std::vector<int32_t> c_ref(static_cast<size_t>(M) * N);
+    // Operands the transport had to saturate into DIN_W.  A chain that clamps is
+    // running hotter than its operand width can carry, which is a real condition
+    // and is reported rather than hidden.
+    long clamped_ops = 0;
 
     for (int L = 1; L <= cc.layers; ++L) {
         const bool requant = cc.reset_every > 0 && (L % cc.reset_every) == 0;
@@ -922,12 +930,28 @@ std::vector<ChainPoint> run_chain(int M, int N, int K, int dw, const ChainCfg& c
         // so this column is printed and read before any curve is believed.
         const double ref_rms = std::sqrt(den / static_cast<double>(c_ref.size()));
         out.push_back({rel, mx, static_cast<int>(rr.act_sats), ref_rms});
+        if (L == cc.layers && clamped_ops)
+            printf("[A3] NOTE: the transport saturated %ld operands into DIN_W=%d"
+                   " over %d layers -- the chain runs hotter than its operand"
+                   " width\n", clamped_ops, dw, cc.layers);
 
         // Transport: one shift, elementwise, both chains, the same rule
         // (design note section 8 item 3).  N == K, checked above.
+        //
+        // CLAMPED to the operand width, which is the whole point: a_mem holds
+        // DIN_W-wide operands, so a next-layer activation outside that range is
+        // not representable and a real system would saturate it.  Without the
+        // clamp the DUT truncates on the way in while this harness's reference
+        // keeps the full value, and the two diverge -- which is what put 64 runs
+        // of the full sweep past the bitwise check.  The RTL was never wrong.
+        const int lim = (1 << (dw - 1)) - 1;
         for (size_t e = 0; e < c_rtl.size(); ++e) {
-            a_rtl[e] = c_rtl[e] >> cc.transport;
-            a_ref[e] = c_ref[e] >> cc.transport;
+            int64_t t = static_cast<int64_t>(c_rtl[e]) >> cc.transport;
+            if (t > lim) { t = lim; ++clamped_ops; } else if (t < -lim) { t = -lim; ++clamped_ops; }
+            a_rtl[e] = static_cast<int>(t);
+            int64_t u = static_cast<int64_t>(c_ref[e]) >> cc.transport;
+            if (u > lim) u = lim; else if (u < -lim) u = -lim;
+            a_ref[e] = static_cast<int>(u);
         }
     }
     return out;

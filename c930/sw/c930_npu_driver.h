@@ -158,6 +158,41 @@ extern "C" {
  * At Q = 1 it is a no-op by construction: with no next GEMM queued there is
  * nothing for PF2 to prefetch, and the gate checks that. */
 #define PTA_CTRL_PF2_OFF    0x800u  /* no cross-GEMM prefetch */
+/* ---- S_ACT (A-CSR; doc/npu_act_stage_design_note.md section 4) ----
+ * Four words, which is what the PTA block has free: 0xE4, 0xE8, 0xEC and 0xF4,
+ * 0xF8.  The note's draft said twelve were free at 0xD0-0xFC, which predates
+ * DRIFT_MAX, CAL_CFG, TRIM, CAL_SEED, AROW_CT and ERR_FOUND taking half of
+ * them.  So everything that is not a scalar goes behind one indirect window:
+ * the per-column scales, the table, and the three counters. */
+#define ACT_REG_CFG         (PTA_BASE + 0xe4)   /* RW: [15:0] k_shot Q8.8,
+                                                 * [19:16] adc_bits,
+                                                 * [25:20] xshift, [31:26] yshift */
+#define ACT_REG_SEED        (PTA_BASE + 0xe8)   /* RW: xorshift32 seed */
+#define ACT_REG_CTRL        (PTA_BASE + 0xec)   /* RW: [0] EN, [1] NOISE_CONST,
+                                                 * [2] REQUANT */
+#define ACT_REG_IADDR       (PTA_BASE + 0xf4)   /* RW: [10:0] index,
+                                                 * [13:12] region */
+#define ACT_REG_IDATA       (PTA_BASE + 0xf8)   /* RW: the word at IADDR; the
+                                                 * index auto-increments */
+
+#define ACT_CTRL_EN         0x1u
+#define ACT_CTRL_NOISE_CONST 0x2u
+/* REQUANT is latched here and SNAPSHOTTED at START, like the dims: a live bit
+ * would apply to whichever command dispatched next, which is the hazard the
+ * completion contract exists to prevent.  Writing it does not disturb a GEMM
+ * already queued. */
+#define ACT_CTRL_REQUANT    0x4u
+
+/* IADDR regions. */
+#define ACT_IR_XS           (0u << 12)   /* 32 bits x NUM_COLS, XSCALE * s_j */
+#define ACT_IR_R            (1u << 12)   /* 16 bits x NUM_COLS, 1/s_j Q4.12 */
+#define ACT_IR_TBL          (2u << 12)   /* 24 bits x 1025, write-only, IDLE only */
+#define ACT_IR_CNT          (3u << 12)   /* read-only: 0 count, 1 sats, 2 cycles */
+
+#define ACT_CNT_ACTIVATED   0u
+#define ACT_CNT_SATS        1u
+#define ACT_CNT_CYCLES      2u
+
 #define PTA_SCHED_OFF       0u
 #define PTA_SCHED_PERIODIC  1u
 #define PTA_SCHED_PREDICT   2u

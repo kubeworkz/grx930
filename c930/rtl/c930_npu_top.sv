@@ -131,6 +131,19 @@ module c930_npu_top
   logic [31:0] pta_seed, pta_tw, pta_ts, pta_cal_per, pta_cal_seed;
   logic        pta_resident, pta_wskip, pta_morder;   // MB's modes, PTA_CTRL 9:7
   logic        pta_stage_a;                           // F2's option, PTA_CTRL 10
+  // S_ACT, from the CSR (A-CSR).  It was tied off here until the chain
+  // experiment reported, which the design note's order required.
+  logic        act_en, act_requant, act_noise_const;
+  logic [3:0]  act_adc_bits;
+  logic [5:0]  act_xshift, act_yshift;
+  logic [15:0] act_k_shot;
+  logic [31:0] act_seed;
+  logic [32*NUM_COLS-1:0] act_xs;
+  logic [16*NUM_COLS-1:0] act_r;
+  logic        act_tbl_wen;
+  logic [10:0] act_tbl_waddr;
+  logic signed [23:0] act_tbl_wdata;
+  logic [31:0] act_count, act_sat_count, act_cycles;
   logic        pta_pf2_off;                           // F2's option, PTA_CTRL 11
   logic [15:0] pta_sigma_th, pta_k_shot, pta_sigma_pr, pta_drift_sigma, pta_drift_max;
   logic [4:0]  pta_drift_log2;
@@ -210,6 +223,22 @@ module c930_npu_top
     .o_pta_morder      (pta_morder),
     .o_pta_stage_a     (pta_stage_a),
     .o_pta_pf2_off     (pta_pf2_off),
+    .o_act_en          (act_en),
+    .o_act_requant     (act_requant),
+    .o_act_adc_bits    (act_adc_bits),
+    .o_act_xshift      (act_xshift),
+    .o_act_yshift      (act_yshift),
+    .o_act_k_shot      (act_k_shot),
+    .o_act_noise_const (act_noise_const),
+    .o_act_seed        (act_seed),
+    .o_act_xs          (act_xs),
+    .o_act_r           (act_r),
+    .o_act_tbl_wen     (act_tbl_wen),
+    .o_act_tbl_waddr   (act_tbl_waddr),
+    .o_act_tbl_wdata   (act_tbl_wdata),
+    .i_act_count       (act_count),
+    .i_act_sat_count   (act_sat_count),
+    .i_act_cycles      (act_cycles),
     .o_pta_cal_per     (pta_cal_per),
     .o_pta_cal_thr     (pta_cal_thr),
     .o_pta_cal_amp     (pta_cal_amp),
@@ -394,22 +423,22 @@ module c930_npu_top
     .o_arow_stall_count (o_arow_stall_count),
     // S_ACT is core-level only until its gates are green
     // (doc/npu_act_stage_design_note.md section 7): off at the top.
-    .i_act_en          (1'b0),
-    .i_act_requant     (1'b0),
-    .i_act_adc_bits    (4'd0),
-    .i_act_xs          ({(32*NUM_COLS){1'b0}}),
-    .i_act_xshift      (6'd0),
-    .i_act_r           ({(16*NUM_COLS){1'b0}}),
-    .i_act_yshift      (6'd0),
-    .i_act_k_shot      (16'd0),
-    .i_act_noise_const (1'b0),
-    .i_act_seed        (32'd0),
-    .i_act_tbl_wen     (1'b0),
-    .i_act_tbl_waddr   (11'd0),
-    .i_act_tbl_wdata   (24'sd0),
-    .o_act_count       (),
-    .o_act_sat_count   (),
-    .o_act_cycles      (),
+    .i_act_en          (act_en),
+    .i_act_requant     (act_requant),
+    .i_act_adc_bits    (act_adc_bits),
+    .i_act_xs          (act_xs),
+    .i_act_xshift      (act_xshift),
+    .i_act_r           (act_r),
+    .i_act_yshift      (act_yshift),
+    .i_act_k_shot      (act_k_shot),
+    .i_act_noise_const (act_noise_const),
+    .i_act_seed        (act_seed),
+    .i_act_tbl_wen     (act_tbl_wen),
+    .i_act_tbl_waddr   (act_tbl_waddr),
+    .i_act_tbl_wdata   (act_tbl_wdata),
+    .o_act_count       (act_count),
+    .o_act_sat_count   (act_sat_count),
+    .o_act_cycles      (act_cycles),
     // The PTA error model and its calibration engine, on the CSR's register
     // block since C4(a) (doc/pta_error_model_design_note.md section 3, and the
     // CSR's own header for where the block sits and why not at 0x40).

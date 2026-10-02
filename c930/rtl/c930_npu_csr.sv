@@ -185,6 +185,27 @@ module c930_npu_csr
   // F2's other feed option, PTA_CTRL bit 11, also the DMA's: no cross-GEMM
   // prefetch.  Unlike STAGE_A this leaves PF1 alone.
   output logic        o_pta_pf2_off,       // PTA_CTRL.PF2_OFF
+  // ---- S_ACT (A-CSR; npu_act_stage_design_note.md section 4) --------------
+  // Every scalar is sampled by the core at i_start, like i_precision.  requant
+  // is the exception and rides the command snapshot instead: a live bit would
+  // apply to whichever command dispatched next, which is the hazard the
+  // completion contract exists to prevent.
+  output logic        o_act_en,
+  output logic        o_act_requant,       // from the FIFO head, not the register
+  output logic [3:0]  o_act_adc_bits,
+  output logic [5:0]  o_act_xshift,
+  output logic [5:0]  o_act_yshift,
+  output logic [15:0] o_act_k_shot,
+  output logic        o_act_noise_const,
+  output logic [31:0] o_act_seed,
+  output logic [32*NUM_COLS-1:0] o_act_xs,
+  output logic [16*NUM_COLS-1:0] o_act_r,
+  output logic        o_act_tbl_wen,
+  output logic [10:0] o_act_tbl_waddr,
+  output logic signed [23:0] o_act_tbl_wdata,
+  input  logic [31:0] i_act_count,
+  input  logic [31:0] i_act_sat_count,
+  input  logic [31:0] i_act_cycles,
   output logic [31:0] o_pta_cal_per,
   output logic [23:0] o_pta_cal_thr,
   output logic [3:0]  o_pta_cal_amp,
@@ -292,6 +313,16 @@ module c930_npu_csr
   logic        pta_morder;
   logic        pta_stage_a;
   logic        pta_pf2_off;
+  // ---- S_ACT's registers --------------------------------------------------
+  logic        act_en, act_noise_const, act_requant_r;
+  logic [3:0]  act_adc_bits;
+  logic [5:0]  act_xshift, act_yshift;
+  logic [15:0] act_k_shot;
+  logic [31:0] act_seed;
+  logic [31:0] act_xs_mem [0:NUM_COLS-1];
+  logic [15:0] act_r_mem  [0:NUM_COLS-1];
+  logic [1:0]  act_ir;
+  logic [10:0] act_iaddr;
   logic [6:0]  pta_impair;
   logic [3:0]  pta_abits, pta_wbits, pta_adcbits;
   logic [5:0]  pta_shift;
@@ -351,6 +382,19 @@ module c930_npu_csr
   assign o_pta_morder      = pta_morder;
   assign o_pta_stage_a     = pta_stage_a;
   assign o_pta_pf2_off     = pta_pf2_off;
+  assign o_act_en          = act_en;
+  assign o_act_adc_bits    = act_adc_bits;
+  assign o_act_xshift      = act_xshift;
+  assign o_act_yshift      = act_yshift;
+  assign o_act_k_shot      = act_k_shot;
+  assign o_act_noise_const = act_noise_const;
+  assign o_act_seed        = act_seed;
+  always_comb begin
+    for (int j = 0; j < NUM_COLS; j++) begin
+      o_act_xs[32*j +: 32] = act_xs_mem[j];
+      o_act_r [16*j +: 16] = act_r_mem[j];
+    end
+  end
   assign o_pta_cal_per     = pta_cal_per;
   assign o_pta_cal_thr     = pta_cal_thr;
   assign o_pta_cal_amp     = pta_cal_amp;
@@ -396,7 +440,29 @@ module c930_npu_csr
   // ---------------------------------------------------------------------------
   // Command FIFO (147 bits per entry)
   // ---------------------------------------------------------------------------
-  localparam int CMD_W = 32 + 32 + 32 + 16 + 16 + 16 + 3;
+  // ---- S_ACT's four words -------------------------------------------------
+  // The free words in the PTA block, which are 0x79-0x7B and 0x7D-0x7F in word
+  // terms: byte 0xE4, 0xE8, 0xEC and 0xF4, 0xF8, 0xFC.  The design note's
+  // "twelve words, 0xD0-0xFC" predates DRIFT_MAX, CAL_CFG, TRIM, CAL_SEED,
+  // AROW_CT and ERR_FOUND, which take half of them.
+  localparam [7:0] A_ACT_CFG   = 8'h79;   // byte 0xE4
+  localparam [7:0] A_ACT_SEED  = 8'h7A;   // byte 0xE8
+  localparam [7:0] A_ACT_CTRL  = 8'h7B;   // byte 0xEC
+  localparam [7:0] A_ACT_IADDR = 8'h7D;   // byte 0xF4
+  localparam [7:0] A_ACT_IDATA = 8'h7E;   // byte 0xF8
+  // 0x7F (byte 0xFC) is left spare on purpose: the next thing to need a word
+  // should not have to re-plan this block.
+
+  // The indirect window's regions.  Anything that is not a scalar lives here:
+  // the per-column scales, the 1025-entry table, and the three counters.  One
+  // window rather than three because six words is what there is.
+  localparam [1:0] IR_XS   = 2'd0;   // 32 bits x NUM_COLS
+  localparam [1:0] IR_R    = 2'd1;   // 16 bits x NUM_COLS
+  localparam [1:0] IR_TBL  = 2'd2;   // 24 bits x 1025, write-only, idle only
+  localparam [1:0] IR_CNT  = 2'd3;   // 32 bits x 3, read-only
+
+  // requant takes CMD_W from 147 to 148 (design note section 4).
+  localparam int CMD_W = 32 + 32 + 32 + 16 + 16 + 16 + 3 + 1;
 
   logic [CMD_W-1:0] fifo_mem [0:CMD_QUEUE_DEPTH-1];
   logic [$clog2(CMD_QUEUE_DEPTH):0] fifo_wr_ptr, fifo_rd_ptr;
@@ -412,10 +478,14 @@ module c930_npu_csr
   wire   fifo_full  = (fifo_count == CMD_QUEUE_DEPTH);
 
   wire [CMD_W-1:0] cmd_snapshot = {
+    act_requant_r,
     precision,
     c_base, b_base, a_base,
     dim_k, dim_n, dim_m
   };
+  // The head's requant bit is the one the core sees, so a queued GEMM carries
+  // the reset it was submitted with rather than whatever the register says now.
+  assign o_act_requant = fifo_head[CMD_W-1];
 
   // Initialize
   integer fi;
@@ -673,6 +743,23 @@ module c930_npu_csr
       pta_morder   <= 1'b0;
       pta_stage_a  <= 1'b0;
       pta_pf2_off  <= 1'b0;
+      act_en          <= 1'b0;
+      act_requant_r   <= 1'b0;
+      act_noise_const <= 1'b0;
+      act_adc_bits    <= 4'd0;
+      act_xshift      <= 6'd0;
+      act_yshift      <= 6'd0;
+      act_k_shot      <= 16'd0;
+      act_seed        <= 32'd0;
+      act_ir          <= 2'd0;
+      act_iaddr       <= 11'd0;
+      o_act_tbl_wen   <= 1'b0;
+      o_act_tbl_waddr <= 11'd0;
+      o_act_tbl_wdata <= 24'sd0;
+      for (int j = 0; j < NUM_COLS; j++) begin
+        act_xs_mem[j] <= 32'd0;
+        act_r_mem[j]  <= 16'd0;
+      end
       pta_sched     <= 2'd0;
       pta_impair    <= 7'd0;
       pta_abits     <= 4'd0;
@@ -751,6 +838,46 @@ module c930_npu_csr
           ADDR_B_BASE: if (s_axi_wstrb[0]) b_base <= s_axi_wdata;
           ADDR_C_BASE: if (s_axi_wstrb[0]) c_base <= s_axi_wdata;
           ADDR_PREC:   if (s_axi_wstrb[0]) precision <= s_axi_wdata[2:0];
+          // S_ACT's scalars, packed to fit the four words there are.
+          A_ACT_CFG: if (s_axi_wstrb[0]) begin
+            act_k_shot   <= s_axi_wdata[15:0];
+            act_adc_bits <= s_axi_wdata[19:16];
+            act_xshift   <= s_axi_wdata[25:20];
+            act_yshift   <= s_axi_wdata[31:26];
+          end
+          A_ACT_SEED: if (s_axi_wstrb[0]) act_seed <= s_axi_wdata;
+          A_ACT_CTRL: if (s_axi_wstrb[0]) begin
+            act_en          <= s_axi_wdata[0];
+            act_noise_const <= s_axi_wdata[1];
+            // Latched, then snapshotted at START like the dims.  Writing it
+            // does not disturb a GEMM already queued.
+            act_requant_r   <= s_axi_wdata[2];
+          end
+          A_ACT_IADDR: if (s_axi_wstrb[0]) begin
+            act_iaddr <= s_axi_wdata[10:0];
+            act_ir    <= s_axi_wdata[13:12];
+          end
+          A_ACT_IDATA: if (s_axi_wstrb[0]) begin
+            case (act_ir)
+              IR_XS: if (act_iaddr < NUM_COLS)
+                       act_xs_mem[act_iaddr[$clog2(NUM_COLS)-1:0]] <= s_axi_wdata;
+              IR_R:  if (act_iaddr < NUM_COLS)
+                       act_r_mem[act_iaddr[$clog2(NUM_COLS)-1:0]] <= s_axi_wdata[15:0];
+              // A breakpoint write is idle-only, as the core's port requires:
+              // the table is read combinationally while S_ACT runs.  A write
+              // while busy is dropped rather than queued, and the drop is
+              // visible because the readback will not match.
+              IR_TBL: if (!i_busy) begin
+                        o_act_tbl_wen   <= 1'b1;
+                        o_act_tbl_waddr <= act_iaddr;
+                        o_act_tbl_wdata <= s_axi_wdata[23:0];
+                      end
+              default: ;   // IR_CNT is read-only
+            endcase
+            // Auto-increment, so loading 1025 breakpoints is one address write
+            // and 1025 data writes rather than 2050 writes.
+            act_iaddr <= act_iaddr + 11'd1;
+          end
           A_PTA_CTRL: if (s_axi_wstrb[0]) begin
             pta_en    <= s_axi_wdata[0];
             pta_sched <= s_axi_wdata[5:4];      // bit 6 of CAL_SCHED is reserved
@@ -856,6 +983,29 @@ module c930_npu_csr
           // 20 + 5 + 1 + 2 + 3 + 1 = 32.  The old form concatenated to 31 and
           // relied on the zero-extension; MB's bits are not going on top of that,
           // and F2's stage_a widened the field rather than the padding.
+          A_ACT_CFG:   s_axi_rdata <= {act_yshift, act_xshift, act_adc_bits,
+                                        act_k_shot};
+          A_ACT_SEED:  s_axi_rdata <= act_seed;
+          A_ACT_CTRL:  s_axi_rdata <= {29'd0, act_requant_r, act_noise_const,
+                                       act_en};
+          A_ACT_IADDR: s_axi_rdata <= {18'd0, act_ir, 1'b0, act_iaddr};
+          A_ACT_IDATA: case (act_ir)
+                         IR_XS:  s_axi_rdata <= act_iaddr < NUM_COLS
+                                 ? act_xs_mem[act_iaddr[$clog2(NUM_COLS)-1:0]] : 32'd0;
+                         IR_R:   s_axi_rdata <= act_iaddr < NUM_COLS
+                                 ? {16'd0, act_r_mem[act_iaddr[$clog2(NUM_COLS)-1:0]]}
+                                 : 32'd0;
+                         // The table is write-only from here: the core owns the
+                         // only read port and S_ACT reads it combinationally.
+                         IR_TBL: s_axi_rdata <= 32'd0;
+                         IR_CNT: case (act_iaddr[1:0])
+                                   2'd0: s_axi_rdata <= i_act_count;
+                                   2'd1: s_axi_rdata <= i_act_sat_count;
+                                   2'd2: s_axi_rdata <= i_act_cycles;
+                                   default: s_axi_rdata <= 32'd0;
+                                 endcase
+                         default: s_axi_rdata <= 32'd0;
+                       endcase
           A_PTA_CTRL:      s_axi_rdata <= {20'd0,
                                            pta_pf2_off, pta_stage_a,
                                            pta_morder, pta_wskip, pta_resident,
