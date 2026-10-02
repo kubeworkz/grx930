@@ -78,6 +78,8 @@ module c930_ptm_b
   input  logic                                     i_cal_shot_start,
   input  logic                                     i_cal_shot,
   input  logic [$clog2(NUM_COLS)-1:0]              i_cal_shot_col,
+  // Passed straight through; see c930_ptm_c.sv, where 0 means all columns.
+  input  logic [$clog2(NUM_COLS):0]                i_pta_shot_cols,
   output logic                                     o_valid,
   output logic signed [ACC_W*NUM_COLS-1:0]         o_ps_out,
 
@@ -219,6 +221,7 @@ module c930_ptm_b
     .i_pta_shot_start   (i_cal_busy ? i_cal_shot_start : shot_now),
     .i_pta_shot         (i_cal_busy ? i_cal_shot       : shot_now),
     .i_pta_shot_col     (i_cal_busy ? i_cal_shot_col   : '0),
+    .i_pta_shot_cols    (i_pta_shot_cols),
     .o_pta_sat_count    (o_pta_sat_count),
     .i_pta_trim_wen     (i_pta_trim_wen),
     .i_pta_trim_bank    (i_pta_trim_bank),
