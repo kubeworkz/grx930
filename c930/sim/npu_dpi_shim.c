@@ -15,10 +15,21 @@
 // is one with no photonic tile.  See npu_dpi_shim.h for exactly what is
 // modelled; the short form is identity, the three registers a driver reads to
 // describe a GEMM, and the refusal of any START that asks for an impairment.
+//
+// The tile build (grxcp's S2).  Compiled with NPU_DPI_WITH_PTA and linked with
+// pta_tile_model.c, npu_dpi_set_tile() makes this a build that HAS the tile.
+// The tile's arithmetic is not written here: it is pta_gemm(), the reference
+// the RTL is gated against, so there is one error model and this file is a
+// register map in front of it.  Without the macro nothing below changes and the
+// file still links against nothing.
 // -----------------------------------------------------------------------------
 
 #include "npu_dpi_shim.h"
 #include <string.h>
+#ifdef NPU_DPI_WITH_PTA
+#include <stdlib.h>
+#include "pta_tile_model.h"
+#endif
 
 // ---- DDR storage (flat 64KB byte array) ----
 static uint8_t ddr[NPU_DDR_SIZE];
@@ -51,6 +62,29 @@ static uint32_t pta_impair;    // PTA_IMPAIR[6:0]
 static uint32_t pta_bits;      // PTA_BITS[17:0]
 static uint32_t pta_seed;      // PTA_SEED
 static uint32_t pta_wload_ct;  // PTA_WLOAD_CT
+static uint32_t pta_sig_th;    // PTA_SIGMA_TH[15:0]
+static uint32_t pta_sig_sh;    // PTA_SIGMA_SH[15:0]
+static uint32_t pta_sig_pr;    // PTA_SIGMA_PR[15:0]
+static uint32_t pta_drift;     // PTA_DRIFT[20:0]
+static uint32_t pta_xtalk;     // PTA_XTALK[7:0]
+static uint32_t pta_dmax;      // PTA_DRIFT_MAX[15:0]
+static uint32_t pta_shot_ct;   // PTA_SHOT_CT
+static uint32_t pta_sat_ct;    // PTA_SAT_CT
+
+// What this model is built as.  Not reset by npu_dpi_init().
+static int tile_kind = NPU_DPI_TILE_NONE;
+
+// The impairments the tile build implements: all but MZM_NL, which is the
+// RTL's PTA_BUILT (c930_npu_core.sv).
+#define NPU_PTA_BUILT_TILE 0x5Fu
+
+#ifdef NPU_DPI_WITH_PTA
+// The tile itself.  Its geometry is this model's, the same one PTA_CAPS0
+// reports, and its drift lives here from one GEMM to the next.
+static const pta_tile tile_geom = { NPU_NUM_ROWS, NPU_NUM_COLS, NPU_DIN_W, NPU_ACC_W };
+static pta_device     tile_dev;
+static int            tile_dev_live;
+#endif
 
 // The words c930_npu_core drives as o_pta_caps0..2, for this model's geometry.
 // Banks are the SoC's rule: one per (N tile, K tile) of the largest shape.
@@ -60,8 +94,28 @@ static uint32_t pta_wload_ct;  // PTA_WLOAD_CT
 #define NPU_PTA_CAPS0 \
     ((uint32_t)NPU_NUM_ROWS | ((uint32_t)NPU_NUM_COLS << 10) | \
      ((uint32_t)NPU_DIN_W << 20) | ((uint32_t)NPU_ACC_W << 26))
-#define NPU_PTA_CAPS1 ((uint32_t)NPU_PTA_BANKS << 8)   // nothing built
-#define NPU_PTA_CAPS2 0u                               // no engine, stage or tile
+// The widest activation and weight bits that quantise: DIN_W - 1, capped by the
+// four bits PTA_BITS has.  As the core computes PTA_QMAX.
+#define NPU_PTA_QMAX ((NPU_DIN_W - 1 > 15) ? 15u : (uint32_t)(NPU_DIN_W - 1))
+
+static uint32_t pta_built(void) {
+    return (tile_kind == NPU_DPI_TILE_MODEL) ? NPU_PTA_BUILT_TILE : 0u;
+}
+
+static uint32_t pta_caps1(void) {
+    uint32_t caps = (uint32_t)NPU_PTA_BANKS << 8;
+    if (tile_kind == NPU_DPI_TILE_MODEL)
+        caps |= NPU_PTA_BUILT_TILE | (NPU_PTA_QMAX << 16) | (NPU_PTA_QMAX << 20) |
+                (15u << 24);
+    return caps;
+}
+
+// An emulated tile of kind 3 -- the model on its own -- or nothing at all.
+// Neither build has a calibration engine or an activation stage.
+static uint32_t pta_caps2(void) {
+    return (tile_kind == NPU_DPI_TILE_MODEL)
+               ? (0x80000000u | ((uint32_t)NPU_DPI_TILE_MODEL << 18)) : 0u;
+}
 
 // ---- CSR field extractors (internal index-based) ----
 #define CSR_CTRL      csr[0]
@@ -102,35 +156,170 @@ void npu_dpi_init(void) {
     pta_bits = 0;
     pta_seed = 0;
     pta_wload_ct = 0;
+    pta_sig_th = 0;
+    pta_sig_sh = 0;
+    pta_sig_pr = 0;
+    pta_drift = 0;
+    pta_xtalk = 0;
+    pta_dmax = 0;
+    pta_shot_ct = 0;
+    pta_sat_ct = 0;
+#ifdef NPU_DPI_WITH_PTA
+    // The tile as the RTL leaves reset: no drift, its generator on its
+    // constant, and the correction stores clear.
+    if (tile_dev_live) {
+        pta_model_reset(&tile_dev, 0);
+        pta_cal_reset(&tile_dev);
+    }
+#endif
+}
+
+// ---- The build ----
+int npu_dpi_set_tile(int kind) {
+    if (kind == NPU_DPI_TILE_NONE) {
+        tile_kind = NPU_DPI_TILE_NONE;
+        return 0;
+    }
+#ifdef NPU_DPI_WITH_PTA
+    if (kind == NPU_DPI_TILE_MODEL) {
+        if (!tile_dev_live) {
+            if (pta_device_init(&tile_dev, &tile_geom) != 0) return -1;
+            tile_dev_live = 1;
+        }
+        tile_kind = NPU_DPI_TILE_MODEL;
+        return 0;
+    }
+#endif
+    return -1;
+}
+
+int npu_dpi_tile(void) {
+    return tile_kind;
 }
 
 // ---- The PTA block ----
 // Returns 1 if addr is one of the block's modelled words and was handled.
 static int pta_csr_write(uint32_t addr, uint32_t data) {
     switch (addr) {
-        case NPU_CSR_PTA_CTRL:   pta_en     = data & 0x1u;     return 1;
-        case NPU_CSR_PTA_IMPAIR: pta_impair = data & 0x7Fu;    return 1;
-        case NPU_CSR_PTA_BITS:   pta_bits   = data & 0x3FFFFu; return 1;
-        case NPU_CSR_PTA_SEED:   pta_seed   = data;            return 1;
+        case NPU_CSR_PTA_CTRL:
+            pta_en = data & NPU_PTA_CTRL_EN;
+#ifdef NPU_DPI_WITH_PTA
+            // Honoured only while idle, as the core's is: a reset under a
+            // running GEMM would change the tile it is running on.
+            if ((data & NPU_PTA_CTRL_MODEL_RST) && !npu_busy && tile_dev_live) {
+                pta_model_reset(&tile_dev, pta_seed);
+                pta_cal_reset(&tile_dev);
+            }
+#endif
+            return 1;
+        case NPU_CSR_PTA_IMPAIR:    pta_impair = data & 0x7Fu;     return 1;
+        case NPU_CSR_PTA_BITS:      pta_bits   = data & 0x3FFFFu;  return 1;
+        case NPU_CSR_PTA_SEED:      pta_seed   = data;             return 1;
+        case NPU_CSR_PTA_SIGMA_TH:  pta_sig_th = data & 0xFFFFu;   return 1;
+        case NPU_CSR_PTA_SIGMA_SH:  pta_sig_sh = data & 0xFFFFu;   return 1;
+        case NPU_CSR_PTA_SIGMA_PR:  pta_sig_pr = data & 0xFFFFu;   return 1;
+        case NPU_CSR_PTA_DRIFT:     pta_drift  = data & 0x1FFFFFu; return 1;
+        case NPU_CSR_PTA_XTALK:     pta_xtalk  = data & 0xFFu;     return 1;
+        case NPU_CSR_PTA_DRIFT_MAX: pta_dmax   = data & 0xFFFFu;   return 1;
         default: return 0;
     }
 }
 
 static int pta_csr_read(uint32_t addr, uint32_t *data) {
     switch (addr) {
-        case NPU_CSR_PTA_ID:       *data = NPU_PTA_ID_VALUE; return 1;
-        case NPU_CSR_PTA_CAPS0:    *data = NPU_PTA_CAPS0;    return 1;
-        case NPU_CSR_PTA_CAPS1:    *data = NPU_PTA_CAPS1;    return 1;
-        case NPU_CSR_PTA_CAPS2:    *data = NPU_PTA_CAPS2;    return 1;
-        case NPU_CSR_PTA_CTRL:     *data = pta_en;           return 1;
-        case NPU_CSR_PTA_STATUS:   *data = npu_busy ? NPU_PTA_STATUS_BUSY : 0u; return 1;
-        case NPU_CSR_PTA_IMPAIR:   *data = pta_impair;       return 1;
-        case NPU_CSR_PTA_BITS:     *data = pta_bits;         return 1;
-        case NPU_CSR_PTA_SEED:     *data = pta_seed;         return 1;
-        case NPU_CSR_PTA_WLOAD_CT: *data = pta_wload_ct;     return 1;
+        case NPU_CSR_PTA_ID:        *data = NPU_PTA_ID_VALUE; return 1;
+        case NPU_CSR_PTA_CAPS0:     *data = NPU_PTA_CAPS0;    return 1;
+        case NPU_CSR_PTA_CAPS1:     *data = pta_caps1();      return 1;
+        case NPU_CSR_PTA_CAPS2:     *data = pta_caps2();      return 1;
+        case NPU_CSR_PTA_CTRL:      *data = pta_en;           return 1;
+        case NPU_CSR_PTA_STATUS:
+            *data = (npu_busy ? NPU_PTA_STATUS_BUSY : 0u) |
+                    (pta_sat_ct ? NPU_PTA_STATUS_SAT : 0u);
+            return 1;
+        case NPU_CSR_PTA_IMPAIR:    *data = pta_impair;       return 1;
+        case NPU_CSR_PTA_BITS:      *data = pta_bits;         return 1;
+        case NPU_CSR_PTA_SEED:      *data = pta_seed;         return 1;
+        case NPU_CSR_PTA_SIGMA_TH:  *data = pta_sig_th;       return 1;
+        case NPU_CSR_PTA_SIGMA_SH:  *data = pta_sig_sh;       return 1;
+        case NPU_CSR_PTA_SIGMA_PR:  *data = pta_sig_pr;       return 1;
+        case NPU_CSR_PTA_DRIFT:     *data = pta_drift;        return 1;
+        case NPU_CSR_PTA_XTALK:     *data = pta_xtalk;        return 1;
+        case NPU_CSR_PTA_SHOT_CT:   *data = pta_shot_ct;      return 1;
+        case NPU_CSR_PTA_WLOAD_CT:  *data = pta_wload_ct;     return 1;
+        case NPU_CSR_PTA_SAT_CT:    *data = pta_sat_ct;       return 1;
+        case NPU_CSR_PTA_DRIFT_MAX: *data = pta_dmax;         return 1;
         default: return 0;
     }
 }
+
+#ifdef NPU_DPI_WITH_PTA
+// One operand element out of DDR, as the exact path below reads it.  The tile
+// is refused for FP16 and BF16 before this is reached, so only the integer
+// packings appear.
+static int32_t tile_operand(uint32_t base, uint32_t idx, uint32_t prec) {
+    if (prec == NPU_PREC_INT16) {
+        uint32_t off = base + idx * 2;
+        return (int16_t)(ddr[off] | (ddr[off + 1] << 8));
+    }
+    if (prec == NPU_PREC_INT4) {
+        int nib = (ddr[base + idx / 2] >> ((idx & 1) * 4)) & 0xF;
+        return (nib >= 8) ? nib - 16 : nib;
+    }
+    return (int8_t)ddr[base + idx];
+}
+
+// The GEMM, on the tile: the registers become a pta_cfg, the operands come out
+// of DDR, and pta_gemm() does the arithmetic.  Returns 0, or -1 if memory ran
+// out or the model declined the shape -- in which case C has not been touched.
+static int gemm_tile(uint32_t m, uint32_t n, uint32_t k, uint32_t prec) {
+    pta_cfg  cfg;
+    int32_t *A, *B;
+    int64_t *C;
+    long     sats;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.impair      = pta_impair;
+    cfg.act_bits    = pta_bits & 0xFu;
+    cfg.w_bits      = (pta_bits >> 4) & 0xFu;
+    cfg.adc_bits    = (pta_bits >> 8) & 0xFu;
+    cfg.adc_shift   = (pta_bits >> 12) & 0x3Fu;
+    cfg.seed        = pta_seed;
+    cfg.sigma_th    = pta_sig_th;
+    cfg.k_shot      = pta_sig_sh;
+    cfg.sigma_pr    = pta_sig_pr;
+    cfg.drift_sigma = pta_drift & 0xFFFFu;
+    cfg.drift_log2  = (pta_drift >> 16) & 0x1Fu;
+    cfg.drift_max   = pta_dmax;
+    cfg.xtalk       = pta_xtalk;
+    /* trim_step and trim_max stay zero: there is no calibration engine here,
+     * and with both zero the tile is the one C1 built. */
+
+    A = (int32_t *)malloc((size_t)m * k * sizeof *A);
+    B = (int32_t *)malloc((size_t)k * n * sizeof *B);
+    C = (int64_t *)malloc((size_t)m * n * sizeof *C);
+    if (!A || !B || !C) { free(A); free(B); free(C); return -1; }
+
+    for (uint32_t i = 0; i < m * k; i++) A[i] = tile_operand(CSR_A_BASE, i, prec);
+    for (uint32_t i = 0; i < k * n; i++) B[i] = tile_operand(CSR_B_BASE, i, prec);
+
+    // Bank 0: no command queue here, so nothing ever flips the bank.
+    sats = pta_gemm(&cfg, &tile_geom, &tile_dev, 0, (int)m, (int)n, (int)k, A, B, C);
+    if (sats < 0) { free(A); free(B); free(C); return -1; }
+
+    // C is the low 32 bits of each ACC_W-bit sum, which is what the DMA writes.
+    for (uint32_t i = 0; i < m * n; i++) {
+        uint32_t v = (uint32_t)(uint64_t)C[i];
+        uint32_t c_addr = CSR_C_BASE + i * 4;
+        ddr[c_addr + 0] = (uint8_t)(v >>  0);
+        ddr[c_addr + 1] = (uint8_t)(v >>  8);
+        ddr[c_addr + 2] = (uint8_t)(v >> 16);
+        ddr[c_addr + 3] = (uint8_t)(v >> 24);
+    }
+    pta_sat_ct = (uint32_t)sats;
+    free(A); free(B); free(C);
+    return 0;
+}
+#endif
 
 // ---- CSR access ----
 void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
@@ -152,14 +341,21 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
 
             if (m == 0 || n == 0 || k == 0) return;
 
-            // There is no tile here, so there is no impairment to apply: this
-            // model can only return the exact product.  Running the GEMM with
-            // PTA_IMPAIR set would hand back exact results under an analog
-            // label, which is why the RTL's digital array refuses the start
-            // (c930_npu_core.sv, pta_bad) -- and so does this.
+            // The core's refusal (c930_npu_core.sv, pta_bad), which is the
+            // same expression in both builds because the built mask is what
+            // differs.  With no tile the mask is empty, so any impairment is
+            // refused: this model could only return the exact product, and
+            // doing that with PTA_IMPAIR set would hand back exact results
+            // under an analog label.  With the tile it refuses what the tile
+            // cannot model -- a bit it does not implement, a float precision,
+            // or an ADC shift past 40.
             if (pta_impair != 0) {
-                npu_error = 1;
-                return;
+                int fp = (prec == NPU_PREC_FP16 || prec == NPU_PREC_BF16);
+                uint32_t shift = (pta_bits >> 12) & 0x3Fu;
+                if ((pta_impair & ~pta_built()) != 0 || fp || shift > 40) {
+                    npu_error = 1;
+                    return;
+                }
             }
 
             // Bounds check: A, B, C must fit in 64KB.
@@ -208,12 +404,31 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
             uint32_t cycles_per_tile = NPU_NUM_ROWS + ps_offset + NPU_NUM_COLS + 2;
             uint32_t total_cycles = m_tiles * n_tiles * k_tiles * cycles_per_tile;
 
+            // The tile, if this build has one and the GEMM is impaired.  An
+            // unimpaired GEMM on a tile is the exact product -- the RTL's C0
+            // gate is that swap being bit-identical -- so it takes the loop
+            // below, as every GEMM does on the array.  Before the counters:
+            // a GEMM the model declines has not run and counts nothing.
+            int tile_ran = 0;
+            pta_sat_ct = 0;
+#ifdef NPU_DPI_WITH_PTA
+            if (tile_kind == NPU_DPI_TILE_MODEL && pta_impair != 0) {
+                if (gemm_tile(m, n, k, prec) != 0) {
+                    npu_error = 1;
+                    return;
+                }
+                tile_ran = 1;
+            }
+#endif
+
             // One weight programming per (N tile, K tile), as the core counts
-            // them in every build.
+            // them in every build, and on a tile a shot per output row of each.
             pta_wload_ct += n_tiles * k_tiles;
+            if (tile_kind == NPU_DPI_TILE_MODEL)
+                pta_shot_ct += m * n_tiles * k_tiles;
 
             // Simulate GEMM: compute C = A x B in software
-            for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t i = 0; !tile_ran && i < m; i++) {
                 for (uint32_t j = 0; j < n; j++) {
                     int32_t sum = 0;
                     for (uint32_t p = 0; p < k; p++) {

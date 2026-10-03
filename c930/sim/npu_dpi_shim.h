@@ -99,25 +99,51 @@ extern "C" {
 // that asks for an impairment, because running it would return an exact GEMM
 // under an analog label.
 //
-// THIS MODEL IS A BUILD WITH NO TILE.  It computes C = A x B exactly, in a C
-// triple loop, so it answers as the digital array does:
+// BY DEFAULT THIS MODEL IS A BUILD WITH NO TILE.  It computes C = A x B exactly,
+// in a C triple loop, so it answers as the digital array does:
 //
 //   PTA_ID      the magic and the map version, as the RTL's
 //   PTA_CAPS0   this model's geometry -- its own, see below
 //   PTA_CAPS1   no impairment built; the weight banks
 //   PTA_CAPS2   zero: no calibration engine, no activation stage, no tile
-//   PTA_IMPAIR, PTA_BITS, PTA_SEED
+//   PTA_IMPAIR, PTA_BITS, PTA_SEED, the three sigmas, PTA_DRIFT, PTA_XTALK,
+//   PTA_DRIFT_MAX
 //               stored and read back, at the RTL's field widths
 //   PTA_CTRL    bit 0 (EN) is stored and read back and enables nothing, there
-//               being no engine.  Every other bit reads zero.
-//   PTA_STATUS  bit 4, the engine's BUSY.  Nothing else can be set here.
+//               being no engine.  Bit 3 (MODEL_RST) is a pulse.  Every other
+//               bit reads zero.
+//   PTA_STATUS  bit 4, the engine's BUSY, and bit 2, SAT (PTA_SAT_CT != 0)
 //   PTA_WLOAD_CT  weight programmings, one per (N tile, K tile), cumulative
 //
 // and a START with PTA_IMPAIR non-zero is REFUSED: STATUS.ERROR, no DONE, C
 // untouched.  Every other word of the block reads zero and ignores writes.
-// A driver that needs the tile's behaviour -- the error model, calibration,
-// the counters that follow shots -- is talking to the wrong model; the tile's
-// arithmetic is sim/pta_tile_model.c, which this file does not link.
+//
+// IT CAN ALSO BE A BUILD WITH A TILE, if it is compiled with NPU_DPI_WITH_PTA
+// and linked with sim/pta_tile_model.c, and npu_dpi_set_tile() asks for one.
+// The tile is that file -- the C reference rtl/pta/c930_ptm_c.sv is held to
+// bit for bit (make core_pta_gates) -- reached through these registers.  Then:
+//
+//   PTA_CAPS1   every impairment but MZM_NL built, as the RTL's tile reports
+//   PTA_CAPS2   an emulated tile of kind 3: the reference model on its own,
+//               with no tile's timing behind it.  No RTL build reports 3.
+//               Still no calibration engine and no activation stage.
+//   a START     with PTA_IMPAIR set RUNS, through pta_gemm(), and C is the
+//               impaired result.  It is refused exactly where the core refuses
+//               it: a bit outside the built mask, FP16 or BF16, or S above 40.
+//   PTA_SHOT_CT   M shots per (N tile, K tile), cumulative
+//   PTA_SAT_CT    ADC saturations in the last GEMM
+//   MODEL_RST     returns drift to zero and reloads its generator from PTA_SEED
+//
+// Drift is device state and survives from one GEMM to the next, as it does in
+// the RTL, until MODEL_RST or npu_dpi_init().  The weight bank is always 0:
+// this model has no command queue, and the RTL's bank only flips when a queued
+// GEMM is prefetched behind the running one.
+//
+// WHAT THE TILE BUILD STILL IS NOT.  It has no calibration engine (PTA_CAL_*,
+// PTA_GAIN, PTA_OFFS, PTA_TRIM read zero), none of PTA_CTRL's loop-order or
+// residency modes, and no timing: PTA_TW and PTA_TS read zero and the cycle
+// counters are the ones grxcp's gap register already says not to quote.  It is
+// the model's arithmetic behind the register map, and nothing more.
 //
 // CAPS0 reports THIS MODEL'S geometry, which is the 4 x 4 array its cycle model
 // has always used, and not the SoC's: c930_soc_top has been 8 x 8 since the
@@ -132,11 +158,28 @@ extern "C" {
 #define NPU_CSR_PTA_IMPAIR    0x40000148u   // RW: [6:0] one bit per impairment
 #define NPU_CSR_PTA_BITS      0x4000014cu   // RW: [3:0] B_a [7:4] B_w [11:8] B_adc [17:12] S
 #define NPU_CSR_PTA_SEED      0x40000150u   // RW
+#define NPU_CSR_PTA_SIGMA_TH  0x40000154u   // RW: [15:0] thermal sigma, Q8.8 ADC LSB
+#define NPU_CSR_PTA_SIGMA_SH  0x40000158u   // RW: [15:0] shot coefficient k, Q8.8
+#define NPU_CSR_PTA_SIGMA_PR  0x4000015cu   // RW: [15:0] programming sigma, Q8.8 weight LSB
+#define NPU_CSR_PTA_DRIFT     0x40000160u   // RW: [15:0] step sigma Q8.8, [20:16] log2 shots a step
+#define NPU_CSR_PTA_XTALK     0x40000164u   // RW: [7:0] chi, Q0.8
+#define NPU_CSR_PTA_SHOT_CT   0x40000180u   // R:  optical shots issued (a tile build only)
 #define NPU_CSR_PTA_WLOAD_CT  0x40000184u   // R:  weight-bank programmings
+#define NPU_CSR_PTA_SAT_CT    0x40000188u   // R:  ADC saturations, the last GEMM
+#define NPU_CSR_PTA_DRIFT_MAX 0x400001d0u   // RW: [15:0] drift clamp, Q8.8 weight LSB
 
 #define NPU_PTA_ID_VALUE      0x50544101u   // "PTA", map version 1
 #define NPU_PTA_ID_MAGIC      0x50544100u
+#define NPU_PTA_CTRL_EN        0x01u
+#define NPU_PTA_CTRL_MODEL_RST 0x08u
+#define NPU_PTA_STATUS_SAT    0x04u
 #define NPU_PTA_STATUS_BUSY   0x10u
+
+// ---- What the model is built as ----
+// A build, not a state: npu_dpi_init() resets the registers and the device and
+// leaves this alone, the way a reset does not change what a chip is.
+#define NPU_DPI_TILE_NONE     0   // the digital array (the default)
+#define NPU_DPI_TILE_MODEL    3   // the tile: pta_tile_model.c behind the registers
 
 // ---- DDR size (must match c930_ddr.sv MEM_BYTES) ----
 #define NPU_DDR_SIZE      65536
@@ -167,6 +210,16 @@ extern "C" {
 #define NPU_STATUS_ERROR  0x04
 
 // ---- DPI functions (compatible with npu_dpi.h signatures) ----
+
+// Choose the build.  Call it before npu_dpi_init(), which then brings the
+// chosen build up from reset.  Returns 0, or -1 if the kind is unknown, if this
+// library was compiled without NPU_DPI_WITH_PTA and a tile was asked for, or if
+// the tile's state could not be allocated -- and in each of those cases the
+// build is left as it was.
+int npu_dpi_set_tile(int kind);
+
+// The build in force: NPU_DPI_TILE_NONE or NPU_DPI_TILE_MODEL.
+int npu_dpi_tile(void);
 
 // Reset all CSR and DDR state to zero.
 void npu_dpi_init(void);
