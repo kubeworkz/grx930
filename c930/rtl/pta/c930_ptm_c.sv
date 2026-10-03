@@ -307,9 +307,14 @@ module c930_ptm_c
   logic signed [19:0] e_new;     // this write's programming error, Q.8
 
   // One draw per column captured.  Skewed, that is one column a window, so one
-  // draw; broadside it is every column on one shot, so NUM_COLS of them, taken
-  // in column order -- the same draws in the same order either way, which is
-  // what makes the two readouts agree.  Draw d is d + 1 steps from the state.
+  // draw; broadside it is every column on one shot, taken in column order -- the
+  // same draws in the same order either way, which is what makes the two readouts
+  // agree.  Draw d is d + 1 steps from the state.
+  //
+  // NDRAW sizes the arrays below and is the MOST draws a capture can use.  How far
+  // the state actually advances is n_step, which is the valid column count: a
+  // partial N tile captures fewer than NUM_COLS and the skewed path advances fewer,
+  // so broadside has to as well.
   localparam int NDRAW = BROADSIDE ? NUM_COLS : 1;
   logic [31:0]        rng_th_seq[0:NDRAW];
   logic [31:0]        rng_sh_seq[0:NDRAW];
@@ -362,6 +367,16 @@ module c930_ptm_c
   // ticks below are `hop` unchanged for PTM-C, which must stay bit-identical to the
   // systolic array (C0), and the shot itself for BROADSIDE.
   wire shot_step  = BROADSIDE ? i_pta_shot       : (hop && i_pta_shot);
+  // How far the per-column streams advance on a shot: one draw per column
+  // CAPTURED.  Skewed that is the single column of this window, and the core has
+  // already masked i_pta_shot by nc, so a run advances nc times.  Broadside
+  // captures every valid column at once, so it must advance by that same nc --
+  // NOT by NUM_COLS, which is what it did, and which put the two streams at
+  // different points from the first partial N tile onwards.
+  wire [$clog2(NUM_COLS):0] n_step =
+      BROADSIDE ? ((i_pta_shot_cols == '0) ? ($clog2(NUM_COLS)+1)'(NUM_COLS)
+                                           : i_pta_shot_cols)
+                : ($clog2(NUM_COLS)+1)'(1);
   wire cap_tick   = BROADSIDE ? i_pta_shot       : hop;
   wire drift_tick = BROADSIDE ? i_pta_shot_start : (hop && i_pta_shot_start);
 
@@ -402,9 +417,9 @@ module c930_ptm_c
       rng_pr     <= stream_seed(i_pta_cfg_load ? i_pta_seed : i_pta_cal_seed, K_PROG);
     end else begin
       if (shot_step) begin
-        // NDRAW is 1 skewed, so this is the single step it always was.
-        rng_th <= rng_th_seq[NDRAW];
-        rng_sh <= rng_sh_seq[NDRAW];
+        // n_step is 1 skewed, so this is the single step it always was.
+        rng_th <= rng_th_seq[n_step];
+        rng_sh <= rng_sh_seq[n_step];
       end
       if (i_wen)
         rng_pr <= rng_pr_next;
