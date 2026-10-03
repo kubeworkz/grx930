@@ -166,13 +166,20 @@ module c930_ptm_c
   input  logic                                     i_pta_shot_start, // this window starts a shot
   input  logic                                     i_pta_shot,       // this window's shot is captured
   input  logic [$clog2(NUM_COLS)-1:0]              i_pta_shot_col,   // ... for this column
-  // Valid columns in this capture, 1..NUM_COLS.  ZERO MEANS ALL OF THEM, so an
-  // instantiation that does not drive it behaves as it did before this port
-  // existed -- tb_ptm_c_lockstep.sv has three such.  It only reaches the
-  // saturation count: a partial N tile has fewer valid columns than the array,
-  // and broadside models every column on its one capture, so without this the
-  // inactive ones are counted too.  PTM-C never needed it, because i_pta_shot is
-  // already masked by nc in the core and its one modelled column is always valid.
+  // Valid columns in this capture, 1..NUM_COLS; ZERO MEANS ALL OF THEM.  A
+  // partial N tile has fewer valid columns than the array has, and broadside
+  // models every column on its one capture, so this is what keeps it to the
+  // columns that exist.  It reaches two things: the saturation count, which
+  // would otherwise include the inactive columns, and under BROADSIDE how far
+  // the THERMAL and SHOT streams advance (n_step below).  PTM-C needs neither,
+  // because i_pta_shot is already masked by nc in the core and its one modelled
+  // column is always a valid one.
+  //
+  // DRIVE IT, to zero if there is nothing to say.  An earlier version of this
+  // comment said an instance that left it unconnected behaved as before, which
+  // is true under Verilator, where an unconnected input reads 0, and false under
+  // a 4-state simulator, where it floats: the comparison with zero is then x and
+  // nothing is counted at all.
   input  logic [$clog2(NUM_COLS):0]                i_pta_shot_cols,
   output logic [31:0]                              o_pta_sat_count,
 
