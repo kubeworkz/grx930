@@ -163,6 +163,14 @@ module c930_npu_core
   input  logic                        i_pta_model_rst,
   output logic [31:0]                 o_pta_sat_count,    // ADC saturations, captured elements
 
+  // ---- What this build is (PTA_CAPS0..2, grxcp pta_chiplet_regmap.md 2) ----
+  // Constants.  They are driven from here, and not from parameters handed to
+  // the register block, because PTA_BUILT below is the mask the refusal uses:
+  // the word a driver reads and the starts this core accepts cannot come apart.
+  output logic [31:0]                 o_pta_caps0,        // rows, columns, DIN_W, ACC_W
+  output logic [31:0]                 o_pta_caps1,        // impairments built, banks, widest bits
+  output logic [31:0]                 o_pta_caps2,        // engine, stage, tile kind, emulated
+
   // ---- PTA calibration, phase C3(b) (rtl/pta/c930_pta_cal.sv) ----
   // Core-level like the rest of the PTA ports: the register block is C4's.
   // The engine runs only in a PTM-C build; elsewhere every output is tied off.
@@ -504,6 +512,45 @@ module c930_npu_core
 `else
   localparam logic [6:0] PTA_BUILT = 7'b000_0000;
 `endif
+
+  // The same facts, published.  Until these words existed a driver could learn
+  // what a build had only by asking for it and seeing whether the start was
+  // refused -- sw/pta_test.c found the digital array that way, and searched for
+  // a probe amplitude the tile would take because nothing reported DIN_W.  Both
+  // are a search for a number the hardware already knows.
+  //
+  //   CAPS0  [9:0] rows  [19:10] columns  [25:20] DIN_W  [31:26] ACC_W
+  //   CAPS1  [6:0] impairments built, in PTA_IMPAIR's order   [15:8] weight banks
+  //          [19:16] [23:20] [27:24] the widest activation, weight and ADC bits
+  //          that quantise.  A wider setting is not refused here, it is taken as
+  //          unquantised, which is the quantiser's own rule (bits >= DIN_W).
+  //   CAPS2  [15:0] the shot rate as built, MHz -- zero: this tile's shot is
+  //          PTA_TS core cycles of emulation and has no rate of its own
+  //          [16] calibration engine  [17] activation stage
+  //          [19:18] the tile: 0 none, 1 word-serial (PTM-C), 2 broadside (PTM-B)
+  //          [31] the tile is the error model and not a photonic device.  Only
+  //          meaningful where CAPS1 says a tile is built.
+`ifdef PTM_C
+  localparam int         PTA_QMAX    = (DIN_W - 1 > 15) ? 15 : (DIN_W - 1);
+  localparam logic [3:0] PTA_ADC_MAX = 4'd15;
+  localparam logic       PTA_HAS_CAL = 1'b1;
+ `ifdef PTM_B
+  localparam logic [1:0] PTA_KIND    = 2'd2;
+ `else
+  localparam logic [1:0] PTA_KIND    = 2'd1;
+ `endif
+`else
+  localparam int         PTA_QMAX    = 0;
+  localparam logic [3:0] PTA_ADC_MAX = 4'd0;
+  localparam logic       PTA_HAS_CAL = 1'b0;
+  localparam logic [1:0] PTA_KIND    = 2'd0;
+`endif
+  assign o_pta_caps0 = {6'(ACC_W), 6'(DIN_W), 10'(NUM_COLS), 10'(NUM_ROWS)};
+  assign o_pta_caps1 = {4'd0, PTA_ADC_MAX, 4'(PTA_QMAX), 4'(PTA_QMAX),
+                        8'(NUM_BANKS), 1'b0, PTA_BUILT};
+  assign o_pta_caps2 = {(PTA_BUILT != 7'd0), 11'd0, PTA_KIND,
+                        1'b1,            // S_ACT is in every build of this core
+                        PTA_HAS_CAL, 16'd0};
   wire pta_any = (i_pta_impair != 7'd0);
   wire pta_bad = pta_any &&
                  (((i_pta_impair & ~PTA_BUILT) != 7'd0) ||

@@ -606,14 +606,20 @@ mul_store: $(MS_SW_HEX) verilate-soc4
 # The PTA register block, driven by firmware (phase C4(a))
 #
 # sw/pta_test.c configures the tile through the block at 0x4000_0100 and checks
-# seven things: the decode, the two counters against a GEMM's shape, the tile
-# answering an impairment, a calibration, a START during one, MODEL_RST, and the
-# MZM_NL refusal.  It runs on the Verilator four-core SoC, because that is the
+# eight things: the decode, the two counters against a GEMM's shape, the tile
+# answering an impairment, a calibration, a START during one, MODEL_RST, the
+# MZM_NL refusal, and that PTA_ID and PTA_CAPS0..2 say what the other seven
+# found.  It runs on the Verilator four-core SoC, because that is the
 # only full-SoC harness that finishes at a usable speed -- iverilog manages tens
 # of cycles a second on the L2 + 4 cores, which is what verilate-soc4 exists for.
 #
-#   make pta_fw PTM_C=1     the modelled tile: all seven checks
+#   make pta_fw PTM_C=1     the modelled tile: all eight checks
+#   make pta_fw PTM_B=1     the broadside tile: the same eight
 #   make pta_fw             the digital array, which refuses every impairment
+#
+# The harness is told which of the three it was built as (PTA_BUILD) and holds
+# the identity words to it.  It used to decide that from a macro nothing
+# defined, so the tile builds were never checked for having a tile.
 #
 # Three things had to be fixed before this could pass, and none of them was the
 # register block:
@@ -650,7 +656,8 @@ $(PTA_SW_HEX): $(PTA_SW_BIN) sw/bin2hex.py
 	$(PYTHON) sw/bin2hex.py $(PTA_SW_BIN) $(PTA_SW_HEX)
 
 pta_fw: $(PTA_SW_HEX) verilate-soc4
-	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT) 	  "PTA_FW=$(PTA_SW_HEX)"
+	@bash synth_xilinx/build_soc4_verilator_wsl.sh run pta $(VERIL4_OUT) \
+	  "PTA_FW=$(PTA_SW_HEX) PTA_BUILD=$(if $(filter 1,$(PTM_B)),ptm_b,$(if $(filter 1,$(PTM_C)),ptm_c,array))"
 
 # ---------------------------------------------------------------------------
 # C4(c): section 6.2's sweep, on the SoC, driven by a RISC-V program.

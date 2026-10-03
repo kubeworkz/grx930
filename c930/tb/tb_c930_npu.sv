@@ -618,6 +618,10 @@ module tb_c930_npu;
   // NPU1's window on the SoC).  Everything here goes through the AXI-Lite slave a
   // driver uses, and the values are worked out by hand from the contract rather
   // than read out of a model.
+  localparam logic [31:0] P_ID     = 32'h100;
+  localparam logic [31:0] P_CAPS0  = 32'h104;
+  localparam logic [31:0] P_CAPS1  = 32'h108;
+  localparam logic [31:0] P_CAPS2  = 32'h10C;
   localparam logic [31:0] P_CTRL   = 32'h140;
   localparam logic [31:0] P_STATUS = 32'h144;
   localparam logic [31:0] P_IMPAIR = 32'h148;
@@ -657,13 +661,86 @@ module tb_c930_npu;
     pta_c_elem = $signed(mem[(C_BASE >> 2) + idx]);
   endfunction
 
+  // One START carrying a single impairment bit, on a 4x4x4 all-ones GEMM, and
+  // whether the engine refused it.  It waits for DONE or ERROR and not for BUSY
+  // to drop: a refused start goes busy first -- the DMA loads the operands and
+  // only then learns the core would not start -- and an accepted one is not
+  // busy yet on the first read.
+  task automatic pta_try(input logic [6:0] impair, output logic refused);
+    logic [31:0] st;
+    int polls;
+    for (int i = 0; i < 16; i++) begin
+      mem_store8(A_BASE + i, 8'h01);
+      mem_store8(B_BASE + i, 8'h01);
+    end
+    axi_write(P_IMPAIR, {25'd0, impair});
+    axi_write(32'h14, A_BASE);
+    axi_write(32'h18, B_BASE);
+    axi_write(32'h1C, C_BASE);
+    axi_write(32'h20, 32'h0);
+    axi_write(32'h08, 32'd4);
+    axi_write(32'h0C, 32'd4);
+    axi_write(32'h10, 32'd4);
+    axi_write(32'h00, 32'h1);
+    st = 32'h0;
+    polls = 0;
+    while ((st & 32'h6) === 32'h0 && polls < 4000) begin
+      axi_read(32'h04, st);
+      polls++;
+    end
+    if ((st & 32'h6) === 32'h0)
+      $fatal(1, "[PTA] IMPAIR %h: neither DONE nor ERROR after %0d polls", impair, polls);
+    while ((st & 32'h1) !== 32'h0)
+      axi_read(32'h04, st);
+    refused = ((st & 32'h4) !== 32'h0);
+  endtask
+
   task automatic test_pta_regs();
     logic [31:0] v, st, shots0, shots1, wload0, wload1;
     logic [31:0] ct0, ct1, found, left, occ;
+    logic [31:0] caps0, caps1, caps2;
+    logic [6:0]  built;
+    logic        refused;
     int m, n, k, moved;
 
     m = 8; n = 8; k = 16;            // 1 N tile, 2 K tiles: 16 shots, 2 loads
     $display("[PTA] the register block at 0x100");
+
+    // ---- identity: what this build is, read and not probed for ------------
+    // The words by hand, for this bench's 8 x 8 tile of 8-bit operands, 48-bit
+    // sums and two banks -- and then field by field against the parameters the
+    // DUT was built with, so a bench resized later fails on the hand-written
+    // word and says which field moved.
+    axi_read(P_ID,    v);     pta_expect("PTA_ID", v, 32'h5054_4101);
+    axi_read(P_CAPS0, caps0); pta_expect("PTA_CAPS0", caps0, 32'hC080_2008);
+    axi_read(P_CAPS1, caps1);
+    axi_read(P_CAPS2, caps2);
+`ifdef PTM_C
+    pta_expect("PTA_CAPS1", caps1, 32'h0F77_025F);   // all but MZM_NL; 7, 7, 15
+ `ifdef PTM_B
+    pta_expect("PTA_CAPS2", caps2, 32'h800B_0000);   // broadside, engine, stage
+ `else
+    pta_expect("PTA_CAPS2", caps2, 32'h8007_0000);   // word-serial, engine, stage
+ `endif
+`else
+    pta_expect("PTA_CAPS1", caps1, 32'h0000_0200);   // nothing built, two banks
+    pta_expect("PTA_CAPS2", caps2, 32'h0002_0000);   // the stage, and no tile
+`endif
+    pta_expect("CAPS0 rows",    {22'd0, caps0[9:0]},   NUM_ROWS);
+    pta_expect("CAPS0 columns", {22'd0, caps0[19:10]}, NUM_COLS);
+    pta_expect("CAPS0 DIN_W",   {26'd0, caps0[25:20]}, DIN_W);
+    pta_expect("CAPS0 ACC_W",   {26'd0, caps0[31:26]}, ACC_W);
+    built = caps1[6:0];
+    // Read-only: a write is taken and changes nothing.
+    axi_write(P_ID,    32'hFFFF_FFFF);
+    axi_write(P_CAPS0, 32'hFFFF_FFFF);
+    axi_write(P_CAPS1, 32'hFFFF_FFFF);
+    axi_write(P_CAPS2, 32'hFFFF_FFFF);
+    axi_read(P_ID,    v); pta_expect("PTA_ID after a write", v, 32'h5054_4101);
+    axi_read(P_CAPS0, v); pta_expect("PTA_CAPS0 after a write", v, caps0);
+    axi_read(P_CAPS1, v); pta_expect("PTA_CAPS1 after a write", v, caps1);
+    axi_read(P_CAPS2, v); pta_expect("PTA_CAPS2 after a write", v, caps2);
+    $display("[PTA]   [PASS] PTA_ID, and CAPS %h %h %h, read-only", caps0, caps1, caps2);
 
     // ---- the decode reads back, and 0x00-0x3C is untouched ----------------
     axi_write(P_SEED,   32'h12345678);
@@ -819,6 +896,28 @@ module tb_c930_npu;
     if (pta_c_elem(0) !== 4)
       $fatal(1, "[PTA] after the refusal C[0] = %0d, expected 4", pta_c_elem(0));
     $display("[PTA]   [PASS] MZM_NL refused, and the next valid start cleared it");
+
+    // ---- the word a driver reads agrees with the starts the core accepts ---
+    // CAPS1's mask is only worth reading if it is the same fact as the refusal,
+    // so every bit is tried on its own: one the word says is built must run, and
+    // one it says is not must be refused.  On the digital array that is all
+    // seven refused -- which no test here asked before, since MZM_NL above is
+    // refused by every build and says nothing about the other six.
+    axi_write(P_BITS, 32'h0);
+    moved = 0;
+    for (int b = 0; b < 7; b++) begin
+      pta_try(7'(1 << b), refused);
+      if (refused !== !built[b])
+        $fatal(1, "[PTA] IMPAIR bit %0d: CAPS1 says built = %b, the start was %s",
+               b, built[b], refused ? "refused" : "accepted");
+      if (refused) moved++;
+    end
+    axi_write(P_IMPAIR, 32'h0);
+    pta_ones_gemm(4, 4, 4);
+    if (pta_c_elem(0) !== 4)
+      $fatal(1, "[PTA] after the per-bit starts C[0] = %0d, expected 4", pta_c_elem(0));
+    $display("[PTA]   [PASS] CAPS1 %b agrees with the starts: %0d of 7 refused",
+             built, moved);
   endtask
 
   // ---------------------------------------------------------------------------

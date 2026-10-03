@@ -98,6 +98,49 @@ extern "C" {
 // and the three places where the block differs from the CPU document's 3.1.
 #define PTA_BASE            (NPU0_BASE + 0x100u)
 
+/* Identity, at the block's own 0x000 as the chiplet's map has it (grxcp
+ * pta_chiplet_regmap.md section 2).  The block is in every build, tile or no
+ * tile, and PTA_CTRL and PTA_IMPAIR read back on a digital array as they do on
+ * a tile -- so these four read-only words are the only thing a driver can READ
+ * that tells the two apart.  A register file that predates them reads zero at
+ * PTA_REG_ID, which is not the magic, and a driver must then treat everything
+ * below as unknown rather than as "no tile". */
+#define PTA_REG_ID          (PTA_BASE + 0x00)   // R: [31:8] "PTA", [7:0] map version
+#define PTA_REG_CAPS0       (PTA_BASE + 0x04)   // R: the tile's geometry and widths
+#define PTA_REG_CAPS1       (PTA_BASE + 0x08)   // R: impairments built, banks, widest bits
+#define PTA_REG_CAPS2       (PTA_BASE + 0x0c)   // R: engine, stage, tile kind, emulated
+
+#define PTA_ID_MAGIC        0x50544100u         // "PTA" in [31:8]
+#define PTA_ID_IS_PTA(id)   (((id) & 0xFFFFFF00u) == PTA_ID_MAGIC)
+#define PTA_ID_VERSION(id)  ((id) & 0xFFu)
+
+#define PTA_CAPS0_ROWS(c)   ((c) & 0x3FFu)             // k: inputs a shot sums
+#define PTA_CAPS0_COLS(c)   (((c) >> 10) & 0x3FFu)     // n: outputs a shot yields
+#define PTA_CAPS0_DIN_W(c)  (((c) >> 20) & 0x3Fu)      // operand width, bits
+#define PTA_CAPS0_ACC_W(c)  (((c) >> 26) & 0x3Fu)      // accumulator width, bits
+
+#define PTA_CAPS1_BUILT(c)  ((c) & 0x7Fu)              // PTA_IMP_* this build accepts
+#define PTA_CAPS1_BANKS(c)  (((c) >> 8) & 0xFFu)
+#define PTA_CAPS1_ABITS(c)  (((c) >> 16) & 0xFu)       // widest B_a that quantises
+#define PTA_CAPS1_WBITS(c)  (((c) >> 20) & 0xFu)       // widest B_w that quantises
+#define PTA_CAPS1_ADCBITS(c) (((c) >> 24) & 0xFu)      // widest B_adc
+
+#define PTA_CAPS2_SHOT_MHZ(c) ((c) & 0xFFFFu)          // 0: an emulation, no rate
+#define PTA_CAPS2_HAS_CAL   0x00010000u                // the calibration engine
+#define PTA_CAPS2_HAS_ACT   0x00020000u                // S_ACT
+#define PTA_CAPS2_TILE(c)   (((c) >> 18) & 3u)         // PTA_TILE_*
+#define PTA_CAPS2_EMULATED  0x80000000u                // the error model, not photonics
+
+#define PTA_TILE_NONE       0u                         // the digital array
+#define PTA_TILE_SERIAL     1u                         // PTM-C, word-serial readout
+#define PTA_TILE_BROADSIDE  2u                         // PTM-B
+
+/* The probe amplitudes PTA_CAL_CFG accepts, from what CAPS0 reports and the
+ * activation bits in PTA_BITS: [DIN_W - B_a, DIN_W - 2].  Before CAPS0 a driver
+ * had to search for one. */
+#define PTA_CAL_AMP_MAX(caps0)      (PTA_CAPS0_DIN_W(caps0) - 2u)
+#define PTA_CAL_AMP_MIN(caps0, ba)  (PTA_CAPS0_DIN_W(caps0) - (ba))
+
 #define PTA_REG_CTRL        (PTA_BASE + 0x40)   // RW: [0] EN [1] CAL_NOW [3] MODEL_RST [5:4] CAL_SCHED
 #define PTA_REG_STATUS      (PTA_BASE + 0x44)   // R:  see PTA_ST_* below
 #define PTA_REG_IMPAIR      (PTA_BASE + 0x48)   // RW: [6:0] one bit per impairment

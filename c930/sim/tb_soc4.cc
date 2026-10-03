@@ -1062,16 +1062,19 @@ static int run_pta(Vc930_soc4_verilator *top) {
     const int M = 8, N = 8, K = 16;          // 1 N tile, 2 K tiles
     const uint32_t A = 0x1000, B = 0x2000, C = 0x3000;
     const uint32_t DIMS = 0x9400, DONE = 0x9410, RESULT = 0x9420;
-    const uint32_t REC = 0x9430, DIAG = 0x9480, PHASE = 0x9490;
+    const uint32_t REC = 0x9430, DIAG = 0x9480, PHASE = 0x9490, IDENT = 0x94A0;
     const uint32_t PASS_MAGIC = 0x0BADBEEF;
 
     printf("[TB] 4-core SoC (L2 ACTIVE) -- PTA mode: the register block, "
            "driven by firmware\n");
-#ifdef PTM_C_BUILD
-    printf("[TB] build: PTM-C, the modelled tile\n");
-#else
-    printf("[TB] build: reported by the firmware (see DIAG bit 8)\n");
-#endif
+    // Which build this is, from whoever chose it.  This used to be an #ifdef on
+    // PTM_C_BUILD, which nothing ever defined: the branch that failed a tile
+    // build for refusing its impairments was never compiled, and `make pta_fw
+    // PTM_C=1` would have passed on a digital array.  The Makefile knows what
+    // it built and says so here.
+    const char *build_s = getenv("PTA_BUILD");
+    const std::string build = build_s ? build_s : "";
+    printf("[TB] build: %s\n", build.empty() ? "NOT GIVEN" : build.c_str());
 
     top->i_rst_n = 0;
     top->i_tb_wr_en = 0;
@@ -1094,6 +1097,7 @@ static int run_pta(Vc930_soc4_verilator *top) {
     // Every slot the report reads: a build that skips a test leaves its slots
     // alone, and an uninitialised DDR word would be read as its answer.
     for (int i = 0; i < 20; i++) preload_word(top, REC + i * 4, 0);
+    for (int i = 0; i < 4; i++) preload_word(top, IDENT + i * 4, 0);
 
     printf("[TB] image preloaded, M=%d N=%d K=%d all ones. Booting CPU0.\n",
            M, N, K);
@@ -1144,15 +1148,23 @@ static int run_pta(Vc930_soc4_verilator *top) {
            ddr_word(top, REC + 40), ddr_word(top, REC + 44),
            ddr_word(top, REC + 48));
     // The probe amplitude is a bit position relative to the tile's operand
-    // width, which no register reports, so the firmware finds one the tile
-    // accepts and this says which -- 14 on this SoC's 16-bit tile, 6 on
-    // tb_c930_npu's 8-bit one.  0xBAD means a calibration never started.
+    // width.  PTA_CAPS0 reports that width now, and T8 holds the amplitude the
+    // firmware finds by searching to the bound the word gives -- 14 on this
+    // SoC's 16-bit tile, 6 on tb_c930_npu's 8-bit one.  0xBAD means a
+    // calibration never started.
     printf("[TB]   probe amplitude 1 << %u%s\n", ddr_word(top, REC + 64),
            ddr_word(top, REC + 68) == 0xBAD ? " (and none ever started)" : "");
     printf("[TB]   refusal %u, then ran %u\n",
            ddr_word(top, REC + 52), ddr_word(top, REC + 56));
 
-    static const struct { uint32_t bit; const char *what; } checks[7] = {
+    const uint32_t id    = ddr_word(top, IDENT + 0);
+    const uint32_t caps0 = ddr_word(top, IDENT + 4);
+    const uint32_t caps1 = ddr_word(top, IDENT + 8);
+    const uint32_t caps2 = ddr_word(top, IDENT + 12);
+    printf("[TB]   PTA_ID 0x%08x CAPS0 0x%08x CAPS1 0x%08x CAPS2 0x%08x\n",
+           id, caps0, caps1, caps2);
+
+    static const struct { uint32_t bit; const char *what; } checks[8] = {
         {0x001, "T1 the decode reads back"},
         {0x002, "T2 the counters match the shape"},
         {0x004, "T3 the tile is listening"},
@@ -1160,24 +1172,60 @@ static int run_pta(Vc930_soc4_verilator *top) {
         {0x010, "T5 a START during it queued"},
         {0x020, "T6 MODEL_RST cleared the correction"},
         {0x040, "T7 MZM_NL refused, then cleared"},
+        {0x080, "T8 the identity words agree with what T2-T7 observed"},
     };
     int fails = 0;
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         bool ok = (diag & checks[i].bit) != 0;
         printf("[TB]   %s %s\n", ok ? "[PASS]" : "[FAIL]", checks[i].what);
         if (!ok) fails++;
     }
     if (res != PASS_MAGIC) { printf("[TB]   [FAIL] RESULT is not PASS\n"); fails++; }
-    // The firmware cannot know which tile it was given; this harness can.
+
+    // The words themselves, against the build this harness was told it has and
+    // the parameters sim/c930_soc4_verilator.sv gives the SoC: an 8 x 8 tile of
+    // 16-bit operands and 48-bit sums, with Nt * Kt = 2 * 2 banks.  Written out
+    // by hand rather than recomputed, so the RTL's packing is checked against
+    // something that is not the RTL's packing.
     bool digital = (diag & 0x100) != 0;
-#ifdef PTM_C_BUILD
-    if (digital) { printf("[TB]   [FAIL] a PTM-C build refused its impairments\n"); fails++; }
-    else printf("[TB]   [PASS] the build has a modelled tile\n");
-#else
-    printf("[TB]   the firmware reports %s\n",
-           digital ? "a digital array, which refused every impairment"
-                   : "a modelled tile");
-#endif
+    uint32_t want1 = 0, want2 = 0;
+    bool known = true;
+    if (build == "array")      { want1 = 0x00000400u; want2 = 0x00020000u; }
+    else if (build == "ptm_c") { want1 = 0x0FFF045Fu; want2 = 0x80070000u; }
+    else if (build == "ptm_b") { want1 = 0x0FFF045Fu; want2 = 0x800B0000u; }
+    else known = false;
+    if (!known) {
+        printf("[TB]   [FAIL] PTA_BUILD is '%s': the harness has to be told "
+               "array, ptm_c or ptm_b, or it cannot hold the words to anything\n",
+               build.c_str());
+        fails++;
+    } else {
+        struct { const char *what; uint32_t got, want; } words[4] = {
+            {"PTA_ID",    id,    0x50544101u},
+            {"PTA_CAPS0", caps0, 0xC1002008u},
+            {"PTA_CAPS1", caps1, want1},
+            {"PTA_CAPS2", caps2, want2},
+        };
+        for (auto &w : words) {
+            bool ok = (w.got == w.want);
+            printf("[TB]   %s %s 0x%08x%s\n", ok ? "[PASS]" : "[FAIL]", w.what,
+                   w.got, ok ? "" : " -- not what this build should report");
+            if (!ok) fails++;
+        }
+        // And the firmware's own finding, which is the check the dead #ifdef
+        // was meant to make: a tile build that refused QUANT, or an array that
+        // took it, is a broken build whatever its words say.
+        const bool want_digital = (build == "array");
+        if (digital != want_digital) {
+            printf("[TB]   [FAIL] a %s build %s its impairments\n", build.c_str(),
+                   digital ? "refused" : "accepted");
+            fails++;
+        } else {
+            printf("[TB]   [PASS] the build %s, which is what PTA_BUILD=%s says\n",
+                   digital ? "refused every impairment" : "has a modelled tile",
+                   build.c_str());
+        }
+    }
 
     if (fails) { printf("[TB] FAIL: %d checks\n", fails); return 1; }
     printf("[TB] PASS: the PTA register block, through MMIO, in %d cycles\n", c);
