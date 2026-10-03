@@ -146,7 +146,7 @@ module tb_ptm_c_lockstep;
     .i_pta_sigma_th(16'd0), .i_pta_k_shot(16'd0), .i_pta_sigma_pr(16'd0), \
     .i_pta_drift_sigma(16'd0), .i_pta_drift_log2(5'd0), .i_pta_drift_max(16'd0), \
     .i_pta_xtalk(8'd0), .i_pta_model_rst(1'b0), .i_pta_shot_start(1'b0), .i_pta_shot(1'b0), \
-    .i_pta_shot_col('0), .o_pta_sat_count(), \
+    .i_pta_shot_col('0), .i_pta_shot_cols('0), .o_pta_sat_count(), \
     .i_pta_trim_wen(1'b0), .i_pta_trim_bank(1'b0), .i_pta_trim_row('0), \
     .i_pta_trim_col('0), .i_pta_trim_data('0), .i_pta_trim_log2(4'd0), \
     .i_pta_trim_max(16'd0), .o_pta_trim_rdata(), .o_pta_trim_clamped(), \
