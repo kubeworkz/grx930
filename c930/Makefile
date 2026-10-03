@@ -220,6 +220,23 @@ $(OUT_HAZARD): $(CORE_RTL) tb/tb_hazard_csrflush.sv
 hazard: $(OUT_HAZARD)
 	$(VVP) $(OUT_HAZARD)
 
+# An MMIO load's data across a frozen pipeline.  The D-cache releases its stall
+# when the response arrives; if an I-cache fill is holding the pipe just then the
+# load waits in MEM, and on the four-core SoC the response bus can be another
+# core's before the fill ends.  The D-cache has to go on presenting the load's
+# own data until it leaves.  Found by `make pta_fw PTM_B=1`, where a register
+# that read 0x0a80 on the bus was stored as zero (doc/dcache_mmio_read_hold.md).
+OUT_DC_HOLD := $(BUILD_DIR)/tb_dcache_mmio_hold.vvp
+
+$(OUT_DC_HOLD): $(CORE_RTL) tb/tb_dcache_mmio_hold.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -s tb_dcache_mmio_hold -o $@ $(CORE_RTL) tb/tb_dcache_mmio_hold.sv
+
+dcache_mmio_hold: $(OUT_DC_HOLD)
+	$(VVP) $(OUT_DC_HOLD)
+
+.PHONY: dcache_mmio_hold
+
 # Dual-DUT equivalence gate for the (retimed) forwarding selects: the
 # production unit and the pristine reference module
 # (tb/riscv_core_hazard_unit_ref.sv) see identical randomized stimulus through

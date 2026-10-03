@@ -109,6 +109,25 @@ logic                            o_amo_result_pending;
 logic [CORE_DATA_WIDTH-1:0]      amo_old_value;
 logic [CORE_DATA_WIDTH-1:0]      mux_to_core;
 
+// Latched copy of an MMIO read's data, for the same reason and in the same
+// shape as the AMO result above.  The controller releases its stall on the
+// cycle the response arrives; if an independent stall (an I-cache fill, through
+// the hazard unit's stall_wb) is holding the pipe just then, the load stays in
+// MEM and MMIO_RD_RETIRE waits for it with the request deasserted.  It keeps
+// the MMIO input selected for that whole wait, and that input is only this
+// core's while its request holds the bridge: on a multi-core SoC the response
+// bus is shared (c930_mmio_arb hands every core the same read data), and with
+// the request gone the arbiter serves whoever asks next.  The parked secondary
+// cores poll CORE*_RELEASE through the same bridge every few hundred cycles;
+// when a poll landed inside the wait, the bus carried its zero and the load
+// took THAT to WB.
+// Observed on the four-core SoC as PTA_ERR_FOUND reading 0x0a80 on the bus and
+// zero in the register (c930/tb/tb_dcache_mmio_hold.sv, make dcache_mmio_hold).
+// The live input is used on the done cycle itself, so an unfrozen load is
+// exactly as fast as it was.
+logic [CORE_DATA_WIDTH-1:0]      mmio_rd_data_r;
+logic [CORE_DATA_WIDTH-1:0]      mmio_rd_data_held;
+
 
 ////////////////////////////////
 //      BLOCK INSTANTIATION   //
@@ -167,10 +186,19 @@ dcache_mux
 (
   .i_mux3x1_in0 (cache_mem_out)
   ,.i_mux3x1_in1(sc_out)
-  ,.i_mux3x1_in2(i_mmio_read_data)
+  ,.i_mux3x1_in2(mmio_rd_data_held)
   ,.i_mux3x1_sel({mmio_read_sel, i_sc})
   ,.o_mux3x1_out(mux_to_core)
 );
+
+always_ff @(posedge i_clk, negedge i_rst_n) begin : MMIO_RD_DATA_REG
+    if (!i_rst_n)
+        mmio_rd_data_r <= '0;
+    else if (i_mmio_read_done)
+        mmio_rd_data_r <= i_mmio_read_data;
+end
+
+assign mmio_rd_data_held = i_mmio_read_done ? i_mmio_read_data : mmio_rd_data_r;
 
 // Present the latched AMO result while a serviced AMO is still pending
 // deassertion (its MEM->WB capture was delayed by an independent stall).
