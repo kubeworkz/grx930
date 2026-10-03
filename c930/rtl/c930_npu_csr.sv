@@ -61,6 +61,7 @@
 //   0x000-0x03C  this file's own registers, unchanged
 //   0x040-0x07F  NPU1's CSR window -- routed away by the SoC, never seen here
 //   0x0F0-0x0FC  the MMIO bridge's HART_ID and CORE*_RELEASE, likewise
+//   0x100-0x10C  PTA_ID and PTA_CAPS0..2, read-only: what this build is
 //   0x140-0x1DC  the PTA block: CTRL, STATUS, IMPAIR, BITS, SEED, the sigmas,
 //                DRIFT, XTALK, TW, TS, CAL_PER, CAL_THR, CAL_CT, CAL_CYC,
 //                SHOT_CT, WLOAD_CT, SAT_CT, ERR_MAX, GAIN[j], OFFS[j],
@@ -75,6 +76,16 @@
 // interrupt block for PTA_IRQ_STATUS.ERR to live in.  And MODEL_RST clears the
 // correction stores with the model, which is what the calibration document says
 // it does, so this file clears its own copies of GAIN and OFFS with them.
+//
+// Identity, at the block's own 0x000 as the chiplet's map has it (grxcp
+// pta_chiplet_regmap.md section 2).  The block is in every build of this file,
+// tile or no tile, so PTA_CTRL and PTA_IMPAIR write and read back on a digital
+// array exactly as they do on a tile -- and before these four words nothing a
+// driver could READ told the two apart.  PTA_ID is this file's: a magic, so a
+// register file that predates the block (where 0x100 aliases CTRL and reads
+// zero) is distinguishable from one that has it, and the version of the map.
+// PTA_CAPS0..2 are the core's, wired straight through, because the core is
+// what knows which impairments it will accept.  Writes to all four are ignored.
 //
 // Every address above 0x3F that the SoC does not route elsewhere still falls
 // through to this slave and aliases modulo 1 KB, as it aliased modulo 64 bytes
@@ -231,6 +242,11 @@ module c930_npu_csr
   input  logic [31:0] i_pta_sat_count,
   input  logic [23:0] i_pta_err_max,
   input  logic [23:0] i_pta_err_found,
+  // What the core was built as (its o_pta_caps0..2).  Constants; a bench with
+  // no core behind this file leaves them unconnected and never reads them.
+  input  logic [31:0] i_pta_caps0,
+  input  logic [31:0] i_pta_caps1,
+  input  logic [31:0] i_pta_caps2,
 
   // ---- FIFO head (next GEMM params for cross-GEMM prefetch) ----
   output logic        o_fifo_valid,    // 1 when FIFO has a queued command
@@ -289,6 +305,15 @@ module c930_npu_csr
   localparam logic [7:0] A_PTA_TRIM      = 8'h76;
   localparam logic [7:0] A_PTA_CAL_SEED  = 8'h77;
   localparam logic [7:0] A_PTA_ERR_FOUND = 8'h7C; // 0x1F0
+  // Identity: the block's own 0x000-0x00C, which is 0x100-0x10C here.
+  localparam logic [7:0] A_PTA_ID    = 8'h40;   // 0x100
+  localparam logic [7:0] A_PTA_CAPS0 = 8'h41;
+  localparam logic [7:0] A_PTA_CAPS1 = 8'h42;
+  localparam logic [7:0] A_PTA_CAPS2 = 8'h43;
+  // "PTA", then the version of this map.  Version 1 is the map with these four
+  // words in it; a register file without them reads zero here.
+  localparam logic [31:0] PTA_ID_VALUE = 32'h5054_4101;
+
   // An NPU counter, not a PTA one, in the PTA block's spare space: NPU0's own
   // counter window (0x00-0x3C) is full and 0x40 upward is NPU1's.  Named for what
   // it counts rather than where it sits -- being starved of operands is a host
@@ -1030,6 +1055,10 @@ module c930_npu_csr
                                  endcase
                          default: s_axi_rdata <= 32'd0;
                        endcase
+          A_PTA_ID:        s_axi_rdata <= PTA_ID_VALUE;
+          A_PTA_CAPS0:     s_axi_rdata <= i_pta_caps0;
+          A_PTA_CAPS1:     s_axi_rdata <= i_pta_caps1;
+          A_PTA_CAPS2:     s_axi_rdata <= i_pta_caps2;
           A_PTA_CTRL:      s_axi_rdata <= {20'd0,
                                            pta_pf2_off, pta_stage_a,
                                            pta_morder, pta_wskip, pta_resident,

@@ -9,6 +9,12 @@
 //   4. All DDR access is bounds-checked; overflow sets STATUS.ERROR
 //   5. Precision modes are respected in the GEMM computation and the cycle
 //      model uses SoC defaults (NUM_ROWS=4, NUM_COLS=4, MAX_N=12)
+//
+// The PTA register block (grxcp's S1).  The RTL's register file has the block
+// in every build, so this model answers on it too -- as the build it is, which
+// is one with no photonic tile.  See npu_dpi_shim.h for exactly what is
+// modelled; the short form is identity, the three registers a driver reads to
+// describe a GEMM, and the refusal of any START that asks for an impairment.
 // -----------------------------------------------------------------------------
 
 #include "npu_dpi_shim.h"
@@ -33,6 +39,29 @@ static int      npu_error;      // mirrors STATUS bit 2
 #define NPU_NUM_ROWS  4
 #define NPU_NUM_COLS  4
 #define NPU_MAX_N     12  // SoC default (not core default of 8)
+#define NPU_MAX_K     16  // SoC default
+#define NPU_DIN_W     16  // the SoC's operand width
+#define NPU_ACC_W     48
+
+// ---- PTA block state ----
+// No tile in this model, so nothing here changes what a GEMM computes: these
+// are the registers a driver reads back, and the mask the refusal tests.
+static uint32_t pta_en;        // PTA_CTRL bit 0
+static uint32_t pta_impair;    // PTA_IMPAIR[6:0]
+static uint32_t pta_bits;      // PTA_BITS[17:0]
+static uint32_t pta_seed;      // PTA_SEED
+static uint32_t pta_wload_ct;  // PTA_WLOAD_CT
+
+// The words c930_npu_core drives as o_pta_caps0..2, for this model's geometry.
+// Banks are the SoC's rule: one per (N tile, K tile) of the largest shape.
+#define NPU_PTA_BANKS \
+    (((NPU_MAX_N + NPU_NUM_COLS - 1) / NPU_NUM_COLS) * \
+     ((NPU_MAX_K + NPU_NUM_ROWS - 1) / NPU_NUM_ROWS))
+#define NPU_PTA_CAPS0 \
+    ((uint32_t)NPU_NUM_ROWS | ((uint32_t)NPU_NUM_COLS << 10) | \
+     ((uint32_t)NPU_DIN_W << 20) | ((uint32_t)NPU_ACC_W << 26))
+#define NPU_PTA_CAPS1 ((uint32_t)NPU_PTA_BANKS << 8)   // nothing built
+#define NPU_PTA_CAPS2 0u                               // no engine, stage or tile
 
 // ---- CSR field extractors (internal index-based) ----
 #define CSR_CTRL      csr[0]
@@ -68,10 +97,44 @@ void npu_dpi_init(void) {
     npu_cycles_left = 0;
     npu_busy_cycles = 0;
     npu_error = 0;
+    pta_en = 0;
+    pta_impair = 0;
+    pta_bits = 0;
+    pta_seed = 0;
+    pta_wload_ct = 0;
+}
+
+// ---- The PTA block ----
+// Returns 1 if addr is one of the block's modelled words and was handled.
+static int pta_csr_write(uint32_t addr, uint32_t data) {
+    switch (addr) {
+        case NPU_CSR_PTA_CTRL:   pta_en     = data & 0x1u;     return 1;
+        case NPU_CSR_PTA_IMPAIR: pta_impair = data & 0x7Fu;    return 1;
+        case NPU_CSR_PTA_BITS:   pta_bits   = data & 0x3FFFFu; return 1;
+        case NPU_CSR_PTA_SEED:   pta_seed   = data;            return 1;
+        default: return 0;
+    }
+}
+
+static int pta_csr_read(uint32_t addr, uint32_t *data) {
+    switch (addr) {
+        case NPU_CSR_PTA_ID:       *data = NPU_PTA_ID_VALUE; return 1;
+        case NPU_CSR_PTA_CAPS0:    *data = NPU_PTA_CAPS0;    return 1;
+        case NPU_CSR_PTA_CAPS1:    *data = NPU_PTA_CAPS1;    return 1;
+        case NPU_CSR_PTA_CAPS2:    *data = NPU_PTA_CAPS2;    return 1;
+        case NPU_CSR_PTA_CTRL:     *data = pta_en;           return 1;
+        case NPU_CSR_PTA_STATUS:   *data = npu_busy ? NPU_PTA_STATUS_BUSY : 0u; return 1;
+        case NPU_CSR_PTA_IMPAIR:   *data = pta_impair;       return 1;
+        case NPU_CSR_PTA_BITS:     *data = pta_bits;         return 1;
+        case NPU_CSR_PTA_SEED:     *data = pta_seed;         return 1;
+        case NPU_CSR_PTA_WLOAD_CT: *data = pta_wload_ct;     return 1;
+        default: return 0;
+    }
 }
 
 // ---- CSR access ----
 void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
+    if (pta_csr_write(addr, data)) return;
     int idx = (addr - 0x40000000u) >> 2;
     if (idx < 0 || idx > 13) return;
 
@@ -88,6 +151,16 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
             uint32_t prec = CSR_PREC;
 
             if (m == 0 || n == 0 || k == 0) return;
+
+            // There is no tile here, so there is no impairment to apply: this
+            // model can only return the exact product.  Running the GEMM with
+            // PTA_IMPAIR set would hand back exact results under an analog
+            // label, which is why the RTL's digital array refuses the start
+            // (c930_npu_core.sv, pta_bad) -- and so does this.
+            if (pta_impair != 0) {
+                npu_error = 1;
+                return;
+            }
 
             // Bounds check: A, B, C must fit in 64KB.
             // Use wrap-safe arithmetic: check base < SIZE and extent <= SIZE - base
@@ -134,6 +207,10 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
 
             uint32_t cycles_per_tile = NPU_NUM_ROWS + ps_offset + NPU_NUM_COLS + 2;
             uint32_t total_cycles = m_tiles * n_tiles * k_tiles * cycles_per_tile;
+
+            // One weight programming per (N tile, K tile), as the core counts
+            // them in every build.
+            pta_wload_ct += n_tiles * k_tiles;
 
             // Simulate GEMM: compute C = A x B in software
             for (uint32_t i = 0; i < m; i++) {
@@ -194,6 +271,8 @@ void npu_dpi_csr_write(uint32_t addr, uint32_t data) {
 }
 
 uint32_t npu_dpi_csr_read(uint32_t addr) {
+    uint32_t pta;
+    if (pta_csr_read(addr, &pta)) return pta;
     int idx = (addr - 0x40000000u) >> 2;
     if (idx < 0 || idx > 13) return 0;
 

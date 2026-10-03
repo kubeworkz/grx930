@@ -55,6 +55,55 @@ int main() {
     st = npu_dpi_csr_read(NPU_CSR_STATUS);
     check("Base 0xFFFFFFF0: ERROR (wrap)", st & 4);
 
+    printf("\n=== The PTA block, on a build with no tile ===\n");
+    npu_dpi_init();
+    check("PTA_ID is the magic, map version 1",
+          npu_dpi_csr_read(NPU_CSR_PTA_ID) == 0x50544101u);
+    {
+        uint32_t c0 = npu_dpi_csr_read(NPU_CSR_PTA_CAPS0);
+        uint32_t c1 = npu_dpi_csr_read(NPU_CSR_PTA_CAPS1);
+        uint32_t c2 = npu_dpi_csr_read(NPU_CSR_PTA_CAPS2);
+        /* 4 rows, 4 columns, 16-bit operands, 48-bit sums -- by hand. */
+        check("CAPS0 is this model's 4 x 4, 16 and 48", c0 == 0xC1001004u);
+        check("CAPS1: no impairment built, twelve banks", c1 == 0x00000C00u);
+        check("CAPS2: no engine, no stage, no tile", c2 == 0u);
+        npu_dpi_csr_write(NPU_CSR_PTA_ID, 0xFFFFFFFFu);
+        npu_dpi_csr_write(NPU_CSR_PTA_CAPS1, 0xFFFFFFFFu);
+        check("the identity words are read-only",
+              npu_dpi_csr_read(NPU_CSR_PTA_ID) == 0x50544101u &&
+              npu_dpi_csr_read(NPU_CSR_PTA_CAPS1) == c1);
+    }
+    npu_dpi_csr_write(NPU_CSR_PTA_BITS, 0xFFFFFFFFu);
+    npu_dpi_csr_write(NPU_CSR_PTA_SEED, 0x12345678u);
+    npu_dpi_csr_write(NPU_CSR_PTA_CTRL, 0xFFFFFFFFu);
+    check("BITS reads back at 18 bits", npu_dpi_csr_read(NPU_CSR_PTA_BITS) == 0x3FFFFu);
+    check("SEED reads back", npu_dpi_csr_read(NPU_CSR_PTA_SEED) == 0x12345678u);
+    check("CTRL keeps EN and nothing else", npu_dpi_csr_read(NPU_CSR_PTA_CTRL) == 0x1u);
+    check("the block did not alias onto DIM_M", npu_dpi_csr_read(NPU_CSR_DIM_M) == 0);
+
+    /* The refusal.  A good GEMM first, so DONE is latched going in: a refused
+     * start has to clear it, and the result buffer must be left alone. */
+    for (int i = 0; i < 4; i++) { npu_dpi_mem_write(0x8000+i, A[i], 1); npu_dpi_mem_write(0x8400+i, B[i], 1); }
+    npu_dpi_csr_write(NPU_CSR_PTA_BITS, 0);
+    npu_dpi_run_gemm(2, 2, 2, 0, 0x8000, 0x8400, 0x8800);
+    check("exact GEMM runs with IMPAIR clear", npu_dpi_csr_read(NPU_CSR_STATUS) == 2);
+    check("and counted one weight programming", npu_dpi_csr_read(NPU_CSR_PTA_WLOAD_CT) == 1);
+    for (int b = 0; b < 7; b++) {
+        char name[64];
+        npu_dpi_mem_write(0x8800, 0xA5, 1);            /* poison C[0] */
+        npu_dpi_csr_write(NPU_CSR_PTA_IMPAIR, 1u << b);
+        npu_dpi_run_gemm(2, 2, 2, 0, 0x8000, 0x8400, 0x8800);
+        st = npu_dpi_csr_read(NPU_CSR_STATUS);
+        snprintf(name, sizeof name, "IMPAIR bit %d refused: ERROR, no DONE, C untouched", b);
+        check(name, st == 4 && npu_dpi_mem_read(0x8800) == 0xA5);
+    }
+    check("IMPAIR reads back what was written", npu_dpi_csr_read(NPU_CSR_PTA_IMPAIR) == 0x40u);
+    check("no programming counted for a refused start", npu_dpi_csr_read(NPU_CSR_PTA_WLOAD_CT) == 1);
+    npu_dpi_csr_write(NPU_CSR_PTA_IMPAIR, 0);
+    npu_dpi_run_gemm(2, 2, 2, 0, 0x8000, 0x8400, 0x8800);
+    check("and the next clean start clears the error and runs",
+          npu_dpi_csr_read(NPU_CSR_STATUS) == 2 && npu_dpi_mem_read(0x8800) == 19);
+
     printf("\n=== Allocator fixes ===\n");
     npu_ddr_alloc_t ddr;
     npu_ddr_alloc_init(&ddr, 0x0000, 0x10000);

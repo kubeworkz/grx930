@@ -29,16 +29,24 @@
 //   T7  the refusal.  MZM_NL has no phase in this build, so a START carrying it
 //       raises STATUS.ERROR and runs nothing; the next valid START clears it.
 //
+//   T8  identity.  PTA_ID and PTA_CAPS0..2 say what the build is, and every
+//       fact in them is one this test had already found the hard way: T3 by
+//       asking for an impairment and seeing whether the start was refused, T7
+//       by asking for MZM_NL, the probe amplitude by searching, and the
+//       geometry by the counters matching it.  So T8 checks the words against
+//       what the other seven observed, not against a table: a word that
+//       disagrees with the machine fails here whatever it says.
+//
 // A build with the digital array refuses every impairment, so T3 detects that
-// and records it in DIAG rather than failing; the harness knows which build it
-// is and asserts accordingly.
+// and records it in DIAG rather than failing.  The harness is told which build
+// it is given (PTA_BUILD) and asserts the words against that.
 //
 // DDR layout (byte addresses), sharing driver_test.c's where they overlap:
 //   0x1000 : A (M*K bytes, INT8)          0x2000 : B (K*N bytes, INT8)
 //   0x3000 : C (M*N*4 bytes)              0x9400 : dims (M, N, K, prec)
 //   0x9410 : DONE magic                   0x9420 : RESULT (PASS/FAIL)
 //   0x9430 : recorded values, 16 words    0x9480 : DIAG (the bitmap)
-//   0x9490 : PHASE (how far it got)
+//   0x9490 : PHASE (how far it got)       0x94A0 : PTA_ID, PTA_CAPS0..2
 // -----------------------------------------------------------------------------
 
 #include "c930_npu_driver.h"
@@ -54,6 +62,7 @@ typedef unsigned int u32;
 #define REC_ADDR    0x9430u
 #define DIAG_ADDR   0x9480u
 #define PHASE_ADDR  0x9490u
+#define IDENT_ADDR  0x94A0u
 
 #define DONE_MAGIC  0xDEADBEEFu
 #define PASS_MAGIC  0x0BADBEEFu
@@ -66,6 +75,7 @@ typedef unsigned int u32;
 #define T5_OK       0x010u
 #define T6_OK       0x020u
 #define T7_OK       0x040u
+#define T8_OK       0x080u
 #define DIGITAL     0x100u   /* the array build: nothing to impair */
 
 #define NUM_COLS    8
@@ -159,6 +169,7 @@ int main(void)
     u32 diag = 0;
     int m, n, k, nt, kt, digital = 0;
     u32 shots0, wload0, shots1, wload1;
+    int cal_amp_found = -1, mzm_refused = 0, counters_ok = 0;
 
     wr(DONE_ADDR, 0);
     wr(RESULT_ADDR, 0);
@@ -237,8 +248,10 @@ int main(void)
     /* SHOT_CT counts the tile's strobe, so a digital-array build reports none.
      * The harness knows which build it is; this only records what it saw. */
     if ((wload1 - wload0) == (u32)(nt * kt) && c_all(m, n, k) &&
-        ((shots1 - shots0) == (u32)(m * nt * kt) || (shots1 - shots0) == 0u))
+        ((shots1 - shots0) == (u32)(m * nt * kt) || (shots1 - shots0) == 0u)) {
         diag |= T2_OK;
+        counters_ok = 1;
+    }
 
     /* ---- T3: the tile is listening -------------------------------------- */
     wr(PHASE_ADDR, 5);
@@ -270,6 +283,7 @@ int main(void)
         /* Before the impairments: this uses MODEL_RST. */
         wr(PTA_REG_BITS, PTA_BITS_FIELDS(6, 5, 7, 8));
         cal_amp = cal_amp_find();
+        cal_amp_found = cal_amp;
         rec(16, (u32)cal_amp);
         if (cal_amp < 2)
             cal_amp = 6;                 /* report the refusal rather than hide it */
@@ -377,13 +391,65 @@ int main(void)
         then_ran = run_gemm(m, n, k) && c_all(m, n, k);
         rec(13, (u32)refused);
         rec(14, (u32)then_ran);
+        mzm_refused = refused;
         if (refused && then_ran) diag |= T7_OK;
     }
 
+    /* ---- T8: identity, held to what the other seven observed ------------- */
     wr(PHASE_ADDR, 8);
+    {
+        u32 id    = rd(PTA_REG_ID);
+        u32 caps0 = rd(PTA_REG_CAPS0);
+        u32 caps1 = rd(PTA_REG_CAPS1);
+        u32 caps2 = rd(PTA_REG_CAPS2);
+        u32 built = PTA_CAPS1_BUILT(caps1);
+        int ok = 1;
+
+        wr(IDENT_ADDR + 0,  id);
+        wr(IDENT_ADDR + 4,  caps0);
+        wr(IDENT_ADDR + 8,  caps1);
+        wr(IDENT_ADDR + 12, caps2);
+
+        ok &= PTA_ID_IS_PTA(id) && PTA_ID_VERSION(id) == 1u;
+
+        /* Read-only: a write is taken and changes nothing. */
+        wr(PTA_REG_ID, 0xFFFFFFFFu);
+        wr(PTA_REG_CAPS0, 0xFFFFFFFFu);
+        wr(PTA_REG_CAPS1, 0xFFFFFFFFu);
+        wr(PTA_REG_CAPS2, 0xFFFFFFFFu);
+        ok &= rd(PTA_REG_ID) == id && rd(PTA_REG_CAPS0) == caps0 &&
+              rd(PTA_REG_CAPS1) == caps1 && rd(PTA_REG_CAPS2) == caps2;
+
+        /* T3 found the build by asking for QUANT.  The word has to say the
+         * same, both ways: nothing built where the start was refused, QUANT
+         * built where it ran. */
+        ok &= digital ? (built == 0u) : ((built & PTA_IMP_QUANT) != 0u);
+        ok &= digital ? (PTA_CAPS2_TILE(caps2) == PTA_TILE_NONE)
+                      : (PTA_CAPS2_TILE(caps2) != PTA_TILE_NONE);
+        ok &= digital ? ((caps2 & PTA_CAPS2_EMULATED) == 0u)
+                      : ((caps2 & PTA_CAPS2_EMULATED) != 0u);
+        /* T7 found MZM_NL refused. */
+        ok &= !mzm_refused || ((built & PTA_IMP_MZM_NL) == 0u);
+        /* T2's counters matched this geometry, where there is a tile to count. */
+        ok &= !counters_ok || (PTA_CAPS0_ROWS(caps0) == (u32)NUM_ROWS &&
+                               PTA_CAPS0_COLS(caps0) == (u32)NUM_COLS);
+        /* The search runs from the top down and stops at the first amplitude
+         * the engine takes, so it must land exactly on the bound CAPS0 gives --
+         * and T4 could only have run on a build that has the engine. */
+        if (!digital) {
+            ok &= (cal_amp_found == (int)PTA_CAL_AMP_MAX(caps0));
+            ok &= (caps2 & PTA_CAPS2_HAS_CAL) != 0u;
+        } else {
+            ok &= (caps2 & PTA_CAPS2_HAS_CAL) == 0u;
+        }
+        if (ok) diag |= T8_OK;
+    }
+
+    wr(PHASE_ADDR, 9);
     wr(DIAG_ADDR, diag);
-    wr(RESULT_ADDR, (diag & (T1_OK | T2_OK | T3_OK | T4_OK | T5_OK | T6_OK | T7_OK)) ==
-                    (T1_OK | T2_OK | T3_OK | T4_OK | T5_OK | T6_OK | T7_OK)
+    wr(RESULT_ADDR, (diag & (T1_OK | T2_OK | T3_OK | T4_OK | T5_OK | T6_OK | T7_OK |
+                             T8_OK)) ==
+                    (T1_OK | T2_OK | T3_OK | T4_OK | T5_OK | T6_OK | T7_OK | T8_OK)
                     ? PASS_MAGIC : FAIL_MAGIC);
     wr(DONE_ADDR, DONE_MAGIC);
     for (;;)

@@ -158,6 +158,7 @@ module c930_npu_top
   logic signed [31:0] pta_aff_offs;
   logic        pta_cal_valid, pta_drift_alarm, pta_cal_err;
   logic [31:0] pta_cal_ct, pta_cal_cyc, pta_shot_ct, pta_wload_ct, pta_sat_ct;
+  logic [31:0] pta_caps0, pta_caps1, pta_caps2;   // what the core was built as
   logic [23:0] pta_err_max, pta_err_found;
 
   logic [15:0] fifo_dim_m, fifo_dim_n, fifo_dim_k;
@@ -260,6 +261,9 @@ module c930_npu_top
     .i_pta_shot_ct     (pta_shot_ct),
     .i_pta_wload_ct    (pta_wload_ct),
     .i_pta_sat_count   (pta_sat_ct),
+    .i_pta_caps0       (pta_caps0),
+    .i_pta_caps1       (pta_caps1),
+    .i_pta_caps2       (pta_caps2),
     .i_pta_err_max     (pta_err_max),
     .i_pta_err_found   (pta_err_found),
     .i_cycle_count (cycle_count),
@@ -457,6 +461,9 @@ module c930_npu_top
     .i_pta_xtalk       (pta_xtalk),
     .i_pta_model_rst   (pta_mrst),
     .o_pta_sat_count   (pta_sat_ct),
+    .o_pta_caps0       (pta_caps0),
+    .o_pta_caps1       (pta_caps1),
+    .o_pta_caps2       (pta_caps2),
     .i_pta_cal_en      (pta_cal_en),
     .i_pta_cal_now     (pta_cal_now),
     .i_pta_cal_sched   (pta_cal_sched),

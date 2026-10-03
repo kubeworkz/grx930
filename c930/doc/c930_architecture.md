@@ -116,6 +116,24 @@ block the layout is the PTA chiplet's own (grxcp `pta_chiplet_regmap.md` §4)
 offset by `0x100`, so one driver reaches a c930 tile and a chiplet with the same
 offsets and a different base.
 
+The block's first four words say what the build is, and they are the only thing
+a driver can read that does. The block is in every build of the register file,
+with a photonic tile or without one, and `PTA_CTRL`, `PTA_IMPAIR` and the rest
+write and read back the same either way.
+
+| Address | Name | |
+|---|---|---|
+| `0x4000_0100` | `PTA_ID` | [31:8] `0x505441`, "PTA"; [7:0] the map's version, 1. A register file that predates the block reads zero here |
+| `0x4000_0104` | `PTA_CAPS0` | [9:0] rows, [19:10] columns, [25:20] `DIN_W`, [31:26] `ACC_W` |
+| `0x4000_0108` | `PTA_CAPS1` | [6:0] the impairments this build implements, in `PTA_IMPAIR`'s order — zero on the digital array; [15:8] weight banks; [19:16], [23:20], [27:24] the widest activation, weight and ADC bits that quantise |
+| `0x4000_010C` | `PTA_CAPS2` | [15:0] shot rate in MHz, zero on an emulated tile; [16] calibration engine; [17] activation stage; [19:18] the tile, 0 none, 1 PTM-C, 2 PTM-B; [31] the tile is the error model, not a photonic device |
+
+`PTA_CAPS0`–`2` are driven by `c930_npu_core`, and `PTA_CAPS1`'s mask is the same
+`PTA_BUILT` the core's START refusal tests, so the word and the refusal cannot
+disagree. `make npu` tries each impairment bit on its own and holds the word to
+which of them ran; `make pta_fw` holds it, from firmware, to what the rest of
+that test found by asking.
+
 The fall-through in the row above therefore aliases modulo a kilobyte rather
 than modulo 64 bytes: `0x4000_2140` reaches `PTA_CTRL`. Nothing in this SoC
 generates those addresses, and the bridge answers `0x4000_0FF0`–`0x4000_0FFC`
