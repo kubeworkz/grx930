@@ -872,6 +872,22 @@ npu-shim: $(NPU_DPI_LIB)
 	@echo "Link with: -L$(BUILD_DIR) -lnpu_dpi_shim"
 	@echo "Include:   sim/npu_dpi_shim.h"
 
+# The shim's own smoke test, and that it still builds clean under the flags
+# grxcp vendors it with.  It had no target: the test was run by hand when the
+# shim changed, which is how a model stops being checked.  The compiler is
+# WSL's, as it is for the vector check above.
+SHIM_DIR := build/shim
+
+shim_test:
+	@wsl.exe -e bash -c "mkdir -p $(SHIM_DIR) && \
+	  $(HOST_CC) -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror \
+	    -c sim/npu_dpi_shim.c -o $(SHIM_DIR)/npu_dpi_shim.o && \
+	  $(HOST_CC) -O1 -Wall -Wextra -Isim -o $(SHIM_DIR)/test_grxcp_fixes \
+	    sim/test_grxcp_fixes.c sim/npu_dpi_shim.c && \
+	  ./$(SHIM_DIR)/test_grxcp_fixes"
+
+.PHONY: shim_test
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)

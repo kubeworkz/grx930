@@ -90,6 +90,54 @@ extern "C" {
 #define NPU_REG_C_BASE    NPU_CSR_C_BASE
 #define NPU_REG_PREC      NPU_CSR_PREC
 
+// ---- The PTA register block (c930_npu_csr.sv, 0x100-0x1FC) ----
+//
+// The RTL's register file carries this block in EVERY build, with a photonic
+// tile or without one, and its configuration registers write and read back the
+// same either way.  What tells the builds apart is four read-only words at the
+// head of the block, and the refusal: a core with no tile refuses any START
+// that asks for an impairment, because running it would return an exact GEMM
+// under an analog label.
+//
+// THIS MODEL IS A BUILD WITH NO TILE.  It computes C = A x B exactly, in a C
+// triple loop, so it answers as the digital array does:
+//
+//   PTA_ID      the magic and the map version, as the RTL's
+//   PTA_CAPS0   this model's geometry -- its own, see below
+//   PTA_CAPS1   no impairment built; the weight banks
+//   PTA_CAPS2   zero: no calibration engine, no activation stage, no tile
+//   PTA_IMPAIR, PTA_BITS, PTA_SEED
+//               stored and read back, at the RTL's field widths
+//   PTA_CTRL    bit 0 (EN) is stored and read back and enables nothing, there
+//               being no engine.  Every other bit reads zero.
+//   PTA_STATUS  bit 4, the engine's BUSY.  Nothing else can be set here.
+//   PTA_WLOAD_CT  weight programmings, one per (N tile, K tile), cumulative
+//
+// and a START with PTA_IMPAIR non-zero is REFUSED: STATUS.ERROR, no DONE, C
+// untouched.  Every other word of the block reads zero and ignores writes.
+// A driver that needs the tile's behaviour -- the error model, calibration,
+// the counters that follow shots -- is talking to the wrong model; the tile's
+// arithmetic is sim/pta_tile_model.c, which this file does not link.
+//
+// CAPS0 reports THIS MODEL'S geometry, which is the 4 x 4 array its cycle model
+// has always used, and not the SoC's: c930_soc_top has been 8 x 8 since the
+// array was widened.  That divergence predates this block and is the reason
+// the word exists -- a driver reads the geometry instead of assuming it.
+#define NPU_CSR_PTA_ID        0x40000100u   // R:  [31:8] "PTA", [7:0] map version
+#define NPU_CSR_PTA_CAPS0     0x40000104u   // R:  [9:0] rows [19:10] cols [25:20] DIN_W [31:26] ACC_W
+#define NPU_CSR_PTA_CAPS1     0x40000108u   // R:  [6:0] impairments built [15:8] banks, widest bits above
+#define NPU_CSR_PTA_CAPS2     0x4000010cu   // R:  [16] cal engine [17] act stage [19:18] tile [31] emulated
+#define NPU_CSR_PTA_CTRL      0x40000140u   // RW: [0] EN
+#define NPU_CSR_PTA_STATUS    0x40000144u   // R:  [4] BUSY
+#define NPU_CSR_PTA_IMPAIR    0x40000148u   // RW: [6:0] one bit per impairment
+#define NPU_CSR_PTA_BITS      0x4000014cu   // RW: [3:0] B_a [7:4] B_w [11:8] B_adc [17:12] S
+#define NPU_CSR_PTA_SEED      0x40000150u   // RW
+#define NPU_CSR_PTA_WLOAD_CT  0x40000184u   // R:  weight-bank programmings
+
+#define NPU_PTA_ID_VALUE      0x50544101u   // "PTA", map version 1
+#define NPU_PTA_ID_MAGIC      0x50544100u
+#define NPU_PTA_STATUS_BUSY   0x10u
+
 // ---- DDR size (must match c930_ddr.sv MEM_BYTES) ----
 #define NPU_DDR_SIZE      65536
 
