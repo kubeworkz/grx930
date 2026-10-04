@@ -872,19 +872,32 @@ npu-shim: $(NPU_DPI_LIB)
 	@echo "Link with: -L$(BUILD_DIR) -lnpu_dpi_shim"
 	@echo "Include:   sim/npu_dpi_shim.h"
 
-# The shim's own smoke test, and that it still builds clean under the flags
-# grxcp vendors it with.  It had no target: the test was run by hand when the
-# shim changed, which is how a model stops being checked.  The compiler is
-# WSL's, as it is for the vector check above.
-SHIM_DIR := build/shim
+# The shim's own tests, in both builds, and that each still compiles clean under
+# the flags grxcp vendors it with.  The smoke test had no target and was run by
+# hand when the shim changed, which is how a model stops being checked.
+#
+#   the array build   sim/test_grxcp_fixes.c, the shim alone
+#   the tile build    sim/test_shim_pta.c, with -DNPU_DPI_WITH_PTA and
+#                     pta_tile_model.c behind the registers: every impaired GEMM
+#                     the shim returns is compared with pta_gemm() called
+#                     directly, on a device taken through the same history
+#
+# The compiler is WSL's, as it is for the vector check above.
+SHIM_DIR    := build/shim
+SHIM_CFLAGS := -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror
 
 shim_test:
 	@wsl.exe -e bash -c "mkdir -p $(SHIM_DIR) && \
-	  $(HOST_CC) -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror \
-	    -c sim/npu_dpi_shim.c -o $(SHIM_DIR)/npu_dpi_shim.o && \
+	  $(HOST_CC) $(SHIM_CFLAGS) -c sim/npu_dpi_shim.c -o $(SHIM_DIR)/npu_dpi_shim.o && \
+	  $(HOST_CC) $(SHIM_CFLAGS) -DNPU_DPI_WITH_PTA -Isim \
+	    -c sim/npu_dpi_shim.c -o $(SHIM_DIR)/npu_dpi_shim_pta.o && \
 	  $(HOST_CC) -O1 -Wall -Wextra -Isim -o $(SHIM_DIR)/test_grxcp_fixes \
 	    sim/test_grxcp_fixes.c sim/npu_dpi_shim.c && \
-	  ./$(SHIM_DIR)/test_grxcp_fixes"
+	  ./$(SHIM_DIR)/test_grxcp_fixes && \
+	  $(HOST_CC) -std=c99 -O1 -Wall -Wextra -DNPU_DPI_WITH_PTA -Isim \
+	    -o $(SHIM_DIR)/test_shim_pta \
+	    sim/test_shim_pta.c sim/npu_dpi_shim.c sim/pta_tile_model.c && \
+	  ./$(SHIM_DIR)/test_shim_pta"
 
 .PHONY: shim_test
 
