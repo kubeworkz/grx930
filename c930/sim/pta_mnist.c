@@ -25,6 +25,14 @@
  * with zero weights and one-hot activations reads every cell's programming
  * error and drift at once, and the trim that answers it goes to the DAC.
  *
+ * And the probe (--probe 1), which measures how far each layer's sums are from
+ * the network's own, as a fraction of their rms, and asks whether that error is
+ * all there is to the accuracy.  It exists because the noise options are in LSB
+ * of whichever ADC a run configures: "--thermal 1" is four times the noise at
+ * six bits that it is at eight.  --thermal8 and --photons8 state the same two in
+ * LSB of an 8-bit ADC whatever the ADC is, and the probe reports every run in
+ * both.  doc/pta_error_model_design_note.md section 5 has what that changed.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -525,6 +533,243 @@ static long tile_batch(const host_net *hn, const pta_cfg cfg[2], const pta_tile 
     return sats;
 }
 
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The probe: how far the tile's sums are from the network's own, layer by
+ * layer, in a unit no ADC defines.  The reference is the network as trained and
+ * as a digital host runs it -- weights at the network's width, activations
+ * unquantised -- so everything the tile does to a sum counts, quantisers
+ * included.
+ *
+ *   e1     layer 1's GEMM: rms(y1 - reference) / rms(reference)
+ *   e2     layer 2's GEMM on its own: against the exact product of the hidden
+ *          operands the tile itself produced
+ *   eprop  layer 1's error as it arrives at the outputs, through exact weights
+ *   elog   both, at the outputs: rms(y2 - reference) / rms(reference)
+ *
+ * and then whether that error is all there is to the accuracy.  Three
+ * predictions, each perturbing the reference outputs with Gaussian noise and
+ * counting what is still classified correctly:
+ *
+ *   pred_iid  independent noise of the measured rms and nothing else.  If the
+ *             tile's accuracy is this, accuracy is a function of how much
+ *             error there is and not of what made it
+ *   pred_cov  the error's measured mean and its covariance across the outputs
+ *   pred_res  the same, of the part a decision can see.  An argmax does not
+ *             move when every output shifts together, nor when they all scale,
+ *             so each image's common shift is taken out and so is the gain: the
+ *             slope of the error against the outputs themselves, fitted over
+ *             the run.  eres is what is left, as a fraction like the others.
+ */
+#define PROBE_DRAWS 32
+
+typedef struct {
+    double  e1, r1;             /* sums of squares: layer 1's error, its reference */
+    double  e2, r2;             /* layer 2's own error, the product it is against */
+    double  ep, et, rt;         /* propagated, total, and the reference outputs */
+    double  mean[N_OUT];        /* the total error's sum, per output */
+    double  cov[N_OUT][N_OUT];  /* and its raw second moments */
+    double  cm[N_OUT], lm[N_OUT];   /* sums, per output: the error and the reference,
+                                       each less its image's mean over the outputs */
+    double  cc[N_OUT][N_OUT];   /* their second moments: error with error, */
+    double  cl[N_OUT][N_OUT];   /* error with reference, */
+    double  ll[N_OUT][N_OUT];   /* reference with reference */
+    double *logit;              /* reference outputs with their biases, images x N_OUT */
+    double *margin;             /* reference top-1 less top-2, per image */
+    int     images, ref_right, agree;
+} probe;
+
+static int probe_init(probe *p, int images)
+{
+    memset(p, 0, sizeof *p);
+    p->logit  = (double *)malloc((size_t)images * N_OUT * sizeof(double));
+    p->margin = (double *)malloc((size_t)images * sizeof(double));
+    return (p->logit && p->margin) ? 0 : -1;
+}
+
+static void probe_free(probe *p)
+{
+    free(p->logit);
+    free(p->margin);
+}
+
+/* M images: their operands, what tile_batch() returned for them, and the
+ * reference weights from quant_weights() at the network's own width. */
+static void probe_batch(probe *p, const host_net *hn, const int32_t *q1, const int32_t *q2, int M,
+                        const int32_t *a1, const int64_t *y1, const int32_t *a2, const int64_t *y2,
+                        const uint8_t *labels)
+{
+    int64_t r_y1[N_HID], r_y2[N_OUT];
+    int32_t r_a2[N_HID];
+    int m, n, k, o, j;
+    for (m = 0; m < M; ++m) {
+        double err[N_OUT], *lg = p->logit + (size_t)p->images * N_OUT, em = 0.0, gm = 0.0;
+        int best = 0, second = -1, tile_best = 0;
+        direct_image(hn, q1, q2, 0, a1 + m * N_IN, r_y1, r_a2, r_y2);
+        for (n = 0; n < N_HID; ++n) {
+            const double d = (double)(y1[m * N_HID + n] - r_y1[n]);
+            p->e1 += d * d;
+            p->r1 += (double)r_y1[n] * (double)r_y1[n];
+        }
+        for (o = 0; o < N_OUT; ++o) {
+            int64_t loc = 0;
+            double dl, dp;
+            for (k = 0; k < N_HID; ++k)
+                loc += (int64_t)a2[m * N_HID + k] * q2[o * N_HID + k];
+            dl     = (double)(y2[m * N_OUT + o] - loc);
+            dp     = (double)(loc - r_y2[o]);
+            err[o] = (double)(y2[m * N_OUT + o] - r_y2[o]);
+            p->e2 += dl * dl;
+            p->r2 += (double)loc * (double)loc;
+            p->ep += dp * dp;
+            p->et += err[o] * err[o];
+            p->rt += (double)r_y2[o] * (double)r_y2[o];
+            lg[o]  = (double)(r_y2[o] + hn->b2[o]);
+            if (y2[m * N_OUT + o] + hn->b2[o] > y2[m * N_OUT + tile_best] + hn->b2[tile_best])
+                tile_best = o;
+        }
+        for (o = 0; o < N_OUT; ++o) {
+            em += err[o] / N_OUT;
+            gm += lg[o] / N_OUT;
+        }
+        for (o = 0; o < N_OUT; ++o) {
+            p->mean[o] += err[o];
+            p->cm[o]   += err[o] - em;
+            p->lm[o]   += lg[o] - gm;
+            for (j = 0; j < N_OUT; ++j) {
+                p->cov[o][j] += err[o] * err[j];
+                p->cc[o][j]  += (err[o] - em) * (err[j] - em);
+                p->cl[o][j]  += (err[o] - em) * (lg[j] - gm);
+                p->ll[o][j]  += (lg[o] - gm) * (lg[j] - gm);
+            }
+            if (lg[o] > lg[best])
+                best = o;
+        }
+        for (o = 0; o < N_OUT; ++o)
+            if (o != best && (second < 0 || lg[o] > lg[second]))
+                second = o;
+        p->margin[p->images] = lg[best] - lg[second];
+        p->ref_right += best == labels[m];
+        p->agree     += best == tile_best;
+        ++p->images;
+    }
+}
+
+static double gauss01(uint64_t *s)
+{
+    double u = uniform01(s);
+    const double v = uniform01(s);
+    if (u < 1e-300)
+        u = 1e-300;
+    return sqrt(-2.0 * log(u)) * cos(2.0 * PI * v);
+}
+
+/* The lower Cholesky factor of a symmetric matrix.  A pivot that is not
+ * positive -- a covariance of rank under ten, which a noiseless run has --
+ * leaves its column at zero rather than failing. */
+static void cholesky(double a[N_OUT][N_OUT], double l[N_OUT][N_OUT])
+{
+    int i, j, k;
+    memset(l, 0, sizeof(double) * N_OUT * N_OUT);
+    for (j = 0; j < N_OUT; ++j) {
+        double d = a[j][j];
+        for (k = 0; k < j; ++k)
+            d -= l[j][k] * l[j][k];
+        if (d <= 1e-12 * (a[j][j] > 1.0 ? a[j][j] : 1.0))
+            continue;
+        l[j][j] = sqrt(d);
+        for (i = j + 1; i < N_OUT; ++i) {
+            double s = a[i][j];
+            for (k = 0; k < j; ++k)
+                s -= l[i][k] * l[j][k];
+            l[i][j] = s / l[j][j];
+        }
+    }
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+    const double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+typedef struct {
+    double ref, agree, e1, e2, eprop, elog, sigma, margin, pred_iid, pred_cov;
+    double gain, eres, pred_res;
+} probe_result;
+
+/* Closes the probe: the ratios, and the two predictions drawn PROBE_DRAWS
+ * times an image on a generator of the probe's own. */
+static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_result *r)
+{
+    const double n = (double)p->images;
+    double mean[N_OUT], cov[N_OUT][N_OUT], l[N_OUT][N_OUT], z[N_OUT];
+    double rmean[N_OUT], rcov[N_OUT][N_OUT], rl[N_OUT][N_OUT], num = 0.0, den = 0.0, rss = 0.0;
+    uint64_t rs = ((uint64_t)seed << 32) ^ 0x50524F4245ull;
+    long iid = 0, cv = 0, rv = 0;
+    int i, d, o, j;
+
+    r->ref    = 100.0 * p->ref_right / n;
+    r->agree  = 100.0 * p->agree / n;
+    r->e1     = p->r1 > 0 ? sqrt(p->e1 / p->r1) : 0.0;
+    r->e2     = p->r2 > 0 ? sqrt(p->e2 / p->r2) : 0.0;
+    r->eprop  = p->rt > 0 ? sqrt(p->ep / p->rt) : 0.0;
+    r->elog   = p->rt > 0 ? sqrt(p->et / p->rt) : 0.0;
+    r->sigma  = sqrt(p->et / (n * N_OUT));
+    for (o = 0; o < N_OUT; ++o)
+        mean[o] = p->mean[o] / n;
+    for (o = 0; o < N_OUT; ++o)
+        for (j = 0; j < N_OUT; ++j)
+            cov[o][j] = p->cov[o][j] / n - mean[o] * mean[j];
+    cholesky(cov, l);
+    /* The gain: least squares of the centred error on the centred outputs. */
+    for (o = 0; o < N_OUT; ++o) {
+        num += p->cl[o][o];
+        den += p->ll[o][o];
+    }
+    r->gain = den > 0.0 ? num / den : 0.0;
+    for (o = 0; o < N_OUT; ++o)
+        rmean[o] = (p->cm[o] - r->gain * p->lm[o]) / n;
+    for (o = 0; o < N_OUT; ++o) {
+        for (j = 0; j < N_OUT; ++j)
+            rcov[o][j] = (p->cc[o][j] - r->gain * (p->cl[o][j] + p->cl[j][o])
+                          + r->gain * r->gain * p->ll[o][j]) / n - rmean[o] * rmean[j];
+        rss += p->cc[o][o] - 2.0 * r->gain * p->cl[o][o] + r->gain * r->gain * p->ll[o][o];
+    }
+    r->eres = (p->rt > 0 && rss > 0) ? sqrt(rss / p->rt) : 0.0;
+    cholesky(rcov, rl);
+    for (i = 0; i < p->images; ++i) {
+        const double *lg = p->logit + (size_t)i * N_OUT;
+        for (d = 0; d < PROBE_DRAWS; ++d) {
+            double x, bx = 0.0, y, by = 0.0, w, bw = 0.0;
+            int bi = 0, bc = 0, br = 0;
+            for (o = 0; o < N_OUT; ++o)
+                z[o] = gauss01(&rs);
+            for (o = 0; o < N_OUT; ++o) {
+                x = lg[o] + r->sigma * gauss01(&rs);
+                y = lg[o] + mean[o];
+                w = lg[o] + rmean[o];
+                for (j = 0; j <= o; ++j) {
+                    y += l[o][j] * z[j];
+                    w += rl[o][j] * z[j];
+                }
+                if (o == 0 || x > bx) { bx = x; bi = o; }
+                if (o == 0 || y > by) { by = y; bc = o; }
+                if (o == 0 || w > bw) { bw = w; br = o; }
+            }
+            iid += bi == labels[i];
+            cv  += bc == labels[i];
+            rv  += br == labels[i];
+        }
+    }
+    r->pred_iid = 100.0 * (double)iid / (n * PROBE_DRAWS);
+    r->pred_cov = 100.0 * (double)cv / (n * PROBE_DRAWS);
+    r->pred_res = 100.0 * (double)rv / (n * PROBE_DRAWS);
+    qsort(p->margin, (size_t)p->images, sizeof(double), cmp_double);
+    r->margin = p->margin[p->images / 2];
+}
+
 /*
  * C3's cell calibration, as X3 specifies it: probe with zero weights so that a
  * cell reports its programming error and its drift alone, and one-hot
@@ -852,7 +1097,8 @@ static int cmd_eval(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
-        "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours", NULL};
+        "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
+        "--probe", "--thermal8", "--photons8", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -861,6 +1107,12 @@ static int cmd_eval(int argc, char **argv)
     const double hours = atof(opt(argc, argv, "--hours", "0"));
     const double post_hours = atof(opt(argc, argv, "--post-hours", "0"));
     const int calibrate = atoi(opt(argc, argv, "--calibrate", "0"));
+    const int probing = atoi(opt(argc, argv, "--probe", "0"));
+    const char *thermal8 = opt(argc, argv, "--thermal8", NULL);
+    const char *photons8 = opt(argc, argv, "--photons8", NULL);
+    probe pr;
+    int32_t *pq1 = NULL, pq2[N_OUT * N_HID];
+    int S8[2] = {0, 0};
     dataset tr, te;
     mlp *net = (mlp *)calloc(1, sizeof *net);
     host_net *hn = (host_net *)calloc(1, sizeof *hn);
@@ -875,6 +1127,7 @@ static int cmd_eval(int argc, char **argv)
     long sats = 0, elements = 0, r;
     int S[2] = {0, 0}, right = 0, base, m, k, o;
 
+    memset(&pr, 0, sizeof pr);
     if (check_opts(argc, argv, names) != 0 || !data || !path || images < 1 || images > N_TEST) {
         fprintf(stderr, "pta_mnist eval: --data DIR --net NET [options] (pta_mnist help)\n");
         return 2;
@@ -920,6 +1173,38 @@ static int cmd_eval(int argc, char **argv)
     cfg[0].adc_shift = (uint32_t)S[0];
     cfg[1].adc_shift = (uint32_t)S[1];
 
+    /*
+     * Noise in LSB of an 8-bit ADC, whatever ADC the run has.  The clip rule
+     * gives every width its own shift, so the same receiver noise is a
+     * different number of LSB at each, and so is the same light: a layer's
+     * 8-bit shift is found the way its own was, and the two differ by the
+     * ratio of the LSBs.
+     */
+    if (thermal8 || photons8 || probing) {
+        if ((thermal8 && atof(opt(argc, argv, "--thermal", "0")) != 0.0) ||
+            (photons8 && photons > 0.0) || ((thermal8 || photons8) && cfg[0].adc_bits == 0)) {
+            fprintf(stderr, "pta_mnist: --thermal8 and --photons8 need --adcbits, and replace "
+                            "--thermal and --photons\n");
+            return 2;
+        }
+        if (cfg[0].adc_bits != 0)
+            adc_setup(hn, net, &tr, 8, S8);
+        for (k = 0; k < 2; ++k) {
+            const double lsb = ldexp(1.0, S[k] - S8[k]);     /* this ADC's LSB, in 8-bit LSB */
+            if (thermal8 && q88("--thermal8", atof(thermal8) / lsb, 65535, &cfg[k].sigma_th) != 0)
+                return 2;
+            if (photons8 && atof(photons8) > 0.0 &&
+                q88("--photons8", 1.0 / sqrt(atof(photons8) * lsb), 65535, &cfg[k].k_shot) != 0)
+                return 2;
+        }
+    }
+    if (probing) {
+        pq1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t));
+        if (!pq1 || probe_init(&pr, images) != 0)
+            return 2;
+        quant_weights(hn, net->wbits, pq1, pq2);
+    }
+
     tile.rows  = ROWS;
     tile.cols  = COLS;
     tile.din_w = net->din;
@@ -947,6 +1232,8 @@ static int cmd_eval(int argc, char **argv)
         }
         sats += r;
         elements += (long)M * (N_HID * ((N_IN + ROWS - 1) / ROWS) + N_OUT * ((N_HID + ROWS - 1) / ROWS));
+        if (probing)
+            probe_batch(&pr, hn, pq1, pq2, M, a1, y1, a2, y2, te.y + base);
         for (m = 0; m < M; ++m) {
             int best = 0;
             for (o = 1; o < N_OUT; ++o)
@@ -959,13 +1246,30 @@ static int cmd_eval(int argc, char **argv)
     printf("din=%d net_wbits=%d net_seed=%d from=%d epochs=%d digital=%.2f impair=0x%02x wbits=%u abits=%u "
            "adcbits=%u S=%d,%d sh=%d thermal=%g photons=%g prog=%g xtalk=%g drift=%s hours=%g "
            "steps=%llu sigma_d=%u d_max=%u cal=%d trimstep=%g trimmax=%g post_hours=%g "
-           "seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld\n",
+           "seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld",
            net->din, net->wbits, net->seed, net->from_bits, net->epochs, net->test_acc, cfg[0].impair, cfg[0].w_bits,
            cfg[0].act_bits, cfg[0].adc_bits, S[0], S[1], hn->sh, cfg[0].sigma_th / 256.0, photons,
            cfg[0].sigma_pr / 256.0, cfg[0].xtalk / 256.0, drift, hours, (unsigned long long)steps,
            cfg[0].drift_sigma, cfg[0].drift_max, calibrate, cfg[0].trim_step / 256.0,
            cfg[0].trim_max / 256.0, post_hours, seed, images, right, 100.0 * right / images, sats,
            elements);
+    if (probing) {
+        probe_result pv;
+        /* The run's noise in LSB of an 8-bit ADC, layer 1's, however it was asked for. */
+        const double lsb = cfg[0].adc_bits ? ldexp(1.0, S[0] - S8[0]) : 0.0;
+        const double ks = cfg[0].k_shot / 256.0;
+        probe_finish(&pr, te.y, seed, &pv);
+        printf(" S8=%d,%d thermal8=%g photons8=%g ref=%.2f agree=%.2f e1=%.5f e2=%.5f eprop=%.5f "
+               "elog=%.5f sigma=%.1f margin=%.1f pred_iid=%.2f pred_cov=%.2f gain=%+.4f eres=%.5f "
+               "pred_res=%.2f",
+               S8[0], S8[1], cfg[0].sigma_th / 256.0 * lsb,
+               (ks > 0.0 && lsb > 0.0) ? 1.0 / (ks * ks * lsb) : 0.0, pv.ref, pv.agree, pv.e1,
+               pv.e2, pv.eprop, pv.elog, pv.sigma, pv.margin, pv.pred_iid, pv.pred_cov, pv.gain,
+               pv.eres, pv.pred_res);
+        probe_free(&pr);
+        free(pq1);
+    }
+    printf("\n");
     pta_device_free(&dev);
     return 0;
 }
@@ -1101,6 +1405,102 @@ static int cmd_selftest(void)
         free(q1);
     }
 
+    /* 4. the probe: nothing impaired is no error at all, an impairment in one
+     *    layer shows in that layer's own term and not in the other's, and what
+     *    layer 1 does reaches the outputs as eprop and as nothing else */
+    {
+        const int D = 8, M = 37;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        const pta_tile tile = {ROWS, COLS, D, ACC_W};
+        host_net *hn = (host_net *)calloc(1, sizeof *hn);
+        gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
+        int32_t a1[MAX_M * N_IN], a2[MAX_M * N_HID];
+        int32_t *q1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t)), q2[N_OUT * N_HID];
+        int64_t y1[MAX_M * N_HID], y2[MAX_M * N_OUT];
+        uint8_t labels[MAX_M];
+        int which, i, bad = 0;
+        pta_device dev;
+        pta_device_init(&dev, &tile);
+        hn->din = D;
+        for (i = 0; i < N_HID * N_IN; ++i)
+            hn->w1[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        for (i = 0; i < N_OUT * N_HID; ++i)
+            hn->w2[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        hn->sh = D + 3;
+        quant_weights(hn, 0, q1, q2);
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+        for (i = 0; i < M; ++i)
+            labels[i] = (uint8_t)(splitmix64(&rs) % N_OUT);
+        for (which = 0; which < 3; ++which) {       /* nothing, layer 1 only, layer 2 only */
+            pta_cfg cfg[2];
+            uint32_t gemm = 0;
+            probe p;
+            int ok;
+            memset(cfg, 0, sizeof cfg);
+            if (which) {
+                cfg[which - 1].impair   = PTA_QUANT;
+                cfg[which - 1].act_bits = (uint32_t)D - 3;
+            }
+            probe_init(&p, M);
+            if (tile_batch(hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, y1, a2, y2) < 0)
+                ++bad;
+            probe_batch(&p, hn, q1, q2, M, a1, y1, a2, y2, labels);
+            ok = which == 0 ? (p.e1 == 0.0 && p.e2 == 0.0 && p.ep == 0.0 && p.et == 0.0 && p.agree == M)
+               : which == 1 ? (p.e1 > 0.0 && p.e2 == 0.0 && p.ep > 0.0 && p.et == p.ep)
+               :              (p.e1 == 0.0 && p.e2 > 0.0 && p.ep == 0.0 && p.et == p.e2);
+            printf("selftest: probe, %s: e1 %s, e2 %s, propagated %s: %s\n",
+                   which == 0 ? "nothing impaired" : which == 1 ? "layer 1 only" : "layer 2 only",
+                   p.e1 > 0.0 ? "nonzero" : "zero", p.e2 > 0.0 ? "nonzero" : "zero",
+                   p.ep > 0.0 ? "nonzero" : "zero", ok ? "as it should be" : "WRONG");
+            bad += !ok;
+            probe_free(&p);
+        }
+        if (bad)
+            errors += fail("the probe does not put an error in the layer that made it");
+        pta_device_free(&dev);
+        free(hn);
+        free(g);
+        free(q1);
+    }
+
+    /* 5. the probe's own arithmetic: its Gaussian has unit variance, and its
+     *    Cholesky factor multiplies back to the matrix it was given */
+    {
+        double a[N_OUT][N_OUT], b[N_OUT][N_OUT], l[N_OUT][N_OUT], s1 = 0.0, s2 = 0.0, worst = 0.0;
+        const int draws = 200000;
+        int i, j, k;
+        for (i = 0; i < draws; ++i) {
+            const double x = gauss01(&rs);
+            s1 += x;
+            s2 += x * x;
+        }
+        s1 /= draws;
+        s2 = s2 / draws - s1 * s1;
+        for (i = 0; i < N_OUT; ++i)
+            for (j = 0; j < N_OUT; ++j)
+                b[i][j] = uniform01(&rs) - 0.5;
+        for (i = 0; i < N_OUT; ++i)
+            for (j = 0; j < N_OUT; ++j) {
+                a[i][j] = i == j ? 0.5 : 0.0;
+                for (k = 0; k < N_OUT; ++k)
+                    a[i][j] += b[i][k] * b[j][k];
+            }
+        cholesky(a, l);
+        for (i = 0; i < N_OUT; ++i)
+            for (j = 0; j < N_OUT; ++j) {
+                double s = -a[i][j];
+                for (k = 0; k < N_OUT; ++k)
+                    s += l[i][k] * l[j][k];
+                if (fabs(s) > worst)
+                    worst = fabs(s);
+            }
+        printf("selftest: probe, %d Gaussian draws: mean %+.4f variance %.4f; Cholesky off by %.1e\n",
+               draws, s1, s2, worst);
+        if (fabs(s1) > 0.01 || fabs(s2 - 1.0) > 0.02 || worst > 1e-9)
+            errors += fail("the probe's Gaussian or its Cholesky factor is wrong");
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -1122,6 +1522,10 @@ static void help(void)
            "  --trimstep X    the weight DAC's step below the weight LSB, in weight LSB (0.25)\n"
            "  --trimmax X     the trim's clamp, in weight LSB (128)\n"
            "  --post-hours H  age H more hours after calibrating, to see how long it holds\n"
+           "  --thermal8 X    thermal sigma in LSB of an 8-bit ADC, whatever --adcbits is\n"
+           "  --photons8 P    photons per LSB of an 8-bit ADC, likewise\n"
+           "  --probe 1       add each layer's error against the network's own sums, the run's\n"
+           "                  noise in 8-bit LSB, and the accuracy that error alone predicts\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
 }
 

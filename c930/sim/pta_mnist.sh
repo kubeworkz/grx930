@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -154,6 +154,12 @@ fi
 # activation bits, a 6-bit ADC, thermal sigma of one ADC LSB, 3 photons per ADC
 # LSB, programming sigma of 4 weight LSB, 10% crosstalk -- and drift at TFLT's
 # fit, aged to the hour its calibration interval allows.
+#
+# READ WITH `budget`, BELOW.  --thermal and --photons are in LSB of the ADC a
+# run configures, and C1 measured those two rows at an 8-bit ADC.  At the 6-bit
+# ADC here "--thermal 1 --photons 3" is four times that receiver noise and a
+# quarter of that light, so "v0 entire" below is not v0's rows together.  These
+# settings are kept as they were run because the plan's tables quote them.
 if [ "$what" = joint ] || [ "$what" = all ]; then
     v0_bits="--abits 5 --adcbits 6"
     v0_noise="--thermal 1 --photons 3 --prog 4 --xtalk 0.1"
@@ -204,6 +210,99 @@ if [ "$what" = calib ] || [ "$what" = all ]; then
     } > "$work/out/calib_settings.txt"
     echo "== C3(a): the cell trim, DIN_W 8, B_w 6, five networks each"
     run_settings calib
+fi
+
+# The budget in a unit that does not move with the ADC, and a probe on every
+# run: each layer's error against the network's own sums, and the accuracy that
+# error alone predicts (pta_mnist.c, the probe).  The rows where C1 measured
+# them; all of v0 at that ADC, at v0's own converters with the same noise, and
+# as X1 ran it; v1 as X1 ran it and as its table reads; what each change is
+# worth from v0 and what each relaxation costs from v1; and a sweep that asks
+# whether accuracy follows the amount of error whatever it is made of.
+if [ "$what" = budget ] || [ "$what" = all ]; then
+    all="quant,thermal,shot,prog,xtalk"
+    v0n="--thermal8 1 --photons8 3 --prog 4 --xtalk 0.1"
+    v1n="--thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+    {
+        echo "--impair quant --adcbits 8"
+        echo "--impair quant --adcbits 8 --abits 5"
+        echo "--impair quant --adcbits 6"
+        echo "--impair quant,thermal --adcbits 8 --thermal8 1"
+        echo "--impair quant,shot --adcbits 8 --photons8 3"
+        echo "--impair quant,prog --adcbits 8 --prog 4"
+        echo "--impair quant,xtalk --adcbits 8 --xtalk 0.1"
+
+        echo "--impair $all --abits 5 --adcbits 8 $v0n"
+        echo "--impair $all --abits 5 --adcbits 6 $v0n"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal 1 --photons 3 --prog 4 --xtalk 0.1"
+
+        echo "--impair $all --abits 6 --adcbits 7 --thermal 0.25 --photons 30 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+
+        # from v0 at its own converters, one change at a time
+        echo "--impair quant,thermal,prog,xtalk --abits 5 --adcbits 6 --thermal8 1 --prog 4 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal8 1 --photons8 30 --prog 4 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal8 0.5 --photons8 3 --prog 4 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal8 1 --photons8 3 --prog 1 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal8 1 --photons8 3 --prog 4 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 6 $v0n"
+        echo "--impair $all --abits 5 --adcbits 7 $v0n"
+
+        # from v1 as X1 ran it, one relaxation at a time
+        echo "--impair quant,thermal,prog,xtalk --abits 6 --adcbits 7 --thermal8 0.5 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 1 --photons8 15 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 3 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 4 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 7 $v1n"
+        echo "--impair $all --abits 6 --adcbits 6 $v1n"
+
+        # two that were predicted before they were run, by adding the rows above:
+        # v1's noise at v0's converters, and v0 with only its two largest rows
+        # tightened
+        echo "--impair $all --abits 5 --adcbits 6 $v1n"
+        echo "--impair $all --abits 5 --adcbits 6 --thermal8 1 --photons8 15 --prog 1 --xtalk 0.1"
+
+        # v0's noise at v1's converters, with drift aged as the joint runs age it
+        echo "--impair $all --abits 6 --adcbits 7 $v0n"
+        echo "--impair $all,drift --abits 5 --adcbits 6 $v0n --drift tflt --hours 1"
+        echo "--impair $all,drift --abits 5 --adcbits 6 $v0n --drift tflt --hours 0.1"
+
+        # does accuracy follow the amount of error, whatever it is made of?
+        for x in 2 4 8; do echo "--impair quant,thermal --adcbits 8 --thermal8 $x"; done
+        for x in 1 0.3 0.1; do echo "--impair quant,shot --adcbits 8 --photons8 $x"; done
+        for x in 8 16 32; do echo "--impair quant,prog --adcbits 8 --prog $x"; done
+        for x in 0.2 0.4; do echo "--impair quant,xtalk --adcbits 8 --xtalk $x"; done
+        echo "--impair $all --adcbits 8 --thermal8 2 --photons8 0.75 --prog 8 --xtalk 0.2"
+        echo "--impair $all --adcbits 8 --thermal8 3 --photons8 0.333 --prog 12 --xtalk 0.3"
+    } | sed 's/$/ --probe 1/' > "$work/out/budget_settings.txt"
+    echo "== budget: noise in 8-bit LSB, DIN_W 8, B_w 6, five networks each, with the probe"
+    for sd in 1 2 3 4 5; do echo 8 8 $sd; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for sd in 1 2 3 4 5; do echo 8 6 $sd 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while read -r setting; do
+        for sd in 1 2 3 4 5; do echo "pta_mnist budget d8_b6_s$sd.net --seed $sd $setting"; done
+    done < "$work/out/budget_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+    # acc is the tile's accuracy; iid, cov and res are the probe's three
+    # predictions of it; e1 to eres are errors as a percentage of the rms they
+    # are measured against; th8 and ph8 are the run's noise in 8-bit LSB.
+    printf '%-86s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %5s %5s\n' \
+        setting acc iid cov res e1 e2 eprop elog eres gain agree th8 ph8
+    while read -r setting; do
+        key=$(echo "$setting" | tr -c 'A-Za-z0-9.,' '_')
+        cat "$work/out/budget.d"/d8_b6_s*"$key".txt | awk -v name="${setting% --probe 1}" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              n++; a += v["acc"]; pi += v["pred_iid"]; pc += v["pred_cov"]; pr += v["pred_res"]
+              ag += v["agree"]; e1 += v["e1"]; e2 += v["e2"]; ep += v["eprop"]; el += v["elog"]
+              er += v["eres"]; g += v["gain"]; t8 = v["thermal8"]; p8 = v["photons8"] }
+            END { sub(/--impair /, "", name); gsub(/quant,thermal,shot,prog,xtalk/, "ALL", name)
+                  printf "%-86s %6.2f %6.2f %6.2f %6.2f %6.2f %6.2f %6.2f %6.2f %6.2f %+6.3f %6.2f %5.3g %5.3g\n",
+                         name, a / n, pi / n, pc / n, pr / n, 100 * e1 / n, 100 * e2 / n, 100 * ep / n,
+                         100 * el / n, 100 * er / n, g / n, ag / n, t8, p8 }'
+    done < "$work/out/budget_settings.txt"
+    cat "$work/out/budget.d"/d8_b6_s*.txt | awk '{ for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+        r[v["net_seed"]] = v["ref"]; d[v["net_seed"]] = v["digital"] }
+        END { for (k in r) { s += r[k]; t += d[k]; n++ }
+              printf "%-88s %6.2f   (in floating point %.2f)\n", "the network on its host, no tile", s / n, t / n }'
 fi
 
 exit $((gate_status | ablate_status))

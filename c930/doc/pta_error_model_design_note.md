@@ -7,6 +7,9 @@ RTL on 2026-09-23: a trim per cell and an affine per column in PTM-C, the
 calibration engine and its four schedulers in `rtl/pta/c930_pta_cal.sv`, and the
 `cal_busy` dispatch guard in `rtl/c930_npu_csr.sv` (§4, §5).
 Decisions E1–E4 were settled on 2026-09-14 and E5–E8 on 2026-09-15.
+**The budget was rerun in a unit no ADC defines on 2026-10-03** (§5, at its
+end): the sweep's noise rows cost 1.5 points together, as they do summed, and
+the 11 to 13 points grxcp's joint runs reported were four times the noise.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -627,6 +630,96 @@ With the 8-bit ADC, 97.42% before any noise:
   rerun each network on its own seed; settings without drift moved by at most
   0.14 points.
 
+### The budget, in a unit the ADC does not move
+
+*Added 2026-10-03.* `sim/pta_mnist.sh MNIST WORK budget`: 44 settings on the
+five `B_w = 6` networks, 220 evaluations, ten minutes on five jobs. Reported,
+not gated.
+
+**Why it was run.** `--thermal` and `--photons` are in LSB of whichever ADC a
+run configures, because that is the contract's unit (§4). The clip rule gives
+each width its own shift, and on all five networks and both layers a `b`-bit
+ADC's shift is exactly `8 − b` more than the 8-bit ADC's. So one LSB of a 6-bit
+ADC is four of an 8-bit one's. The sweep above measured thermal and shot noise
+at an 8-bit ADC. grxcp's X1 then ran those rows together with
+`sim/pta_mnist.sh joint`, at a 6-bit ADC, as `--thermal 1 --photons 3` — which
+at six bits is **four times that receiver noise and a quarter of that light**.
+Its "v0 entire" was not v0's rows together.
+
+Two options state the two in LSB of an 8-bit ADC whatever the ADC is,
+`--thermal8` and `--photons8`, and `--probe 1` reports every run's noise in
+that unit however it was asked for.
+
+**The rows, alone and together.** Means of five, against 97.45% on the host:
+
+| Setting | Accuracy | Loss | Thermal, photons, in 8-bit LSB |
+|---|---|---|---|
+| Nothing but the 8-bit ADC | 97.42 | 0.03 | none |
+| v0's five rows, one at a time at that ADC: 5 activation bits, thermal 1, 3 photons, programming 4, crosstalk 10% | 97.28, 97.16, 96.97, 97.15, 97.26 | 0.14, 0.26, 0.45, 0.27, 0.16 under it: **1.28 summed** | 1, 3 |
+| All five at once, at that ADC | 96.04 | **1.38** under it | 1, 3 |
+| All five at v0's own 6-bit ADC, the same noise | 95.96 | **1.49**, where the rows and the ADC's own 0.21 sum to 1.49 | 1, 3 |
+| As X1 ran it: `--adcbits 6 --thermal 1 --photons 3` | 86.37 | 11.08 | **4, 0.75** |
+| v1 as X1 ran it: `--adcbits 7 --thermal 0.25 --photons 30` | 97.20 | 0.25 | 0.5, 15 |
+| v1 with its 0.25 and 30 taken as 8-bit LSB | 97.27 | 0.18 | 0.25, 30 |
+| v0 at the same noise, after an hour of TFLT drift; after six minutes | 94.87; 95.77 | 2.58; 1.68 | 1, 3 |
+
+**On this network the rows add.** Together they cost what they cost one at a
+time, to a tenth of a point, at either ADC. The same holds between the two
+versions, one row at a time from each end:
+
+| Row, v0 ↔ v1 | Tightened from v0 | Relaxed from v1 |
+|---|---|---|
+| Activation DAC, 5 ↔ 6 bits | +0.10 | −0.10 |
+| ADC, 6 ↔ 7 bits | +0.09 | −0.12 |
+| Receiver noise, 1 ↔ 0.5 LSB of an 8-bit ADC | +0.18 | −0.19 |
+| Light, 3 ↔ 15 photons per such LSB | +0.34 (at 30, and the same with no shot noise at all) | −0.34 |
+| Programming error, 4 ↔ 1 weight LSB | +0.42 | −0.33 |
+| Crosstalk, 10% ↔ 2% | +0.08 | −0.16 |
+| Summed | 1.21 | 1.24 |
+
+The two versions are 1.24 apart. Two settings were predicted by adding these
+before they were run: v1's noise at v0's converters, 96.98 predicted and 96.97
+measured; and v0 with only its light and its programming error tightened, 96.72
+and 96.65.
+
+**The probe** measures each layer's sums against the network's own — weights
+at the network's width, activations unquantised — as a fraction of their rms,
+so the result does not depend on any ADC. Layer 1's GEMM is 22.8% off and layer
+2's 20.1% at v0, 8.0% and 7.7% at v1, and 49.5% and 30.0% as X1 ran v0. It then
+asks whether the error at the ten outputs is all there is to the accuracy, by
+perturbing the reference outputs with Gaussian noise and counting what is still
+classified correctly.
+
+- **For noise it is.** Thermal, shot and programming error, each alone and each
+  turned up until the outputs are equally wrong, give the same accuracy:
+
+  | Output error | Thermal | Shot | Programming | Independent noise of that rms predicts |
+  |---|---|---|---|---|
+  | 18 to 19% | 96.21 | 96.25 | 96.27 | 96.15, 95.92, 95.94 |
+  | 35 to 39% | 89.97 | 91.85 | 89.92 | 90.59, 90.64, 88.71 |
+  | 63 to 88% | 65.23 | 73.97 | 57.15 | 69.39, 74.47, 60.57 |
+
+  So what decides the cost of these three is how much error they put on the
+  outputs, in quadrature, and not which of them it was.
+- **Crosstalk is not noise.** At 10% it puts 26% of error on the outputs and
+  costs 0.16 points, where noise of that size would cost about three. Most of it
+  is a gain — the outputs come back 17% large — and an argmax does not see a
+  gain. With each image's common shift and the fitted gain taken out, 10.9% is
+  left and the prediction is 97.13 against 97.26. At 20% and 40% crosstalk even
+  that under-predicts, by 1.5 and by 16 points: what is left is still a
+  deterministic function of the image, and noise is the wrong model for it.
+- **So accuracy is not a function of total error**, which is what this was run
+  to find out. All of v0 puts 33% of error on the outputs and loses 1.5 points;
+  thermal noise alone at 35% loses 7.5. The joint points are under-predicted by
+  one point at v0 and three as X1 ran it, for the crosstalk in them.
+
+**What this is not.** One 784-100-10 network on MNIST, five trainings of it.
+That the rows add here says nothing about a deeper network, where a layer's
+error is the next layer's input many times over. Programming error is in 8-bit
+weight LSB and drift in the fits above; neither was restated. And it prices
+rows, it does not choose between them: what a bit of ADC or a halving of
+receiver noise costs in silicon and in laser is grxcp's to weigh against these.
+
 ---
 
 ## 6. Order
@@ -695,3 +788,10 @@ With the 8-bit ADC, 97.42% before any noise:
    neighbour's crosstalk does not couple on again. An MZI mesh would couple
    along its triangular structure instead (CPU document §8 item 5); that is a
    different matrix, and a hypothesis this program has no ground truth for.
+8. **The noise fields are in ADC LSB, and a requirement cannot be.**
+   `PTA_SIGMA_TH` and `PTA_SIGMA_SH` are in LSB of the ADC the same block
+   configures, which is the right unit for a model that adds noise at the ADC.
+   It is the wrong unit to hand anyone: the same receiver is 1 LSB at eight
+   bits and a quarter at six, and §5's budget records what that cost. A
+   requirement on a receiver or on the light has to name the ADC it stands
+   beside, or be in a unit of the signal. `pta_mnist --probe` prints both.
