@@ -25,6 +25,12 @@
  * with zero weights and one-hot activations reads every cell's programming
  * error and drift at once, and the trim that answers it goes to the DAC.
  *
+ * A network may have more hidden layers than D3's one (train --hidden H), each
+ * 100 wide: layer l runs on weight bank l & 1, and each hidden layer has its own
+ * rescale.  At one hidden layer everything here is what it was -- the files,
+ * the trained weights and every output line -- and deeper ones are how the
+ * budget is asked whether it holds with depth (design note section 5).
+ *
  * And the probe (--probe 1), which measures how far each layer's sums are from
  * the network's own, as a fraction of their rms, and asks whether that error is
  * all there is to the accuracy.  It exists because the noise options are in LSB
@@ -34,12 +40,13 @@
  * both.  doc/pta_error_model_design_note.md section 5 has what that changed.
  *
  *   pta_mnist selftest
- *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET]
+ *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
  */
 #include "pta_tile_model.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +63,8 @@
 #define CLIP_FRAC   1e-4        /* the fraction either may clip */
 #define BATCH       32
 #define MAX_EPOCHS  100
+#define MAX_HID     8           /* hidden layers a network may have; D3 has one */
+#define MAX_L       (MAX_HID + 1)
 
 /* The core's NUM_ROWS, NUM_COLS, MAX_M, MAX_K, MAX_N and ACC_W. */
 #define ROWS        8
@@ -77,7 +86,8 @@
 #define TEST_HOURS  46.0
 #define PI          3.14159265358979323846
 
-static const char MAGIC[8] = "PTAMLP2";
+/* PTAMLP2 is one hidden layer, laid out as it always was; PTAMLP3 says how many. */
+static const char MAGIC[8] = "PTAMLP2", MAGIC_DEEP[8] = "PTAMLP3";
 
 typedef struct {
     int      n;
@@ -85,26 +95,113 @@ typedef struct {
     uint8_t *y;                 /* n labels */
 } dataset;
 
+/*
+ * A network: `hidden` hidden layers, each N_HID wide, and so hidden + 1 weight
+ * layers.  D3 has one.  Everything before `hidden` is the file's header, and at
+ * one hidden layer a file is that header and then w and b, layer by layer:
+ * byte for byte what this harness has always written.
+ */
 typedef struct {
     char     magic[8];
     int      din, wbits, seed, epochs;
     int      from_bits, from_epochs;  /* the network it started from, or 0 */
     double   val_acc, test_acc; /* digital, on the quantised weights */
-    float    w1[N_HID * N_IN];  /* row n: hidden unit n's input weights */
-    float    b1[N_HID];
-    float    w2[N_OUT * N_HID];
-    float    b2[N_OUT];
+    int      hidden;
+    float   *w[MAX_L];          /* layer l, row n: its output n's input weights */
+    float   *b[MAX_L];
 } mlp;
 
 /* The network as the host drives the tile. */
 typedef struct {
-    int      din;
-    int32_t  w1[N_HID * N_IN];  /* weight operands, w * 2^(D-1) */
-    int32_t  w2[N_OUT * N_HID];
-    int64_t  b1[N_HID];         /* biases in their layer's output units */
-    int64_t  b2[N_OUT];
-    int      sh;                /* hidden rescale: a2 = round(h / 2^sh) */
+    int      din, hidden;
+    int32_t *w[MAX_L];          /* weight operands, w * 2^(D-1) */
+    int64_t *b[MAX_L];          /* biases in their layer's output units */
+    int      sh[MAX_HID];       /* hidden layer l's rescale: a = round(h / 2^sh[l]) */
 } host_net;
+
+/* One image's sums and operands, layer by layer. */
+typedef struct {
+    int64_t  y[MAX_L][N_HID];   /* layer l's sums before its bias; N_OUT of them in the last */
+    int32_t  a[MAX_L][N_HID];   /* a[l], l >= 1: the operands layer l is given */
+} image_ws;
+
+/* The same for a batch of up to MAX_M images, each layer row-major by image. */
+typedef struct {
+    int64_t  y[MAX_L][MAX_M * N_HID];
+    int32_t  a[MAX_L][MAX_M * N_HID];
+} batch_ws;
+
+static int layer_in(int l)
+{
+    return l == 0 ? N_IN : N_HID;
+}
+
+static int layer_out(int hidden, int l)
+{
+    return l == hidden ? N_OUT : N_HID;
+}
+
+static int layer_size(int hidden, int l)
+{
+    return layer_in(l) * layer_out(hidden, l);
+}
+
+static void mlp_free(mlp *net)
+{
+    int l;
+    for (l = 0; l < MAX_L; ++l) {
+        free(net->w[l]);
+        free(net->b[l]);
+        net->w[l] = NULL;
+        net->b[l] = NULL;
+    }
+}
+
+/* Zeroed weights and biases for a network of this depth.  Returns 0, or -1. */
+static int mlp_alloc(mlp *net, int hidden)
+{
+    int l;
+    net->hidden = hidden;
+    for (l = 0; l < MAX_L; ++l)
+        net->w[l] = net->b[l] = NULL;
+    for (l = 0; l <= hidden; ++l) {
+        net->w[l] = (float *)calloc((size_t)layer_size(hidden, l), sizeof(float));
+        net->b[l] = (float *)calloc((size_t)layer_out(hidden, l), sizeof(float));
+        if (!net->w[l] || !net->b[l]) {
+            mlp_free(net);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void host_free(host_net *hn)
+{
+    int l;
+    for (l = 0; l < MAX_L; ++l) {
+        free(hn->w[l]);
+        free(hn->b[l]);
+        hn->w[l] = NULL;
+        hn->b[l] = NULL;
+    }
+}
+
+static int host_alloc(host_net *hn, int din, int hidden)
+{
+    int l;
+    memset(hn, 0, sizeof *hn);
+    hn->din    = din;
+    hn->hidden = hidden;
+    for (l = 0; l <= hidden; ++l) {
+        hn->w[l] = (int32_t *)calloc((size_t)layer_size(hidden, l), sizeof(int32_t));
+        hn->b[l] = (int64_t *)calloc((size_t)layer_out(hidden, l), sizeof(int64_t));
+        if (!hn->w[l] || !hn->b[l]) {
+            host_free(hn);
+            return -1;
+        }
+    }
+    return 0;
+}
 
 /* ------------------------------------------------------------------------- */
 
@@ -235,28 +332,41 @@ static int load_set(const char *dir, const char *images, const char *labels, int
 
 /* ------------------------------------------------------------------------- */
 
-/* The network on quantised weights, as a digital computer runs it. */
-static int classify(const float *wq1, const float *b1, const float *wq2, const float *b2,
-                    const uint8_t *px)
+/* The network on quantised weights wq, as a digital computer runs it. */
+static int classify(const mlp *net, float *const *wq, const uint8_t *px)
 {
-    float x[N_IN], h[N_HID], z, best_z = 0.0f;
-    int nz[N_IN], cnt = 0, n, k, o, best = 0;
+    const int H = net->hidden;
+    float x[N_IN], h[2][N_HID], z, best_z = 0.0f;
+    const float *in;
+    int nz[N_IN], cnt = 0, n, k, o, l, best = 0;
     for (k = 0; k < N_IN; ++k)
         if (px[k]) {
             nz[cnt]  = k;
             x[cnt++] = px[k] / 255.0f;
         }
     for (n = 0; n < N_HID; ++n) {
-        const float *row = wq1 + n * N_IN;
-        z = b1[n];
+        const float *row = wq[0] + n * N_IN;
+        z = net->b[0][n];
         for (k = 0; k < cnt; ++k)
             z += row[nz[k]] * x[k];
-        h[n] = z > 0.0f ? z : 0.0f;
+        h[0][n] = z > 0.0f ? z : 0.0f;
     }
+    for (l = 1; l < H; ++l) {
+        float *out = h[l & 1];
+        in = h[(l - 1) & 1];
+        for (n = 0; n < N_HID; ++n) {
+            const float *row = wq[l] + n * N_HID;
+            z = net->b[l][n];
+            for (k = 0; k < N_HID; ++k)
+                z += row[k] * in[k];
+            out[n] = z > 0.0f ? z : 0.0f;
+        }
+    }
+    in = h[(H - 1) & 1];
     for (o = 0; o < N_OUT; ++o) {
-        z = b2[o];
+        z = net->b[H][o];
         for (n = 0; n < N_HID; ++n)
-            z += wq2[o * N_HID + n] * h[n];
+            z += wq[H][o * N_HID + n] * in[n];
         if (o == 0 || z > best_z) {
             best_z = z;
             best   = o;
@@ -265,12 +375,12 @@ static int classify(const float *wq1, const float *b1, const float *wq2, const f
     return best;
 }
 
-static double digital_accuracy(const mlp *net, const float *wq1, const float *wq2,
-                               const dataset *d, int first, int count)
+static double digital_accuracy(const mlp *net, float *const *wq, const dataset *d, int first,
+                               int count)
 {
     int i, right = 0;
     for (i = first; i < first + count; ++i)
-        right += classify(wq1, net->b1, wq2, net->b2, d->x + (size_t)i * N_IN) == d->y[i];
+        right += classify(net, wq, d->x + (size_t)i * N_IN) == d->y[i];
     return 100.0 * right / count;
 }
 
@@ -289,67 +399,75 @@ static void adam(float *w, const float *g, float *m, float *v, int n, long t)
     }
 }
 
-/* Trains net at wbits, from Glorot or, if start is given, from start's weights. */
+/* Trains net, already allocated for its depth, at wbits: from Glorot or, if
+ * start is given, from start's weights. */
 static void train(mlp *net, const dataset *tr, const dataset *te, int din, int wbits, int seed,
                   const mlp *start, int verbose)
 {
-    enum { P1 = N_HID * N_IN, P2 = N_OUT * N_HID };
-    const double lim1 = sqrt(6.0 / (N_IN + N_HID)), lim2 = sqrt(6.0 / (N_HID + N_OUT));
+    const int H = net->hidden, L = H + 1;
     uint64_t ri = 0x243F6A8885A308D3ull ^ (uint64_t)(uint32_t)seed;                /* init */
     uint64_t rs = 0x13198A2E03707344ull ^ (uint64_t)(uint32_t)seed ^ ((uint64_t)wbits << 32);
-    float *wq1 = (float *)malloc(P1 * sizeof(float)), *wq2 = (float *)malloc(P2 * sizeof(float));
-    float *g1  = (float *)malloc(P1 * sizeof(float)), *g2  = (float *)malloc(P2 * sizeof(float));
-    float *m1  = (float *)calloc(P1, sizeof(float)),  *v1  = (float *)calloc(P1, sizeof(float));
-    float *m2  = (float *)calloc(P2, sizeof(float)),  *v2  = (float *)calloc(P2, sizeof(float));
-    float gb1[N_HID], gb2[N_OUT], mb1[N_HID] = {0}, vb1[N_HID] = {0}, mb2[N_OUT] = {0}, vb2[N_OUT] = {0};
+    float *wq[MAX_L], *g[MAX_L], *m[MAX_L], *v[MAX_L];
+    float gb[MAX_L][N_HID], mb[MAX_L][N_HID], vb[MAX_L][N_HID];
     int *order = (int *)malloc(N_TRAIN * sizeof(int));
     double best = -1.0;
     long t = 0;
-    int i, epoch;
+    int i, l, epoch;
 
-    memcpy(net->magic, MAGIC, sizeof MAGIC);
+    for (l = 0; l < L; ++l) {
+        const size_t P = (size_t)layer_size(H, l);
+        wq[l] = (float *)malloc(P * sizeof(float));
+        g[l]  = (float *)malloc(P * sizeof(float));
+        m[l]  = (float *)calloc(P, sizeof(float));
+        v[l]  = (float *)calloc(P, sizeof(float));
+    }
+    memset(mb, 0, sizeof mb);
+    memset(vb, 0, sizeof vb);
+
+    memcpy(net->magic, H == 1 ? MAGIC : MAGIC_DEEP, sizeof MAGIC);
     net->din   = din;
     net->wbits = wbits;
     net->seed  = seed;
     if (start) {
-        memcpy(net->w1, start->w1, sizeof net->w1);
-        memcpy(net->b1, start->b1, sizeof net->b1);
-        memcpy(net->w2, start->w2, sizeof net->w2);
-        memcpy(net->b2, start->b2, sizeof net->b2);
+        for (l = 0; l < L; ++l) {
+            memcpy(net->w[l], start->w[l], (size_t)layer_size(H, l) * sizeof(float));
+            memcpy(net->b[l], start->b[l], (size_t)layer_out(H, l) * sizeof(float));
+        }
         net->from_bits   = start->wbits;
         net->from_epochs = start->epochs;
     } else {
-        for (i = 0; i < P1; ++i)
-            net->w1[i] = (float)((2.0 * uniform01(&ri) - 1.0) * lim1);  /* Glorot uniform */
-        for (i = 0; i < P2; ++i)
-            net->w2[i] = (float)((2.0 * uniform01(&ri) - 1.0) * lim2);
-        memset(net->b1, 0, sizeof net->b1);
-        memset(net->b2, 0, sizeof net->b2);
+        for (l = 0; l < L; ++l) {
+            const double lim = sqrt(6.0 / (layer_in(l) + layer_out(H, l)));
+            const int P = layer_size(H, l);
+            for (i = 0; i < P; ++i)
+                net->w[l][i] = (float)((2.0 * uniform01(&ri) - 1.0) * lim);  /* Glorot uniform */
+            memset(net->b[l], 0, (size_t)layer_out(H, l) * sizeof(float));
+        }
     }
     for (i = 0; i < N_TRAIN; ++i)
         order[i] = i;
 
     for (epoch = 0; epoch < MAX_EPOCHS; ++epoch) {
-        int start;
+        int first;
         for (i = N_TRAIN - 1; i > 0; --i) {
             const int j = (int)(splitmix64(&rs) % (uint64_t)(i + 1));
             const int s = order[i];
             order[i] = order[j];
             order[j] = s;
         }
-        for (start = 0; start < N_TRAIN; start += BATCH) {
-            const int bs = (N_TRAIN - start < BATCH) ? N_TRAIN - start : BATCH;
+        for (first = 0; first < N_TRAIN; first += BATCH) {
+            const int bs = (N_TRAIN - first < BATCH) ? N_TRAIN - first : BATCH;
             int j;
-            quantise(net->w1, wq1, P1, din, wbits);
-            quantise(net->w2, wq2, P2, din, wbits);
-            memset(g1, 0, P1 * sizeof(float));
-            memset(g2, 0, P2 * sizeof(float));
-            memset(gb1, 0, sizeof gb1);
-            memset(gb2, 0, sizeof gb2);
+            for (l = 0; l < L; ++l) {
+                quantise(net->w[l], wq[l], layer_size(H, l), din, wbits);
+                memset(g[l], 0, (size_t)layer_size(H, l) * sizeof(float));
+                memset(gb[l], 0, sizeof gb[l]);
+            }
             for (j = 0; j < bs; ++j) {
-                const int idx = order[start + j];
+                const int idx = order[first + j];
                 const uint8_t *px = tr->x + (size_t)idx * N_IN;
-                float x[N_IN], z1[N_HID], h[N_HID], z2[N_OUT], dz2[N_OUT], zmax, sum;
+                float x[N_IN], z[MAX_HID][N_HID], h[MAX_HID][N_HID], dl[MAX_HID][N_HID];
+                float z2[N_OUT], dz2[N_OUT], zmax, sum;
                 int nz[N_IN], cnt = 0, n, k, o;
                 for (k = 0; k < N_IN; ++k)
                     if (px[k]) {
@@ -357,21 +475,30 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                         x[cnt++] = px[k] / 255.0f;
                     }
                 for (n = 0; n < N_HID; ++n) {
-                    const float *row = wq1 + n * N_IN;
-                    float z = net->b1[n];
+                    const float *row = wq[0] + n * N_IN;
+                    float zz = net->b[0][n];
                     for (k = 0; k < cnt; ++k)
-                        z += row[nz[k]] * x[k];
-                    z1[n] = z;
-                    h[n]  = z > 0.0f ? z : 0.0f;
+                        zz += row[nz[k]] * x[k];
+                    z[0][n] = zz;
+                    h[0][n] = zz > 0.0f ? zz : 0.0f;
                 }
+                for (l = 1; l < H; ++l)
+                    for (n = 0; n < N_HID; ++n) {
+                        const float *row = wq[l] + n * N_HID;
+                        float zz = net->b[l][n];
+                        for (k = 0; k < N_HID; ++k)
+                            zz += row[k] * h[l - 1][k];
+                        z[l][n] = zz;
+                        h[l][n] = zz > 0.0f ? zz : 0.0f;
+                    }
                 zmax = -1e30f;
                 for (o = 0; o < N_OUT; ++o) {
-                    float z = net->b2[o];
+                    float zz = net->b[H][o];
                     for (n = 0; n < N_HID; ++n)
-                        z += wq2[o * N_HID + n] * h[n];
-                    z2[o] = z;
-                    if (z > zmax)
-                        zmax = z;
+                        zz += wq[H][o * N_HID + n] * h[H - 1][n];
+                    z2[o] = zz;
+                    if (zz > zmax)
+                        zmax = zz;
                 }
                 sum = 0.0f;
                 for (o = 0; o < N_OUT; ++o)
@@ -379,34 +506,47 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                 for (o = 0; o < N_OUT; ++o) {
                     const float p = (float)exp(z2[o] - zmax) / sum;
                     dz2[o] = (p - (o == tr->y[idx] ? 1.0f : 0.0f)) / (float)bs;
-                    gb2[o] += dz2[o];
+                    gb[H][o] += dz2[o];
                     for (n = 0; n < N_HID; ++n)
-                        g2[o * N_HID + n] += dz2[o] * h[n];
+                        g[H][o * N_HID + n] += dz2[o] * h[H - 1][n];
                 }
                 /* straight through: the rounded weights carry the gradient back,
                  * and it lands on the real-valued ones */
-                for (n = 0; n < N_HID; ++n) {
-                    float dh = 0.0f;
-                    float *row;
-                    if (z1[n] <= 0.0f)
-                        continue;
-                    for (o = 0; o < N_OUT; ++o)
-                        dh += wq2[o * N_HID + n] * dz2[o];
-                    gb1[n] += dh;
-                    row = g1 + n * N_IN;
-                    for (k = 0; k < cnt; ++k)
-                        row[nz[k]] += dh * x[k];
+                for (l = H - 1; l >= 0; --l) {
+                    const float *wn = wq[l + 1];            /* the layer above */
+                    const float *dn = (l == H - 1) ? dz2 : dl[l + 1];
+                    const int on = layer_out(H, l + 1);
+                    for (n = 0; n < N_HID; ++n) {
+                        float dh = 0.0f;
+                        float *row;
+                        dl[l][n] = 0.0f;
+                        if (z[l][n] <= 0.0f)
+                            continue;
+                        for (o = 0; o < on; ++o)
+                            dh += wn[o * N_HID + n] * dn[o];
+                        dl[l][n] = dh;
+                        gb[l][n] += dh;
+                        if (l == 0) {
+                            row = g[0] + n * N_IN;
+                            for (k = 0; k < cnt; ++k)
+                                row[nz[k]] += dh * x[k];
+                        } else {
+                            row = g[l] + n * N_HID;
+                            for (k = 0; k < N_HID; ++k)
+                                row[k] += dh * h[l - 1][k];
+                        }
+                    }
                 }
             }
             ++t;
-            adam(net->w1, g1, m1, v1, P1, t);
-            adam(net->b1, gb1, mb1, vb1, N_HID, t);
-            adam(net->w2, g2, m2, v2, P2, t);
-            adam(net->b2, gb2, mb2, vb2, N_OUT, t);
+            for (l = 0; l < L; ++l) {
+                adam(net->w[l], g[l], m[l], v[l], layer_size(H, l), t);
+                adam(net->b[l], gb[l], mb[l], vb[l], layer_out(H, l), t);
+            }
         }
-        quantise(net->w1, wq1, P1, din, wbits);
-        quantise(net->w2, wq2, P2, din, wbits);
-        net->val_acc = digital_accuracy(net, wq1, wq2, tr, N_TRAIN, N_ALL - N_TRAIN);
+        for (l = 0; l < L; ++l)
+            quantise(net->w[l], wq[l], layer_size(H, l), din, wbits);
+        net->val_acc = digital_accuracy(net, wq, tr, N_TRAIN, N_ALL - N_TRAIN);
         net->epochs  = epoch + 1;
         if (verbose)
             fprintf(stderr, "  epoch %d: held out %.2f%%\n", epoch + 1, net->val_acc);
@@ -415,55 +555,66 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
         else if (epoch > 0)
             break;
     }
-    net->test_acc = digital_accuracy(net, wq1, wq2, te, 0, N_TEST);
+    net->test_acc = digital_accuracy(net, wq, te, 0, N_TEST);
 
-    free(wq1); free(wq2); free(g1); free(g2);
-    free(m1); free(v1); free(m2); free(v2);
+    for (l = 0; l < L; ++l) {
+        free(wq[l]);
+        free(g[l]);
+        free(m[l]);
+        free(v[l]);
+    }
     free(order);
 }
 
 /* ------------------------------------------------------------------------- */
 
-/* The weight operands as the DAC holds them at B bits. */
-static void quant_weights(const host_net *hn, int wbits, int32_t *q1, int32_t *q2)
+/* The weight operands as the DAC holds them at B bits, into q[l] for each layer. */
+static void quant_weights(const host_net *hn, int wbits, int32_t *const *q)
 {
-    int i;
-    for (i = 0; i < N_HID * N_IN; ++i)
-        q1[i] = contract_quant(hn->w1[i], wbits, hn->din);
-    for (i = 0; i < N_OUT * N_HID; ++i)
-        q2[i] = contract_quant(hn->w2[i], wbits, hn->din);
+    int i, l;
+    for (l = 0; l <= hn->hidden; ++l) {
+        const int P = layer_size(hn->hidden, l);
+        for (i = 0; i < P; ++i)
+            q[l][i] = contract_quant(hn->w[l][i], wbits, hn->din);
+    }
 }
 
 /* One image through the network in integers, with no tile, on weights from
  * quant_weights(): the sums the tile computes exactly when only QUANT's
  * operand quantisers are on.  q(0, B) is 0, so zero inputs are skipped. */
-static void direct_image(const host_net *hn, const int32_t *q1, const int32_t *q2, int abits,
-                         const int32_t *a1, int64_t *y1, int32_t *a2, int64_t *y2)
+static void direct_image(const host_net *hn, int32_t *const *q, int abits, const int32_t *a0,
+                         image_ws *ws)
 {
-    const int D = hn->din;
+    const int D = hn->din, H = hn->hidden;
     const int64_t amax = ((int64_t)1 << (D - 1)) - 1;
     int64_t xa[N_IN];
-    int nz[N_IN], cnt = 0, n, k, o;
+    int nz[N_IN], cnt = 0, n, k, l;
     for (k = 0; k < N_IN; ++k)
-        if (a1[k]) {
+        if (a0[k]) {
             nz[cnt]   = k;
-            xa[cnt++] = contract_quant(a1[k], abits, D);
+            xa[cnt++] = contract_quant(a0[k], abits, D);
         }
-    for (n = 0; n < N_HID; ++n) {
-        const int32_t *row = q1 + n * N_IN;
-        int64_t s = 0, v;
-        for (k = 0; k < cnt; ++k)
-            s += xa[k] * row[nz[k]];
-        y1[n] = s;
-        v = s + hn->b1[n];
-        v = round_shift(v > 0 ? v : 0, hn->sh);
-        a2[n] = (int32_t)(v > amax ? amax : v);
-    }
-    for (o = 0; o < N_OUT; ++o) {
-        int64_t s = 0;
-        for (k = 0; k < N_HID; ++k)
-            s += (int64_t)contract_quant(a2[k], abits, D) * q2[o * N_HID + k];
-        y2[o] = s;
+    for (l = 0; l <= H; ++l) {
+        const int out = layer_out(H, l);
+        if (l > 0)
+            for (k = 0; k < N_HID; ++k)
+                xa[k] = contract_quant(ws->a[l][k], abits, D);
+        for (n = 0; n < out; ++n) {
+            const int32_t *row = q[l] + n * layer_in(l);
+            int64_t s = 0, v;
+            if (l == 0)
+                for (k = 0; k < cnt; ++k)
+                    s += xa[k] * row[nz[k]];
+            else
+                for (k = 0; k < N_HID; ++k)
+                    s += xa[k] * row[k];
+            ws->y[l][n] = s;
+            if (l < H) {
+                v = s + hn->b[l][n];
+                v = round_shift(v > 0 ? v : 0, hn->sh[l]);
+                ws->a[l + 1][n] = (int32_t)(v > amax ? amax : v);
+            }
+        }
     }
 }
 
@@ -474,61 +625,53 @@ typedef struct {
 } gemm_buf;
 
 /*
- * M images, their input operands a1 (M x 784), through the tile: y1 (M x 100)
- * and y2 (M x 10) are the GEMMs' sums before the biases, a2 the hidden
- * operands.  Every GEMM takes the next seed.  Returns ADC saturations, or -1.
+ * M images, their input operands a0 (M x 784), through the tile: bw->y[l] are
+ * layer l's GEMM sums before the biases and bw->a[l], for l >= 1, the operands
+ * layer l was given.  Layer l runs on weight bank l & 1, and every GEMM takes
+ * the next seed.  Returns ADC saturations, or -1.
  */
-static long tile_batch(const host_net *hn, const pta_cfg cfg[2], const pta_tile *tile,
+static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile,
                        pta_device *dev, uint32_t seed, uint32_t *gemm, gemm_buf *g, int M,
-                       const int32_t *a1, int64_t *y1, int32_t *a2, int64_t *y2)
+                       const int32_t *a0, batch_ws *bw)
 {
+    const int H = hn->hidden;
     const int64_t amax = ((int64_t)1 << (hn->din - 1)) - 1;
     long sats = 0, r;
-    int n0, k0, m, n, k;
+    int l, n0, k0, m, n, k;
     pta_cfg c;
 
-    memset(y1, 0, (size_t)M * N_HID * sizeof *y1);
-    for (n0 = 0; n0 < N_HID; n0 += MAX_N) {
-        const int N = (N_HID - n0 < MAX_N) ? N_HID - n0 : MAX_N;
-        for (k0 = 0; k0 < N_IN; k0 += MAX_K) {
-            const int K = (N_IN - k0 < MAX_K) ? N_IN - k0 : MAX_K;
-            for (m = 0; m < M; ++m)
+    for (l = 0; l <= H; ++l) {
+        const int in = layer_in(l), out = layer_out(H, l);
+        const int32_t *src = l == 0 ? a0 : bw->a[l];
+        int64_t *y = bw->y[l];
+        memset(y, 0, (size_t)M * out * sizeof *y);
+        for (n0 = 0; n0 < out; n0 += MAX_N) {
+            const int N = (out - n0 < MAX_N) ? out - n0 : MAX_N;
+            for (k0 = 0; k0 < in; k0 += MAX_K) {
+                const int K = (in - k0 < MAX_K) ? in - k0 : MAX_K;
+                for (m = 0; m < M; ++m)
+                    for (k = 0; k < K; ++k)
+                        g->A[m * K + k] = src[m * in + k0 + k];
                 for (k = 0; k < K; ++k)
-                    g->A[m * K + k] = a1[m * N_IN + k0 + k];
-            for (k = 0; k < K; ++k)
-                for (n = 0; n < N; ++n)
-                    g->B[k * N + n] = hn->w1[(n0 + n) * N_IN + k0 + k];
-            c      = cfg[0];
-            c.seed = gemm_seed(seed, (*gemm)++);
-            if ((r = pta_gemm(&c, tile, dev, 0, M, N, K, g->A, g->B, g->C)) < 0)
-                return -1;
-            sats += r;
+                    for (n = 0; n < N; ++n)
+                        g->B[k * N + n] = hn->w[l][(n0 + n) * in + k0 + k];
+                c      = cfg[l];
+                c.seed = gemm_seed(seed, (*gemm)++);
+                if ((r = pta_gemm(&c, tile, dev, l & 1, M, N, K, g->A, g->B, g->C)) < 0)
+                    return -1;
+                sats += r;
+                for (m = 0; m < M; ++m)
+                    for (n = 0; n < N; ++n)
+                        y[m * out + n0 + n] += g->C[m * N + n];
+            }
+        }
+        if (l < H)
             for (m = 0; m < M; ++m)
-                for (n = 0; n < N; ++n)
-                    y1[m * N_HID + n0 + n] += g->C[m * N + n];
-        }
-    }
-    for (m = 0; m < M; ++m)
-        for (n = 0; n < N_HID; ++n) {
-            int64_t v = y1[m * N_HID + n] + hn->b1[n];
-            v = round_shift(v > 0 ? v : 0, hn->sh);
-            a2[m * N_HID + n] = (int32_t)(v > amax ? amax : v);
-        }
-
-    memset(y2, 0, (size_t)M * N_OUT * sizeof *y2);
-    for (n0 = 0; n0 < N_OUT; n0 += MAX_N) {
-        const int N = (N_OUT - n0 < MAX_N) ? N_OUT - n0 : MAX_N;
-        for (k = 0; k < N_HID; ++k)
-            for (n = 0; n < N; ++n)
-                g->B[k * N + n] = hn->w2[(n0 + n) * N_HID + k];
-        c      = cfg[1];
-        c.seed = gemm_seed(seed, (*gemm)++);
-        if ((r = pta_gemm(&c, tile, dev, 1, M, N, N_HID, a2, g->B, g->C)) < 0)
-            return -1;
-        sats += r;
-        for (m = 0; m < M; ++m)
-            for (n = 0; n < N; ++n)
-                y2[m * N_OUT + n0 + n] += g->C[m * N + n];
+                for (n = 0; n < N_HID; ++n) {
+                    int64_t v = y[m * N_HID + n] + hn->b[l][n];
+                    v = round_shift(v > 0 ? v : 0, hn->sh[l]);
+                    bw->a[l + 1][m * N_HID + n] = (int32_t)(v > amax ? amax : v);
+                }
     }
     return sats;
 }
@@ -542,11 +685,14 @@ static long tile_batch(const host_net *hn, const pta_cfg cfg[2], const pta_tile 
  * unquantised -- so everything the tile does to a sum counts, quantisers
  * included.
  *
- *   e1     layer 1's GEMM: rms(y1 - reference) / rms(reference)
- *   e2     layer 2's GEMM on its own: against the exact product of the hidden
- *          operands the tile itself produced
- *   eprop  layer 1's error as it arrives at the outputs, through exact weights
- *   elog   both, at the outputs: rms(y2 - reference) / rms(reference)
+ *   e1, e2, ...  each layer's GEMM on its own: against the exact product of
+ *                the operands the tile itself gave it.  Layer 1's inputs are
+ *                the image, so e1 is also its whole error
+ *   eprop        everything before the last layer as it arrives at the
+ *                outputs, through exact weights
+ *   elog         all of it, at the outputs: rms(y - reference) / rms(reference)
+ *   t1, t2, ...  the same measure at every layer, for a network of more than
+ *                one hidden layer: how the error grows on the way through
  *
  * and then whether that error is all there is to the accuracy.  Three
  * predictions, each perturbing the reference outputs with Gaussian noise and
@@ -565,9 +711,11 @@ static long tile_batch(const host_net *hn, const pta_cfg cfg[2], const pta_tile 
 #define PROBE_DRAWS 32
 
 typedef struct {
-    double  e1, r1;             /* sums of squares: layer 1's error, its reference */
-    double  e2, r2;             /* layer 2's own error, the product it is against */
-    double  ep, et, rt;         /* propagated, total, and the reference outputs */
+    int     hidden;
+    double  e[MAX_L], r[MAX_L]; /* sums of squares: a layer's own error, and the
+                                   product it is measured against */
+    double  t[MAX_L], rt[MAX_L];/* its whole error, and the reference's sums */
+    double  ep;                 /* what arrives at the outputs from before them */
     double  mean[N_OUT];        /* the total error's sum, per output */
     double  cov[N_OUT][N_OUT];  /* and its raw second moments */
     double  cm[N_OUT], lm[N_OUT];   /* sums, per output: the error and the reference,
@@ -580,9 +728,10 @@ typedef struct {
     int     images, ref_right, agree;
 } probe;
 
-static int probe_init(probe *p, int images)
+static int probe_init(probe *p, int images, int hidden)
 {
     memset(p, 0, sizeof *p);
+    p->hidden = hidden;
     p->logit  = (double *)malloc((size_t)images * N_OUT * sizeof(double));
     p->margin = (double *)malloc((size_t)images * sizeof(double));
     return (p->logit && p->margin) ? 0 : -1;
@@ -594,39 +743,51 @@ static void probe_free(probe *p)
     free(p->margin);
 }
 
-/* M images: their operands, what tile_batch() returned for them, and the
+/* M images: their operands, what tile_batch() left in bw for them, and the
  * reference weights from quant_weights() at the network's own width. */
-static void probe_batch(probe *p, const host_net *hn, const int32_t *q1, const int32_t *q2, int M,
-                        const int32_t *a1, const int64_t *y1, const int32_t *a2, const int64_t *y2,
-                        const uint8_t *labels)
+static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, const int32_t *a0,
+                        const batch_ws *bw, const uint8_t *labels)
 {
-    int64_t r_y1[N_HID], r_y2[N_OUT];
-    int32_t r_a2[N_HID];
-    int m, n, k, o, j;
+    const int H = hn->hidden;
+    image_ws ws;
+    int m, n, k, o, j, l;
     for (m = 0; m < M; ++m) {
         double err[N_OUT], *lg = p->logit + (size_t)p->images * N_OUT, em = 0.0, gm = 0.0;
+        const int64_t *y2 = bw->y[H] + m * N_OUT;
         int best = 0, second = -1, tile_best = 0;
-        direct_image(hn, q1, q2, 0, a1 + m * N_IN, r_y1, r_a2, r_y2);
-        for (n = 0; n < N_HID; ++n) {
-            const double d = (double)(y1[m * N_HID + n] - r_y1[n]);
-            p->e1 += d * d;
-            p->r1 += (double)r_y1[n] * (double)r_y1[n];
-        }
+        direct_image(hn, q, 0, a0 + m * N_IN, &ws);
+        for (l = 0; l < H; ++l)
+            for (n = 0; n < N_HID; ++n) {
+                const int64_t yt = bw->y[l][m * N_HID + n];
+                int64_t loc = ws.y[l][n];
+                double d;
+                if (l > 0) {
+                    loc = 0;
+                    for (k = 0; k < N_HID; ++k)
+                        loc += (int64_t)bw->a[l][m * N_HID + k] * q[l][n * N_HID + k];
+                }
+                d = (double)(yt - loc);
+                p->e[l]  += d * d;
+                p->r[l]  += (double)loc * (double)loc;
+                d = (double)(yt - ws.y[l][n]);
+                p->t[l]  += d * d;
+                p->rt[l] += (double)ws.y[l][n] * (double)ws.y[l][n];
+            }
         for (o = 0; o < N_OUT; ++o) {
             int64_t loc = 0;
             double dl, dp;
             for (k = 0; k < N_HID; ++k)
-                loc += (int64_t)a2[m * N_HID + k] * q2[o * N_HID + k];
-            dl     = (double)(y2[m * N_OUT + o] - loc);
-            dp     = (double)(loc - r_y2[o]);
-            err[o] = (double)(y2[m * N_OUT + o] - r_y2[o]);
-            p->e2 += dl * dl;
-            p->r2 += (double)loc * (double)loc;
-            p->ep += dp * dp;
-            p->et += err[o] * err[o];
-            p->rt += (double)r_y2[o] * (double)r_y2[o];
-            lg[o]  = (double)(r_y2[o] + hn->b2[o]);
-            if (y2[m * N_OUT + o] + hn->b2[o] > y2[m * N_OUT + tile_best] + hn->b2[tile_best])
+                loc += (int64_t)bw->a[H][m * N_HID + k] * q[H][o * N_HID + k];
+            dl     = (double)(y2[o] - loc);
+            dp     = (double)(loc - ws.y[H][o]);
+            err[o] = (double)(y2[o] - ws.y[H][o]);
+            p->e[H]  += dl * dl;
+            p->r[H]  += (double)loc * (double)loc;
+            p->ep    += dp * dp;
+            p->t[H]  += err[o] * err[o];
+            p->rt[H] += (double)ws.y[H][o] * (double)ws.y[H][o];
+            lg[o]  = (double)(ws.y[H][o] + hn->b[H][o]);
+            if (y2[o] + hn->b[H][o] > y2[tile_best] + hn->b[H][tile_best])
                 tile_best = o;
         }
         for (o = 0; o < N_OUT; ++o) {
@@ -695,14 +856,15 @@ static int cmp_double(const void *a, const void *b)
 }
 
 typedef struct {
-    double ref, agree, e1, e2, eprop, elog, sigma, margin, pred_iid, pred_cov;
+    double ref, agree, e[MAX_L], t[MAX_L], eprop, elog, sigma, margin, pred_iid, pred_cov;
     double gain, eres, pred_res;
 } probe_result;
 
-/* Closes the probe: the ratios, and the two predictions drawn PROBE_DRAWS
+/* Closes the probe: the ratios, and the three predictions drawn PROBE_DRAWS
  * times an image on a generator of the probe's own. */
 static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_result *r)
 {
+    const int H = p->hidden;
     const double n = (double)p->images;
     double mean[N_OUT], cov[N_OUT][N_OUT], l[N_OUT][N_OUT], z[N_OUT];
     double rmean[N_OUT], rcov[N_OUT][N_OUT], rl[N_OUT][N_OUT], num = 0.0, den = 0.0, rss = 0.0;
@@ -712,11 +874,13 @@ static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_r
 
     r->ref    = 100.0 * p->ref_right / n;
     r->agree  = 100.0 * p->agree / n;
-    r->e1     = p->r1 > 0 ? sqrt(p->e1 / p->r1) : 0.0;
-    r->e2     = p->r2 > 0 ? sqrt(p->e2 / p->r2) : 0.0;
-    r->eprop  = p->rt > 0 ? sqrt(p->ep / p->rt) : 0.0;
-    r->elog   = p->rt > 0 ? sqrt(p->et / p->rt) : 0.0;
-    r->sigma  = sqrt(p->et / (n * N_OUT));
+    for (i = 0; i <= H; ++i) {
+        r->e[i] = p->r[i] > 0 ? sqrt(p->e[i] / p->r[i]) : 0.0;
+        r->t[i] = p->rt[i] > 0 ? sqrt(p->t[i] / p->rt[i]) : 0.0;
+    }
+    r->eprop  = p->rt[H] > 0 ? sqrt(p->ep / p->rt[H]) : 0.0;
+    r->elog   = p->rt[H] > 0 ? sqrt(p->t[H] / p->rt[H]) : 0.0;
+    r->sigma  = sqrt(p->t[H] / (n * N_OUT));
     for (o = 0; o < N_OUT; ++o)
         mean[o] = p->mean[o] / n;
     for (o = 0; o < N_OUT; ++o)
@@ -737,7 +901,7 @@ static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_r
                           + r->gain * r->gain * p->ll[o][j]) / n - rmean[o] * rmean[j];
         rss += p->cc[o][o] - 2.0 * r->gain * p->cl[o][o] + r->gain * r->gain * p->ll[o][o];
     }
-    r->eres = (p->rt > 0 && rss > 0) ? sqrt(rss / p->rt) : 0.0;
+    r->eres = (p->rt[H] > 0 && rss > 0) ? sqrt(rss / p->rt[H]) : 0.0;
     cholesky(rcov, rl);
     for (i = 0; i < p->images; ++i) {
         const double *lg = p->logit + (size_t)i * N_OUT;
@@ -866,44 +1030,57 @@ static int shift_for(const long *hist, long total)
 
 /*
  * The host's view of a trained network: operands, biases in output units, and
- * the hidden rescale set on training images with the weights as trained.
+ * each hidden layer's rescale, set on training images with the weights as
+ * trained.  A layer's rescale needs the layers before it settled, so they are
+ * set in order.  Allocates hn.  Returns 0, or -1 if out of memory.
  */
-static void host_setup(host_net *hn, const mlp *net, const dataset *tr)
+static int host_setup(host_net *hn, const mlp *net, const dataset *tr)
 {
-    const int D = net->din;
+    const int D = net->din, H = net->hidden;
     const double a_s = ldexp(1.0, D - 1) - 1.0, w_s = ldexp(1.0, D - 1);
     const int64_t amax = ((int64_t)1 << (D - 1)) - 1;
-    long hist[64] = {0}, total = 0;
-    int32_t a1[N_IN], a2[N_HID], *q1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t));
-    int32_t q2[N_OUT * N_HID];
-    int64_t y1[N_HID], y2[N_OUT];
-    int i, n, k;
+    int32_t a1[N_IN], *q[MAX_L];
+    image_ws *ws = (image_ws *)malloc(sizeof *ws);
+    double scale = a_s;         /* operand units per unit of this layer's input */
+    int i, n, k, l;
 
-    hn->din = D;
-    for (i = 0; i < N_HID * N_IN; ++i)
-        hn->w1[i] = weight_operand(net->w1[i], D);
-    for (i = 0; i < N_OUT * N_HID; ++i)
-        hn->w2[i] = weight_operand(net->w2[i], D);
-    for (n = 0; n < N_HID; ++n)
-        hn->b1[n] = llround(net->b1[n] * a_s * w_s);
-    hn->sh = 0;
-    quant_weights(hn, net->wbits, q1, q2);
-    for (i = 0; i < N_CAL_HID; ++i) {
-        for (k = 0; k < N_IN; ++k)
-            a1[k] = pixel_operand(tr->x[(size_t)i * N_IN + k], D);
-        direct_image(hn, q1, q2, 0, a1, y1, a2, y2);
-        for (n = 0; n < N_HID; ++n) {
-            const int64_t v = y1[n] + hn->b1[n];
-            if (v > 0) {
-                ++hist[shift_needed(v, amax)];
-                ++total;
+    if (!ws || host_alloc(hn, D, H) != 0)
+        return -1;
+    for (l = 0; l <= H; ++l) {
+        const int P = layer_size(H, l);
+        q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+        if (!q[l])
+            return -1;
+        for (i = 0; i < P; ++i)
+            hn->w[l][i] = weight_operand(net->w[l][i], D);
+    }
+    quant_weights(hn, net->wbits, q);
+    for (l = 0; l < H; ++l) {
+        long hist[64] = {0}, total = 0;
+        for (n = 0; n < N_HID; ++n)
+            hn->b[l][n] = llround(net->b[l][n] * scale * w_s);
+        hn->sh[l] = 0;
+        for (i = 0; i < N_CAL_HID; ++i) {
+            for (k = 0; k < N_IN; ++k)
+                a1[k] = pixel_operand(tr->x[(size_t)i * N_IN + k], D);
+            direct_image(hn, q, 0, a1, ws);
+            for (n = 0; n < N_HID; ++n) {
+                const int64_t v = ws->y[l][n] + hn->b[l][n];
+                if (v > 0) {
+                    ++hist[shift_needed(v, amax)];
+                    ++total;
+                }
             }
         }
+        hn->sh[l] = shift_for(hist, total);
+        scale = scale * w_s / ldexp(1.0, hn->sh[l]);
     }
-    hn->sh = shift_for(hist, total);
     for (n = 0; n < N_OUT; ++n)
-        hn->b2[n] = llround(net->b2[n] * a_s * w_s / ldexp(1.0, hn->sh) * w_s);
-    free(q1);
+        hn->b[H][n] = llround(net->b[H][n] * scale * w_s);
+    for (l = 0; l <= H; ++l)
+        free(q[l]);
+    free(ws);
+    return 0;
 }
 
 /*
@@ -912,41 +1089,43 @@ static void host_setup(host_net *hn, const mlp *net, const dataset *tr)
  * images.  The ADC rounds a sum s to round(s / 2^S), which saturates past
  * 2^(B-1) - 1.
  */
-static void adc_setup(const host_net *hn, const mlp *net, const dataset *tr, int adc_bits, int S[2])
+static void adc_setup(const host_net *hn, const mlp *net, const dataset *tr, int adc_bits, int *S)
 {
-    const int D = hn->din;
+    const int D = hn->din, H = hn->hidden;
     const int64_t lim = ((int64_t)1 << (adc_bits - 1)) - 1;
-    long hist[2][64] = {{0}}, total[2] = {0, 0};
-    int32_t a1[N_IN], a2[N_HID], *q1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t));
-    int32_t q2[N_OUT * N_HID];
-    int64_t y1[N_HID], y2[N_OUT];
-    int i, n, k, r;
+    long hist[MAX_L][64];
+    long total[MAX_L];
+    int32_t a1[N_IN], *q[MAX_L];
+    image_ws *ws = (image_ws *)malloc(sizeof *ws);
+    int i, n, k, r, l;
 
-    quant_weights(hn, net->wbits, q1, q2);
+    memset(hist, 0, sizeof hist);
+    memset(total, 0, sizeof total);
+    for (l = 0; l <= H; ++l)
+        q[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+    quant_weights(hn, net->wbits, q);
     for (i = 0; i < N_CAL_ADC; ++i) {
         for (k = 0; k < N_IN; ++k)
             a1[k] = pixel_operand(tr->x[(size_t)i * N_IN + k], D);
-        direct_image(hn, q1, q2, 0, a1, y1, a2, y2);
-        for (n = 0; n < N_HID; ++n)
-            for (k = 0; k < N_IN; k += ROWS) {
-                int64_t s = 0;
-                for (r = k; r < k + ROWS && r < N_IN; ++r)
-                    s += (int64_t)a1[r] * q1[n * N_IN + r];
-                ++hist[0][shift_needed(s < 0 ? -s : s, lim)];
-                ++total[0];
-            }
-        for (n = 0; n < N_OUT; ++n)
-            for (k = 0; k < N_HID; k += ROWS) {
-                int64_t s = 0;
-                for (r = k; r < k + ROWS && r < N_HID; ++r)
-                    s += (int64_t)a2[r] * q2[n * N_HID + r];
-                ++hist[1][shift_needed(s < 0 ? -s : s, lim)];
-                ++total[1];
-            }
+        direct_image(hn, q, 0, a1, ws);
+        for (l = 0; l <= H; ++l) {
+            const int in = layer_in(l), out = layer_out(H, l);
+            const int32_t *src = l == 0 ? a1 : ws->a[l];
+            for (n = 0; n < out; ++n)
+                for (k = 0; k < in; k += ROWS) {
+                    int64_t s = 0;
+                    for (r = k; r < k + ROWS && r < in; ++r)
+                        s += (int64_t)src[r] * q[l][n * in + r];
+                    ++hist[l][shift_needed(s < 0 ? -s : s, lim)];
+                    ++total[l];
+                }
+        }
     }
-    S[0] = shift_for(hist[0], total[0]);
-    S[1] = shift_for(hist[1], total[1]);
-    free(q1);
+    for (l = 0; l <= H; ++l) {
+        S[l] = shift_for(hist[l], total[l]);
+        free(q[l]);
+    }
+    free(ws);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -975,10 +1154,53 @@ static void drift_fit(pta_cfg *cfg, double swing_db)
 
 /* ------------------------------------------------------------------------- */
 
+/* The bytes before a network's weights: the header, and nothing else. */
+#define HEAD_BYTES  offsetof(mlp, hidden)
+
+static long net_bytes(int hidden)
+{
+    long n = (long)HEAD_BYTES + (hidden > 1 ? (long)sizeof(int) : 0);
+    int l;
+    for (l = 0; l <= hidden; ++l)
+        n += (long)sizeof(float) * (layer_size(hidden, l) + layer_out(hidden, l));
+    return n;
+}
+
+/* The header, then the depth if it is more than one, then w and b by layer. */
+static int save_net(const char *path, const mlp *net)
+{
+    FILE *f = fopen(path, "wb");
+    int l, ok = f && fwrite(net, HEAD_BYTES, 1, f) == 1;
+    if (net->hidden > 1)
+        ok = ok && fwrite(&net->hidden, sizeof(int), 1, f) == 1;
+    for (l = 0; ok && l <= net->hidden; ++l) {
+        const size_t P = (size_t)layer_size(net->hidden, l), B = (size_t)layer_out(net->hidden, l);
+        ok = fwrite(net->w[l], sizeof(float), P, f) == P &&
+             fwrite(net->b[l], sizeof(float), B, f) == B;
+    }
+    if (f && fclose(f) != 0)
+        ok = 0;
+    return ok ? 0 : -1;
+}
+
+/* Reads a network and allocates it.  Returns 0, or -1 with a message. */
 static int load_net(const char *path, mlp *net)
 {
     FILE *f = fopen(path, "rb");
-    int ok = f && fread(net, sizeof *net, 1, f) == 1 && memcmp(net->magic, MAGIC, sizeof MAGIC) == 0;
+    int hidden = 1, l, ok;
+    memset(net, 0, sizeof *net);
+    ok = f && fread(net, HEAD_BYTES, 1, f) == 1;
+    if (ok && memcmp(net->magic, MAGIC_DEEP, sizeof MAGIC_DEEP) == 0)
+        ok = fread(&hidden, sizeof(int), 1, f) == 1 && hidden > 1 && hidden <= MAX_HID;
+    else
+        ok = ok && memcmp(net->magic, MAGIC, sizeof MAGIC) == 0;
+    ok = ok && mlp_alloc(net, hidden) == 0;
+    for (l = 0; ok && l <= hidden; ++l) {
+        const size_t P = (size_t)layer_size(hidden, l), B = (size_t)layer_out(hidden, l);
+        ok = fread(net->w[l], sizeof(float), P, f) == P &&
+             fread(net->b[l], sizeof(float), B, f) == B;
+    }
+    ok = ok && fgetc(f) == EOF;
     if (f)
         fclose(f);
     if (!ok)
@@ -1021,40 +1243,45 @@ static int load_mnist(const char *dir, dataset *tr, dataset *te)
 static int cmd_train(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--din", "--wbits", "--seed", "--out", "--from",
-        "--verbose", NULL};
+        "--verbose", "--hidden", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *out = opt(argc, argv, "--out", NULL);
     const char *from = opt(argc, argv, "--from", NULL);
     const int din = atoi(opt(argc, argv, "--din", "16")), wbits = atoi(opt(argc, argv, "--wbits", "0"));
     const int seed = atoi(opt(argc, argv, "--seed", "1"));
+    const int hidden = atoi(opt(argc, argv, "--hidden", "1"));
     dataset tr, te;
-    mlp *net, *start = NULL;
-    FILE *f;
+    mlp net, from_net, *start = NULL;
     if (check_opts(argc, argv, names) != 0 || !data || !out || (din != 8 && din != 16) ||
-        wbits < 0 || wbits > din) {
-        fprintf(stderr, "pta_mnist train: --data DIR --din 8|16 --wbits 0..D --seed S --out NET [--from NET]\n");
+        wbits < 0 || wbits > din || hidden < 1 || hidden > MAX_HID) {
+        fprintf(stderr, "pta_mnist train: --data DIR --din 8|16 --wbits 0..D --seed S --out NET "
+                        "[--from NET] [--hidden 1..%d]\n", MAX_HID);
         return 2;
     }
     if (from) {
-        start = (mlp *)calloc(1, sizeof *start);
+        start = &from_net;
         if (load_net(from, start) != 0)
             return 2;
-        if (start->din != din || start->seed != seed) {
-            fprintf(stderr, "pta_mnist: %s is not a DIN_W %d network of seed %d\n", from, din, seed);
+        if (start->din != din || start->seed != seed || start->hidden != hidden) {
+            fprintf(stderr, "pta_mnist: %s is not a DIN_W %d network of seed %d and %d hidden "
+                            "layer%s\n", from, din, seed, hidden, hidden == 1 ? "" : "s");
             return 2;
         }
     }
     if (load_mnist(data, &tr, &te) != 0)
         return 2;
-    net = (mlp *)calloc(1, sizeof *net);
-    train(net, &tr, &te, din, wbits, seed, start, atoi(opt(argc, argv, "--verbose", "0")));
-    f = fopen(out, "wb");
-    if (!f || fwrite(net, sizeof *net, 1, f) != 1) {
+    memset(&net, 0, sizeof net);
+    if (mlp_alloc(&net, hidden) != 0)
+        return 2;
+    train(&net, &tr, &te, din, wbits, seed, start, atoi(opt(argc, argv, "--verbose", "0")));
+    if (save_net(out, &net) != 0) {
         fprintf(stderr, "pta_mnist: cannot write %s\n", out);
         return 2;
     }
-    fclose(f);
-    printf("din=%d wbits=%d seed=%d from=%d from_epochs=%d epochs=%d held_out=%.2f digital=%.2f\n",
-           din, wbits, seed, net->from_bits, net->from_epochs, net->epochs, net->val_acc, net->test_acc);
+    printf("din=%d wbits=%d seed=%d from=%d from_epochs=%d epochs=%d held_out=%.2f digital=%.2f",
+           din, wbits, seed, net.from_bits, net.from_epochs, net.epochs, net.val_acc, net.test_acc);
+    if (hidden > 1)
+        printf(" hidden=%d", hidden);
+    printf("\n");
     return 0;
 }
 
@@ -1093,6 +1320,16 @@ static int q88(const char *what, double v, uint32_t max, uint32_t *field)
     return 0;
 }
 
+/* "11,9": a list of ints as the output line carries it. */
+static void join_ints(char *buf, size_t size, const int *v, int n)
+{
+    size_t used = 0;
+    int i;
+    buf[0] = '\0';
+    for (i = 0; i < n && used < size; ++i)
+        used += (size_t)snprintf(buf + used, size - used, i ? ",%d" : "%d", v[i]);
+}
+
 static int cmd_eval(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
@@ -1111,29 +1348,31 @@ static int cmd_eval(int argc, char **argv)
     const char *thermal8 = opt(argc, argv, "--thermal8", NULL);
     const char *photons8 = opt(argc, argv, "--photons8", NULL);
     probe pr;
-    int32_t *pq1 = NULL, pq2[N_OUT * N_HID];
-    int S8[2] = {0, 0};
+    int32_t *pq[MAX_L] = {NULL};
+    int S[MAX_L] = {0}, S8[MAX_L] = {0};
     dataset tr, te;
-    mlp *net = (mlp *)calloc(1, sizeof *net);
-    host_net *hn = (host_net *)calloc(1, sizeof *hn);
+    mlp net_s, *net = &net_s;
+    host_net hn_s, *hn = &hn_s;
     gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
-    pta_cfg cfg[2];
+    batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+    int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
+    pta_cfg cfg[MAX_L];
     pta_tile tile;
     pta_device dev;
-    int32_t a1[MAX_M * N_IN], a2[MAX_M * N_HID];
-    int64_t y1[MAX_M * N_HID], y2[MAX_M * N_OUT];
+    char s_txt[64], sh_txt[64], s8_txt[64];
     uint32_t gemm = 0;
     uint64_t steps = 0, post_steps = 0;
-    long sats = 0, elements = 0, r;
-    int S[2] = {0, 0}, right = 0, base, m, k, o;
+    long sats = 0, elements = 0, per_image = 0, r;
+    int right = 0, base, m, k, o, l, H;
 
     memset(&pr, 0, sizeof pr);
     if (check_opts(argc, argv, names) != 0 || !data || !path || images < 1 || images > N_TEST) {
         fprintf(stderr, "pta_mnist eval: --data DIR --net NET [options] (pta_mnist help)\n");
         return 2;
     }
-    if (load_net(path, net) != 0 || load_mnist(data, &tr, &te) != 0)
+    if (!g || !bw || !a1 || load_net(path, net) != 0 || load_mnist(data, &tr, &te) != 0)
         return 2;
+    H = net->hidden;
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
@@ -1166,12 +1405,14 @@ static int cmd_eval(int argc, char **argv)
         return 2;
     }
 
-    host_setup(hn, net, &tr);
+    if (host_setup(hn, net, &tr) != 0)
+        return 2;
     if (cfg[0].adc_bits != 0)
         adc_setup(hn, net, &tr, (int)cfg[0].adc_bits, S);
-    cfg[1]           = cfg[0];
-    cfg[0].adc_shift = (uint32_t)S[0];
-    cfg[1].adc_shift = (uint32_t)S[1];
+    for (l = 1; l <= H; ++l)
+        cfg[l] = cfg[0];
+    for (l = 0; l <= H; ++l)
+        cfg[l].adc_shift = (uint32_t)S[l];
 
     /*
      * Noise in LSB of an 8-bit ADC, whatever ADC the run has.  The clip rule
@@ -1189,20 +1430,24 @@ static int cmd_eval(int argc, char **argv)
         }
         if (cfg[0].adc_bits != 0)
             adc_setup(hn, net, &tr, 8, S8);
-        for (k = 0; k < 2; ++k) {
-            const double lsb = ldexp(1.0, S[k] - S8[k]);     /* this ADC's LSB, in 8-bit LSB */
-            if (thermal8 && q88("--thermal8", atof(thermal8) / lsb, 65535, &cfg[k].sigma_th) != 0)
+        for (l = 0; l <= H; ++l) {
+            const double lsb = ldexp(1.0, S[l] - S8[l]);     /* this ADC's LSB, in 8-bit LSB */
+            if (thermal8 && q88("--thermal8", atof(thermal8) / lsb, 65535, &cfg[l].sigma_th) != 0)
                 return 2;
             if (photons8 && atof(photons8) > 0.0 &&
-                q88("--photons8", 1.0 / sqrt(atof(photons8) * lsb), 65535, &cfg[k].k_shot) != 0)
+                q88("--photons8", 1.0 / sqrt(atof(photons8) * lsb), 65535, &cfg[l].k_shot) != 0)
                 return 2;
         }
     }
     if (probing) {
-        pq1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t));
-        if (!pq1 || probe_init(&pr, images) != 0)
+        for (l = 0; l <= H; ++l) {
+            pq[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+            if (!pq[l])
+                return 2;
+        }
+        if (probe_init(&pr, images, H) != 0)
             return 2;
-        quant_weights(hn, net->wbits, pq1, pq2);
+        quant_weights(hn, net->wbits, pq);
     }
 
     tile.rows  = ROWS;
@@ -1221,56 +1466,75 @@ static int cmd_eval(int argc, char **argv)
     if ((cfg[0].impair & PTA_DRIFT) && post_steps)
         pta_drift_age(&dev, &cfg[0], post_steps);
 
+    for (l = 0; l <= H; ++l)
+        per_image += (long)layer_out(H, l) * ((layer_in(l) + ROWS - 1) / ROWS);
     for (base = 0; base < images; base += MAX_M) {
         const int M = (images - base < MAX_M) ? images - base : MAX_M;
+        const int64_t *y2 = bw->y[H];
         for (m = 0; m < M; ++m)
             for (k = 0; k < N_IN; ++k)
                 a1[m * N_IN + k] = pixel_operand(te.x[(size_t)(base + m) * N_IN + k], net->din);
-        if ((r = tile_batch(hn, cfg, &tile, &dev, seed, &gemm, g, M, a1, y1, a2, y2)) < 0) {
+        if ((r = tile_batch(hn, cfg, &tile, &dev, seed, &gemm, g, M, a1, bw)) < 0) {
             fprintf(stderr, "pta_mnist: pta_gemm refused a GEMM\n");
             return 2;
         }
         sats += r;
-        elements += (long)M * (N_HID * ((N_IN + ROWS - 1) / ROWS) + N_OUT * ((N_HID + ROWS - 1) / ROWS));
+        elements += (long)M * per_image;
         if (probing)
-            probe_batch(&pr, hn, pq1, pq2, M, a1, y1, a2, y2, te.y + base);
+            probe_batch(&pr, hn, pq, M, a1, bw, te.y + base);
         for (m = 0; m < M; ++m) {
             int best = 0;
             for (o = 1; o < N_OUT; ++o)
-                if (y2[m * N_OUT + o] + hn->b2[o] > y2[m * N_OUT + best] + hn->b2[best])
+                if (y2[m * N_OUT + o] + hn->b[H][o] > y2[m * N_OUT + best] + hn->b[H][best])
                     best = o;
             right += best == te.y[base + m];
         }
     }
 
+    join_ints(s_txt, sizeof s_txt, S, H + 1);
+    join_ints(sh_txt, sizeof sh_txt, hn->sh, H);
     printf("din=%d net_wbits=%d net_seed=%d from=%d epochs=%d digital=%.2f impair=0x%02x wbits=%u abits=%u "
-           "adcbits=%u S=%d,%d sh=%d thermal=%g photons=%g prog=%g xtalk=%g drift=%s hours=%g "
+           "adcbits=%u S=%s sh=%s thermal=%g photons=%g prog=%g xtalk=%g drift=%s hours=%g "
            "steps=%llu sigma_d=%u d_max=%u cal=%d trimstep=%g trimmax=%g post_hours=%g "
            "seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld",
            net->din, net->wbits, net->seed, net->from_bits, net->epochs, net->test_acc, cfg[0].impair, cfg[0].w_bits,
-           cfg[0].act_bits, cfg[0].adc_bits, S[0], S[1], hn->sh, cfg[0].sigma_th / 256.0, photons,
+           cfg[0].act_bits, cfg[0].adc_bits, s_txt, sh_txt, cfg[0].sigma_th / 256.0, photons,
            cfg[0].sigma_pr / 256.0, cfg[0].xtalk / 256.0, drift, hours, (unsigned long long)steps,
            cfg[0].drift_sigma, cfg[0].drift_max, calibrate, cfg[0].trim_step / 256.0,
            cfg[0].trim_max / 256.0, post_hours, seed, images, right, 100.0 * right / images, sats,
            elements);
+    if (H > 1)
+        printf(" hidden=%d", H);
     if (probing) {
         probe_result pv;
         /* The run's noise in LSB of an 8-bit ADC, layer 1's, however it was asked for. */
         const double lsb = cfg[0].adc_bits ? ldexp(1.0, S[0] - S8[0]) : 0.0;
         const double ks = cfg[0].k_shot / 256.0;
         probe_finish(&pr, te.y, seed, &pv);
-        printf(" S8=%d,%d thermal8=%g photons8=%g ref=%.2f agree=%.2f e1=%.5f e2=%.5f eprop=%.5f "
-               "elog=%.5f sigma=%.1f margin=%.1f pred_iid=%.2f pred_cov=%.2f gain=%+.4f eres=%.5f "
-               "pred_res=%.2f",
-               S8[0], S8[1], cfg[0].sigma_th / 256.0 * lsb,
-               (ks > 0.0 && lsb > 0.0) ? 1.0 / (ks * ks * lsb) : 0.0, pv.ref, pv.agree, pv.e1,
-               pv.e2, pv.eprop, pv.elog, pv.sigma, pv.margin, pv.pred_iid, pv.pred_cov, pv.gain,
-               pv.eres, pv.pred_res);
+        join_ints(s8_txt, sizeof s8_txt, S8, H + 1);
+        printf(" S8=%s thermal8=%g photons8=%g ref=%.2f agree=%.2f", s8_txt,
+               cfg[0].sigma_th / 256.0 * lsb, (ks > 0.0 && lsb > 0.0) ? 1.0 / (ks * ks * lsb) : 0.0,
+               pv.ref, pv.agree);
+        for (l = 0; l <= H; ++l)
+            printf(" e%d=%.5f", l + 1, pv.e[l]);
+        printf(" eprop=%.5f elog=%.5f sigma=%.1f margin=%.1f pred_iid=%.2f pred_cov=%.2f gain=%+.4f "
+               "eres=%.5f pred_res=%.2f",
+               pv.eprop, pv.elog, pv.sigma, pv.margin, pv.pred_iid, pv.pred_cov, pv.gain, pv.eres,
+               pv.pred_res);
+        if (H > 1)
+            for (l = 0; l <= H; ++l)
+                printf(" t%d=%.5f", l + 1, pv.t[l]);
         probe_free(&pr);
-        free(pq1);
+        for (l = 0; l <= H; ++l)
+            free(pq[l]);
     }
     printf("\n");
     pta_device_free(&dev);
+    host_free(hn);
+    mlp_free(net);
+    free(g);
+    free(bw);
+    free(a1);
     return 0;
 }
 
@@ -1351,29 +1615,34 @@ static int cmd_selftest(void)
 
     /* 3. the GEMM walk: random operands through tile_batch() against the
      *    direct sums, all impairments clear and with QUANT's operand
-     *    quantisers, at both widths, over a partial last batch */
-    for (di = 0; di < 2; ++di) {
-        const int D = dins[di];
+     *    quantisers, at both widths and then at three hidden layers, over a
+     *    partial last batch */
+    for (di = 0; di < 3; ++di) {
+        const int D = dins[di < 2 ? di : 0], H = di < 2 ? 1 : 3;
         const int32_t lo = -(1 << (D - 1)), span = 1 << D;
         const pta_tile tile = {ROWS, COLS, D, ACC_W};
-        host_net *hn = (host_net *)calloc(1, sizeof *hn);
+        host_net hn;
         gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
-        int32_t a1[MAX_M * N_IN], a2[MAX_M * N_HID], d_a2[N_HID];
-        int32_t *q1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t)), q2[N_OUT * N_HID];
-        int64_t y1[MAX_M * N_HID], y2[MAX_M * N_OUT], d_y1[N_HID], d_y2[N_OUT];
-        int pass, i, m, bad = 0;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        image_ws *ws = (image_ws *)malloc(sizeof *ws);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
+        int pass, i, m, l, bad = 0;
         pta_device dev;
         pta_device_init(&dev, &tile);
-        hn->din = D;
-        for (i = 0; i < N_HID * N_IN; ++i)
-            hn->w1[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
-        for (i = 0; i < N_OUT * N_HID; ++i)
-            hn->w2[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
-        for (i = 0; i < N_HID; ++i)
-            hn->b1[i] = (int64_t)(splitmix64(&rs) % (1ull << (2 * D + 6))) - (1ll << (2 * D + 5));
-        hn->sh = D + 3;
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        }
+        for (l = 0; l < H; ++l) {
+            for (i = 0; i < N_HID; ++i)
+                hn.b[l][i] = (int64_t)(splitmix64(&rs) % (1ull << (2 * D + 6))) - (1ll << (2 * D + 5));
+            hn.sh[l] = D + 3 - l;       /* a different rescale a layer: an index off by one shows */
+        }
         for (pass = 0; pass < 2; ++pass) {
-            pta_cfg cfg[2];
+            pta_cfg cfg[MAX_L];
             uint32_t gemm = 0;
             const int M = 37;
             memset(cfg, 0, sizeof cfg);
@@ -1382,86 +1651,117 @@ static int cmd_selftest(void)
                 cfg[0].w_bits   = 3;
                 cfg[0].act_bits = (uint32_t)D - 3;
             }
-            cfg[1] = cfg[0];
+            for (l = 1; l <= H; ++l)
+                cfg[l] = cfg[0];
             for (i = 0; i < M * N_IN; ++i)
                 a1[i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
-            if (tile_batch(hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, y1, a2, y2) < 0)
+            if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
                 ++bad;
-            quant_weights(hn, (int)cfg[0].w_bits, q1, q2);
+            quant_weights(&hn, (int)cfg[0].w_bits, q);
             for (m = 0; m < M; ++m) {
-                direct_image(hn, q1, q2, (int)cfg[0].act_bits, a1 + m * N_IN, d_y1, d_a2, d_y2);
-                bad += memcmp(d_y1, y1 + m * N_HID, sizeof d_y1) != 0;
-                bad += memcmp(d_a2, a2 + m * N_HID, sizeof d_a2) != 0;
-                bad += memcmp(d_y2, y2 + m * N_OUT, sizeof d_y2) != 0;
+                direct_image(&hn, q, (int)cfg[0].act_bits, a1 + m * N_IN, ws);
+                for (l = 0; l <= H; ++l) {
+                    const int out = layer_out(H, l);
+                    bad += memcmp(ws->y[l], bw->y[l] + m * out, (size_t)out * sizeof(int64_t)) != 0;
+                    if (l < H)
+                        bad += memcmp(ws->a[l + 1], bw->a[l + 1] + m * N_HID,
+                                      N_HID * sizeof(int32_t)) != 0;
+                }
             }
-            printf("selftest: D=%d %s, %d images in %u GEMMs against direct sums: %d differ\n", D,
-                   pass ? "QUANT B_w=3 B_a=D-3" : "no impairments", M, gemm, bad);
+            if (H == 1)
+                printf("selftest: D=%d %s, %d images in %u GEMMs against direct sums: %d differ\n", D,
+                       pass ? "QUANT B_w=3 B_a=D-3" : "no impairments", M, gemm, bad);
+            else
+                printf("selftest: D=%d %s, %d hidden layers, %d images in %u GEMMs against direct "
+                       "sums: %d differ\n", D, pass ? "QUANT B_w=3 B_a=D-3" : "no impairments", H, M,
+                       gemm, bad);
         }
         if (bad)
             errors += fail("the GEMM walk does not compute the network");
         pta_device_free(&dev);
-        free(hn);
+        host_free(&hn);
+        for (l = 0; l <= H; ++l)
+            free(q[l]);
         free(g);
-        free(q1);
+        free(bw);
+        free(ws);
+        free(a1);
     }
 
     /* 4. the probe: nothing impaired is no error at all, an impairment in one
-     *    layer shows in that layer's own term and not in the other's, and what
-     *    layer 1 does reaches the outputs as eprop and as nothing else */
-    {
-        const int D = 8, M = 37;
+     *    layer shows in that layer's own term and in no other's, nothing
+     *    before it is disturbed, and what it does reaches the outputs as
+     *    eprop and as nothing else -- at one hidden layer and at three */
+    for (di = 0; di < 2; ++di) {
+        const int D = 8, M = 37, H = di ? 3 : 1;
         const int32_t lo = -(1 << (D - 1)), span = 1 << D;
         const pta_tile tile = {ROWS, COLS, D, ACC_W};
-        host_net *hn = (host_net *)calloc(1, sizeof *hn);
+        host_net hn;
         gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
-        int32_t a1[MAX_M * N_IN], a2[MAX_M * N_HID];
-        int32_t *q1 = (int32_t *)malloc(N_HID * N_IN * sizeof(int32_t)), q2[N_OUT * N_HID];
-        int64_t y1[MAX_M * N_HID], y2[MAX_M * N_OUT];
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
         uint8_t labels[MAX_M];
-        int which, i, bad = 0;
+        int which, i, l, bad = 0;
         pta_device dev;
         pta_device_init(&dev, &tile);
-        hn->din = D;
-        for (i = 0; i < N_HID * N_IN; ++i)
-            hn->w1[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
-        for (i = 0; i < N_OUT * N_HID; ++i)
-            hn->w2[i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
-        hn->sh = D + 3;
-        quant_weights(hn, 0, q1, q2);
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        }
+        for (l = 0; l < H; ++l)
+            hn.sh[l] = D + 3 - l;
+        quant_weights(&hn, 0, q);
         for (i = 0; i < M * N_IN; ++i)
             a1[i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
         for (i = 0; i < M; ++i)
             labels[i] = (uint8_t)(splitmix64(&rs) % N_OUT);
-        for (which = 0; which < 3; ++which) {       /* nothing, layer 1 only, layer 2 only */
-            pta_cfg cfg[2];
+        for (which = 0; which <= H + 1; ++which) {      /* nothing, then each layer alone */
+            pta_cfg cfg[MAX_L];
             uint32_t gemm = 0;
             probe p;
-            int ok;
+            int ok = 1;
             memset(cfg, 0, sizeof cfg);
             if (which) {
                 cfg[which - 1].impair   = PTA_QUANT;
                 cfg[which - 1].act_bits = (uint32_t)D - 3;
             }
-            probe_init(&p, M);
-            if (tile_batch(hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, y1, a2, y2) < 0)
+            probe_init(&p, M, H);
+            if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
                 ++bad;
-            probe_batch(&p, hn, q1, q2, M, a1, y1, a2, y2, labels);
-            ok = which == 0 ? (p.e1 == 0.0 && p.e2 == 0.0 && p.ep == 0.0 && p.et == 0.0 && p.agree == M)
-               : which == 1 ? (p.e1 > 0.0 && p.e2 == 0.0 && p.ep > 0.0 && p.et == p.ep)
-               :              (p.e1 == 0.0 && p.e2 > 0.0 && p.ep == 0.0 && p.et == p.e2);
-            printf("selftest: probe, %s: e1 %s, e2 %s, propagated %s: %s\n",
-                   which == 0 ? "nothing impaired" : which == 1 ? "layer 1 only" : "layer 2 only",
-                   p.e1 > 0.0 ? "nonzero" : "zero", p.e2 > 0.0 ? "nonzero" : "zero",
-                   p.ep > 0.0 ? "nonzero" : "zero", ok ? "as it should be" : "WRONG");
+            probe_batch(&p, &hn, q, M, a1, bw, labels);
+            for (l = 0; l <= H; ++l) {
+                ok &= (p.e[l] > 0.0) == (l == which - 1);       /* its own term, no other's */
+                if (which == 0 || l < which - 1)
+                    ok &= p.t[l] == 0.0;                        /* nothing before it moved */
+            }
+            if (which == 0)
+                ok &= p.ep == 0.0 && p.agree == M;
+            else if (which - 1 < H)
+                ok &= p.ep > 0.0 && p.t[H] == p.ep;             /* it arrives, and only so */
+            else
+                ok &= p.ep == 0.0 && p.t[H] == p.e[H];
+            if (which == 0)
+                printf("selftest: probe, %d hidden, nothing impaired: no error anywhere: %s\n", H,
+                       ok ? "as it should be" : "WRONG");
+            else
+                printf("selftest: probe, %d hidden, layer %d only: in its own term alone, %s at the "
+                       "outputs: %s\n", H, which,
+                       which - 1 < H ? "propagated" : "its own", ok ? "as it should be" : "WRONG");
             bad += !ok;
             probe_free(&p);
         }
         if (bad)
             errors += fail("the probe does not put an error in the layer that made it");
         pta_device_free(&dev);
-        free(hn);
+        host_free(&hn);
+        for (l = 0; l <= H; ++l)
+            free(q[l]);
         free(g);
-        free(q1);
+        free(bw);
+        free(a1);
     }
 
     /* 5. the probe's own arithmetic: its Gaussian has unit variance, and its
@@ -1501,6 +1801,18 @@ static int cmd_selftest(void)
             errors += fail("the probe's Gaussian or its Cholesky factor is wrong");
     }
 
+    /* 6. a network of one hidden layer is laid out as this harness always
+     *    wrote it: 48 bytes of header, then w and b for each layer */
+    {
+        const long want = 48 + 4L * (N_HID * N_IN + N_HID + N_OUT * N_HID + N_OUT);
+        const int ok = net_bytes(1) == want && want == 318088 && HEAD_BYTES == 48 &&
+                       net_bytes(2) == want + 4 + 4L * (N_HID * N_HID + N_HID);
+        printf("selftest: a one-hidden-layer network is %ld bytes after a %d-byte header: %s\n",
+               net_bytes(1), (int)HEAD_BYTES, ok ? "as it always was" : "CHANGED");
+        if (!ok)
+            errors += fail("the network file's layout has moved");
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -1509,6 +1821,7 @@ static void help(void)
 {
     printf("pta_mnist selftest\n"
            "pta_mnist train --data DIR --din 8|16 --wbits B --seed S --out NET [--from NET] [--verbose 1]\n"
+           "  --hidden H      hidden layers, each 100 wide (1, which is D3; up to 8)\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
            "  --images N      first N test images (10000)\n"
            "  --seed S        model reset and per-GEMM seeds (1)\n"

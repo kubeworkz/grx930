@@ -2,13 +2,14 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
 # only evaluates) and the results in WORK_DIR/out.  JOBS sets how many runs go
 # at once (default 4).  Exits nonzero if the self-test or the gate fails, or
-# if the ablation passes.
+# if the ablation passes.  `depth` trains fifteen more networks and is not part
+# of `all`; DEPTHS sets which hidden-layer counts it runs (default "1 2 4 8").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -303,6 +304,92 @@ if [ "$what" = budget ] || [ "$what" = all ]; then
         r[v["net_seed"]] = v["ref"]; d[v["net_seed"]] = v["digital"] }
         END { for (k in r) { s += r[k]; t += d[k]; n++ }
               printf "%-88s %6.2f   (in floating point %.2f)\n", "the network on its host, no tile", s / n, t / n }'
+fi
+
+# Does the budget hold with depth?  D3 has one hidden layer, so a layer's error
+# is the next layer's input once.  This trains the same network with more of
+# them -- 784, then H layers of 100, then 10, by the same rule and from the same
+# seeds -- and runs the budget's core on each: the rows of v0 alone and
+# together, v0 and v1 with and without shot noise, and each of v1's rows
+# relaxed to v0's.  Noise is in 8-bit LSB throughout, and the probe is on.
+if [ "$what" = depth ]; then
+    all="quant,thermal,shot,prog,xtalk"
+    v0n="--thermal8 1 --photons8 3 --prog 4 --xtalk 0.1"
+    v1n="--thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+    {
+        echo "--impair quant --adcbits 8"
+        echo "--impair quant --adcbits 8 --abits 5"
+        echo "--impair quant,thermal --adcbits 8 --thermal8 1"
+        echo "--impair quant,shot --adcbits 8 --photons8 3"
+        echo "--impair quant,prog --adcbits 8 --prog 4"
+        echo "--impair quant,xtalk --adcbits 8 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 8 $v0n"
+        echo "--impair $all --abits 5 --adcbits 6 $v0n"
+        echo "--impair quant,thermal,prog,xtalk --abits 5 --adcbits 6 --thermal8 1 --prog 4 --xtalk 0.1"
+        echo "--impair quant,thermal,shot,prog --abits 5 --adcbits 6 --thermal8 1 --photons8 3 --prog 4"
+        echo "--impair $all --abits 6 --adcbits 7 $v1n"
+        echo "--impair quant,thermal,prog,xtalk --abits 6 --adcbits 7 --thermal8 0.5 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 1 --photons8 15 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 3 --prog 1 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 4 --xtalk 0.02"
+        echo "--impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.1"
+        echo "--impair $all --abits 5 --adcbits 7 $v1n"
+        echo "--impair $all --abits 6 --adcbits 6 $v1n"
+    } | sed 's/$/ --probe 1/' > "$work/out/depth_settings.txt"
+
+    # train_deep H WBITS SEED [FROM]: a DIN_W 8 network of H hidden layers
+    train_deep() {
+        local net="$PTA_WORK/nets/h$1_d8_b$2_s$3.net" from=()
+        [ $# -lt 4 ] || from=(--from "$PTA_WORK/nets/h$1_d8_b$4_s$3.net")
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits "$2" \
+            --seed "$3" --hidden "$1" "${from[@]}" --out "$net" > "$net.log"
+    }
+    export -f train_deep
+    # depth H's network of seed S; D3's are the ones the other modes use
+    net_of() { if [ "$1" = 1 ]; then echo "d8_b6_s$2"; else echo "h$1_d8_b6_s$2"; fi; }
+
+    depths=${DEPTHS:-1 2 4 8}
+    for sd in 1 2 3 4 5; do echo 8 8 $sd; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for sd in 1 2 3 4 5; do echo 8 6 $sd 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for h in $depths; do [ "$h" = 1 ] || for sd in 1 2 3 4 5; do echo $h 8 $sd; done; done |
+        xargs -r -P "$jobs" -L 1 bash -c 'train_deep "$@"' _
+    for h in $depths; do [ "$h" = 1 ] || for sd in 1 2 3 4 5; do echo $h 6 $sd 8; done; done |
+        xargs -r -P "$jobs" -L 1 bash -c 'train_deep "$@"' _
+    for h in $depths; do
+        while read -r setting; do
+            for sd in 1 2 3 4 5; do echo "pta_mnist depth $(net_of $h $sd).net --seed $sd $setting"; done
+        done < "$work/out/depth_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # acc is the tile's accuracy and loss what it gave up against the same
+    # networks on their host; res is the probe's prediction from the error a
+    # decision can see; own is the layers' own GEMM errors, averaged; elog and
+    # eres are the error at the outputs, all of it and the part a decision can
+    # see; and the last column is the error after each layer on the way through.
+    # All errors are percentages of the rms they are measured against.
+    for h in $depths; do
+        echo "== depth: $h hidden layer(s), DIN_W 8, B_w 6, five networks, noise in 8-bit LSB"
+        printf '%-84s %6s %6s %6s %6s %6s %6s  %s\n' setting acc loss res own elog eres "after each layer"
+        while read -r setting; do
+            key=$(echo "$setting" | tr -c 'A-Za-z0-9.,' '_')
+            cat "$work/out/depth.d/$(net_of $h '')"*"$key".txt | awk -v name="${setting% --probe 1}" -v h="$h" '
+                { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  n++; a += v["acc"]; rf += v["ref"]; pr += v["pred_res"]; el += v["elog"]; er += v["eres"]
+                  for (l = 1; l <= h + 1; ++l) {
+                      own[l] += v["e" l]
+                      t[l] += (("t" l) in v) ? v["t" l] : (l == 1 ? v["e1"] : v["elog"])
+                  } }
+                END { sub(/--impair /, "", name); gsub(/quant,thermal,shot,prog,xtalk/, "ALL", name)
+                      for (l = 1; l <= h + 1; ++l) { o += own[l] / (h + 1); ts = ts sprintf(" %5.1f", 100 * t[l] / n) }
+                      printf "%-84s %6.2f %6.2f %6.2f %6.2f %6.2f %6.2f %s\n", name, a / n, (rf - a) / n,
+                             pr / n, 100 * o / n, 100 * el / n, 100 * er / n, ts }'
+        done < "$work/out/depth_settings.txt"
+        cat "$work/out/depth.d/$(net_of $h '')"*.txt | awk '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              r[v["net_seed"]] = v["ref"]; d[v["net_seed"]] = v["digital"] }
+            END { for (k in r) { s += r[k]; t += d[k]; n++ }
+                  printf "%-84s %6.2f   (in floating point %.2f)\n", "the networks on their host, no tile", s / n, t / n }'
+    done
 fi
 
 exit $((gate_status | ablate_status))
