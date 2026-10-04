@@ -10,6 +10,10 @@ Decisions E1–E4 were settled on 2026-09-14 and E5–E8 on 2026-09-15.
 **The budget was rerun in a unit no ADC defines on 2026-10-03** (§5, at its
 end): the sweep's noise rows cost 1.5 points together, as they do summed, and
 the 11 to 13 points grxcp's joint runs reported were four times the noise.
+**And at depth, the same day** (§5, after that): on networks of up to eight
+hidden layers v1 costs what it costs on D3, v0 costs twice as much and its rows
+stop adding — by 40% at eight layers — and it is deterministic error that
+accumulates, not noise.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -719,6 +723,108 @@ error is the next layer's input many times over. Programming error is in 8-bit
 weight LSB and drift in the fits above; neither was restated. And it prices
 rows, it does not choose between them: what a bit of ADC or a halving of
 receiver noise costs in silicon and in laser is grxcp's to weigh against these.
+
+### Does the budget hold with depth?
+
+*Added 2026-10-03.* `sim/pta_mnist.sh MNIST WORK depth`. Reported, not gated.
+
+**Why.** The rows add on D3, and D3 has one hidden layer: a layer's error is the
+next layer's input once. grxcp's board plan asks whether the budget holds on a
+second workload (its §8, question 7), and the withdrawn claim that analog error
+compounds would, if it were true anywhere, be true of depth.
+
+**The networks.** 784 inputs, then H hidden layers of 100, then 10 outputs, for
+H = 2, 4 and 8, trained by D3's rule and from D3's seeds — five of each, at
+`B_w = 6` from its seed's network at 8 — with D3's own five as H = 1. On their
+host they score 97.45, 97.61, 97.27 and 96.91%. The deeper ones are not better
+because the rule stops at the first epoch that does not improve, which is a
+few epochs in; that is the rule's doing and nothing here depends on it.
+
+**The harness.** `pta_mnist.c` now takes any number of hidden layers up to
+eight (`train --hidden H`). Layer `l` runs on weight bank `l & 1`, and every
+hidden layer has its own rescale, set in order on training images. At one
+hidden layer nothing moved, and that was checked rather than assumed: three
+networks retrained from scratch are byte for byte the stored ones, and ten
+evaluation lines — the probe, drift and calibration among them — are byte for
+byte the previous build's.
+
+**What it ran.** Eighteen settings on each of the twenty networks: v0's five
+rows alone and together, v0 and v1 with and without shot noise, and each of
+v1's six rows relaxed to v0's. 360 evaluations, 29 minutes on five jobs. Noise
+is in LSB of an 8-bit ADC throughout. Losses are in points against the same
+networks on their host, with the standard error over the five:
+
+| | H = 1 | H = 2 | H = 4 | H = 8 |
+|---|---|---|---|---|
+| v1 | 0.26 ± 0.06 | 0.23 ± 0.03 | 0.30 ± 0.05 | 0.30 ± 0.03 |
+| v0, at its 6-bit ADC | 1.49 ± 0.05 | 1.96 ± 0.10 | 2.44 ± 0.29 | 3.19 ± 0.29 |
+| v0's five rows at the 8-bit ADC, summed | 1.30 | 1.53 | 1.90 | 1.95 |
+| The same five together | 1.38 | 1.81 | 2.24 | 2.76 |
+| Together, less the sum | +0.08 ± 0.16 | +0.28 ± 0.10 | +0.34 ± 0.21 | **+0.81 ± 0.15** |
+
+- **v1 holds.** It costs a quarter to a third of a point at every depth.
+- **v0 does not hold as well, and its rows stop adding.** Its cost doubles from
+  one hidden layer to eight, and at eight the five rows together cost 1.4 times
+  what they cost one at a time, five standard errors clear of adding. So analog
+  error does compound with depth — by 40% at eight layers. It was withdrawn at
+  the factor of six it was first reported at, and that stays withdrawn.
+
+**What accumulates is not the noise.** Each row alone, as its loss and as the
+error it puts on the outputs (percent of their rms):
+
+| Row, alone | Loss at H = 1, 2, 4, 8 | Output error at H = 1, 2, 4, 8 |
+|---|---|---|
+| Thermal, 1 LSB | 0.29, 0.37, 0.25, 0.24 | 9.3, 10.6, 9.2, 10.9 |
+| Shot, 3 photons | 0.49, 0.36, 0.27, 0.26 | 11.2, 11.7, 11.6, 13.7 |
+| Programming error, 4 LSB | 0.30, 0.32, 0.52, 0.51 | 9.7, 12.1, 16.2, 19.1 |
+| Crosstalk, 10% | 0.19, 0.32, 0.35, 0.32 | 26.2, 28.3, 22.4, 18.2 |
+| 5 activation bits | 0.17, 0.26, 0.40, 0.53 | 7.7, 11.7, 16.7, 31.5 |
+
+Thermal and shot noise put the same error on the outputs of a nine-layer
+network as of a two-layer one, and cost no more. The probe's error after each
+layer shows why. For thermal noise alone at H = 8 it runs 7.4, 8.9, 8.9, 9.5,
+9.0, 9.6, 10.3, 11.0, 10.9: a layer's noise does not survive the next layer
+undiminished, so what is on any layer's output is mostly that layer's own. For
+the activation quantiser it runs 4.6, 10.2, 11.7, 14.2, 16.7, 19.6, 24.1, 27.4,
+31.5: three points and more a layer, every layer. The quantiser's error is a
+function of the signal and not a draw, the same function at every layer, and it
+adds up. Programming error sits between: fresh at every weight write, but one
+draw for all 64 rows of a GEMM.
+
+Why a layer attenuates noise and not a quantiser's error is not something this
+measures. That a trained layer carries its signal along directions the noise is
+not on is a reading, and nothing here tests it.
+
+**The menu moves with depth.** v1's rows relaxed to v0's, one at a time:
+
+| Row | H = 1 | H = 2 | H = 4 | H = 8 |
+|---|---|---|---|---|
+| Receiver noise, 0.5 → 1 LSB | 0.18 | 0.38 | 0.23 | 0.22 |
+| Light, 15 → 3 photons | 0.34 | 0.31 | 0.23 | 0.21 |
+| Programming error, 1 → 4 LSB | 0.33 | 0.42 | 0.53 | 0.59 |
+| Crosstalk, 2% → 10% | 0.16 | 0.35 | 0.35 | 0.34 |
+| Activation DAC, 6 → 5 bits | 0.09 | 0.27 | 0.32 | 0.54 |
+| ADC, 7 → 6 bits | 0.12 | 0.21 | 0.11 | 0.20 |
+| Summed, against the gap between the versions | 1.21, 1.23 | 1.94, 1.73 | 1.78, 2.14 | 2.10, 2.89 |
+
+Standard errors are 0.02 to 0.14 on a row and 0.1 to 0.3 on a sum. At one hidden
+layer the activation DAC's sixth bit was the cheapest row there is; at eight it
+is six times that, and with programming error it is one of the two dearest.
+The two rows whose price is a laser and a converter — receiver noise and the
+ADC's bit — stay near a fifth of a point at every depth.
+
+**What was predicted, and was wrong.** Written down before the run: that the
+error on the outputs would grow as the square root of the number of layers, as
+independent errors that pass through unchanged would; that v1 would then cost a
+point and a half to two points at eight hidden layers, and v0 ten or more. v1
+costs 0.30 and v0 3.19. The assumption was that a layer passes its input's
+error on, and for noise it does not.
+
+**What this is not.** Fully connected layers of 100 on MNIST, and nothing with
+a convolution, a residual path or attention in it. One training rule. The
+hidden layers' rescale is the host's and exact, where grxcp's B4 puts the
+activation stage on the chiplet. And the networks were trained without the
+impairments: a network trained with them in the loop may tolerate more.
 
 ---
 
