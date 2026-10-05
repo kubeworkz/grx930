@@ -18,6 +18,11 @@ accumulates, not noise.
 measured on the core's 8 × 8 tile. On the tiles grxcp's chiplet may have, up to
 256 × 128, v1 costs what it costs here, v0 costs a quarter to a half more, and
 drift costs far less — in a model whose cells drift independently.
+**And the light, 2026-10-05** (§5, at its end): the model has no term for a
+source, and one was added on the host's side of the line, outside the contract.
+A source's noise costs under a tenth of a point up to 5% rms a shot if a column
+reads a weight through a balanced pair, and twenty times less of it costs the
+same if it reads through an offset.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -987,6 +992,137 @@ shift, the smallest that clips one sum in ten thousand, and one shift a layer;
 another rule puts the sums elsewhere in the converter. Drift that is independent
 from cell to cell. The plan's candidate tiles and no others. And a model: none
 of it is a measurement of a tile.
+
+### What may the light do?
+
+*Added 2026-10-05.* `sim/pta_mnist.sh MNIST WORK source`. Reported, not gated.
+
+**Why.** The model has six impairments, and every one of them is the tile's or
+its receiver's. Nothing in it is the light's. That was harmless while the
+source was one laser of whatever noise it had. grxcp's board plan has since
+made the tile 256 × 64 at 1 GS/s, a ring bank on four buses lit by a comb with
+an amplifier behind it (its B10 to B12), and it holds that source to an
+intensity noise it could only assume: the receiver's own allowance applied to
+the light, 0.2% rms of full scale. Nothing had measured what a source's noise
+costs.
+
+**The harness.** `pta_mnist eval` takes three things a source does to a line's
+power, each as an rms fraction of it:
+
+| Option | What moves | When |
+|---|---|---|
+| `--src` | Every line together | Anew each shot: a pump's noise, or an amplifier's |
+| `--srcline` | Each line on its own | Anew each shot |
+| `--srcflat` | Each line's level | Once, for the run: lines that are not level |
+
+`--buses` cuts the tile's rows into runs that share their lines, since a line
+lights one row on every bus. And `--srcsign` says what a line's light reaches a
+column through, because that turns on how the tile signs a weight, which
+nothing has settled: `pair`, the weight alone, as a balanced pair of
+photodiodes has it; or `offset`, the weight and an offset the host takes off
+again from the operands it sent, as one photodiode would have it.
+
+**It is not in the contract.** The term is added on the host's side of the
+line, to the sums the tile returns: `a × (w + offset) × error`, summed over a
+shot's rows, with `a` and `w` as the tile quantises them. §4 is untouched and
+so are PTM-C and the RTL. What follows from where it sits are the model's
+limits. It is first order: the error meets the weight as written, not its
+programming error, its drift or its neighbours. It is added after the
+converter, where it is neither clipped nor quantised. And under `offset` the
+converter would also have to span the offset, which is not modelled. A shot's
+draws are its image's, its layer's and its tile's, so neither the cut nor the
+batch moves one. The self-test holds that, and fifteen errors planted in the
+term one at a time each fail it. At the defaults nothing moved: nine settings of the budget's record and
+eight of `geometry`'s are byte for byte what this build prints.
+
+**What it costs.** On the 256 × 64 tile, a layer a GEMM, four buses, over v1.
+Points lost against the same weights on the host, five networks, mean and
+standard error. v1 with no light's error loses 0.20 ± 0.05.
+
+Through a pair:
+
+| rms, a shot | Every line together | Each line on its own | A line's level |
+|---|---|---|---|
+| 0.2% | 0.21 ± 0.04 | 0.20 ± 0.05 | |
+| 0.5% | 0.20 ± 0.05 | | |
+| 1% | 0.25 ± 0.04 | 0.21 ± 0.05 | 0.25 ± 0.04 |
+| 2% | 0.24 ± 0.04 | 0.23 ± 0.05 | 0.24 ± 0.02 |
+| 5% | 0.28 ± 0.04 | 0.26 ± 0.05 | 0.27 ± 0.01 |
+| 10% | 0.45 ± 0.06 | 0.36 ± 0.03 | 0.34 ± 0.04 |
+| 20% | | 0.76 ± 0.06 | 0.65 ± 0.07 |
+
+Through an offset:
+
+| rms, a shot | Every line together | Each line on its own | A line's level |
+|---|---|---|---|
+| 0.2% | 0.30 ± 0.08 | 0.20 ± 0.06 | |
+| 0.5% | 0.40 ± 0.10 | | |
+| 1% | 0.94 ± 0.21 | 0.20 ± 0.06 | 0.23 ± 0.05 |
+| 2% | 3.75 ± 0.70 | 0.35 ± 0.05 | 0.32 ± 0.03 |
+| 5% | | 0.71 ± 0.12 | 0.55 ± 0.18 |
+
+And together: 2% with 5% a line and 5% of level, through a pair, loses
+0.30 ± 0.04; 5% of each loses 0.35 ± 0.05; and through an offset 0.2% with 1% a
+line and 1% of level loses 0.33 ± 0.08. They do not compound. Each set costs
+no more than its three rows summed, which over v1's 0.20 are 0.17, 0.21 and
+0.13, and the errors on layer 1's sums add in quadrature: 9.77% and 10.98%
+through a pair, which is what the three alone predict to the last figure.
+
+**Through a pair a source may be noisy.** Up to 5% rms a shot costs under a
+tenth of a point whichever of the three it is, and 10% costs 0.25, 0.16 and
+0.14. As three rows of one budget, 2% together with 5% a line and 5% of level
+cost a tenth of a point between them. The 0.2% the board plan assumed costs
+nothing that can be seen.
+
+**Through an offset it may not.** There 0.5% together costs what 10% does
+through a pair, 0.40 for 0.45, and it puts the same error on layer 1's sums,
+14.26% of their rms for 14.28%. That is a factor of twenty. The offset is every
+lit input at a weight of one, and the weights it sits beside are small. So how
+the tile signs a weight is worth twenty times in the source's noise, and at an
+offset the plan's 0.2% is about what the budget can stand: it costs a tenth of
+a point.
+
+**Noise a line is worth 0.42 of noise together**, at the sums. Layer 1's error
+grows as if `--src` added its own fraction of the sums' rms in quadrature, and
+`--srcline` 0.42 of its own: 10.06% at 10% a line, where together gives 14.28%.
+That is not the eighth that 64 independent lines on equal weights would leave,
+and not the whole. And the buses do not enter: 5% a line on one bus loses
+0.28 ± 0.04 and on four 0.26 ± 0.05, with the same 9.38% on layer 1's sums.
+
+**A line's level is a weight error that C3's calibration cannot see.** Level
+costs what noise a line costs, because to a column it is one: every weight in
+a row off by the same fraction. But the probe GEMM reads each cell through a
+weight of zero (§4), and a line's power multiplies that zero. So
+nothing built here measures a line's level, and it has to be levelled by
+something else or read by a probe with weights in it. This is an argument from
+how the probe is made and not a measurement: in this model the term is outside
+the tile, where the probe does not go.
+
+**What was predicted.** Written while the first run was going and before any of
+it was read. Six things.
+
+1. That through a pair, noise together would cost under a tenth of a point up
+   to 5%, and 0.1 to 0.4 at 10%. Right: 0.08 and 0.25.
+2. That noise a line would be as large at the sums as noise together, signed
+   weights leaving a sum no larger than its terms' root sum of squares. Wrong:
+   it is 0.42 of it. A trained network's sums are larger than that, by the
+   2.4 this measures. So the losses predicted at 10% and 20% a line, 0.2 to
+   0.5 and 1 to 2.5, were too high: 0.16 and 0.56.
+3. That the buses would not matter. Right.
+4. That a line's level would cost what its noise does. Right: 0.14 for 0.16 at
+   10%, and 0.45 for 0.56 at 20%.
+5. That through an offset, noise together would cost 0 to 0.1 at 0.2%, 0.1 to
+   0.4 at 0.5%, 0.5 to 2 at 1% and 2 to 8 at 2%. Right on all four: 0.10, 0.20,
+   0.74 and 3.55. The error it predicted on the sums was twice what it is.
+6. That through an offset 2% a line would cost under a tenth. A little low:
+   0.15.
+
+**What this is not.** One family of networks, on MNIST. First order, and after
+the converter. Noise with no memory from one shot to the next: a source whose
+power wanders slowly is a level that moves between calibrations, and that was
+not run. An offset taken off digitally: a column of rings at a weight of zero
+that reads the same light would take the offset's noise off with the offset,
+and is the pair again. And a model: none of it is a measurement of a source.
 
 ---
 

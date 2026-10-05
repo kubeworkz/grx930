@@ -46,6 +46,13 @@
  * puts the tile on a chiplet that may be 256 x 64 and takes a layer as one
  * command, and design note section 5 has what the budget costs there.
  *
+ * And the light, which is not the tile's (eval --src, --srcline, --srcflat).
+ * grxcp's board makes the tile a ring bank lit by a comb, and the error model
+ * has no term for a source at all.  Its error is added here, on the host's
+ * side of the line, to the sums the tile returns: first order, and outside
+ * the contract.  Design note section 5 has what a source may do before it
+ * costs what a row of the budget does.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -676,10 +683,151 @@ static gemm_buf *gemm_alloc(void)
 }
 
 /*
+ * The light.  A source does three things to a line's power, and each is an rms
+ * fraction of it:
+ *
+ *   all    every line together, anew each shot: a pump's noise, or an amplifier's
+ *   line   each line on its own, anew each shot
+ *   flat   each line on its own and fixed for the run: lines that are not level
+ *
+ * A line lights one input row on every bus, so the rows of a tile are cut into
+ * `buses` equal runs and rows a run apart share a line.  And what a line's
+ * light reaches a column through depends on how the tile signs a weight, which
+ * nothing has settled: through the weight alone, as a balanced pair of
+ * photodiodes has it, or through the weight and an offset the host takes off
+ * again, as one photodiode would.
+ *
+ * So a shot's sum gains  sum over rows of  a * (w + offset) * error(row's line),
+ * with a and w as the tile quantises them.  It is first order: the error meets
+ * the weight as written, not its programming error, its drift or its
+ * neighbours.  And it is added after the converter, where it is neither
+ * clipped nor quantised; with half an LSB of receiver noise ahead of it a
+ * converter would pass it in the mean.  Under the offset reading the converter
+ * would also have to span the offset, which this does not model.
+ *
+ * A shot's draws are its image's, its layer's and its tile's, so neither the
+ * cut nor the batch moves one.  With no light set up, tile_batch() is what it
+ * was.
+ */
+static struct {
+    int      on;
+    double   all, line, flat;
+    int      buses, offset;
+    uint32_t seed;
+    int      base;              /* the batch's first image: the caller's to set */
+    int      lines;             /* tile_rows / buses */
+    double  *level;             /* flat's draw, a line */
+    double  *eps;               /* a shot's error, a line */
+    double  *ae;                /* and its activations, each times its line's error */
+    int32_t *wq[MAX_L];         /* the weights as the tile quantises them */
+} light;
+
+static double gauss01(uint64_t *s);
+
+static void light_free(void)
+{
+    int l;
+    free(light.level);
+    free(light.eps);
+    free(light.ae);
+    for (l = 0; l < MAX_L; ++l)
+        free(light.wq[l]);
+    memset(&light, 0, sizeof light);
+}
+
+/* Returns 0, or -1 if the buses do not divide the tile's rows or memory ran out.
+ * cfg is the run's, a layer each: the term uses each layer's own quantisers. */
+static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, double all,
+                       double line, double flat, int buses, int offset)
+{
+    uint64_t s = ((uint64_t)seed << 32) | 0x11697u;
+    int i, l;
+
+    light_free();
+    if (buses < 1 || tile_rows % buses != 0)
+        return -1;
+    light.all    = all;
+    light.line   = line;
+    light.flat   = flat;
+    light.buses  = buses;
+    light.offset = offset;
+    light.seed   = seed;
+    light.lines  = tile_rows / buses;
+    light.level  = (double *)malloc((size_t)light.lines * sizeof *light.level);
+    light.eps    = (double *)malloc((size_t)light.lines * sizeof *light.eps);
+    light.ae     = (double *)malloc((size_t)tile_rows * sizeof *light.ae);
+    if (!light.level || !light.eps || !light.ae) {
+        light_free();
+        return -1;
+    }
+    for (l = 0; l <= hn->hidden; ++l) {
+        const int P = layer_size(hn->hidden, l);
+        const int quant = (cfg[l].impair & PTA_QUANT) != 0;
+        light.wq[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+        if (!light.wq[l]) {
+            light_free();
+            return -1;
+        }
+        for (i = 0; i < P; ++i)
+            light.wq[l][i] = quant ? contract_quant(hn->w[l][i], (int)cfg[l].w_bits, hn->din)
+                                   : hn->w[l][i];
+    }
+    for (i = 0; i < light.lines; ++i)
+        light.level[i] = flat * gauss01(&s);
+    light.on = 1;
+    return 0;
+}
+
+/* Layer l's share, for M images whose operands are a: added to its sums y. */
+static void light_add(const host_net *hn, const pta_cfg *c, int l, int M, const int32_t *a,
+                      int64_t *y)
+{
+    const int in = layer_in(l), out = layer_out(hn->hidden, l), D = hn->din;
+    const int quant = (c->impair & PTA_QUANT) != 0;
+    const double off = light.offset ? ldexp(1.0, D - 1) : 0.0;   /* a weight of one */
+    int n0, k0, m, n, k;
+
+    for (n0 = 0; n0 < out; n0 += tile_cols)
+        for (k0 = 0; k0 < in; k0 += tile_rows) {
+            const int N = (out - n0 < tile_cols) ? out - n0 : tile_cols;
+            const int K = (in - k0 < tile_rows) ? in - k0 : tile_rows;
+            for (m = 0; m < M; ++m) {
+                /* one shot */
+                uint64_t s = ((uint64_t)light.seed << 32) | (uint32_t)(light.base + m);
+                const uint64_t h = splitmix64(&s);
+                double all;
+                int live = 0;
+                s = h ^ (((uint64_t)l << 48) | ((uint64_t)(n0 / tile_cols) << 24) |
+                         (uint64_t)(k0 / tile_rows));
+                all = light.all > 0.0 ? light.all * gauss01(&s) : 0.0;
+                for (k = 0; k < light.lines; ++k)
+                    light.eps[k] = light.level[k] + all +
+                                   (light.line > 0.0 ? light.line * gauss01(&s) : 0.0);
+                for (k = 0; k < K; ++k) {
+                    const int32_t av = a[m * in + k0 + k];
+                    const int32_t xa = quant ? contract_quant(av, (int)c->act_bits, D) : av;
+                    light.ae[k] = xa * light.eps[k % light.lines];
+                    live |= xa != 0;
+                }
+                if (!live)
+                    continue;
+                for (n = 0; n < N; ++n) {
+                    const int32_t *w = light.wq[l] + (size_t)(n0 + n) * in + k0;
+                    double d = 0.0;
+                    for (k = 0; k < K; ++k)
+                        d += light.ae[k] * (w[k] + off);
+                    y[m * out + n0 + n] += (int64_t)floor(d + 0.5);
+                }
+            }
+        }
+}
+
+/*
  * M images, their input operands a0 (M x 784), through the tile: bw->y[l] are
  * layer l's GEMM sums before the biases and bw->a[l], for l >= 1, the operands
  * layer l was given.  Layer l runs on weight bank l & 1, and every GEMM takes
- * the next seed.  Returns ADC saturations, or -1.
+ * the next seed.  Returns ADC saturations, or -1.  If a light is set up its
+ * share is in the sums, and so in every operand after the first layer's.
  */
 static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile,
                        pta_device *dev, uint32_t seed, uint32_t *gemm, gemm_buf *g, int M,
@@ -716,6 +864,8 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
                         y[m * out + n0 + n] += g->C[m * N + n];
             }
         }
+        if (light.on)
+            light_add(hn, &cfg[l], l, M, src, y);
         if (l < H)
             for (m = 0; m < M; ++m)
                 for (n = 0; n < N_HID; ++n) {
@@ -1401,7 +1551,8 @@ static int cmd_eval(int argc, char **argv)
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
-        "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", NULL};
+        "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
+        "--srcline", "--srcflat", "--buses", "--srcsign", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1413,6 +1564,12 @@ static int cmd_eval(int argc, char **argv)
     const int probing = atoi(opt(argc, argv, "--probe", "0"));
     const char *thermal8 = opt(argc, argv, "--thermal8", NULL);
     const char *photons8 = opt(argc, argv, "--photons8", NULL);
+    const double src_all = atof(opt(argc, argv, "--src", "0"));
+    const double src_line = atof(opt(argc, argv, "--srcline", "0"));
+    const double src_flat = atof(opt(argc, argv, "--srcflat", "0"));
+    const char *src_sign = opt(argc, argv, "--srcsign", "pair");
+    const int buses = atoi(opt(argc, argv, "--buses", "1"));
+    const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
     int S[MAX_L] = {0}, S8[MAX_L] = {0};
@@ -1459,6 +1616,19 @@ static int cmd_eval(int argc, char **argv)
         gemm_n < tile_cols || gemm_n > 65536 || gemm_n % tile_cols != 0) {
         fprintf(stderr, "pta_mnist: --rows and --cols are 1 to 1023, and --maxk and --maxn are "
                         "whole tiles of them\n");
+        return 2;
+    }
+    if (src_all < 0.0 || src_all >= 1.0 || src_line < 0.0 || src_line >= 1.0 || src_flat < 0.0 ||
+        src_flat >= 1.0 || buses < 1 || tile_rows % buses != 0 ||
+        (strcmp(src_sign, "pair") != 0 && strcmp(src_sign, "offset") != 0)) {
+        fprintf(stderr, "pta_mnist: --src, --srcline and --srcflat are rms fractions under 1, "
+                        "--buses divides --rows, and --srcsign is pair or offset\n");
+        return 2;
+    }
+    /* The probe GEMM reads a cell through a weight of zero, where a pair sees
+     * no light at all and an offset sees the offset's: not modelled. */
+    if (lit && calibrate > 0 && strcmp(src_sign, "offset") == 0) {
+        fprintf(stderr, "pta_mnist: --calibrate is not modelled under --srcsign offset\n");
         return 2;
     }
     g = gemm_alloc();
@@ -1560,11 +1730,15 @@ static int cmd_eval(int argc, char **argv)
     if ((cfg[0].impair & PTA_DRIFT) && post_steps)
         pta_drift_age(&dev, &cfg[0], post_steps);
 
+    if (lit && light_setup(hn, cfg, seed, src_all, src_line, src_flat, buses,
+                           strcmp(src_sign, "offset") == 0) != 0)
+        return 2;
     for (l = 0; l <= H; ++l)
         per_image += (long)layer_out(H, l) * ((layer_in(l) + tile_rows - 1) / tile_rows);
     for (base = 0; base < images; base += MAX_M) {
         const int M = (images - base < MAX_M) ? images - base : MAX_M;
         const int64_t *y2 = bw->y[H];
+        light.base = base;
         for (m = 0; m < M; ++m)
             for (k = 0; k < N_IN; ++k)
                 a1[m * N_IN + k] = pixel_operand(te.x[(size_t)(base + m) * N_IN + k], net->din);
@@ -1603,6 +1777,10 @@ static int cmd_eval(int argc, char **argv)
      * the line it was before the tile could be anything else. */
     if (tile_rows != ROWS || tile_cols != COLS || gemm_k != MAX_K || gemm_n != MAX_N)
         printf(" tile=%dx%d gemm=%dx%d", tile_rows, tile_cols, gemm_k, gemm_n);
+    /* And the light only when there is some. */
+    if (lit)
+        printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
+               buses, src_sign);
     if (probing) {
         probe_result pv;
         /* The run's noise in LSB of an 8-bit ADC, layer 1's, however it was asked for. */
@@ -1627,6 +1805,7 @@ static int cmd_eval(int argc, char **argv)
             free(pq[l]);
     }
     printf("\n");
+    light_free();
     pta_device_free(&dev);
     host_free(hn);
     mlp_free(net);
@@ -1642,6 +1821,43 @@ static int fail(const char *what)
 {
     printf("selftest FAIL: %s\n", what);
     return 1;
+}
+
+/* selftest's: is d[i] one fraction of y[i] for every i of n, to the rounding
+ * of a sum and of the fraction itself?  *frac is that fraction. */
+static int same_fraction(const int64_t *d, const int64_t *y, int n, double *frac)
+{
+    int i, ref = 0;
+    for (i = 1; i < n; ++i)
+        if (llabs(y[i]) > llabs(y[ref]))
+            ref = i;
+    *frac = y[ref] ? (double)d[ref] / (double)y[ref] : 0.0;
+    for (i = 0; i < n; ++i)
+        if (fabs((double)d[i] - *frac * (double)y[i]) > 1.0 + 1e-9)
+            return 0;
+    return 1;
+}
+
+/* selftest's: M images from `base` through a fresh device, with whatever light
+ * is set up.  Returns 0, or -1. */
+static int light_run(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile, int M, int base,
+                     const int32_t *a, batch_ws *bw)
+{
+    gemm_buf *g = gemm_alloc();
+    pta_device dev;
+    uint32_t gemm = 0;
+    int rc;
+
+    if (!g || pta_device_init(&dev, tile) != 0) {
+        gemm_free(g);
+        return -1;
+    }
+    pta_model_reset(&dev, 0);
+    light.base = base;
+    rc = tile_batch(hn, cfg, tile, &dev, 7, &gemm, g, M, a, bw) < 0 ? -1 : 0;
+    pta_device_free(&dev);
+    gemm_free(g);
+    return rc;
 }
 
 static int cmd_selftest(void)
@@ -2073,6 +2289,244 @@ static int cmd_selftest(void)
         pta_device_free(&dev);
         gemm_free(g);
     }
+    /* 9. the light.  Its share is the exact product of the operands with each
+     *    line's error, so where the tile's own sums are exact it can be read
+     *    back: one fraction for a whole shot when the lines move together, one
+     *    for a line however many buses it lights, one that stays put when it is
+     *    a line's level, and the offset's when a weight is signed with one.
+     *    And neither the cut nor the batch moves a draw. */
+    {
+        const int D = 8, H = 1, T = 10, M = 40;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        const double sigma = 0.02;
+        const pta_tile tile = {256, 64, 8, ACC_W};
+        const size_t all_in = (size_t)MAX_M * N_IN * sizeof(int32_t);
+        host_net hn, hz;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw), *b0 = (batch_ws *)malloc(sizeof *b0);
+        int32_t *a1 = (int32_t *)malloc(all_in);
+        pta_cfg cfg[MAX_L];
+        int64_t d[N_HID];
+        double sum = 0.0, sq = 0.0, f0 = 0.0, f1 = 0.0, mean, sd, shot_frac[MAX_M];
+        long shots = 0, apart = 0, layers = 0;
+        int ran = 1, together = 1, split = 0, shared = 1, alone = 0, level = 1, offs = 1;
+        int moved = 1, nothing = 1, quant, t, i, l, m, n;
+
+        tile_rows = tile.rows;
+        tile_cols = tile.cols;
+        gemm_k    = 1024;
+        gemm_n    = 128;
+        host_alloc(&hn, D, H);
+        host_alloc(&hz, D, H);                  /* hz: every weight zero */
+        for (l = 0; l <= H; ++l)
+            for (i = 0; i < layer_size(H, l); ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        hn.sh[0] = hz.sh[0] = D + 3;
+
+        /* together: inputs in one K tile only, each in turn and the short last
+         * one too, so a shot is an image and an N tile, and the first layer's
+         * two N tiles are two shots */
+        for (quant = 0; quant < 2; ++quant) {
+            memset(cfg, 0, sizeof cfg);
+            for (l = 0; quant && l <= H; ++l) {
+                cfg[l].impair   = PTA_QUANT;
+                cfg[l].act_bits = 6;
+                cfg[l].w_bits   = 6;
+            }
+            for (t = 0; t < T; ++t) {
+                const int k_lo = (t % 4) * tile_rows;
+                const int k_n = (N_IN - k_lo < tile_rows) ? N_IN - k_lo : tile_rows;
+                memset(a1, 0, all_in);
+                for (m = 0; m < MAX_M; ++m)
+                    for (i = 0; i < k_n; ++i)
+                        a1[m * N_IN + k_lo + i] =
+                            (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+                light_free();
+                ran &= light_run(&hn, cfg, &tile, MAX_M, t * MAX_M, a1, b0) == 0;
+                ran &= light_setup(&hn, cfg, 11, sigma, 0.0, 0.0, 1, 0) == 0;
+                ran &= light_run(&hn, cfg, &tile, MAX_M, t * MAX_M, a1, bw) == 0;
+                for (m = 0; m < MAX_M; ++m) {
+                    const int64_t *y = b0->y[0] + m * N_HID;
+                    for (n = 0; n < N_HID; ++n)
+                        d[n] = bw->y[0][m * N_HID + n] - y[n];
+                    together &= same_fraction(d, y, tile_cols, &f0);
+                    together &= same_fraction(d + tile_cols, y + tile_cols, N_HID - tile_cols, &f1);
+                    apart += fabs(f0 - f1) > 1e-4;
+                    sum += f0;
+                    sq  += f0 * f0;
+                    ++shots;
+                    /* the second layer is one shot an image, of the operands this
+                     * run gave it: its share against their product, worked here */
+                    {
+                        int64_t yx[N_OUT], d1[N_OUT];
+                        double f2 = 0.0;
+                        for (n = 0; n < N_OUT; ++n) {
+                            int64_t sx = 0;
+                            for (i = 0; i < N_HID; ++i) {
+                                const int32_t av = bw->a[1][m * N_HID + i];
+                                const int32_t wv = hn.w[1][n * N_HID + i];
+                                sx += (int64_t)(quant ? contract_quant(av, 6, D) : av) *
+                                      (quant ? contract_quant(wv, 6, D) : wv);
+                            }
+                            yx[n] = sx;
+                            d1[n] = bw->y[1][m * N_OUT + n] - sx;
+                        }
+                        together &= same_fraction(d1, yx, N_OUT, &f2);
+                        layers += fabs(f2 - f0) > 1e-4;
+                    }
+                }
+            }
+        }
+        mean = sum / shots;
+        sd   = sqrt(sq / shots - mean * mean);
+        /* and with inputs in two K tiles a sum is two shots: no one fraction */
+        memset(a1, 0, all_in);
+        for (m = 0; m < MAX_M; ++m)
+            for (i = 0; i < 2 * tile_rows; ++i)
+                a1[m * N_IN + i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+        memset(cfg, 0, sizeof cfg);
+        light_free();
+        ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, b0) == 0;
+        ran &= light_setup(&hn, cfg, 11, sigma, 0.0, 0.0, 1, 0) == 0;
+        ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, bw) == 0;
+        for (m = 0; m < MAX_M; ++m) {
+            for (n = 0; n < tile_cols; ++n)
+                d[n] = bw->y[0][m * N_HID + n] - b0->y[0][m * N_HID + n];
+            split += !same_fraction(d, b0->y[0] + m * N_HID, tile_cols, &f0);
+        }
+        printf("selftest: the light, every line together: %ld shots each one fraction of their sums, "
+               "rms %.4f for %.2f, mean %+.5f; two N tiles apart in %ld and two layers in %ld; two "
+               "K tiles no one fraction in %d of %d: %s\n", shots, sd, sigma, mean, apart, layers,
+               split, MAX_M,
+               ran && together && fabs(sd / sigma - 1.0) < 0.1 &&
+               fabs(mean) < 4.0 * sigma / sqrt((double)shots) && apart > shots * 9 / 10 &&
+               layers > shots * 9 / 10 && split > MAX_M * 9 / 10 ? "as it should be" : "WRONG");
+        if (!ran || !together)
+            errors += fail("light that moves together is not one fraction of a shot's sums");
+        if (fabs(sd / sigma - 1.0) >= 0.1 || fabs(mean) >= 4.0 * sigma / sqrt((double)shots))
+            errors += fail("the light's noise is not the size it was asked for");
+        if (apart <= shots * 9 / 10 || layers <= shots * 9 / 10 || split <= MAX_M * 9 / 10)
+            errors += fail("two shots share the light's draw");
+
+        /* a line: rows 3 and 3 + 64 share one on four buses, and not on one */
+        for (t = 0; t < 2; ++t) {
+            memset(a1, 0, all_in);
+            for (m = 0; m < MAX_M; ++m) {
+                a1[m * N_IN + 3]      = 100;
+                a1[m * N_IN + 3 + 64] = 90;
+            }
+            light_free();
+            ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, b0) == 0;
+            ran &= light_setup(&hn, cfg, 11, 0.0, sigma, 0.0, t == 0 ? 4 : 1, 0) == 0;
+            ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, bw) == 0;
+            for (m = 0; m < MAX_M; ++m) {
+                int ok;
+                for (n = 0; n < tile_cols; ++n)
+                    d[n] = bw->y[0][m * N_HID + n] - b0->y[0][m * N_HID + n];
+                ok = same_fraction(d, b0->y[0] + m * N_HID, tile_cols, &f0);
+                if (t == 0)
+                    shared &= ok;
+                else
+                    alone += !ok;
+            }
+        }
+        /* a level: the same image twice reads the same, and two lines differ */
+        memset(a1, 0, all_in);
+        a1[0 * N_IN + 5] = a1[1 * N_IN + 5] = a1[2 * N_IN + 6] = 100;
+        light_free();
+        ran &= light_run(&hn, cfg, &tile, 3, 0, a1, b0) == 0;
+        ran &= light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, 1, 0) == 0;
+        ran &= light_run(&hn, cfg, &tile, 3, 0, a1, bw) == 0;
+        level &= memcmp(bw->y[0], bw->y[0] + N_HID, N_HID * sizeof(int64_t)) == 0;
+        for (n = 0; n < tile_cols; ++n)
+            d[n] = bw->y[0][n] - b0->y[0][n];
+        level &= same_fraction(d, b0->y[0], tile_cols, &f0);
+        for (n = 0; n < tile_cols; ++n)
+            d[n] = bw->y[0][2 * N_HID + n] - b0->y[0][2 * N_HID + n];
+        level &= same_fraction(d, b0->y[0] + 2 * N_HID, tile_cols, &f1);
+        level &= f0 != 0.0 && fabs(f0 - f1) > 1e-4;
+        printf("selftest: the light, a line: rows a bus apart move as one on four buses (%s) and "
+               "not on one (%d of %d); a line's level stays put and differs from its neighbour's "
+               "(%+.4f, %+.4f): %s\n", shared ? "all" : "NOT ALL", alone, MAX_M, f0, f1,
+               ran && shared && alone > MAX_M * 9 / 10 && level ? "as it should be" : "WRONG");
+        if (!ran || !shared || alone <= MAX_M * 9 / 10)
+            errors += fail("a line's light does not follow its buses");
+        if (!level)
+            errors += fail("a line's level is not fixed for the run");
+
+        /* the offset: through weights of zero a pair passes no light, and one
+         * photodiode passes the offset's, the same to every column of a shot */
+        memset(a1, 0, all_in);
+        for (m = 0; m < MAX_M; ++m)
+            for (i = 0; i < tile_rows; ++i)
+                a1[m * N_IN + i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+        light_free();
+        ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, b0) == 0;
+        ran &= light_setup(&hn, cfg, 11, sigma, 0.0, 0.0, 1, 0) == 0;
+        ran &= light_run(&hn, cfg, &tile, MAX_M, 0, a1, bw) == 0;
+        for (m = 0; m < MAX_M; ++m) {
+            for (n = 0; n < tile_cols; ++n)
+                d[n] = bw->y[0][m * N_HID + n] - b0->y[0][m * N_HID + n];
+            same_fraction(d, b0->y[0] + m * N_HID, tile_cols, &shot_frac[m]);
+        }
+        ran &= light_setup(&hz, cfg, 11, sigma, 0.0, 0.0, 1, 1) == 0;
+        ran &= light_run(&hz, cfg, &tile, MAX_M, 0, a1, bw) == 0;
+        for (m = 0; m < MAX_M; ++m) {
+            /* the same shot's draw, on the offset alone: a weight of one a row */
+            double lit_sum = 0.0;
+            for (i = 0; i < tile_rows; ++i)
+                lit_sum += a1[m * N_IN + i];
+            lit_sum *= ldexp(1.0, D - 1);
+            offs &= bw->y[0][m * N_HID] != 0;
+            offs &= fabs((double)bw->y[0][m * N_HID] / lit_sum - shot_frac[m]) < 1e-4;
+            for (n = 1; n < tile_cols; ++n)
+                offs &= bw->y[0][m * N_HID + n] == bw->y[0][m * N_HID];
+        }
+        ran &= light_setup(&hz, cfg, 11, sigma, 0.0, 0.0, 1, 0) == 0;
+        ran &= light_run(&hz, cfg, &tile, MAX_M, 0, a1, bw) == 0;
+        for (i = 0; i < MAX_M * N_HID; ++i)
+            offs &= bw->y[0][i] == 0;
+
+        /* the cut and the batch: all three, four buses, the quantisers on */
+        for (l = 0; l <= H; ++l) {
+            cfg[l].impair   = PTA_QUANT;
+            cfg[l].act_bits = 6;
+            cfg[l].w_bits   = 6;
+        }
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+        ran &= light_setup(&hn, cfg, 11, sigma, sigma, sigma, 4, 0) == 0;
+        ran &= light_run(&hn, cfg, &tile, M, 0, a1, b0) == 0;
+        gemm_k = 256;
+        gemm_n = 64;
+        ran &= light_run(&hn, cfg, &tile, 23, 0, a1, bw) == 0;
+        moved &= memcmp(bw->y[0], b0->y[0], 23 * N_HID * sizeof(int64_t)) == 0;
+        moved &= memcmp(bw->y[1], b0->y[1], 23 * N_OUT * sizeof(int64_t)) == 0;
+        ran &= light_run(&hn, cfg, &tile, M - 23, 23, a1 + 23 * N_IN, bw) == 0;
+        moved &= memcmp(bw->y[0], b0->y[0] + 23 * N_HID, (M - 23) * N_HID * sizeof(int64_t)) == 0;
+        moved &= memcmp(bw->y[1], b0->y[1] + 23 * N_OUT, (M - 23) * N_OUT * sizeof(int64_t)) == 0;
+        /* and a light of nothing is no light */
+        ran &= light_setup(&hn, cfg, 11, 0.0, 0.0, 0.0, 4, 0) == 0;
+        ran &= light_run(&hn, cfg, &tile, 23, 0, a1, bw) == 0;
+        light_free();
+        ran &= light_run(&hn, cfg, &tile, 23, 0, a1, b0) == 0;
+        nothing &= memcmp(bw->y[0], b0->y[0], 23 * N_HID * sizeof(int64_t)) == 0;
+        nothing &= memcmp(bw->y[1], b0->y[1], 23 * N_OUT * sizeof(int64_t)) == 0;
+        printf("selftest: the light, an offset: the same to every column of a shot, and none through "
+               "a pair at weights of zero: %s; at another cut and in two batches: %s; a light of "
+               "nothing: %s\n", ran && offs ? "as it should be" : "WRONG",
+               moved ? "the same sums" : "DIFFERENT", nothing ? "changes nothing" : "CHANGES THEM");
+        if (!ran || !offs)
+            errors += fail("the offset's light is not the offset's");
+        if (!moved)
+            errors += fail("the cut or the batch moves the light's draws");
+        if (!nothing)
+            errors += fail("a light of nothing changes the sums");
+        host_free(&hn);
+        host_free(&hz);
+        free(bw);
+        free(b0);
+        free(a1);
+    }
     tile_rows = ROWS;
     tile_cols = COLS;
     gemm_k = MAX_K;
@@ -2107,6 +2561,12 @@ static void help(void)
            "                  tile; a whole layer on any other, which is one command)\n"
            "  --probe 1       add each layer's error against the network's own sums, the run's\n"
            "                  noise in 8-bit LSB, and the accuracy that error alone predicts\n"
+           "  --src X         the light source: every line's power together, rms fraction a shot\n"
+           "  --srcline X     each line's on its own, rms fraction a shot\n"
+           "  --srcflat X     each line's level, rms fraction, fixed for the run\n"
+           "  --buses B       the tile's rows as B runs that share their lines (1)\n"
+           "  --srcsign pair|offset   what a line's light reaches a column through: its weight\n"
+           "                  alone, or its weight and an offset the host takes off (pair)\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
 }
 

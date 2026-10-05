@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -11,11 +11,12 @@
 # if the ablation passes.  `depth` trains fifteen more networks and is not part
 # of `all`; DEPTHS sets which hidden-layer counts it runs (default "1 2 4 8").
 # `geometry` is not part of `all` either; GEOMETRIES sets the tiles it runs
-# beside the core's 8x8 (default "64x8 128x64 256x64 256x128").
+# beside the core's 8x8 (default "64x8 128x64 256x64 256x128").  Nor is `source`;
+# SOURCE_TILE and SOURCE_BUSES set its tile and its buses (default 256x64 and 4).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,12p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,15p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -470,6 +471,62 @@ if [ "$what" = geometry ]; then
     geometry_table loss "points lost against the same weights on the host, five networks, mean and standard error"
     geometry_table e1 "layer 1's error against the network's own sums, percent of their rms"
     geometry_table eprop "the error that reaches the outputs, percent of their rms"
+fi
+
+# `source`: what the light costs.  grxcp's board makes the tile 256 x 64, a ring
+# bank on four buses lit by a comb (its B10 to B12), and the error model has no
+# term for a source.  pta_mnist adds one on the host's side of the line (--src,
+# --srcline, --srcflat), and this runs it on that tile over version 1 of the
+# budget: every line together, each line on its own, and lines that are not
+# level, each through a weight alone and through a weight and an offset.  It
+# trains nothing.
+if [ "$what" = source ]; then
+    tile=${SOURCE_TILE:-256x64}
+    buses=${SOURCE_BUSES:-4}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    v1="--impair quant,thermal,shot,prog,xtalk --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+    {
+        echo "v1, and no light's error|$v1"
+        for x in 0.002 0.005 0.01 0.02 0.05 0.1; do echo "together, $x|$v1 --src $x"; done
+        for x in 0.002 0.01 0.02 0.05 0.1 0.2; do echo "a line, $x|$v1 --srcline $x --buses $buses"; done
+        echo "a line, 0.05, on one bus|$v1 --srcline 0.05 --buses 1"
+        for x in 0.01 0.02 0.05 0.1 0.2; do echo "level, $x|$v1 --srcflat $x --buses $buses"; done
+        echo "all three: 0.02, 0.05, 0.05|$v1 --src 0.02 --srcline 0.05 --srcflat 0.05 --buses $buses"
+        echo "all three, 0.05 each|$v1 --src 0.05 --srcline 0.05 --srcflat 0.05 --buses $buses"
+        for x in 0.002 0.005 0.01 0.02; do echo "offset: together, $x|$v1 --srcsign offset --src $x"; done
+        for x in 0.002 0.01 0.02 0.05; do echo "offset: a line, $x|$v1 --srcsign offset --srcline $x --buses $buses"; done
+        for x in 0.01 0.02 0.05; do echo "offset: level, $x|$v1 --srcsign offset --srcflat $x --buses $buses"; done
+        echo "offset: all three, 0.002, 0.01, 0.01|$v1 --srcsign offset --src 0.002 --srcline 0.01 --srcflat 0.01 --buses $buses"
+        echo "the quantisers alone|--impair quant --adcbits 8"
+        echo "  and together, 0.01|--impair quant --adcbits 8 --src 0.01"
+        echo "  and a line, 0.05|--impair quant --adcbits 8 --srcline 0.05 --buses $buses"
+        echo "  and level, 0.05|--impair quant --adcbits 8 --srcflat 0.05 --buses $buses"
+    } | sed 's/$/ --probe 1/' > "$work/out/source_settings.txt"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while IFS='|' read -r name setting; do
+        for sd in 1 2 3 4 5; do echo "pta_mnist source d8_b6_s$sd.net --seed $sd $gopt $setting"; done
+    done < "$work/out/source_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    echo "== source: the $tile tile on $buses buses, five networks, mean and standard error"
+    printf '%-36s %15s %15s %15s\n' "" "points lost" "e1, % of rms" "eprop, % of rms"
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        for field in loss e1 eprop; do
+            for sd in 1 2 3 4 5; do
+                # the file eval_one wrote: its arguments, as it joined them
+                # shellcheck disable=SC2086
+                set -- --seed $sd $gopt $setting
+                cat "$work/out/source.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+            done | awk -v field="$field" '
+                { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  x = (field == "loss") ? v["digital"] - v["acc"] : 100 * v[field]
+                  s += x; ss += x * x; n++ }
+                END { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                      printf " %8.2f +-%4.2f", m, (n > 1) ? sqrt(var / (n - 1)) : 0 }'
+        done
+        echo
+    done < "$work/out/source_settings.txt"
 fi
 
 exit $((gate_status | ablate_status))
