@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -13,10 +13,11 @@
 # `geometry` is not part of `all` either; GEOMETRIES sets the tiles it runs
 # beside the core's 8x8 (default "64x8 128x64 256x64 256x128").  Nor is `source`;
 # SOURCE_TILE and SOURCE_BUSES set its tile and its buses (default 256x64 and 4).
+# Nor is `laser`; LASER_TILES sets its tiles (default "256x64 128x64").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,15p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,16p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -527,6 +528,98 @@ if [ "$what" = source ]; then
         done
         echo
     done < "$work/out/source_settings.txt"
+fi
+
+# `laser`: the receiver's noise as one laser fixes it.  The budget gives that
+# noise in LSB, a layer at a time and each at its own shift.  A tile has one
+# laser.  grxcp's board plan sizes it (its B5) so that a detector's full scale,
+# 256 LSB of an 8-bit ADC, is the light a column is sent: all of its rows at
+# full scale through weights of one.  Under version 1's half an LSB that puts
+# the receiver's noise at rows / 512 of one line's light, in every layer.  This
+# runs version 1 with its receiver row given that way, at that laser and at 2
+# to 64 times it, beside version 1 as budgeted.  It trains nothing.
+if [ "$what" = laser ]; then
+    tiles=${LASER_TILES:-256x64 128x64}
+    rest="--impair quant,thermal,shot,prog,xtalk --abits 6 --adcbits 7 --photons8 15 --prog 1 --xtalk 0.02"
+    times="1 2 4 8 16 32 64"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    # laser_opts TILE TIMES: the options for one run; TIMES 0 is version 1 as budgeted
+    laser_opts() {
+        local rows=${1%x*} cols=${1#*x}
+        if [ "$2" = 0 ]; then
+            echo "--rows $rows --cols $cols $rest --thermal8 0.5 --probe 1"
+        else
+            echo "--rows $rows --cols $cols $rest --thermalline $(awk -v r="$rows" -v m="$2" \
+                'BEGIN { printf "%.10g", r / 512 / m }') --probe 1"
+        fi
+    }
+    for t in $tiles; do
+        for m in 0 $times; do
+            for sd in 1 2 3 4 5; do echo "pta_mnist laser d8_b6_s$sd.net --seed $sd $(laser_opts "$t" "$m")"; done
+        done
+    done | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # Every layer's noise, in its own LSB and at its own shift, has to be the one
+    # fraction of a line's light its run asked for, to the Q8.8 it is held in.
+    cat "$work/out/laser.d"/*.txt | awk '
+        { delete v
+          for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+          if (v["thermalline"] == "") next
+          line = (2 ^ (v["din"] - 1) - 1) * 2 ^ (v["din"] - 1)
+          n = split(v["thermal_l"], tl, ","); split(v["S"], sv, ",")
+          for (i = 1; i <= n; ++i) {
+              d = tl[i] * 2 ^ sv[i] / line - v["thermalline"]
+              if (d < 0) d = -d
+              if (d > 2 ^ sv[i] / 512 / line) bad++
+          }
+          runs++ }
+        END { printf "== laser: %d runs, and every layer of each at the fraction of a line it was asked for: %s\n",
+                     runs, (runs > 0 && !bad) ? "yes" : "NO"
+              exit !(runs > 0 && !bad) }' || exit 1
+
+    # laser_table FIELD TITLE [LASERS]: one row a laser, one column a tile
+    laser_table() {
+        local field=$1 title=$2 lasers=${3:-0 $times} t m sd
+        echo "== laser: $title"
+        printf '%-28s' ""
+        for t in $tiles; do printf ' %15s' "$t"; done
+        echo
+        for m in $lasers; do
+            if [ "$m" = 0 ]; then printf '%-28s' "v1 as budgeted"; else printf '%-28s' "B5's laser, times $m"; fi
+            for t in $tiles; do
+                for sd in 1 2 3 4 5; do
+                    # the file eval_one wrote: its arguments, as it joined them
+                    # shellcheck disable=SC2046
+                    set -- --seed $sd $(laser_opts "$t" "$m")
+                    cat "$work/out/laser.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+                done | awk -v field="$field" '
+                    { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                      if (field == "loss") x = v["digital"] - v["acc"]
+                      else if (field == "lsb1" || field == "lsb2") { split(v["thermal_l"], tl, ","); split(v["S"], sv, ","); split(v["S8"], s8, ",")
+                          i = (field == "lsb1") ? 1 : 2
+                          x = (v["thermal_l"] == "") ? v["thermal8"] : tl[i] * 2 ^ (sv[i] - s8[i]) }
+                      else if (field == "lit1" || field == "lit2" || field == "max1" || field == "max2") {
+                          split(v[substr(field, 1, 3) == "lit" ? "lit" : "litmax"], lv, ",")
+                          x = lv[substr(field, 4, 1)] }
+                      else x = 100 * v[field]
+                      s += x; ss += x * x; n++ }
+                    END { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                          printf " %8.2f +-%4.2f", m, (n > 1) ? sqrt(var / (n - 1)) : 0 }'
+            done
+            echo
+        done
+    }
+    laser_table loss "points lost against the same weights on the host, five networks, mean and standard error"
+    laser_table lsb1 "the receiver's noise on layer 1, in LSB of an 8-bit ADC at that layer's shift"
+    laser_table lsb2 "and on layer 2"
+    laser_table eprop "the error that reaches the outputs, percent of their rms"
+    # the light a shot sends a column, in lines.  It is the inputs', so on the
+    # first layer no laser moves it, and one row says it
+    laser_table lit1 "the light a shot sends a column on layer 1, in lines: the mean" 8
+    laser_table max1 "and the most" 8
+    laser_table lit2 "the same on layer 2: the mean" "1 8 64"
+    laser_table max2 "and the most" "1 8 64"
 fi
 
 exit $((gate_status | ablate_status))

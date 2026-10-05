@@ -23,6 +23,11 @@ source, and one was added on the host's side of the line, outside the contract.
 A source's noise costs under a tenth of a point up to 5% rms a shot if a column
 reads a weight through a balanced pair, and twenty times less of it costs the
 same if it reads through an offset.
+**And the laser, the same day** (§5, at its end): the budget gives the
+receiver's noise in LSB a layer at a time, as if each layer had the light its
+own sums ask for. Given as one laser fixes it, a laser sized the way grxcp's
+board plan sizes one loses 39 points on a 256 × 64 tile, and it takes sixteen
+times that laser to come within a tenth of a point of v1.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1123,6 +1128,118 @@ power wanders slowly is a level that moves between calibrations, and that was
 not run. An offset taken off digitally: a column of rings at a weight of zero
 that reads the same light would take the offset's noise off with the offset,
 and is the pair again. And a model: none of it is a measurement of a source.
+
+### What does a laser of a given size cost?
+
+*Added 2026-10-05.* `sim/pta_mnist.sh MNIST WORK laser`. Reported, not gated.
+
+**Why.** A receiver's noise is a current. This section has given it in LSB,
+`--thermal` in the run's own ADC's and `--thermal8` in an 8-bit ADC's, and
+both give it a layer at a time, each at that layer's own shift. That is as if
+every layer had the light its own sums ask for. A tile has one laser.
+
+grxcp's board plan sizes that laser (its B5) from a detector's full scale: the
+receiver's noise, held to the budget's share of an 8-bit LSB, makes the 256 LSB
+of a full scale so much light, and the laser is that for every column. The
+method takes the light at a detector when its converter reads full scale to be
+the light the column was sent. It is not. A column is sent every line at full
+power whatever the inputs are, an input passes its activation's share of a
+line, and a ring sends what is left to one photodiode of a pair or the other.
+A converter's full scale is set where the sums fall, and nothing had run the
+budget at a laser sized that way.
+
+**The harness.** `--thermalline X` gives the receiver's noise as a fraction of
+one line's light at a detector: an input at full scale through a weight of one,
+127 × 128 of a sum's units at 8-bit operands. It is the same X in every layer,
+so each layer's noise in its own LSB follows from its own shift, and a layer
+whose sums are small has more of it. A run's line then also says what that
+noise is in each layer's LSB (`thermal_l`), and the light a shot sends a
+column, in lines (`lit`, `litmax`). A laser of B5's size is `X = rows / 512`
+under v1's half an LSB: its full scale is the tile's rows at a line each.
+
+Nothing else moved. A line printed without the option is byte for byte what it
+was, on a sample of the recorded budget, `geometry` and `source` runs. The
+self-test holds the unit and the light's count, the `laser` mode checks every
+layer of every run against the fraction it was asked for, and ten errors
+planted one at a time each fail one or the other.
+
+**The fill.** A converter's full scale, 256 LSB at the shift the clip rule
+gives a layer, over the light the tile's rows can send a column:
+
+| Tile | 8-bit shifts, layers 1 and 2 | Fill, layer 1 | Layer 2 | A laser of B5's size leaves the receiver |
+|---|---|---|---|---|
+| 8 × 8 | 9, 7 | 1.01 | 0.25 | 0.50 and 1.98 LSB |
+| 64 × 8 | 10, 8 | 0.25 | 0.063 | 1.98 and 7.94 |
+| 128 × 64 | 11, 9 | 0.25 | 0.063 | 1.98 and 7.94 |
+| 256 × 64 | 11, 9 | 0.126 | 0.031 | 3.97 and 15.88 |
+| 256 × 128 | 11, 9 | 0.126 | 0.031 | 3.97 and 15.88 |
+
+B5's method takes the fill for one, and on the core's tile, on the first layer,
+it is: eight lines are a full scale. Sums do not grow as a tile's rows do, and
+the light does. At 64 × 8 the rule gave two of the five networks other shifts,
+(11, 8) and (11, 9).
+
+**What it costs.** v1's other rows as they are, and the receiver's as a laser
+of B5's size fixes it, and of 2 to 64 times that. Points lost against the same
+weights on the host, five networks, mean and standard error, with the
+receiver's noise on each layer in LSB of the 8-bit ADC at that layer's shift.
+
+| Laser | 256 × 64 | Its noise, layers 1 and 2 | 128 × 64 | Its noise |
+|---|---|---|---|---|
+| v1 as budgeted | 0.20 ± 0.05 | 0.50, 0.50 | 0.34 ± 0.07 | 0.50, 0.50 |
+| B5's | 39.19 ± 1.87 | 3.97, 15.88 | 13.56 ± 1.14 | 1.98, 7.94 |
+| 2 times it | 12.53 ± 1.14 | 1.98, 7.94 | 2.74 ± 0.19 | 0.99, 3.97 |
+| 4 times | 2.44 ± 0.24 | 0.99, 3.97 | 0.75 ± 0.07 | 0.50, 1.98 |
+| 8 times | 0.60 ± 0.07 | 0.50, 1.98 | 0.35 ± 0.06 | 0.25, 0.99 |
+| 16 times | 0.28 ± 0.06 | 0.25, 0.99 | 0.22 ± 0.04 | 0.12, 0.50 |
+| 32 times | 0.23 ± 0.06 | 0.12, 0.50 | 0.20 ± 0.06 | 0.06, 0.25 |
+| 64 times | 0.19 ± 0.06 | 0.06, 0.25 | 0.19 ± 0.05 | 0.03, 0.12 |
+
+**A laser of B5's size loses 39 points on the 256 × 64 tile.** It is within a
+tenth of a point of v1 at 16 times that laser and matches it at 32. On
+128 × 64 it loses 14, and is at that tile's own v1 at 8 times.
+
+**v1 as budgeted is no one laser.** Half an LSB on the first layer is this
+sweep at 8 times B5's laser, and half an LSB on the second is it at 32. The
+error that reaches the outputs from the first layer says the same: 6.89% of
+their rms as budgeted, and 6.89% at 8 times. The second layer's sums are a
+quarter the size of the first's on every tile, two bits of shift, so its LSB
+is a quarter the light and it asks four times the laser.
+
+**The rows cost light.** At any multiple 128 × 64 loses what 256 × 64 loses at
+twice that, within their errors: the same receiver noise is half the fraction
+of a line when a column's light is split over half as many. The laser for
+each MAC a second is then the same on both.
+
+**The light a pair carries.** A shot sends a column 25.8 lines on the first
+layer at the mean and 133 at the most, of 256, and 6.7 and 12 on the second.
+On 128 × 64 it is 14.8 and 83 of 128. That is the inputs summed, whatever the
+weights, and under a balanced pair it is what the two photodiodes carry
+between them: what their shot noise follows, where this model's follows the
+difference.
+
+**What was predicted.** Written before the first run was read. Four things.
+
+1. That the 256 × 64 tile would lose 5 to 20 points at B5's laser, 1.5 to 6 at
+   twice it, 0.5 to 2 at four times, 0.3 to 0.6 at eight, 0.2 to 0.35 at
+   sixteen, within 0.05 of v1 at thirty-two and 0.15 to 0.2 at sixty-four.
+   Wrong at the first three, and low each time: 39.19, 12.53 and 2.44. Right
+   at the other four: 0.60, 0.28, 0.23 and 0.19. The second layer's 16 LSB had
+   been counted and what 16 LSB does had not.
+2. That 128 × 64 at a multiple would lose what 256 × 64 loses at twice it.
+   Right, within their errors, at every multiple.
+3. That the second layer's noise would be four times the first's in LSB.
+   Right, and it is the shifts' doing.
+4. That v1 as budgeted would be the first layer at 8 times and the second at
+   32. Right.
+
+**What this is not.** One family of networks, on MNIST, whose images are
+mostly dark: a workload that lights more of its inputs fills more of the
+light. One rule for a converter's shift. The receiver's row alone: the photon
+row is left at v1's 15 an LSB of each layer's own, which at these lasers is
+far fewer photons than there are. A receiver whose noise does not depend on
+how many photodiodes are on its input. And a model: none of it is a
+measurement of a tile or of a laser.
 
 ---
 

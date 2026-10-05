@@ -53,6 +53,15 @@
  * the contract.  Design note section 5 has what a source may do before it
  * costs what a row of the budget does.
  *
+ * And the receiver's noise as one laser fixes it (eval --thermalline).  A
+ * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
+ * layer at a time and each at that layer's own shift, which is as if every
+ * layer had the light its own sums ask for.  A tile has one laser, and an
+ * input at full scale through a weight of one puts the same light on a
+ * detector whatever the layer.  --thermalline gives the noise as a fraction of
+ * that, the same in every layer, and design note section 5 has what a laser
+ * of a given size then costs.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -1536,6 +1545,59 @@ static int q88(const char *what, double v, uint32_t max, uint32_t *field)
     return 0;
 }
 
+/* One line's light at a detector, in a sum's units: an input at full scale
+ * through a weight of one. */
+static double line_light(int din)
+{
+    return (ldexp(1.0, din - 1) - 1.0) * ldexp(1.0, din - 1);
+}
+
+/* Noise that is `x` of that, in LSB of an ADC whose LSB is 2^S of a sum's units. */
+static double line_lsb(double x, int din, int S)
+{
+    return x * line_light(din) / ldexp(1.0, S);
+}
+
+/*
+ * The light a shot sends a column, in lines: its inputs summed, each as a
+ * fraction of full scale.  It does not depend on the weights.  A ring sends a
+ * line's light to one photodiode of a pair or to the other, so this is what
+ * the pair carries between them whatever the sum comes to, and it is what
+ * their shot noise and their currents follow.  One figure a shot: an image and
+ * a K tile.
+ */
+typedef struct {
+    double sum[MAX_L], max[MAX_L];
+    long   shots[MAX_L];
+} lit_stats;
+
+static void lit_batch(lit_stats *ls, const host_net *hn, const pta_cfg *cfg, int M,
+                      const int32_t *a0, const batch_ws *bw)
+{
+    const double full = ldexp(1.0, hn->din - 1) - 1.0;
+    int l, m, k0, k;
+
+    for (l = 0; l <= hn->hidden; ++l) {
+        const int in = layer_in(l);
+        const int32_t *a = l == 0 ? a0 : bw->a[l];
+        const int quant = (cfg[l].impair & PTA_QUANT) != 0;
+        for (m = 0; m < M; ++m)
+            for (k0 = 0; k0 < in; k0 += tile_rows) {
+                const int K = (in - k0 < tile_rows) ? in - k0 : tile_rows;
+                double s = 0.0;
+                for (k = 0; k < K; ++k) {
+                    const int32_t av = a[m * in + k0 + k];
+                    s += quant ? contract_quant(av, (int)cfg[l].act_bits, hn->din) : av;
+                }
+                s /= full;
+                ls->sum[l] += s;
+                ++ls->shots[l];
+                if (s > ls->max[l])
+                    ls->max[l] = s;
+            }
+    }
+}
+
 /* "11,9": a list of ints as the output line carries it. */
 static void join_ints(char *buf, size_t size, const int *v, int n)
 {
@@ -1552,7 +1614,7 @@ static int cmd_eval(int argc, char **argv)
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
-        "--srcline", "--srcflat", "--buses", "--srcsign", NULL};
+        "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1564,6 +1626,8 @@ static int cmd_eval(int argc, char **argv)
     const int probing = atoi(opt(argc, argv, "--probe", "0"));
     const char *thermal8 = opt(argc, argv, "--thermal8", NULL);
     const char *photons8 = opt(argc, argv, "--photons8", NULL);
+    const char *thermalline = opt(argc, argv, "--thermalline", NULL);
+    lit_stats lit_s;
     const double src_all = atof(opt(argc, argv, "--src", "0"));
     const double src_line = atof(opt(argc, argv, "--srcline", "0"));
     const double src_flat = atof(opt(argc, argv, "--srcflat", "0"));
@@ -1589,6 +1653,7 @@ static int cmd_eval(int argc, char **argv)
     int right = 0, base, m, k, o, l, H;
 
     memset(&pr, 0, sizeof pr);
+    memset(&lit_s, 0, sizeof lit_s);
     if (check_opts(argc, argv, names) != 0 || !data || !path || images < 1 || images > N_TEST) {
         fprintf(stderr, "pta_mnist eval: --data DIR --net NET [options] (pta_mnist help)\n");
         return 2;
@@ -1701,6 +1766,22 @@ static int cmd_eval(int argc, char **argv)
                 return 2;
         }
     }
+    /*
+     * And noise as a laser fixes it: one fraction of a line's light, and so a
+     * different number of LSB in each layer.  A layer whose sums are small has
+     * a fine LSB and more of them.
+     */
+    if (thermalline) {
+        if (thermal8 || atof(opt(argc, argv, "--thermal", "0")) != 0.0 || cfg[0].adc_bits == 0) {
+            fprintf(stderr, "pta_mnist: --thermalline needs --adcbits, and replaces --thermal and "
+                            "--thermal8\n");
+            return 2;
+        }
+        for (l = 0; l <= H; ++l)
+            if (q88("--thermalline", line_lsb(atof(thermalline), net->din, S[l]), 65535,
+                    &cfg[l].sigma_th) != 0)
+                return 2;
+    }
     if (probing) {
         for (l = 0; l <= H; ++l) {
             pq[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
@@ -1750,6 +1831,8 @@ static int cmd_eval(int argc, char **argv)
         elements += (long)M * per_image;
         if (probing)
             probe_batch(&pr, hn, pq, M, a1, bw, te.y + base);
+        if (thermalline)
+            lit_batch(&lit_s, hn, cfg, M, a1, bw);
         for (m = 0; m < M; ++m) {
             int best = 0;
             for (o = 1; o < N_OUT; ++o)
@@ -1781,6 +1864,20 @@ static int cmd_eval(int argc, char **argv)
     if (lit)
         printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
                buses, src_sign);
+    /* The noise as a laser fixes it, and what that is in each layer's own LSB:
+     * `thermal` earlier in the line is the first layer's. */
+    if (thermalline) {
+        printf(" thermalline=%g thermal_l=", atof(thermalline));
+        for (l = 0; l <= H; ++l)
+            printf("%s%g", l ? "," : "", cfg[l].sigma_th / 256.0);
+        /* and the light a shot sends a column, in lines: mean and most, a layer */
+        printf(" lit=");
+        for (l = 0; l <= H; ++l)
+            printf("%s%.3f", l ? "," : "", lit_s.shots[l] ? lit_s.sum[l] / lit_s.shots[l] : 0.0);
+        printf(" litmax=");
+        for (l = 0; l <= H; ++l)
+            printf("%s%.2f", l ? "," : "", lit_s.max[l]);
+    }
     if (probing) {
         probe_result pv;
         /* The run's noise in LSB of an 8-bit ADC, layer 1's, however it was asked for. */
@@ -2532,6 +2629,59 @@ static int cmd_selftest(void)
     gemm_k = MAX_K;
     gemm_n = MAX_N;
 
+    /* 10. a line's light: an input at full scale through a weight of one, and
+     *     noise that is a sixteenth of it, which at 8-bit operands and a shift
+     *     of 11 is half an LSB and at a shift of 9 is two */
+    {
+        const double l8 = line_light(8), l16 = line_light(16);
+        const double a = line_lsb(0.0625, 8, 11), b = line_lsb(0.0625, 8, 9);
+        const int ok = l8 == 127.0 * 128.0 && l16 == 32767.0 * 32768.0 && fabs(a - 0.49609375) < 1e-12 &&
+                       fabs(b - 4.0 * a) < 1e-12 && fabs(line_lsb(0.5, 8, 11) - 8.0 * a) < 1e-12;
+        printf("selftest: a line's light is %.0f at 8 bits and %.0f at 16; a sixteenth of it is %.4f "
+               "LSB at a shift of 11 and %.4f at 9: %s\n", l8, l16, a, b, ok ? "as it should be" : "WRONG");
+        if (!ok)
+            errors += fail("a line's light, or noise as a fraction of it, is not what it should be");
+    }
+    /*     and the light a shot sends a column: ten inputs at full scale in one
+     *     K tile of the first layer's four on a 256-row tile is ten lines there
+     *     and none in the others; five hidden operands at full scale is five */
+    {
+        host_net hn;
+        batch_ws *bw = (batch_ws *)calloc(1, sizeof *bw);
+        int32_t *a1 = (int32_t *)calloc(2 * N_IN, sizeof(int32_t));
+        pta_cfg cfg[MAX_L];
+        lit_stats ls;
+        int i, ok;
+
+        memset(cfg, 0, sizeof cfg);
+        memset(&ls, 0, sizeof ls);
+        host_alloc(&hn, 8, 1);
+        tile_rows = 256;
+        for (i = 0; i < 10; ++i)
+            a1[300 + i] = 127;                  /* image 0, the second K tile */
+        for (i = 0; i < 5; ++i)
+            bw->a[1][N_HID + i] = 127;          /* image 1's hidden operands */
+        lit_batch(&ls, &hn, cfg, 2, a1, bw);
+        ok = ls.shots[0] == 8 && ls.shots[1] == 2 && fabs(ls.sum[0] - 10.0) < 1e-12 &&
+             fabs(ls.max[0] - 10.0) < 1e-12 && fabs(ls.sum[1] - 5.0) < 1e-12 &&
+             fabs(ls.max[1] - 5.0) < 1e-12;
+        /* the same through a 6-bit activation DAC: 127 is quantised to 124 */
+        memset(&ls, 0, sizeof ls);
+        cfg[0].impair = cfg[1].impair = PTA_QUANT;
+        cfg[0].act_bits = cfg[1].act_bits = 6;
+        lit_batch(&ls, &hn, cfg, 2, a1, bw);
+        ok = ok && fabs(ls.sum[0] - 10.0 * 124.0 / 127.0) < 1e-12 &&
+             fabs(ls.max[1] - 5.0 * 124.0 / 127.0) < 1e-12;
+        printf("selftest: the light a shot sends a column, in lines, over two images: %s\n",
+               ok ? "as it should be" : "WRONG");
+        if (!ok)
+            errors += fail("the light a shot sends a column is not its inputs summed");
+        tile_rows = ROWS;
+        host_free(&hn);
+        free(bw);
+        free(a1);
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -2567,6 +2717,9 @@ static void help(void)
            "  --buses B       the tile's rows as B runs that share their lines (1)\n"
            "  --srcsign pair|offset   what a line's light reaches a column through: its weight\n"
            "                  alone, or its weight and an offset the host takes off (pair)\n"
+           "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
+           "                  input at full scale through a weight of one: the same in every\n"
+           "                  layer, as one laser fixes it.  Needs --adcbits\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
 }
 
