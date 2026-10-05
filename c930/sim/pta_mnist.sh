@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -10,6 +10,8 @@
 # at once (default 4).  Exits nonzero if the self-test or the gate fails, or
 # if the ablation passes.  `depth` trains fifteen more networks and is not part
 # of `all`; DEPTHS sets which hidden-layer counts it runs (default "1 2 4 8").
+# `geometry` is not part of `all` either; GEOMETRIES sets the tiles it runs
+# beside the core's 8x8 (default "64x8 128x64 256x64 256x128").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -390,6 +392,84 @@ if [ "$what" = depth ]; then
             END { for (k in r) { s += r[k]; t += d[k]; n++ }
                   printf "%-84s %6.2f   (in floating point %.2f)\n", "the networks on their host, no tile", s / n, t / n }'
     done
+fi
+
+# Does the budget hold on another tile?  Everything above runs on the c930
+# core's 8 x 8 tile, in the GEMMs that core accepts.  grxcp's board plan puts
+# the tile on a chiplet -- its candidates run from 64 x 8 to 256 x 128 -- and
+# gives it a layer as one command.  This runs the budget's core on each tile in
+# GEOMETRIES with a layer a GEMM, and on the core's tile both ways, so that what
+# the tile changes can be told from what the cut changes.  It trains nothing.
+#
+# The noise is in LSB of an 8-bit ADC throughout, as in `budget`, and each
+# layer's ADC shift is set on the tile's own sums, so a tile of 256 inputs has
+# a coarser LSB than one of 8 and the same noise in it.
+if [ "$what" = geometry ]; then
+    geos=${GEOMETRIES:-64x8 128x64 256x64 256x128}
+    all5="quant,thermal,shot,prog,xtalk"
+    v0n="--thermal8 1 --photons8 3 --prog 4 --xtalk 0.1"
+    v1="--abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+    {
+        echo "the quantisers, 8-bit ADC|--impair quant --adcbits 8"
+        echo "the same, 6-bit ADC|--impair quant --adcbits 6"
+        echo "v0's rows alone: 5 activation bits|--impair quant --adcbits 8 --abits 5"
+        echo "  thermal 1|--impair quant,thermal --adcbits 8 --thermal8 1"
+        echo "  3 photons|--impair quant,shot --adcbits 8 --photons8 3"
+        echo "  programming 4|--impair quant,prog --adcbits 8 --prog 4"
+        echo "  crosstalk 10%|--impair quant,xtalk --adcbits 8 --xtalk 0.1"
+        echo "v0's rows together, 8-bit ADC|--impair $all5 --abits 5 --adcbits 8 $v0n"
+        echo "v0, at its 6-bit ADC|--impair $all5 --abits 5 --adcbits 6 $v0n"
+        echo "v1|--impair $all5 $v1"
+        echo "v1, an hour of TFLT's drift|--impair $all5,drift $v1 --drift tflt --hours 1"
+        echo "v1, six minutes of it|--impair $all5,drift $v1 --drift tflt --hours 0.1"
+        echo "v1, four hours of it|--impair $all5,drift $v1 --drift tflt --hours 4"
+        echo "v1, 46 hours of it|--impair $all5,drift $v1 --drift tflt --hours 46"
+        echo "v1, an hour of TFLN's|--impair $all5,drift $v1 --drift tfln --hours 1"
+        echo "v1, an hour, then calibrated|--impair $all5,drift $v1 --drift tflt --hours 1 --calibrate 16"
+    } | sed 's/$/ --probe 1/' > "$work/out/geometry_settings.txt"
+    # the tiles, as a label and the options that ask for one: the core's as it
+    # has always run, the core's with a layer a GEMM, and each of GEOMETRIES
+    {
+        echo "8x8, core's cut|"
+        echo "8x8, a layer|--maxk 784 --maxn 104"
+        for gxy in $geos; do echo "$gxy|--rows ${gxy%x*} --cols ${gxy#*x}"; done
+    } > "$work/out/geometry_tiles.txt"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while IFS='|' read -r label gopt; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "pta_mnist geometry d8_b6_s$sd.net --seed $sd $gopt $setting"; done
+        done < "$work/out/geometry_settings.txt"
+    done < "$work/out/geometry_tiles.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # geometry_table FIELD TITLE: one row a setting, one column a tile
+    geometry_table() {
+        local field=$1 title=$2 name setting label gopt sd
+        echo "== geometry: $title"
+        printf '%-32s' ""
+        while IFS='|' read -r label gopt; do printf ' %15s' "$label"; done < "$work/out/geometry_tiles.txt"
+        echo
+        while IFS='|' read -r name setting; do
+            printf '%-32s' "$name"
+            while IFS='|' read -r label gopt; do
+                for sd in 1 2 3 4 5; do
+                    # the file eval_one wrote: its arguments, as it joined them
+                    # shellcheck disable=SC2086
+                    set -- --seed $sd $gopt $setting
+                    cat "$work/out/geometry.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+                done | awk -v field="$field" '
+                    { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                      x = (field == "loss") ? v["digital"] - v["acc"] : 100 * v[field]
+                      s += x; ss += x * x; n++ }
+                    END { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                          printf " %8.2f +-%4.2f", m, (n > 1) ? sqrt(var / (n - 1)) : 0 }'
+            done < "$work/out/geometry_tiles.txt"
+            echo
+        done < "$work/out/geometry_settings.txt"
+    }
+    geometry_table loss "points lost against the same weights on the host, five networks, mean and standard error"
+    geometry_table e1 "layer 1's error against the network's own sums, percent of their rms"
+    geometry_table eprop "the error that reaches the outputs, percent of their rms"
 fi
 
 exit $((gate_status | ablate_status))

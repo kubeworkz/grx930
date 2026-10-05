@@ -14,6 +14,10 @@ the 11 to 13 points grxcp's joint runs reported were four times the noise.
 hidden layers v1 costs what it costs on D3, v0 costs twice as much and its rows
 stop adding — by 40% at eight layers — and it is deterministic error that
 accumulates, not noise.
+**And on other tiles, 2026-10-04** (§5, at its end): everything before that was
+measured on the core's 8 × 8 tile. On the tiles grxcp's chiplet may have, up to
+256 × 128, v1 costs what it costs here, v0 costs a quarter to a half more, and
+drift costs far less — in a model whose cells drift independently.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -825,6 +829,164 @@ a convolution, a residual path or attention in it. One training rule. The
 hidden layers' rescale is the host's and exact, where grxcp's B4 puts the
 activation stage on the chiplet. And the networks were trained without the
 impairments: a network trained with them in the loop may tolerate more.
+
+### Does the budget hold on another tile?
+
+*Added 2026-10-04.* `sim/pta_mnist.sh MNIST WORK geometry`. Reported, not gated.
+
+**Why.** Every figure in this section was measured on the core's 8 × 8 tile, in
+GEMMs of at most 64 rows, 256 inputs and 8 outputs. grxcp's board plan puts the
+tile on a chiplet whose candidates run from 64 × 8 to 256 × 128, gives it a
+layer as one command, and holds its interface chip to v1 on these figures.
+Nothing had asked whether they carry to another tile.
+
+**The harness.** `pta_mnist eval` takes the tile (`--rows`, `--cols`) and the
+cut of a layer into GEMMs (`--maxk`, `--maxn`, in whole tiles). Off the core's
+tile the cut defaults to a whole layer. At the defaults nothing moved, and that
+was checked: all 220 lines of the budget's record are byte for byte what this
+build prints, and on the 26 settings of `calib` and the 9 of `joint` it prints
+what the build before it prints. Two things underneath had to follow the tile.
+Each layer's ADC shift is set on the K-tile sums of the tile in use. And the
+calibration, which kept its sums in 64-entry arrays and returned without a word
+on a tile of more than 64 cells, now runs on any tile and says when it cannot.
+On the 8 × 8 tile 64 cells was every cell there was, so no figure above is
+affected.
+
+**What it ran.** Sixteen settings on D3's five networks, on six tiles: the
+core's at the core's cut, as every figure above was run; the core's with a layer
+a GEMM; and 64 × 8, 128 × 64, 256 × 64 and 256 × 128 with a layer a GEMM. 480
+evaluations, 24 minutes on five jobs. Noise is in LSB of an 8-bit ADC
+throughout. Losses are in points against the same weights on the host, with the
+standard error over the five networks:
+
+| | 8 × 8, core's cut | 8 × 8, a layer | 64 × 8 | 128 × 64 | 256 × 64 | 256 × 128 |
+|---|---|---|---|---|---|---|
+| The quantisers, 8-bit ADC | 0.03 ± 0.02 | 0.03 ± 0.02 | 0.02 ± 0.04 | 0.02 ± 0.04 | 0.01 ± 0.04 | 0.01 ± 0.04 |
+| The same, 6-bit ADC | 0.22 ± 0.06 | 0.22 ± 0.06 | 0.33 ± 0.16 | 0.43 ± 0.18 | 0.31 ± 0.16 | 0.31 ± 0.16 |
+| v0's rows alone: 5 activation bits | 0.17 ± 0.05 | 0.17 ± 0.05 | 0.17 ± 0.06 | 0.13 ± 0.06 | 0.11 ± 0.03 | 0.11 ± 0.03 |
+| thermal 1 | 0.29 ± 0.02 | 0.23 ± 0.03 | 0.30 ± 0.10 | 0.28 ± 0.06 | 0.19 ± 0.07 | 0.21 ± 0.07 |
+| 3 photons | 0.49 ± 0.03 | 0.42 ± 0.03 | 0.67 ± 0.13 | 0.68 ± 0.04 | 0.61 ± 0.05 | 0.62 ± 0.04 |
+| programming 4 | 0.30 ± 0.02 | 0.23 ± 0.04 | 0.25 ± 0.02 | 0.20 ± 0.10 | 0.24 ± 0.08 | 0.24 ± 0.07 |
+| crosstalk 10% | 0.19 ± 0.07 | 0.19 ± 0.07 | 0.24 ± 0.08 | 0.21 ± 0.05 | 0.21 ± 0.06 | 0.21 ± 0.06 |
+| v0's rows together, 8-bit ADC | 1.41 ± 0.09 | 1.32 ± 0.09 | 1.65 ± 0.30 | 1.83 ± 0.04 | 1.48 ± 0.05 | 1.57 ± 0.08 |
+| v0, at its 6-bit ADC | 1.49 ± 0.06 | 1.46 ± 0.08 | 2.05 ± 0.40 | 2.17 ± 0.12 | 1.86 ± 0.17 | 1.78 ± 0.13 |
+| **v1** | 0.26 ± 0.06 | 0.24 ± 0.04 | 0.33 ± 0.11 | 0.34 ± 0.07 | 0.20 ± 0.05 | 0.23 ± 0.05 |
+| v1, an hour of TFLT's drift | 0.81 ± 0.21 | 0.80 ± 0.23 | 0.56 ± 0.09 | 0.51 ± 0.07 | 0.24 ± 0.06 | 0.43 ± 0.15 |
+| v1, six minutes of it | 0.37 ± 0.04 | 0.36 ± 0.05 | 0.32 ± 0.12 | 0.33 ± 0.09 | 0.21 ± 0.04 | 0.23 ± 0.06 |
+| v1, four hours of it | 5.18 ± 2.31 | 5.18 ± 2.21 | 1.17 ± 0.07 | 0.74 ± 0.07 | 0.77 ± 0.16 | 1.18 ± 0.30 |
+| v1, 46 hours of it | 65.54 ± 5.06 | 65.59 ± 5.08 | 27.88 ± 5.97 | 9.36 ± 0.96 | 12.02 ± 2.84 | 10.46 ± 1.54 |
+| v1, an hour of TFLN's | 22.62 ± 4.79 | 22.49 ± 4.79 | 4.24 ± 0.28 | 2.81 ± 0.22 | 1.92 ± 0.25 | 3.53 ± 0.99 |
+| v1, an hour of TFLT's, then calibrated | 0.22 ± 0.05 | 0.27 ± 0.05 | 0.32 ± 0.08 | 0.21 ± 0.05 | 0.20 ± 0.05 | 0.25 ± 0.07 |
+
+One evaluation's accuracy moves by 0.07 to 0.10 points with its seed (sixteen
+seeds on one network, below), so a tenth of a point between two columns of one
+row is a draw.
+
+**v1 holds on every tile.** 0.20 to 0.34 against 0.26, none of them a standard
+error and a half away. Its error on layer 1 is larger off the core's tile, 9.1%
+of the sums' rms at 256 × 64 against 8.0%, and the accuracy does not see it.
+
+**v0 does not.** 1.49 on the core's tile and 1.78 to 2.17 on the others, and at
+128 × 64 that is five standard errors. Its rows do not all move the same way,
+which is the four paragraphs after the next: the receiver's noise costs less,
+the light more, crosstalk a little more, the ADC's own bit more.
+
+**The cut changes nothing.** The two 8 × 8 columns differ in where one GEMM ends
+and the next begins: 54 GEMMs a batch against 2. Every row with no draw in it is
+the same to the last digit, in its loss and in both of the probe's errors. The
+three noise rows differ by 0.06 to 0.07, all the same way, which looked like
+more than chance and was not. On one network over sixteen seeds the thermal row
+scores 97.23 ± 0.02 at the core's cut and 97.21 ± 0.02 with a layer a GEMM, and
+the programming row 97.20 ± 0.03 and 97.24 ± 0.02.
+
+**The ADC's shift is a whole number of bits, and the tile decides where the sums
+fall in it.** A noise row is so many LSB a conversion. The LSB is `2^S`, and a
+layer's sum is `T` conversions added up, so the error the row leaves on a layer
+goes as `√T · 2^S`. The thermal row's, on layer 1, in percent of the sums' rms:
+
+| Tile | Conversions a sum, `T` | Shift `S` | `√T · 2^S`, against the core's | Predicted | Measured |
+|---|---|---|---|---|---|
+| 8 × 8 | 98 | 9 | 1 | | 10.55 |
+| 64 × 8, three of the networks | 13 | 10 | 0.73 | 7.7 | 7.8, 7.9, 8.3 |
+| 64 × 8, the other two | 13 | 11 | 1.46 | 15.4 | 14.3, 14.9 |
+| 128 × 64 | 7 | 11 | 1.07 | 11.3 | 11.23 |
+| 256 × 64 | 4 | 11 | 0.81 | 8.5 | 8.50 |
+
+The clip rule sets `S`, and it lands where it lands. 128 inputs need the shift
+256 need and take nearly twice the conversions, so 128 × 64 is the worst of
+these tiles for receiver noise and 256 × 64 the best. At 64 × 8 the rule puts
+three networks on one side of a bit and two on the other, and that row's
+standard error is seven times its neighbours'. **So "thermal 1 LSB" is not one
+amount of noise from tile to tile: it is one within a factor of two.** It was
+already known not to be one from ADC to ADC, which is why this section's unit is
+the 8-bit LSB. This is the same fact in the other direction, and no unit removes
+it, because the shift is the tile's own.
+
+**The light costs more on a larger tile.** The photons row's error on layer 1
+is 9.6% on the core's tile and 13.6 to 15.1% on the others, and it is the one
+row of v0's whose loss grows: 0.49, against 0.61 to 0.68. Shot noise is the one
+noise here that follows the signal. An 8-input tile is dark for much of an
+MNIST image and a 256-input one never is. That is offered as the reason and was
+not tested.
+
+**Crosstalk's error grows by 14%**, 16.6% to 19.0%, and its loss does not move.
+An input couples to the inputs beside it in its K tile. In a tile of 8, two of
+the eight have one neighbour; in a tile of 256, two of 256 do.
+
+**The ADC's own bit costs more.** A 6-bit ADC alone leaves 7.2% of error on
+layer 1 on the core's tile and 8.2 to 10.7% on the others. Its loss, 0.22
+against 0.31 to 0.43, has standard errors too wide to say more.
+
+**Drift costs far less on a large tile**, and nothing predicted it. An hour of
+TFLT's drift costs 0.55 points beyond v1 on the core's tile and 0.04 at
+256 × 64. Four hours cost 5.18 and 0.77. An hour of TFLN's costs 22.6 and 1.9.
+With v1's own error taken out in quadrature, drift leaves 19.6% on layer 1 after
+an hour on the core's tile and 6.9% at 256 × 64; after four hours, 41.9 and
+14.5; after 46, 147 and 46. That is 2.8 to 3.2 times less at every age, and
+drift's error grows as the root of the time, so **a 256 × 64 tile after eight
+hours is the core's tile after one.**
+
+The reason is how the tile is used and not how it drifts. Layer 1 is 78,400
+weights. On the 8 × 8 tile every one of them passes through the same 64 cells
+of a bank, 1,225 weights a cell, and a cell's drift is the same error on all of
+them. At 256 × 64 a bank has 16,384 cells and a cell carries 8 at most.
+
+**This is the model's drift, and the model draws every cell's on its own.** If a
+real tile's drift is common to neighbouring cells, as a temperature would be, a
+larger tile gains less than this, and nothing here says how much less. The
+figure to carry away is not "eight times longer between calibrations". It is
+that the 8 × 8 tile was the worst case for drift, and the calibration interval
+grxcp sized on it is on the safe side.
+
+**The calibration works at every size.** An hour of drift and then C3's
+calibration returns every tile to within a tenth of a point of its own v1. At
+256 × 128 that is 32,768 cells a bank, which before this change would have been
+reported as calibrated and left as it was.
+
+**What was predicted.** Written down while the first run was going and before
+any of it was read, but after a prototype on one network at 256 × 64, which had
+shown v1 0.06 lower and v0 0.38 lower than on the core's tile. Five things.
+
+1. That the cut would not matter, each pair of columns agreeing within its
+   standard errors on every row. Wrong as written: three rows differed by more.
+   Right in substance, on sixteen seeds.
+2. That v1 at 256 × 64 would cost within 0.15 points of what it costs at 8 × 8.
+   It costs 0.06 less.
+3. That v0 would cost 0.2 to 0.6 points more there. It costs 0.37 more.
+4. That the two noise rows would grow and the others would not. Half right: the
+   light grows and the receiver's noise falls. The reasoning counted the last
+   K tile, which at 256 inputs is 16 inputs carrying a whole conversion's noise,
+   and did not count the shift.
+5. That the growth would be monotone in the tile's inputs. Wrong: 128 is the
+   worst and 256 the best, for the reason in the table above.
+
+Nothing was predicted about drift, which moved most.
+
+**What this is not.** One family of networks, on MNIST. One rule for the ADC's
+shift, the smallest that clips one sum in ten thousand, and one shift a layer;
+another rule puts the sums elsewhere in the converter. Drift that is independent
+from cell to cell. The plan's candidate tiles and no others. And a model: none
+of it is a measurement of a tile.
 
 ---
 
