@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -14,10 +14,11 @@
 # beside the core's 8x8 (default "64x8 128x64 256x64 256x128").  Nor is `source`;
 # SOURCE_TILE and SOURCE_BUSES set its tile and its buses (default 256x64 and 4).
 # Nor is `laser`; LASER_TILES sets its tiles (default "256x64 128x64").
+# Nor is `fill`; FILL_TILE sets its tile (default 128x64).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,16p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,17p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -620,6 +621,97 @@ if [ "$what" = laser ]; then
     laser_table max1 "and the most" 8
     laser_table lit2 "the same on layer 2: the mean" "1 8 64"
     laser_table max2 "and the most" "1 8 64"
+fi
+
+# `fill`: how a network is put on the tile, and what that buys of a laser.  A
+# converter's full scale is a fraction of the light a column is sent (`laser`),
+# because a layer's sums are small beside it.  The host sets two things that
+# make them larger, and both clip: each hidden layer's rescale (--hidshift) and
+# the scale the first layer's weights are written at (--w1gain).  This runs
+# version 1 at three lasers under nine pairs of them.  It trains nothing.
+if [ "$what" = fill ]; then
+    tile=${FILL_TILE:-128x64}
+    rows=${tile%x*}
+    rest="--rows $rows --cols ${tile#*x} --impair quant,thermal,shot,prog,xtalk --abits 6 --adcbits 7 --photons8 15 --prog 1 --xtalk 0.02"
+    shifts="0 -1 -2"
+    gains="0 1 2"
+    times="2 4 8"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    # fill_opts SHIFT GAIN TIMES: the options for one run
+    fill_opts() {
+        echo "$rest --hidshift $1 --w1gain $2 --thermalline $(awk -v r="$rows" -v m="$3" \
+            'BEGIN { printf "%.10g", r / 512 / m }') --probe 1"
+    }
+    for h in $shifts; do for g in $gains; do for m in $times; do
+        for sd in 1 2 3 4 5; do echo "pta_mnist fill d8_b6_s$sd.net --seed $sd $(fill_opts "$h" "$g" "$m")"; done
+    done; done; done | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # Every run has to say it was put on the tile as it was asked to be, and to
+    # show it: a hidden rescale that moved by the bits asked, against the same
+    # network's run at the same gain with none.  (The gain's own bits come back
+    # in the rescale through the clip rule, which a clipped weight can move.)
+    fill_ok=yes
+    fill_runs=0
+    for h in $shifts; do for g in $gains; do for m in $times; do for sd in 1 2 3 4 5; do
+        # shellcheck disable=SC2046
+        set -- --seed $sd $(fill_opts "$h" "$g" "$m")
+        f="$work/out/fill.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+        # shellcheck disable=SC2046
+        set -- --seed $sd $(fill_opts 0 "$g" "$m")
+        f0="$work/out/fill.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+        cat "$f0" "$f" | awk -v h="$h" -v g="$g" '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+            NR == 1 { sh0 = v["sh"] + 0 }
+            NR == 2 { bad = !(v["hidshift"] == h && v["w1gain"] == g && v["sh"] + 0 == sh0 + h) }
+            END { exit bad || NR != 2 }' || fill_ok=NO
+        fill_runs=$((fill_runs + 1))
+    done; done; done; done
+    echo "== fill: $fill_runs runs, each put on the tile as it was asked to be: $fill_ok"
+    [ "$fill_ok" = yes ] || exit 1
+
+    # fill_cell FIELD SHIFT GAIN TIMES: five networks' mean and standard error
+    fill_cell() {
+        local field=$1 h=$2 g=$3 m=$4 sd
+        for sd in 1 2 3 4 5; do
+            # the file eval_one wrote: its arguments, as it joined them
+            # shellcheck disable=SC2046
+            set -- --seed $sd $(fill_opts "$h" "$g" "$m")
+            sed "s/^/$field /" "$work/out/fill.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+        done | awk '
+            { field = $1; delete v
+              for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              if (field == "loss") x = v["digital"] - v["acc"]
+              else if (field == "scaled") x = v["digital"] - v["ref"]
+              else if (field == "hidclip") { split(v["hidclip"], hc, ","); x = 100 * hc[1] }
+              else if (field == "w1clip") x = 100 * v["w1clip"]
+              else if (field == "lsb1" || field == "lsb2") { split(v["thermal_l"], tl, ","); split(v["S"], sv, ","); split(v["S8"], s8, ",")
+                  i = (field == "lsb1") ? 1 : 2; x = tl[i] * 2 ^ (sv[i] - s8[i]) }
+              else if (field == "lit2") { split(v["lit"], lv, ","); x = lv[2] }
+              else x = v[field]
+              s += x; ss += x * x; n++ }
+            END { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                  printf " %7.2f +-%4.2f", m, (n > 1) ? sqrt(var / (n - 1)) : 0 }'
+    }
+    echo "== fill: the $tile tile, five networks, mean and standard error.  Points lost against the"
+    echo "== network as trained, on the host; a laser is in multiples of grxcp's B5"
+    printf '%-18s %14s %14s %14s %14s %14s %14s' "rescale, gain" "units clipped%" "weights clip%" "scaled, host" "laser x2" "x4" "x8"
+    echo
+    for h in $shifts; do for g in $gains; do
+        printf '%-18s' "$h bits, $g bits"
+        fill_cell hidclip "$h" "$g" 4; fill_cell w1clip "$h" "$g" 4; fill_cell scaled "$h" "$g" 4
+        for m in $times; do fill_cell loss "$h" "$g" "$m"; done
+        echo
+    done; done
+    echo "== fill: the receiver's noise in LSB of an 8-bit ADC at each layer's shift, at 4 times B5's"
+    echo "== laser, and the light a shot sends a column on layer 2, in lines"
+    printf '%-18s %14s %14s %14s' "rescale, gain" "layer 1" "layer 2" "lines, layer 2"
+    echo
+    for h in $shifts; do for g in $gains; do
+        printf '%-18s' "$h bits, $g bits"
+        fill_cell lsb1 "$h" "$g" 4; fill_cell lsb2 "$h" "$g" 4; fill_cell lit2 "$h" "$g" 4
+        echo
+    done; done
 fi
 
 exit $((gate_status | ablate_status))

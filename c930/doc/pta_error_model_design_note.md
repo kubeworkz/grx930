@@ -28,6 +28,11 @@ receiver's noise in LSB a layer at a time, as if each layer had the light its
 own sums ask for. Given as one laser fixes it, a laser sized the way grxcp's
 board plan sizes one loses 39 points on a 256 × 64 tile, and it takes sixteen
 times that laser to come within a tenth of a point of v1.
+**And half of that laser is the host's to give back** (§5, at its end): the
+hidden layer's rescale, set one bit under the clip rule, clips 0.65% of the
+units that fire, costs 0.02 points, and loses at any laser what the rule's
+rescale loses at twice it. A second bit buys nothing, and a gain on the first
+layer's weights does not pay.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1240,6 +1245,112 @@ row is left at v1's 15 an LSB of each layer's own, which at these lasers is
 far fewer photons than there are. A receiver whose noise does not depend on
 how many photodiodes are on its input. And a model: none of it is a
 measurement of a tile or of a laser.
+
+### How a network is put on the tile
+
+*Added 2026-10-05.* `sim/pta_mnist.sh MNIST WORK fill`. Reported, not gated.
+
+**Why.** The section above found a converter's full scale to be a fraction of
+the light a column is sent, and the laser to follow from that fraction. The
+fraction is the network's as much as the tile's: a layer's sums fall where its
+operands do. The host sets two of them. Each hidden layer's rescale, which
+this harness sets by the clip rule, so that one firing unit in ten thousand
+reaches full scale. And the scale the first layer's weights are written at,
+which training leaves with an rms of 0.14 of their range. Either can be made
+larger, and either then clips. Nothing had asked what that buys.
+
+**The harness.** `--hidshift D` adds D to every hidden layer's rescale after
+the clip rule has set it: −1 hands the next layer operands twice as large.
+`--w1gain B` writes the first layer's weights 2^B as large, saturating at the
+ends of their range. The hidden rescale takes that gain back through the clip
+rule, so the network is what it was except in the weights that clipped. A
+run's line then says what each clipped (`hidclip`, `w1clip`).
+
+Neither is in the contract, and neither is the tile's. On grxcp's chiplet the
+first is the activation stage's shift, which is a field of a command, and the
+second is how a weight set is written. A line printed without the options is
+byte for byte what it was, on thirty recorded lines across four sweeps. The self-test
+holds both on a made-up network whose weights a doubling keeps on their grid:
+a bit of gain is one more bit of rescale and moves no hidden operand. The
+`fill` mode checks that every run was put on the tile as it was asked to be,
+and twelve errors planted one at a time each fail one or the other.
+
+**What it costs and what it buys.** On the 128 × 64 tile, a layer a GEMM, with
+v1's other rows and the receiver's noise as a laser of 2, 4 and 8 times
+grxcp's B5 fixes it. Points lost against the network as trained, five
+networks, mean and standard error.
+
+| Hidden rescale | Weight gain | Firing units that clip | Weights that clip | The scaling alone, on the host | Laser × 2 | × 4 | × 8 |
+|---|---|---|---|---|---|---|---|
+| The rule's | None | 0.00% | 0.00% | 0.00 ± 0.01 | 2.74 ± 0.19 | 0.75 ± 0.07 | 0.35 ± 0.06 |
+| The rule's | One bit | 0.00% | 0.38% | 0.14 ± 0.08 | 2.90 ± 0.21 | 0.83 ± 0.12 | 0.50 ± 0.16 |
+| The rule's | Two bits | 0.00% | 7.91% | 1.46 ± 0.33 | 5.65 ± 0.31 | 2.62 ± 0.34 | 2.05 ± 0.33 |
+| **One bit less** | **None** | 0.65% | 0.00% | 0.02 ± 0.01 | 0.92 ± 0.06 | **0.35 ± 0.06** | 0.22 ± 0.06 |
+| One bit less | One bit | 0.55% | 0.38% | 0.14 ± 0.08 | 0.83 ± 0.12 | 0.41 ± 0.13 | 0.34 ± 0.10 |
+| One bit less | Two bits | 0.30% | 7.91% | 1.49 ± 0.35 | 2.64 ± 0.32 | 2.04 ± 0.29 | 1.89 ± 0.30 |
+| Two bits less | None | 13.45% | 0.00% | 0.26 ± 0.05 | 0.99 ± 0.11 | 0.60 ± 0.08 | 0.46 ± 0.06 |
+| Two bits less | One bit | 12.24% | 0.38% | 0.33 ± 0.08 | 0.79 ± 0.12 | 0.63 ± 0.12 | 0.52 ± 0.13 |
+| Two bits less | Two bits | 9.57% | 7.91% | 1.94 ± 0.42 | 2.67 ± 0.46 | 2.50 ± 0.45 | 2.41 ± 0.47 |
+
+The first row is the `laser` mode's at 128 × 64, as it should be.
+
+**One bit less of hidden rescale is half the laser.** It clips 0.65% of the
+units that fire, and by itself costs 0.02 points. The second layer's operands
+are twice as large, its 8-bit shift goes from 9 to 10, and its noise in LSB
+halves at any laser. At 4 and at 8 times B5's laser the network then loses
+0.35 and 0.22, which is what the rule's rescale loses at 8 and at 16. So it is
+within a tenth of a point of v1 at 4 times B5's laser, where it took 8.
+
+**It gives back the second layer's share and not the first's.** At twice B5's
+laser it loses 0.92, where the rule's rescale at four times loses 0.75. The
+first layer's noise is then an LSB, and nothing done to the hidden layer's
+operands reaches it.
+
+**A second bit buys nothing.** It clips 13% of the units that fire and costs a
+quarter of a point by itself, and the second layer's shift does not move
+again.
+
+**A gain on the first layer's weights does not pay.** One bit saturates 0.38%
+of them and that alone costs 0.14 ± 0.08. It does raise the first layer's
+shift from 11 to 12 and halve its noise in LSB, and at twice B5's laser, with
+the rescale down, it is the best there is: 0.79 and 0.83 against 0.92, which
+is inside their errors. Everywhere else it loses more than it gains. It also
+leaves the hidden operands smaller, 6.1 lines of light a shot for 6.7, so the
+second layer's noise goes up as the first's comes down: 2.8 LSB for 2.0 at 4
+times B5's laser. Two bits
+saturate 8% of the weights and cost a point and a half.
+
+**So the clip rule was a converter's rule.** One unit in ten thousand at full
+scale wastes none of an operand's range. Under a laser the range is not what
+is short. The light is, and one unit in a hundred and fifty at full scale is
+worth a factor of two of it.
+
+**What was predicted.** Written before the first run was read. Six things.
+
+1. That a bit less of rescale would raise the second layer's shift from 9 to
+   10 and halve its noise, and two bits take it to 11. Right for one. Wrong
+   for two: it stays at 10.
+2. That under 1% of firing units would clip at one bit and several percent at
+   two. Right at one, 0.65%. Low at two: 13%.
+3. That the clipping alone would cost under 0.05 points at one bit and 0.1 to
+   0.4 at two. Right: 0.02 and 0.26.
+4. That a bit of weight gain would saturate about half a percent of the
+   weights and cost under 0.1 by itself, and two bits several percent and 0.2
+   to 1. Right about the shares, 0.38% and 7.9%. Low about what they cost:
+   0.14 and 1.46.
+5. That a bit of weight gain would raise the first layer's shift by one and
+   halve its noise. Right.
+6. That at 4 times B5's laser the best of the nine would be a bit of each,
+   losing 0.38 to 0.50, and that none would be within a tenth of a point of
+   v1. Wrong on both: the best is the rescale alone, at 0.35, and that is
+   within a tenth.
+
+**What this is not.** One family of networks, on MNIST, with one hidden
+layer. Networks trained with neither clip in the loop: one trained to it might
+take a second bit. A gain that is the same for every unit of the first layer:
+a gain a unit, each to its own largest weight, would clip none, and needs a
+rescale a unit to take it back, where the stage on grxcp's chiplet has one a
+command. One tile. And a model: none of it is a measurement of a tile.
 
 ---
 

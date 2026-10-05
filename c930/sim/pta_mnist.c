@@ -62,6 +62,14 @@
  * that, the same in every layer, and design note section 5 has what a laser
  * of a given size then costs.
  *
+ * And how a network is put on the tile, where the host has a choice (eval
+ * --hidshift, --w1gain).  A converter's full scale is set where a layer's sums
+ * fall, and they fall where its operands do, so operands that are small leave
+ * most of a tile's light unused.  The host sets two of them: each hidden
+ * layer's rescale, and the scale the first layer's weights are written at.
+ * Both can be made larger, and both then clip.  Design note section 5 has what
+ * that buys of a laser.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -107,6 +115,25 @@
  * from its own seed.
  */
 static int tile_rows = ROWS, tile_cols = COLS, gemm_k = MAX_K, gemm_n = MAX_N;
+
+/*
+ * How a network is put on the tile, where the host has a choice:
+ *
+ *   hid_shift  added to every hidden layer's rescale, after the clip rule has
+ *              set it.  -1 hands the next layer operands twice as large, and
+ *              the largest of them clip at full scale
+ *   w1_gain    the first layer's weights written 2^w1_gain as large,
+ *              saturating at the ends of their range.  The hidden rescale
+ *              takes the gain back, so the network is what it was except in
+ *              the weights that clipped
+ *
+ * Both are zero unless eval is told, and host_setup() is then what it was.
+ * It leaves what each clipped here: of the hidden units that fire, the share
+ * that reach full scale, a layer; and of the first layer's weights, the share
+ * that saturate.
+ */
+static int    hid_shift = 0, w1_gain = 0;
+static double hid_clip[MAX_HID], w1_clip;
 
 /*
  * Drift runs at grxcp's EO-res point (pta_cpu_integration.md section 6.2):
@@ -1264,7 +1291,7 @@ static int host_setup(host_net *hn, const mlp *net, const dataset *tr)
     const int D = net->din, H = net->hidden;
     const double a_s = ldexp(1.0, D - 1) - 1.0, w_s = ldexp(1.0, D - 1);
     const int64_t amax = ((int64_t)1 << (D - 1)) - 1;
-    int32_t a1[N_IN], *q[MAX_L];
+    int32_t a1[N_IN], *q[MAX_L] = {NULL};
     image_ws *ws = (image_ws *)malloc(sizeof *ws);
     double scale = a_s;         /* operand units per unit of this layer's input */
     int i, n, k, l;
@@ -1273,17 +1300,26 @@ static int host_setup(host_net *hn, const mlp *net, const dataset *tr)
         return -1;
     for (l = 0; l <= H; ++l) {
         const int P = layer_size(H, l);
+        const double g = l == 0 ? ldexp(1.0, w1_gain) : 1.0;
+        long clipped = 0;
         q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
         if (!q[l])
             return -1;
-        for (i = 0; i < P; ++i)
-            hn->w[l][i] = weight_operand(net->w[l][i], D);
+        for (i = 0; i < P; ++i) {
+            const double v = floor(net->w[l][i] * g * w_s + 0.5);
+            hn->w[l][i] = weight_operand(net->w[l][i] * g, D);
+            clipped += v > w_s - 1.0 || v < -w_s;
+        }
+        if (l == 0)
+            w1_clip = (double)clipped / P;
     }
     quant_weights(hn, net->wbits, q);
     for (l = 0; l < H; ++l) {
-        long hist[64] = {0}, total = 0;
+        const double g = l == 0 ? ldexp(1.0, w1_gain) : 1.0;
+        long hist[64] = {0}, total = 0, over = 0;
+        int s;
         for (n = 0; n < N_HID; ++n)
-            hn->b[l][n] = llround(net->b[l][n] * scale * w_s);
+            hn->b[l][n] = llround(net->b[l][n] * scale * w_s * g);
         hn->sh[l] = 0;
         for (i = 0; i < N_CAL_HID; ++i) {
             for (k = 0; k < N_IN; ++k)
@@ -1297,8 +1333,13 @@ static int host_setup(host_net *hn, const mlp *net, const dataset *tr)
                 }
             }
         }
-        hn->sh[l] = shift_for(hist, total);
-        scale = scale * w_s / ldexp(1.0, hn->sh[l]);
+        hn->sh[l] = shift_for(hist, total) + hid_shift;
+        if (hn->sh[l] < 0)
+            hn->sh[l] = 0;
+        for (s = hn->sh[l] + 1; s < 64; ++s)
+            over += hist[s];
+        hid_clip[l] = total ? (double)over / total : 0.0;
+        scale = scale * w_s * g / ldexp(1.0, hn->sh[l]);
     }
     for (n = 0; n < N_OUT; ++n)
         hn->b[H][n] = llround(net->b[H][n] * scale * w_s);
@@ -1614,7 +1655,8 @@ static int cmd_eval(int argc, char **argv)
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
-        "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", NULL};
+        "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
+        "--w1gain", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1627,6 +1669,8 @@ static int cmd_eval(int argc, char **argv)
     const char *thermal8 = opt(argc, argv, "--thermal8", NULL);
     const char *photons8 = opt(argc, argv, "--photons8", NULL);
     const char *thermalline = opt(argc, argv, "--thermalline", NULL);
+    const char *hidshift = opt(argc, argv, "--hidshift", NULL);
+    const char *w1gain = opt(argc, argv, "--w1gain", NULL);
     lit_stats lit_s;
     const double src_all = atof(opt(argc, argv, "--src", "0"));
     const double src_line = atof(opt(argc, argv, "--srcline", "0"));
@@ -1732,6 +1776,12 @@ static int cmd_eval(int argc, char **argv)
         return 2;
     }
 
+    hid_shift = hidshift ? atoi(hidshift) : 0;
+    w1_gain   = w1gain ? atoi(w1gain) : 0;
+    if (hid_shift < -8 || hid_shift > 8 || w1_gain < 0 || w1_gain > 6) {
+        fprintf(stderr, "pta_mnist: --hidshift is -8 to 8 and --w1gain is 0 to 6\n");
+        return 2;
+    }
     if (host_setup(hn, net, &tr) != 0)
         return 2;
     if (cfg[0].adc_bits != 0)
@@ -1877,6 +1927,13 @@ static int cmd_eval(int argc, char **argv)
         printf(" litmax=");
         for (l = 0; l <= H; ++l)
             printf("%s%.2f", l ? "," : "", lit_s.max[l]);
+    }
+    /* How the network was put on the tile, and what that clipped, when asked. */
+    if (hidshift || w1gain) {
+        printf(" hidshift=%d hidclip=", hid_shift);
+        for (l = 0; l < H; ++l)
+            printf("%s%.5f", l ? "," : "", hid_clip[l]);
+        printf(" w1gain=%d w1clip=%.5f", w1_gain, w1_clip);
     }
     if (probing) {
         probe_result pv;
@@ -2682,6 +2739,111 @@ static int cmd_selftest(void)
         free(a1);
     }
 
+    /* 11. how a network is put on the tile.  A made-up network whose weights sit
+     *     on a grid a doubling keeps, and made-up images.  A gain on the first
+     *     layer's weights is taken back by the hidden rescale: one more bit of
+     *     shift, and every hidden operand what it was.  One bit less of rescale
+     *     doubles what the next layer is handed and its biases, and clips more.
+     *     And a gain too large for a weight saturates it and says so. */
+    {
+        const int D = 8, H = 1;
+        mlp net;
+        host_net h0, h1, h2, h3;
+        dataset tr;
+        image_ws *w0 = (image_ws *)malloc(sizeof *w0), *w2 = (image_ws *)malloc(sizeof *w2);
+        int32_t *q0[MAX_L], *q2[MAX_L], a1[N_IN];
+        double c0, c1, wc2, wc3;
+        long differ = 0, grew = 0, units = 0;
+        int i, k, l, n, ok;
+
+        memset(&net, 0, sizeof net);
+        net.din   = D;
+        net.wbits = 6;
+        mlp_alloc(&net, H);
+        for (l = 0; l <= H; ++l)
+            for (i = 0; i < layer_size(H, l); ++i)
+                net.w[l][i] = (float)((int)(splitmix64(&rs) % 13) - 6) / 16.0f;     /* -6/16 .. 6/16 */
+        for (n = 0; n < N_OUT; ++n)
+            net.b[H][n] = (float)((int)(splitmix64(&rs) % 9) - 4) / 64.0f;
+        for (n = 0; n < N_HID; ++n)
+            net.b[0][n] = (float)((int)(splitmix64(&rs) % 9) - 4) / 64.0f;
+        tr.n = N_CAL_HID;
+        tr.x = (uint8_t *)calloc((size_t)N_CAL_HID * N_IN, 1);
+        tr.y = NULL;
+        for (i = 0; i < N_CAL_HID; ++i)
+            for (k = 0; k < 24; ++k)
+                tr.x[(size_t)i * N_IN + splitmix64(&rs) % N_IN] = (uint8_t)(1 + splitmix64(&rs) % 255);
+
+        hid_shift = 0;  w1_gain = 0;  ok = host_setup(&h0, &net, &tr) == 0;  c0 = hid_clip[0];
+        hid_shift = -1; w1_gain = 0;  ok &= host_setup(&h1, &net, &tr) == 0; c1 = hid_clip[0];
+        hid_shift = 0;  w1_gain = 1;  ok &= host_setup(&h2, &net, &tr) == 0; wc2 = w1_clip;
+        hid_shift = 0;  w1_gain = 2;  ok &= host_setup(&h3, &net, &tr) == 0; wc3 = w1_clip;
+        hid_shift = 0;  w1_gain = 0;
+
+        /* one bit less of rescale: the same weights, the next layer's biases doubled */
+        ok &= h0.sh[0] >= 2 && h1.sh[0] == h0.sh[0] - 1 && c0 <= CLIP_FRAC && c1 > c0;
+        ok &= memcmp(h1.w[0], h0.w[0], (size_t)layer_size(H, 0) * sizeof(int32_t)) == 0;
+        for (n = 0; n < N_OUT; ++n)
+            ok &= llabs(h1.b[H][n] - 2 * h0.b[H][n]) <= 1;
+        /* a bit of gain: every weight doubled and none clipped, one more bit of
+         * shift, and the last layer's biases what they were */
+        ok &= wc2 == 0.0 && h2.sh[0] == h0.sh[0] + 1;
+        for (i = 0; i < layer_size(H, 0); ++i)
+            ok &= h2.w[0][i] == 2 * h0.w[0][i];
+        for (n = 0; n < N_HID; ++n)
+            ok &= h2.b[0][n] == 2 * h0.b[0][n] && h1.b[0][n] == h0.b[0][n];
+        ok &= memcmp(h2.w[H], h0.w[H], (size_t)layer_size(H, H) * sizeof(int32_t)) == 0;
+        ok &= memcmp(h2.b[H], h0.b[H], N_OUT * sizeof(int64_t)) == 0;
+        /* and two bits: 4/16 and up times four is past the range's top, and -5/16
+         * and down past its bottom: five weights of the thirteen saturate */
+        ok &= fabs(wc3 - 5.0 / 13.0) < 0.01;
+        for (i = 0; i < layer_size(H, 0); ++i) {
+            const int32_t w = h0.w[0][i], g = h3.w[0][i];
+            ok &= g == (4 * w > 127 ? 127 : 4 * w < -128 ? -128 : 4 * w);
+        }
+        /* the hidden operands, image by image: the gain changes none of them,
+         * and a bit less of rescale never makes one smaller */
+        for (l = 0; l <= H; ++l) {
+            q0[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+            q2[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+        }
+        quant_weights(&h0, net.wbits, q0);
+        quant_weights(&h2, net.wbits, q2);
+        for (i = 0; i < 200; ++i) {
+            for (k = 0; k < N_IN; ++k)
+                a1[k] = pixel_operand(tr.x[(size_t)i * N_IN + k], D);
+            direct_image(&h0, q0, 0, a1, w0);
+            direct_image(&h2, q2, 0, a1, w2);
+            for (n = 0; n < N_HID; ++n)
+                differ += w0->a[1][n] != w2->a[1][n];
+            direct_image(&h1, q0, 0, a1, w2);
+            for (n = 0; n < N_HID; ++n) {
+                differ += w2->a[1][n] < w0->a[1][n] || w2->a[1][n] > 2 * w0->a[1][n] + 1;
+                grew   += w2->a[1][n] > w0->a[1][n];
+                units  += w0->a[1][n] > 0;
+            }
+        }
+        ok &= differ == 0 && units > 1000 && grew > units / 2;
+        printf("selftest: a network put on the tile: a bit of gain on the first layer's weights is one "
+               "more of rescale (%d for %d) and no operand moves; a bit less of rescale clips %.4f of "
+               "the units that fire for %.5f; two bits of gain saturate %.3f of the weights: %s\n",
+               h2.sh[0], h0.sh[0], c1, c0, wc3, ok ? "as it should be" : "WRONG");
+        if (!ok)
+            errors += fail("the host's choices in putting a network on the tile are not what they say");
+        for (l = 0; l <= H; ++l) {
+            free(q0[l]);
+            free(q2[l]);
+        }
+        host_free(&h0);
+        host_free(&h1);
+        host_free(&h2);
+        host_free(&h3);
+        mlp_free(&net);
+        free(tr.x);
+        free(w0);
+        free(w2);
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -2720,6 +2882,10 @@ static void help(void)
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
+           "  --hidshift D    added to every hidden layer's rescale: -1 hands the next layer\n"
+           "                  operands twice as large, and clips the largest (0)\n"
+           "  --w1gain B      the first layer's weights written 2^B as large, saturating; the\n"
+           "                  hidden rescale takes the gain back (0)\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
 }
 
