@@ -39,6 +39,13 @@
  * LSB of an 8-bit ADC whatever the ADC is, and the probe reports every run in
  * both.  doc/pta_error_model_design_note.md section 5 has what that changed.
  *
+ * And the tile itself (eval --rows, --cols) with the cut of a layer into GEMMs
+ * (--maxk, --maxn).  Everything above was measured on the c930 core's 8 x 8
+ * tile in GEMMs that core accepts, and those are still the defaults, so a line
+ * printed without the four options is the line it always was.  grxcp's board
+ * puts the tile on a chiplet that may be 256 x 64 and takes a layer as one
+ * command, and design note section 5 has what the budget costs there.
+ *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
@@ -73,6 +80,17 @@
 #define MAX_K       256
 #define MAX_N       8
 #define ACC_W       48
+
+/*
+ * The tile and the cut as a run has them: the core's, above, unless eval is
+ * told otherwise.  The tile is what a shot is -- tile_rows inputs summed into
+ * each of tile_cols outputs, through one ADC conversion each.  The cut is where
+ * one GEMM ends and the next begins, gemm_k inputs by gemm_n outputs at most,
+ * and it is kept to whole tiles so that a shot sees the same operands however
+ * a layer is cut.  It then matters to one thing: each GEMM draws its noise
+ * from its own seed.
+ */
+static int tile_rows = ROWS, tile_cols = COLS, gemm_k = MAX_K, gemm_n = MAX_N;
 
 /*
  * Drift runs at grxcp's EO-res point (pta_cpu_integration.md section 6.2):
@@ -618,11 +636,44 @@ static void direct_image(const host_net *hn, int32_t *const *q, int abits, const
     }
 }
 
+/*
+ * A GEMM's operands and its result, sized for the run's cut and for the
+ * calibration probe, which is tile_rows one-hot rows against one tile.
+ */
 typedef struct {
-    int32_t A[MAX_M * MAX_K];
-    int32_t B[MAX_K * MAX_N];
-    int64_t C[MAX_M * MAX_N];
+    int32_t *A;
+    int32_t *B;
+    int64_t *C;
 } gemm_buf;
+
+static void gemm_free(gemm_buf *g)
+{
+    if (!g)
+        return;
+    free(g->A);
+    free(g->B);
+    free(g->C);
+    free(g);
+}
+
+static gemm_buf *gemm_alloc(void)
+{
+    const size_t m = (size_t)(MAX_M > tile_rows ? MAX_M : tile_rows);
+    const size_t k = (size_t)(gemm_k > tile_rows ? gemm_k : tile_rows);
+    const size_t n = (size_t)(gemm_n > tile_cols ? gemm_n : tile_cols);
+    gemm_buf *g = (gemm_buf *)calloc(1, sizeof *g);
+
+    if (!g)
+        return NULL;
+    g->A = (int32_t *)malloc(m * k * sizeof *g->A);
+    g->B = (int32_t *)malloc(k * n * sizeof *g->B);
+    g->C = (int64_t *)malloc(m * n * sizeof *g->C);
+    if (!g->A || !g->B || !g->C) {
+        gemm_free(g);
+        return NULL;
+    }
+    return g;
+}
 
 /*
  * M images, their input operands a0 (M x 784), through the tile: bw->y[l] are
@@ -645,10 +696,10 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
         const int32_t *src = l == 0 ? a0 : bw->a[l];
         int64_t *y = bw->y[l];
         memset(y, 0, (size_t)M * out * sizeof *y);
-        for (n0 = 0; n0 < out; n0 += MAX_N) {
-            const int N = (out - n0 < MAX_N) ? out - n0 : MAX_N;
-            for (k0 = 0; k0 < in; k0 += MAX_K) {
-                const int K = (in - k0 < MAX_K) ? in - k0 : MAX_K;
+        for (n0 = 0; n0 < out; n0 += gemm_n) {
+            const int N = (out - n0 < gemm_n) ? out - n0 : gemm_n;
+            for (k0 = 0; k0 < in; k0 += gemm_k) {
+                const int K = (in - k0 < gemm_k) ? in - k0 : gemm_k;
                 for (m = 0; m < M; ++m)
                     for (k = 0; k < K; ++k)
                         g->A[m * K + k] = src[m * in + k0 + k];
@@ -945,9 +996,13 @@ static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_r
  * The probe reads at the ADC's finest setting: a network's shift is calibrated
  * for sums thousands of units wide, and a cell's error is a handful.  A real
  * tile changes range the same way.
+ *
+ * Returns 0, or -1 if it could not run.  It used to return nothing, and to do
+ * nothing on a tile of more than 64 cells: on the 8 x 8 tile that was every
+ * tile there was.
  */
-static void calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, int bank,
-                           uint32_t seed, uint32_t *gemm, int repeats, gemm_buf *g)
+static int calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, int bank,
+                          uint32_t seed, uint32_t *gemm, int repeats, gemm_buf *g)
 {
     enum { PASSES = 3 };
     const int k = tile->rows, n = tile->cols;
@@ -956,15 +1011,20 @@ static void calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *
                      ? contract_quant(probe, (int)cfg->act_bits, tile->din_w) : probe;
     const int quantised = (cfg->impair & PTA_QUANT) && cfg->adc_bits != 0;
     const int64_t codes = quantised ? (((int64_t)1 << (cfg->adc_bits - 1)) - 1) : 0;
-    int64_t sum[64], total[64];
+    int64_t *sum, *total;
     int64_t range = pa * (int64_t)cfg->trim_max / 256;   /* cover what a trim can hold */
     pta_cfg c = *cfg;
     int r, col, rep, pass, s_probe;
 
-    if (k * n > (int)(sizeof sum / sizeof sum[0]) || pa == 0)
-        return;
-    for (r = 0; r < k * n; ++r)
-        total[r] = 0;
+    if (pa == 0)
+        return 0;                       /* nothing a probe could read */
+    sum   = (int64_t *)malloc((size_t)k * n * sizeof *sum);
+    total = (int64_t *)calloc((size_t)k * n, sizeof *total);
+    if (!sum || !total) {
+        free(sum);
+        free(total);
+        return -1;
+    }
 
     for (pass = 0; pass < PASSES; ++pass) {
         int64_t worst = 0;
@@ -981,8 +1041,11 @@ static void calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *
             for (r = 0; r < k; ++r)
                 g->A[r * k + r] = probe;                            /* one-hot rows */
             c.seed = gemm_seed(seed, (*gemm)++);
-            if (pta_gemm(&c, tile, dev, bank, k, n, k, g->A, g->B, g->C) < 0)
-                return;
+            if (pta_gemm(&c, tile, dev, bank, k, n, k, g->A, g->B, g->C) < 0) {
+                free(sum);
+                free(total);
+                return -1;
+            }
             for (r = 0; r < k; ++r)
                 for (col = 0; col < n; ++col)
                     sum[r * n + col] += g->C[r * n + col];
@@ -1002,6 +1065,9 @@ static void calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *
             break;                      /* nothing to refine: the probe read it exactly */
         range = worst * 4 + 8;          /* next pass measures what this one left */
     }
+    free(sum);
+    free(total);
+    return 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1112,9 +1178,9 @@ static void adc_setup(const host_net *hn, const mlp *net, const dataset *tr, int
             const int in = layer_in(l), out = layer_out(H, l);
             const int32_t *src = l == 0 ? a1 : ws->a[l];
             for (n = 0; n < out; ++n)
-                for (k = 0; k < in; k += ROWS) {
+                for (k = 0; k < in; k += tile_rows) {
                     int64_t s = 0;
-                    for (r = k; r < k + ROWS && r < in; ++r)
+                    for (r = k; r < k + tile_rows && r < in; ++r)
                         s += (int64_t)src[r] * q[l][n * in + r];
                     ++hist[l][shift_needed(s < 0 ? -s : s, lim)];
                     ++total[l];
@@ -1335,7 +1401,7 @@ static int cmd_eval(int argc, char **argv)
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
         "--wbits", "--abits", "--adcbits", "--thermal", "--photons", "--prog", "--xtalk",
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
-        "--probe", "--thermal8", "--photons8", NULL};
+        "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1353,7 +1419,7 @@ static int cmd_eval(int argc, char **argv)
     dataset tr, te;
     mlp net_s, *net = &net_s;
     host_net hn_s, *hn = &hn_s;
-    gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
+    gemm_buf *g;
     batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
     int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
     pta_cfg cfg[MAX_L];
@@ -1370,6 +1436,32 @@ static int cmd_eval(int argc, char **argv)
         fprintf(stderr, "pta_mnist eval: --data DIR --net NET [options] (pta_mnist help)\n");
         return 2;
     }
+    /* The tile, and the cut.  The cut is whole tiles: a GEMM that ended inside
+     * one would give its last shot fewer inputs than the tile has, and the same
+     * layer would then be a different set of shots at every cut. */
+    tile_rows = atoi(opt(argc, argv, "--rows", "8"));
+    tile_cols = atoi(opt(argc, argv, "--cols", "8"));
+    /* On the core's tile the cut is the core's.  On any other it is a whole
+     * layer, which is how a tile that is not the core's is given its work. */
+    if (tile_rows == ROWS && tile_cols == COLS) {
+        gemm_k = MAX_K;
+        gemm_n = MAX_N;
+    } else if (tile_rows >= 1 && tile_cols >= 1) {
+        gemm_k = tile_rows * ((N_IN + tile_rows - 1) / tile_rows);
+        gemm_n = tile_cols * ((N_HID + tile_cols - 1) / tile_cols);
+    }
+    if (opt(argc, argv, "--maxk", NULL))
+        gemm_k = atoi(opt(argc, argv, "--maxk", NULL));
+    if (opt(argc, argv, "--maxn", NULL))
+        gemm_n = atoi(opt(argc, argv, "--maxn", NULL));
+    if (tile_rows < 1 || tile_rows > 1023 || tile_cols < 1 || tile_cols > 1023 ||
+        gemm_k < tile_rows || gemm_k > 65536 || gemm_k % tile_rows != 0 ||
+        gemm_n < tile_cols || gemm_n > 65536 || gemm_n % tile_cols != 0) {
+        fprintf(stderr, "pta_mnist: --rows and --cols are 1 to 1023, and --maxk and --maxn are "
+                        "whole tiles of them\n");
+        return 2;
+    }
+    g = gemm_alloc();
     if (!g || !bw || !a1 || load_net(path, net) != 0 || load_mnist(data, &tr, &te) != 0)
         return 2;
     H = net->hidden;
@@ -1450,8 +1542,8 @@ static int cmd_eval(int argc, char **argv)
         quant_weights(hn, net->wbits, pq);
     }
 
-    tile.rows  = ROWS;
-    tile.cols  = COLS;
+    tile.rows  = tile_rows;
+    tile.cols  = tile_cols;
     tile.din_w = net->din;
     tile.acc_w = ACC_W;
     if (pta_device_init(&dev, &tile) != 0)
@@ -1459,15 +1551,17 @@ static int cmd_eval(int argc, char **argv)
     pta_model_reset(&dev, seed);
     if (cfg[0].impair & PTA_DRIFT)
         pta_drift_age(&dev, &cfg[0], steps);
-    if (calibrate > 0) {
-        calibrate_bank(&dev, &cfg[0], &tile, 0, seed ^ 0xCA11B, &gemm, calibrate, g);
-        calibrate_bank(&dev, &cfg[1], &tile, 1, seed ^ 0xCA11B, &gemm, calibrate, g);
+    if (calibrate > 0 &&
+        (calibrate_bank(&dev, &cfg[0], &tile, 0, seed ^ 0xCA11B, &gemm, calibrate, g) != 0 ||
+         calibrate_bank(&dev, &cfg[1], &tile, 1, seed ^ 0xCA11B, &gemm, calibrate, g) != 0)) {
+        fprintf(stderr, "pta_mnist: the calibration could not run\n");
+        return 2;
     }
     if ((cfg[0].impair & PTA_DRIFT) && post_steps)
         pta_drift_age(&dev, &cfg[0], post_steps);
 
     for (l = 0; l <= H; ++l)
-        per_image += (long)layer_out(H, l) * ((layer_in(l) + ROWS - 1) / ROWS);
+        per_image += (long)layer_out(H, l) * ((layer_in(l) + tile_rows - 1) / tile_rows);
     for (base = 0; base < images; base += MAX_M) {
         const int M = (images - base < MAX_M) ? images - base : MAX_M;
         const int64_t *y2 = bw->y[H];
@@ -1505,6 +1599,10 @@ static int cmd_eval(int argc, char **argv)
            elements);
     if (H > 1)
         printf(" hidden=%d", H);
+    /* Said only when it is not the core's, so that a line at the defaults is
+     * the line it was before the tile could be anything else. */
+    if (tile_rows != ROWS || tile_cols != COLS || gemm_k != MAX_K || gemm_n != MAX_N)
+        printf(" tile=%dx%d gemm=%dx%d", tile_rows, tile_cols, gemm_k, gemm_n);
     if (probing) {
         probe_result pv;
         /* The run's noise in LSB of an 8-bit ADC, layer 1's, however it was asked for. */
@@ -1532,7 +1630,7 @@ static int cmd_eval(int argc, char **argv)
     pta_device_free(&dev);
     host_free(hn);
     mlp_free(net);
-    free(g);
+    gemm_free(g);
     free(bw);
     free(a1);
     return 0;
@@ -1622,7 +1720,7 @@ static int cmd_selftest(void)
         const int32_t lo = -(1 << (D - 1)), span = 1 << D;
         const pta_tile tile = {ROWS, COLS, D, ACC_W};
         host_net hn;
-        gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
+        gemm_buf *g = gemm_alloc();
         batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
         image_ws *ws = (image_ws *)malloc(sizeof *ws);
         int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
@@ -1682,7 +1780,7 @@ static int cmd_selftest(void)
         host_free(&hn);
         for (l = 0; l <= H; ++l)
             free(q[l]);
-        free(g);
+        gemm_free(g);
         free(bw);
         free(ws);
         free(a1);
@@ -1697,7 +1795,7 @@ static int cmd_selftest(void)
         const int32_t lo = -(1 << (D - 1)), span = 1 << D;
         const pta_tile tile = {ROWS, COLS, D, ACC_W};
         host_net hn;
-        gemm_buf *g = (gemm_buf *)malloc(sizeof *g);
+        gemm_buf *g = gemm_alloc();
         batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
         int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
         uint8_t labels[MAX_M];
@@ -1759,7 +1857,7 @@ static int cmd_selftest(void)
         host_free(&hn);
         for (l = 0; l <= H; ++l)
             free(q[l]);
-        free(g);
+        gemm_free(g);
         free(bw);
         free(a1);
     }
@@ -1813,6 +1911,173 @@ static int cmd_selftest(void)
             errors += fail("the network file's layout has moved");
     }
 
+    /* 7. the tile and the cut.  With nothing impaired a network's sums are
+     *    the same on every tile at every cut.  With the quantisers on they
+     *    depend on the tile, which is what a shot is, and not on the cut,
+     *    which is only where one GEMM ends and the next begins. */
+    {
+        static const int geo[][4] = {     /* rows, cols, most K, most N */
+            {8, 8, 256, 8},     /* the core's, as everything before was run */
+            {8, 8, 784, 104},   /* its tile, a layer a GEMM */
+            {256, 64, 1024, 128},
+            {256, 64, 256, 64}, /* that tile, a tile a GEMM */
+            {64, 8, 832, 104},
+            {16, 4, 32, 8},
+        };
+        enum { GEOS = sizeof geo / sizeof geo[0] };
+        const int D = 8, M = 19, H = 2;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        host_net hn;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int64_t *first = (int64_t *)malloc(2 * GEOS * M * N_OUT * sizeof *first);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
+        int gi, quant, i, l, clear_same = 1, cut_same = 1, tile_matters = 0, ran = 1;
+
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l)
+            for (i = 0; i < layer_size(H, l); ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&rs) % (uint64_t)span);
+        for (l = 0; l < H; ++l)
+            hn.sh[l] = D + 3 - l;
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&rs) % (uint64_t)(1 << (D - 1)));
+        for (quant = 0; quant < 2; ++quant)
+            for (gi = 0; gi < GEOS; ++gi) {
+                int64_t *y = first + (size_t)(quant * GEOS + gi) * M * N_OUT;
+                pta_tile tile;
+                pta_device dev;
+                pta_cfg cfg[MAX_L];
+                gemm_buf *g;
+                uint32_t gemm = 0;
+                tile_rows = geo[gi][0];
+                tile_cols = geo[gi][1];
+                gemm_k    = geo[gi][2];
+                gemm_n    = geo[gi][3];
+                tile.rows = tile_rows;
+                tile.cols = tile_cols;
+                tile.din_w = D;
+                tile.acc_w = ACC_W;
+                g = gemm_alloc();
+                pta_device_init(&dev, &tile);
+                pta_model_reset(&dev, 0);
+                memset(cfg, 0, sizeof cfg);
+                for (l = 0; quant && l <= H; ++l) {
+                    cfg[l].impair    = PTA_QUANT;
+                    cfg[l].act_bits  = 6;
+                    cfg[l].w_bits    = 6;
+                    cfg[l].adc_bits  = 7;
+                    cfg[l].adc_shift = 14;   /* for a 256-input sum; coarse for 8, and the same for all */
+                }
+                if (!g || tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
+                    ran = 0;
+                memcpy(y, bw->y[H], (size_t)M * N_OUT * sizeof *y);
+                pta_device_free(&dev);
+                gemm_free(g);
+            }
+        for (gi = 1; gi < GEOS; ++gi)
+            clear_same &= memcmp(first, first + (size_t)gi * M * N_OUT,
+                                 (size_t)M * N_OUT * sizeof *first) == 0;
+        /* quantised: 0 and 1 are one tile at two cuts, and so are 2 and 3 */
+        {
+            const int64_t *q0 = first + (size_t)GEOS * M * N_OUT;
+            const size_t one = (size_t)M * N_OUT, bytes = one * sizeof *first;
+            cut_same &= memcmp(q0, q0 + one, bytes) == 0;
+            cut_same &= memcmp(q0 + 2 * one, q0 + 3 * one, bytes) == 0;
+            tile_matters = memcmp(q0, q0 + 2 * one, bytes) != 0 &&
+                           memcmp(q0, q0 + 4 * one, bytes) != 0 &&
+                           memcmp(q0 + 2 * one, q0 + 4 * one, bytes) != 0;
+        }
+        printf("selftest: %d tiles and cuts, nothing impaired: the last layer's sums are the same on "
+               "all: %s\n", (int)GEOS, ran && clear_same ? "as it should be" : "WRONG");
+        printf("selftest: the quantisers on: one tile at two cuts %s, and three tiles %s\n",
+               cut_same ? "agrees" : "DISAGREES", tile_matters ? "do not" : "AGREE, which they should not");
+        if (!ran || !clear_same)
+            errors += fail("a network's sums depend on the tile or the cut with nothing impaired");
+        if (!cut_same)
+            errors += fail("a layer's cut into GEMMs changes what its shots see");
+        if (!tile_matters)
+            errors += fail("the tile's size does not reach the quantised sums");
+        host_free(&hn);
+        free(bw);
+        free(first);
+        free(a1);
+    }
+
+    /* 8. the calibration, on a tile of more than 64 cells.  Drift alone, so a
+     *    probe reads each cell exactly: after it, a probe reads what the trim's
+     *    step leaves, on every cell and not on the first 64. */
+    {
+        const int D = 8;
+        pta_tile tile;
+        pta_device dev;
+        pta_cfg cfg;
+        gemm_buf *g;
+        uint32_t gemm = 0;
+        int64_t before = 0, after = 0, after_late = 0, before_late = 0;
+        int pass, r, c, rc;
+
+        tile_rows = 16;
+        tile_cols = 12;                 /* 192 cells */
+        gemm_k = 16;
+        gemm_n = 12;
+        tile.rows = tile_rows;
+        tile.cols = tile_cols;
+        tile.din_w = D;
+        tile.acc_w = ACC_W;
+        g = gemm_alloc();
+        pta_device_init(&dev, &tile);
+        pta_model_reset(&dev, 99);
+        memset(&cfg, 0, sizeof cfg);
+        cfg.impair = PTA_DRIFT;
+        drift_fit(&cfg, 5.0);                           /* TFLN's, the larger */
+        cfg.trim_step = 64;                             /* a quarter of a weight LSB */
+        cfg.trim_max  = 128 << 8;
+        pta_drift_age(&dev, &cfg, hours_to_steps(TEST_HOURS));
+        rc = g ? 0 : -1;
+        for (pass = 0; rc == 0 && pass < 2; ++pass) {
+            int64_t worst = 0, late = 0;
+            memset(g->B, 0, (size_t)tile_rows * tile_cols * sizeof g->B[0]);
+            memset(g->A, 0, (size_t)tile_rows * tile_rows * sizeof g->A[0]);
+            for (r = 0; r < tile_rows; ++r)
+                g->A[r * tile_rows + r] = (1 << (D - 1)) - 1;
+            cfg.seed = gemm_seed(5, gemm++);
+            if (pta_gemm(&cfg, &tile, &dev, 0, tile_rows, tile_cols, tile_rows, g->A, g->B, g->C) < 0)
+                rc = -1;
+            for (r = 0; r < tile_rows; ++r)
+                for (c = 0; c < tile_cols; ++c) {
+                    const int64_t v = g->C[r * tile_cols + c] < 0 ? -g->C[r * tile_cols + c]
+                                                                  : g->C[r * tile_cols + c];
+                    if (v > worst)
+                        worst = v;
+                    if (r * tile_cols + c >= 64 && v > late)
+                        late = v;
+                }
+            if (pass == 0) {
+                before = worst;
+                before_late = late;
+                if (calibrate_bank(&dev, &cfg, &tile, 0, 5, &gemm, 1, g) != 0)
+                    rc = -1;
+            } else {
+                after = worst;
+                after_late = late;
+            }
+        }
+        /* a probe of 127 on a residue of at most half a trim step, 32 / 256 of an LSB */
+        printf("selftest: calibration on a %d x %d tile: a probe read %lld before and %lld after; past "
+               "the 64th cell, %lld and %lld: %s\n", tile_rows, tile_cols, (long long)before,
+               (long long)after, (long long)before_late, (long long)after_late,
+               rc == 0 && before > 200 && before_late > 200 && after <= 16 && after_late <= 16
+                   ? "corrected, all of it" : "WRONG");
+        if (rc != 0 || before <= 200 || before_late <= 200 || after > 16 || after_late > 16)
+            errors += fail("the calibration does not reach every cell of a tile");
+        pta_device_free(&dev);
+        gemm_free(g);
+    }
+    tile_rows = ROWS;
+    tile_cols = COLS;
+    gemm_k = MAX_K;
+    gemm_n = MAX_N;
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -1837,6 +2102,9 @@ static void help(void)
            "  --post-hours H  age H more hours after calibrating, to see how long it holds\n"
            "  --thermal8 X    thermal sigma in LSB of an 8-bit ADC, whatever --adcbits is\n"
            "  --photons8 P    photons per LSB of an 8-bit ADC, likewise\n"
+           "  --rows R --cols C   the tile: inputs a shot sums, outputs it yields (8, 8)\n"
+           "  --maxk K --maxn N   the most a GEMM takes, in whole tiles (256, 8 on the 8 x 8\n"
+           "                  tile; a whole layer on any other, which is one command)\n"
            "  --probe 1       add each layer's error against the network's own sums, the run's\n"
            "                  noise in 8-bit LSB, and the accuracy that error alone predicts\n"
            "DIR holds MNIST's four idx files, uncompressed.\n");
