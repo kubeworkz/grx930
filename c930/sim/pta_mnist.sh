@@ -928,13 +928,16 @@ fi
 # hour, four hours and 46 hours of TFLT's drift, an hour of TFLN's, and an hour
 # and then calibrated; and with a source's noise through a balanced pair, the
 # lines together, a line on its own and the lines' level, each at several
-# sizes, and the three together.  It trains nothing.
+# sizes, and the three together.  grxcp then set the lines together to 1% and
+# the calibration to every six minutes (its B15 and B16), so the last two rows
+# are the three at 1%, 5% and 5%, and the same at the end of such an interval:
+# a version with everything it is held to.  It trains nothing.
 if [ "$what" = v2 ]; then
     tile=${V2_TILE:-128x64}
     buses=${V2_BUSES:-2}
     gopt="--rows ${tile%x*} --cols ${tile#*x}"
     all="quant,thermal,shot,prog,xtalk"
-    # version|row|options, a version's twenty rows each
+    # version|row|options, a version's twenty-two rows each
     {
         for ver in v1 v2; do
             if [ $ver = v1 ]; then r="--abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
@@ -951,6 +954,8 @@ if [ "$what" = v2 ]; then
             for x in 0.02 0.05 0.1; do echo "$ver|  level, $x|--impair $all $r --srcflat $x --buses $buses"; done
             echo "$ver|  all three: 0.02, 0.05, 0.05|--impair $all $r --src 0.02 --srcline 0.05 --srcflat 0.05 --buses $buses"
             echo "$ver|  all three, 0.05 each|--impair $all $r --src 0.05 --srcline 0.05 --srcflat 0.05 --buses $buses"
+            echo "$ver|  all three: 0.01, 0.05, 0.05|--impair $all $r --src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
+            echo "$ver|six minutes and all three: 0.01, 0.05, 0.05|--impair $all,drift $r --drift tflt --hours 0.1 --src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
         done
     } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/v2_settings.txt"
     for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
@@ -999,7 +1004,7 @@ if [ "$what" = v2 ]; then
                         sane = sane && (drifts == (("drift" in on) ? 1 : 0)) && (drifts == (("drift" in given) ? 1 : 0)) &&
                                (!drifts || want["drift"] == kind) && asked("hours") == hours && asked("calibrate") == cal &&
                                asked("src") == ns && asked("srcline") == nl && asked("srcflat") == nf &&
-                               !(drifts && lit) && (name == "as budgeted") == (!drifts && !lit) &&
+                               (name == "as budgeted") == (!drifts && !lit) &&
                                asked("buses") == ((nl > 0 || nf > 0) ? nb : 0) }
                 { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
                   ok = sane && v["tile"] == tile && v["impair"] == sprintf("0x%02x", mask) &&
@@ -1040,10 +1045,10 @@ if [ "$what" = v2 ]; then
     echo "== v2: the $tile tile on $buses buses, five networks, mean and standard error.  Points lost"
     echo "== against the same weights on the host, and what a row adds to its own version as"
     echo "== budgeted, network by network.  A source's noise is through a balanced pair"
-    printf '%-38s %14s %14s %14s %14s' "" "v1 loses" "and adds" "v2 loses" "and adds"
+    printf '%-44s %14s %14s %14s %14s' "" "v1 loses" "and adds" "v2 loses" "and adds"
     echo
     awk -F'|' '$1 == "v1" { print $2 }' "$work/out/v2_settings.txt" | while IFS= read -r name; do
-        printf '%-38s' "$name"
+        printf '%-44s' "$name"
         for ver in v1 v2; do v2_stat "$(v2_named "$ver" "$name")" "$(v2_named "$ver" "as budgeted")"; done
         echo
     done
