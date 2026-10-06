@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -17,6 +17,7 @@
 # Nor is `fill`; FILL_TILE sets its tile (default 128x64) and FILL_TIMES the
 # lasers it runs, in multiples of grxcp's B5 (default "2 4 8").
 # Nor is `tighten`; TIGHTEN_TILE sets its tile (default 128x64).
+# Nor is `v2`; V2_TILE and V2_BUSES set its tile and its buses (default 128x64 and 2).
 #
 # MNIST_DIR need not be MNIST.  Any set in its format and under its four file
 # names is a workload: Fashion-MNIST is one.  And PIXELS=inverted gives a new
@@ -26,7 +27,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,25p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,26p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -915,6 +916,135 @@ if [ "$what" = tighten ]; then
         tighten_stat "$(tighten_named "v1's rows, laser x$m")"; printf '      '
         tighten_stat "$(tighten_named "the ADC and the light, laser x$m")"
         tighten_stat "$(tighten_named "all six, laser x$m")"
+        echo
+    done
+fi
+
+# `v2`: grxcp's board plan now holds its interface chip to its version 2 (its
+# B14): v1 with an 8-bit ADC, half the receiver's noise and twice the photons,
+# which is `tighten`'s "the ADC and both noise rows".  Drift and the source's
+# rows were measured at v1 and nowhere else.  This runs both at v2, with v1
+# beside it on the same lines: each version as budgeted; after six minutes, an
+# hour, four hours and 46 hours of TFLT's drift, an hour of TFLN's, and an hour
+# and then calibrated; and with a source's noise through a balanced pair, the
+# lines together, a line on its own and the lines' level, each at several
+# sizes, and the three together.  It trains nothing.
+if [ "$what" = v2 ]; then
+    tile=${V2_TILE:-128x64}
+    buses=${V2_BUSES:-2}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    # version|row|options, a version's twenty rows each
+    {
+        for ver in v1 v2; do
+            if [ $ver = v1 ]; then r="--abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+            else r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"; fi
+            echo "$ver|as budgeted|--impair $all $r"
+            echo "$ver|six minutes of TFLT's drift|--impair $all,drift $r --drift tflt --hours 0.1"
+            echo "$ver|an hour of it|--impair $all,drift $r --drift tflt --hours 1"
+            echo "$ver|four hours of it|--impair $all,drift $r --drift tflt --hours 4"
+            echo "$ver|46 hours of it|--impair $all,drift $r --drift tflt --hours 46"
+            echo "$ver|an hour of TFLN's|--impair $all,drift $r --drift tfln --hours 1"
+            echo "$ver|an hour of TFLT's, then calibrated|--impair $all,drift $r --drift tflt --hours 1 --calibrate 16"
+            for x in 0.01 0.02 0.05 0.1; do echo "$ver|the source: together, $x|--impair $all $r --src $x"; done
+            for x in 0.02 0.05 0.1 0.2; do echo "$ver|  a line, $x|--impair $all $r --srcline $x --buses $buses"; done
+            for x in 0.02 0.05 0.1; do echo "$ver|  level, $x|--impair $all $r --srcflat $x --buses $buses"; done
+            echo "$ver|  all three: 0.02, 0.05, 0.05|--impair $all $r --src 0.02 --srcline 0.05 --srcflat 0.05 --buses $buses"
+            echo "$ver|  all three, 0.05 each|--impair $all $r --src 0.05 --srcline 0.05 --srcflat 0.05 --buses $buses"
+        done
+    } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/v2_settings.txt"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while IFS='|' read -r ver name setting; do
+        for sd in 1 2 3 4 5; do echo "pta_mnist v2 d8_b6_s$sd.net --seed $sd $setting"; done
+    done < "$work/out/v2_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # v2_file SD SETTING: the file eval_one wrote for that run
+    v2_file() {
+        local sd=$1
+        # shellcheck disable=SC2086
+        set -- --seed "$sd" $2
+        echo "$work/out/v2.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+    }
+    # Every run has to have run what its row says.  Its version's six rows, as
+    # grxcp's plan has them and written out again here.  The drift, the hours
+    # and the calibration its name says, and the source's three sizes its name
+    # says.  And each of those in the line the run printed.
+    v2_ok=yes
+    v2_runs=0
+    while IFS='|' read -r ver name setting; do
+        for sd in 1 2 3 4 5; do
+            awk -v opts="$setting" -v tile="$tile" -v ver="$ver" -v name="$name" -v nb="$buses" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function after(str, key,    p) { p = index(str, key); return p ? substr(str, p + length(key)) + 0 : 0 }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        rows["v1"] = "6 7 0.5 15 1 0.02"; rows["v2"] = "6 8 0.25 30 1 0.02"
+                        sane = (ver in rows) && split(rows[ver], r, " ") == 6 &&
+                               asked("abits") == r[1] && asked("adcbits") == r[2] && asked("thermal8") == r[3] &&
+                               asked("photons8") == r[4] && asked("prog") == r[5] && asked("xtalk") == r[6] &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        drifts = (name ~ /minutes|hour/) ? 1 : 0
+                        kind = drifts ? ((name ~ /TFLN/) ? "tfln" : "tflt") : "none"
+                        hours = !drifts ? 0 : (name ~ /six minutes/) ? 0.1 : (name ~ /four hours/) ? 4 : (name ~ /46 hours/) ? 46 : 1
+                        cal = (name ~ /calibrated/) ? 16 : 0
+                        ns = after(name, "together, "); nl = after(name, "a line, "); nf = after(name, "level, ")
+                        if (name ~ /all three: /) { split(substr(name, index(name, "all three: ") + 11), t3, ", ")
+                                                    ns = t3[1] + 0; nl = t3[2] + 0; nf = t3[3] + 0 }
+                        if (name ~ /all three, .* each/) ns = nl = nf = after(name, "all three, ")
+                        lit = (ns > 0 || nl > 0 || nf > 0) ? 1 : 0
+                        sane = sane && (drifts == (("drift" in on) ? 1 : 0)) && (drifts == (("drift" in given) ? 1 : 0)) &&
+                               (!drifts || want["drift"] == kind) && asked("hours") == hours && asked("calibrate") == cal &&
+                               asked("src") == ns && asked("srcline") == nl && asked("srcflat") == nf &&
+                               !(drifts && lit) && (name == "as budgeted") == (!drifts && !lit) &&
+                               asked("buses") == ((nl > 0 || nf > 0) ? nb : 0) }
+                { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  ok = sane && v["tile"] == tile && v["impair"] == sprintf("0x%02x", mask) &&
+                       v["abits"] == r[1] && v["adcbits"] == r[2] && near(v["thermal8"], r[3], 1e-6) &&
+                       near(v["photons8"] / r[4], 1, 0.03) && near(v["prog"], r[5], 1e-9) &&
+                       near(v["xtalk"], r[6], 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                       v["drift"] == kind && v["hours"] == hours && v["cal"] == cal && (v["steps"] > 0) == drifts &&
+                       !("hidshift" in v) && !("thermalline" in v)
+                  if (lit) ok = ok && v["src"] == ns && v["srcline"] == nl && v["srcflat"] == nf && v["srcsign"] == "pair" &&
+                                v["buses"] == ((nl > 0 || nf > 0) ? nb : 1)
+                  else ok = ok && !("src" in v)
+                  lines++ }
+                END { exit !(lines == 1 && ok) }' "$(v2_file "$sd" "$setting")" || v2_ok=NO
+            v2_runs=$((v2_runs + 1))
+        done
+    done < "$work/out/v2_settings.txt"
+    echo "== v2: $v2_runs runs, each of them the version and the row its line says: $v2_ok"
+    [ "$v2_ok" = yes ] || exit 1
+
+    # v2_named VER NAME: that version's setting for that row
+    v2_named() { awk -F'|' -v v="$1" -v l="$2" '$1 == v && $2 == l { print $3 }' "$work/out/v2_settings.txt"; }
+    # v2_stat SETTING BASE: five networks' loss, mean and standard error, and
+    # what the setting adds to BASE, network by network
+    v2_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(v2_file "$sd" "$2")"
+            sed 's/^/B /' "$(v2_file "$sd" "$1")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    echo "== v2: the $tile tile on $buses buses, five networks, mean and standard error.  Points lost"
+    echo "== against the same weights on the host, and what a row adds to its own version as"
+    echo "== budgeted, network by network.  A source's noise is through a balanced pair"
+    printf '%-38s %14s %14s %14s %14s' "" "v1 loses" "and adds" "v2 loses" "and adds"
+    echo
+    awk -F'|' '$1 == "v1" { print $2 }' "$work/out/v2_settings.txt" | while IFS= read -r name; do
+        printf '%-38s' "$name"
+        for ver in v1 v2; do v2_stat "$(v2_named "$ver" "$name")" "$(v2_named "$ver" "as budgeted")"; done
         echo
     done
 fi

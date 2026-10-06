@@ -43,6 +43,12 @@ Fashion-MNIST v1's point is in three of its six rows, the ADC's bit and the
 two noise rows. All six a notch tighter cost 0.39 points there, 0.50 on the
 inverted set and 0.06 on MNIST. One more bit of ADC with both noise rows
 halved is four fifths of that on the two harder sets.
+**And drift and a source at that set, which grxcp adopted as its version 2,
+the same day** (§5, at its end): drift adds to version 2 what it adds to v1,
+at every age on every data set, so after an hour it is most of what the
+harder sets lose. A source's three rows hold at version 2 on MNIST and on
+Fashion-MNIST, and cost three to four tenths of a point on the inverted set
+at either version.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1826,6 +1832,134 @@ multiplies, and a real laser moves both; a pair's shot noise also follows all
 the light it is lit with, which this model does not have. One notch of
 crosstalk is 1.2% and not 1%. One tile. And a model: none of it is a
 measurement of a tile.
+
+### Drift and a source's rows at grxcp's version 2
+
+*Added 2026-10-06.* `sim/pta_mnist.sh DIR WORK v2`. Reported, not gated.
+
+**Why.** grxcp's board plan chose from the section above. Its B14 holds the
+interface chip to its version 2: v1 with an 8-bit ADC, half the receiver's
+noise and twice the photons, which is that section's "the ADC and both noise
+rows". Drift was measured at v1 and nowhere else, and so were a source's rows,
+and on one data set. A budget that loses half as much has less for either to
+hide in.
+
+**What it runs.** On the 128 × 64 tile on two buses, twenty rows at each
+version on a data set's five networks: 200 evaluations, a quarter of an hour
+on five jobs. Each version as budgeted. After six minutes, an hour, four hours
+and 46 hours of TFLT's drift, an hour of TFLN's, and an hour and then C3's
+calibration. With a source's noise through a balanced pair: the lines together
+at 1, 2, 5 and 10% rms a shot, a line on its own at 2, 5, 10 and 20%, and the
+lines' level at 2, 5 and 10%. And the three together, as grxcp budgets them
+and at 5% each.
+
+No option is new, and `pta_mnist.c` is untouched. The mode checks every run
+against its row, three ways. The version's six rows are written out a second
+time in the check and held to the options. The drift, the hours, the
+calibration and the source's three sizes are read from the row's name and held
+to the options. And each of those is held to the line the run printed. 42
+errors planted one at a time each fail it: 29 in a result's line after the
+fact, and 13 in the script. v1's lines are byte for byte what the modes before
+this wrote: 35 of `geometry`'s on each data set, 70 of `source`'s on MNIST,
+and on each data set the ten that `tighten` wrote for the two versions as
+budgeted.
+
+**Drift adds what it added.** What a row adds to its own version as budgeted,
+network by network, mean and standard error:
+
+| | MNIST, v1 | v2 | Fashion-MNIST, v1 | v2 | Inverted, v1 | v2 |
+|---|---|---|---|---|---|---|
+| As budgeted, points lost | 0.34 ± 0.07 | 0.15 ± 0.02 | 1.16 ± 0.14 | 0.54 ± 0.22 | 1.23 ± 0.13 | 0.62 ± 0.07 |
+| Six minutes of TFLT's drift adds | −0.01 ± 0.02 | −0.06 ± 0.04 | 0.08 ± 0.10 | 0.08 ± 0.06 | 0.20 ± 0.26 | 0.28 ± 0.27 |
+| An hour | 0.17 ± 0.05 | 0.12 ± 0.05 | 0.69 ± 0.33 | 0.67 ± 0.31 | 1.95 ± 1.29 | 1.99 ± 1.26 |
+| Four hours | 0.40 ± 0.08 | 0.37 ± 0.08 | 2.34 ± 0.43 | 2.36 ± 0.57 | 16.54 ± 3.01 | 16.07 ± 3.09 |
+| 46 hours | 9.02 ± 0.97 | 8.69 ± 0.85 | 22.10 ± 1.38 | 22.60 ± 1.38 | 66.89 ± 2.99 | 67.51 ± 2.97 |
+| An hour of TFLN's | 2.47 ± 0.20 | 2.35 ± 0.17 | 7.22 ± 1.48 | 7.29 ± 1.50 | 37.35 ± 5.63 | 37.38 ± 5.74 |
+| An hour of TFLT's, then calibrated | −0.13 ± 0.03 | −0.06 ± 0.03 | 0.03 ± 0.15 | 0.02 ± 0.11 | −0.09 ± 0.08 | −0.01 ± 0.05 |
+| So after an hour, points lost | 0.51 ± 0.07 | 0.27 ± 0.06 | 1.84 ± 0.39 | 1.21 ± 0.28 | 3.18 ± 1.27 | 2.61 ± 1.25 |
+
+At every age and on every data set drift adds to version 2 what it adds to
+v1. The two differ by at most eight hundredths of a point where the figures
+are small, and by under half a standard error where they are large. A tighter
+converter and a quieter receiver neither hide drift nor expose it: in points,
+it is its own. And calibration returns version 2 to its budget, as it
+returned v1.
+
+**So at version 2 an hour's drift is most of what the harder sets lose.** On
+Fashion-MNIST it adds 0.67 to a budget of 0.54, and on the inverted set 1.99
+to one of 0.62. At six minutes it adds 0.08 and 0.28. Version 2 bought half
+the budget's loss, and an hourly calibration gives more than that back on
+either.
+
+**A source's rows.** The same, for a source's noise through a balanced pair.
+The sizes are rms fractions of a line's power:
+
+| | MNIST, v1 | v2 | Fashion-MNIST, v1 | v2 | Inverted, v1 | v2 |
+|---|---|---|---|---|---|---|
+| The lines together, 1% | 0.00 ± 0.02 | 0.01 ± 0.02 | 0.06 ± 0.06 | 0.04 ± 0.04 | 0.10 ± 0.06 | 0.13 ± 0.08 |
+| **2%** | −0.06 ± 0.03 | 0.02 ± 0.02 | 0.05 ± 0.02 | 0.03 ± 0.04 | **0.16 ± 0.06** | **0.24 ± 0.05** |
+| 5% | 0.04 ± 0.04 | 0.02 ± 0.05 | 0.12 ± 0.04 | 0.01 ± 0.08 | 0.82 ± 0.05 | 0.90 ± 0.13 |
+| 10% | 0.19 ± 0.04 | 0.18 ± 0.04 | 0.16 ± 0.03 | 0.25 ± 0.10 | 3.20 ± 0.21 | 3.23 ± 0.31 |
+| A line on its own, 2% | 0.02 ± 0.05 | 0.05 ± 0.03 | 0.04 ± 0.09 | −0.01 ± 0.07 | 0.06 ± 0.07 | 0.13 ± 0.04 |
+| **5%** | 0.09 ± 0.07 | 0.05 ± 0.05 | 0.11 ± 0.14 | 0.14 ± 0.12 | 0.11 ± 0.13 | **0.25 ± 0.07** |
+| 10% | 0.22 ± 0.07 | 0.16 ± 0.05 | 0.27 ± 0.12 | 0.34 ± 0.09 | 0.39 ± 0.18 | 0.54 ± 0.09 |
+| 20% | 0.59 ± 0.07 | 0.55 ± 0.08 | 0.73 ± 0.15 | 0.75 ± 0.14 | 1.81 ± 0.25 | 1.88 ± 0.23 |
+| The lines' level, 2% | 0.03 ± 0.05 | 0.05 ± 0.03 | 0.09 ± 0.05 | −0.01 ± 0.04 | −0.03 ± 0.04 | 0.01 ± 0.02 |
+| **5%** | 0.05 ± 0.06 | 0.03 ± 0.03 | 0.09 ± 0.08 | 0.01 ± 0.07 | 0.05 ± 0.11 | 0.17 ± 0.06 |
+| 10% | 0.10 ± 0.10 | 0.12 ± 0.04 | 0.22 ± 0.12 | 0.20 ± 0.15 | 0.21 ± 0.15 | 0.29 ± 0.10 |
+| **All three, as grxcp budgets them: 2%, 5%, 5%** | 0.03 ± 0.11 | 0.06 ± 0.03 | 0.06 ± 0.11 | 0.09 ± 0.13 | **0.29 ± 0.17** | **0.37 ± 0.07** |
+| All three at 5% | 0.12 ± 0.08 | 0.09 ± 0.03 | 0.20 ± 0.12 | 0.15 ± 0.12 | 0.98 ± 0.18 | 0.93 ± 0.17 |
+
+**They hold at version 2 on MNIST and on Fashion-MNIST.** grxcp's three rows
+together add 0.06 and 0.09, where at v1 they add 0.03 and 0.06: all under the
+tenth of a point the rows were sized to. Row by row the two versions differ by
+a tenth of a point at most, and not one way.
+
+**They do not hold on the inverted set, at either version.** The three add
+0.29 at v1 and 0.37 at version 2. And the dear row is the one the lines share.
+At 2% it adds 0.16 and 0.24, at 5% over four fifths of a point, and at 10%
+over three points, where on the other two sets 10% adds about a fifth. For
+that row to cost a tenth there it has to be 1%. The lines together are drawn
+once a shot and scale that shot's sum, and a layer goes through this tile in
+seven shots. If those seven partial sums are large and nearly cancel, seven
+separate draws leave what does not. That is what sums that are small
+differences of a great deal of light would do, and it was not measured shot
+by shot.
+
+**On the inverted set a source costs a little more at version 2.** A tenth
+more on each row that costs anything: 0.24 for 0.16, 0.25 for 0.11, 0.17 for
+0.05. On the other two sets the versions do not differ one way. Drift did
+not do this.
+
+**What was predicted.** Written before the runs were read. Eight things.
+
+1. That an hour's drift would add to version 2 about what it adds to v1 or a
+   little less: 0.1 to 0.2 on MNIST, 0.4 to 0.7 on Fashion-MNIST, 1.3 to 2.0 on
+   the inverted set. Right: 0.12, 0.67 and 1.99.
+2. That four hours would be within 30% of v1's. Right: within 8%.
+3. That six minutes would add under a tenth on MNIST and Fashion-MNIST, and
+   0.1 to 0.2 on the inverted set. Right on two, and 0.28 on the third, inside
+   its error.
+4. That calibration would return version 2 to within a tenth of its budget.
+   Right, to within 0.06.
+5. That on MNIST each of a source's rows would add under a tenth at both
+   versions, and the three under 0.15 at version 2. Right.
+6. The same on Fashion-MNIST. Right for two rows. A line on its own at 5% adds
+   0.11 and 0.14, which its error covers.
+7. That on the inverted set the two rows a line carries would each add 0.2 to
+   0.5 and the row the lines share under a tenth. Wrong, and the wrong way
+   round: the shared row is the dear one, and a line's two are 0.05 to 0.25.
+8. That no row within a tenth at v1 would be over two tenths at version 2.
+   Right.
+
+Five right, two partly, one wrong.
+
+**What this is not.** A measurement of a source or of a drift: the source's
+term is first order and added on the host's side of the line, the drift is the
+fits', and every cell still drifts on its own. A pair only: the offset reading
+was not rerun. Two buses, one tile, and the same fifteen networks, none
+trained for the tile. And version 2 is grxcp's name for a set of rows this
+harness ran. Nothing here says it is the right set.
 
 ---
 
