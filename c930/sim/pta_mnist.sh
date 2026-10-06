@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -16,6 +16,7 @@
 # Nor is `laser`; LASER_TILES sets its tiles (default "256x64 128x64").
 # Nor is `fill`; FILL_TILE sets its tile (default 128x64) and FILL_TIMES the
 # lasers it runs, in multiples of grxcp's B5 (default "2 4 8").
+# Nor is `tighten`; TIGHTEN_TILE sets its tile (default 128x64).
 #
 # MNIST_DIR need not be MNIST.  Any set in its format and under its four file
 # names is a workload: Fashion-MNIST is one.  And PIXELS=inverted gives a new
@@ -25,7 +26,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,24p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,25p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -744,6 +745,178 @@ if [ "$what" = fill ]; then
         fill_cell lsb1 "$h" "$g" "$at"; fill_cell lsb2 "$h" "$g" "$at"; fill_cell lit2 "$h" "$g" "$at"
         echo
     done; done
+fi
+
+# `tighten`: what tightening v1 buys.  grxcp's board plan holds its interface
+# chip to v1, and on a second data set v1 costs over a point (design note
+# section 5, "another workload").  Nothing had asked which of its six rows that
+# point is in.  This takes each row away alone, which is the most that
+# tightening it could buy; tightens each a notch alone, then in pairs, in
+# threes and all six, a notch and two; runs the two converters with nothing
+# else; and puts v1's rows and two tighter sets under a laser, the hidden
+# rescale a bit down, to say what laser each needs.  It trains nothing.
+if [ "$what" = tighten ]; then
+    tile=${TIGHTEN_TILE:-128x64}
+    rows=${tile%x*}
+    all="quant,thermal,shot,prog,xtalk"
+    lasers="4 8 16 32 64"
+    # tighten_set LABEL ABITS ADCBITS THERMAL8 PHOTONS8 PROG XTALK: one setting,
+    # as label|options.  A - for a noise row or a weight's row is that row gone;
+    # an activation DAC of 0 bits is none, which at these operands is all 8
+    tighten_set() {
+        local imp=quant o="--abits $2 --adcbits $3"
+        [ "$4" = - ] || { imp=$imp,thermal; o="$o --thermal8 $4"; }
+        [ "$5" = - ] || { imp=$imp,shot; o="$o --photons8 $5"; }
+        [ "$6" = - ] || { imp=$imp,prog; o="$o --prog $6"; }
+        [ "$7" = - ] || { imp=$imp,xtalk; o="$o --xtalk $7"; }
+        echo "$1|--impair $imp $o"
+    }
+    # tighten_laser LABEL ABITS ADCBITS PHOTONS8 PROG XTALK TIMES: those rows
+    # under a laser of TIMES grxcp's B5, the hidden rescale a bit down
+    tighten_laser() {
+        echo "$1|--impair $all --abits $2 --adcbits $3 --photons8 $4 --prog $5 --xtalk $6 --hidshift -1 --thermalline $(awk \
+            -v r="$rows" -v m="$7" 'BEGIN { printf "%.10g", r / 512 / m }')"
+    }
+    {
+        tighten_set "v1" 6 7 0.5 15 1 0.02
+        tighten_set "one row gone: the activation DAC's" 0 7 0.5 15 1 0.02
+        tighten_set "  the ADC's, at 12 bits" 6 12 0.5 15 1 0.02
+        tighten_set "  the receiver's noise" 6 7 - 15 1 0.02
+        tighten_set "  the shot noise" 6 7 0.5 - 1 0.02
+        tighten_set "  programming error" 6 7 0.5 15 - 0.02
+        tighten_set "  crosstalk" 6 7 0.5 15 1 -
+        tighten_set "one row a notch: 7 activation bits" 7 7 0.5 15 1 0.02
+        tighten_set "  an 8-bit ADC" 6 8 0.5 15 1 0.02
+        tighten_set "  receiver noise 0.25 LSB" 6 7 0.25 15 1 0.02
+        tighten_set "  30 photons" 6 7 0.5 30 1 0.02
+        tighten_set "  programming error 0.5 LSB" 6 7 0.5 15 0.5 0.02
+        tighten_set "  crosstalk 1.2%" 6 7 0.5 15 1 0.01
+        tighten_set "a notch together: both converters" 7 8 0.5 15 1 0.02
+        tighten_set "  both noise rows" 6 7 0.25 30 1 0.02
+        tighten_set "  both of a weight's rows" 6 7 0.5 15 0.5 0.01
+        tighten_set "  the ADC and both noise rows" 6 8 0.25 30 1 0.02
+        tighten_set "  the other three" 7 7 0.5 15 0.5 0.01
+        tighten_set "  all six" 7 8 0.25 30 0.5 0.01
+        tighten_set "all six, two notches" 0 9 0.125 60 0.25 0.005
+        tighten_set "the ADC and both noise rows gone" 6 12 - - 1 0.02
+        tighten_set "the converters alone: v1's" 6 7 - - - -
+        tighten_set "  a notch tighter" 7 8 - - - -
+        for m in $lasers; do tighten_laser "v1's rows, laser x$m" 6 7 15 1 0.02 "$m"; done
+        for m in $lasers; do tighten_laser "the ADC and the light, laser x$m" 6 8 30 1 0.02 "$m"; done
+        for m in $lasers; do tighten_laser "all six, laser x$m" 7 8 30 0.5 0.01 "$m"; done
+    } | sed "s/|/|--rows $rows --cols ${tile#*x} /; s/\$/ --probe 1/" > "$work/out/tighten_settings.txt"
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    while IFS='|' read -r name setting; do
+        for sd in 1 2 3 4 5; do echo "pta_mnist tighten d8_b6_s$sd.net --seed $sd $setting"; done
+    done < "$work/out/tighten_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'eval_one "$@"' _
+
+    # tighten_file SD SETTING: the file eval_one wrote for that run
+    tighten_file() {
+        local sd=$1
+        # shellcheck disable=SC2086
+        set -- --seed "$sd" $2
+        echo "$work/out/tighten.d/d8_b6_s${sd}_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
+    }
+    # Every run has to have run what its row says: the tile, the converters,
+    # which rows are on, and each row's size to the Q8.8 it is held in.  A row
+    # that is on has to have a size, and one that is off none.  A row named for
+    # a laser has to be that laser.  And the first row has to be v1 as every
+    # mode before this ran it, since everything here is measured from it.
+    v1set=$(sed -n '1s/^[^|]*|//p' "$work/out/tighten_settings.txt")
+    tighten_ok=yes
+    tighten_runs=0
+    [ "$v1set" = "--rows $rows --cols ${tile#*x} --impair $all --abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02 --probe 1" ] || tighten_ok=NO
+    while IFS='|' read -r name setting; do
+        for sd in 1 2 3 4 5; do
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v rows="$rows" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = (("thermal" in on) == (("thermal8" in given) || ("thermalline" in given))) &&
+                               (("shot" in on) == ("photons8" in given)) && (("prog" in on) == ("prog" in given)) &&
+                               (("xtalk" in on) == ("xtalk" in given)) && ("quant" in on)
+                        laser = match(name, /laser x[0-9]+$/)
+                        sane = sane && ((laser > 0) == ("thermalline" in given))
+                        if (laser) sane = sane && near(want["thermalline"] * 512 * substr(name, RSTART + 7) / rows, 1, 1e-6) }
+                { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  ok = sane && v["tile"] == tile && v["impair"] == sprintf("0x%02x", mask) &&
+                       v["abits"] == want["abits"] && v["adcbits"] == want["adcbits"]
+                  if ("thermal8" in given) ok = ok && near(v["thermal8"], want["thermal8"], 1e-6) && v["thermal8"] > 0
+                  else if ("thermalline" in given) {
+                      line = (2 ^ (v["din"] - 1) - 1) * 2 ^ (v["din"] - 1)
+                      k = split(v["thermal_l"], tl, ","); split(v["S"], sv, ",")
+                      ok = ok && k == 2 && v["thermalline"] == want["thermalline"] + 0 && want["thermalline"] > 0
+                      for (i = 1; i <= k; ++i)
+                          ok = ok && near(tl[i] * 2 ^ sv[i] / line, want["thermalline"], 2 ^ sv[i] / 512 / line)
+                  } else ok = ok && v["thermal8"] == 0
+                  if ("photons8" in given) ok = ok && near(v["photons8"] / want["photons8"], 1, 0.03)
+                  else ok = ok && v["photons8"] == 0
+                  if ("prog" in given) ok = ok && near(v["prog"], want["prog"], 1e-9) && v["prog"] > 0
+                  else ok = ok && v["prog"] == 0
+                  if ("xtalk" in given) ok = ok && near(v["xtalk"], want["xtalk"], 1 / 512 + 1e-9) && v["xtalk"] > 0
+                  else ok = ok && v["xtalk"] == 0
+                  if ("hidshift" in given) ok = ok && v["hidshift"] == want["hidshift"]
+                  else ok = ok && !("hidshift" in v)
+                  lines++ }
+                END { exit !(lines == 1 && ok) }' "$(tighten_file "$sd" "$setting")" || tighten_ok=NO
+            tighten_runs=$((tighten_runs + 1))
+        done
+    done < "$work/out/tighten_settings.txt"
+    echo "== tighten: $tighten_runs runs, each of them the rows its line says: $tighten_ok"
+    [ "$tighten_ok" = yes ] || exit 1
+
+    # tighten_stat SETTING [BASE]: five networks' loss, mean and standard
+    # error; then, given a BASE setting, what this one buys of it, network by
+    # network; then the error that reaches the outputs, percent of their rms
+    tighten_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            [ $# -lt 2 ] || sed 's/^/A /' "$(tighten_file "$sd" "$2")"
+            sed 's/^/B /' "$(tighten_file "$sd" "$1")"
+        done | awk -v base=$(($# - 1)) '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = a - x; gs += g; gss += g * g
+              e = 100 * v["eprop"]; es += e; ess += e * e }
+            END { printf " %7.2f +-%4.2f", s / n, se(s, ss, n)
+                  if (base) printf " %7.2f +-%4.2f %9.2f +-%4.2f", gs / n, se(gs, gss, n), es / n, se(es, ess, n) }'
+    }
+    echo "== tighten: the $tile tile, five networks, mean and standard error.  Points lost against the"
+    echo "== same weights on the host; what a row buys is v1's loss less its own, network by network;"
+    echo "== and the error that reaches the outputs, percent of their rms"
+    printf '%-36s %14s %14s %16s' "" "points lost" "bought of v1" "error at outputs"
+    echo
+    while IFS='|' read -r name setting; do
+        case $setting in *--thermalline*) continue ;; esac
+        printf '%-36s' "$name"
+        tighten_stat "$setting" "$v1set"
+        echo
+    done < "$work/out/tighten_settings.txt"
+
+    # tighten_named LABEL: the setting with that label
+    tighten_named() { awk -F'|' -v l="$1" '$1 == l { print $2 }' "$work/out/tighten_settings.txt"; }
+    echo "== tighten: rows under a laser, in multiples of grxcp's B5, the hidden rescale a bit down:"
+    echo "== v1's; v1's with an 8-bit ADC and 30 photons; and all six a notch tighter.  As budgeted"
+    echo "== is at the rule's rescale, with the receiver's noise the budget's and not a laser's"
+    printf '%-18s %14s %20s %14s' "" "v1's rows" "the ADC and the light" "all six"
+    echo
+    printf '%-18s' "as budgeted"
+    tighten_stat "$v1set"; printf '      '; tighten_stat "$(tighten_named "  the ADC and both noise rows")"
+    tighten_stat "$(tighten_named "  all six")"
+    echo
+    for m in $lasers; do
+        printf '%-18s' "laser x$m"
+        tighten_stat "$(tighten_named "v1's rows, laser x$m")"; printf '      '
+        tighten_stat "$(tighten_named "the ADC and the light, laser x$m")"
+        tighten_stat "$(tighten_named "all six, laser x$m")"
+        echo
+    done
 fi
 
 exit $((gate_status | ablate_status))
