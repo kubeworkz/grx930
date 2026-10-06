@@ -38,6 +38,11 @@ is MNIST. On Fashion-MNIST, and on MNIST with every pixel inverted, v1 costs
 1.2 points on a 128 × 64 tile where it costs 0.34 on MNIST. Every row of the
 budget costs two to seven times as much, the dear rows are different ones,
 and the laser that was enough is not.
+**And what tightening v1 would buy, 2026-10-06** (§5, at its end): on
+Fashion-MNIST v1's point is in three of its six rows, the ADC's bit and the
+two noise rows. All six a notch tighter cost 0.39 points there, 0.50 on the
+inverted set and 0.06 on MNIST. One more bit of ADC with both noise rows
+halved is four fifths of that on the two harder sets.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1626,6 +1631,201 @@ Fashion-MNIST is MNIST's size and shape, and no convolution, residual path or
 attention has been run. A version of the budget that holds: nothing here says
 what tightening which rows would buy. The drift is the fits' and the cells
 still drift independently. And a model: none of it is a measurement of a tile.
+
+### What would tightening v1 buy?
+
+*Added 2026-10-06.* `sim/pta_mnist.sh DIR WORK tighten`. Reported, not gated.
+
+**Why.** The section above found v1 at over a point on two data sets, and
+could not say where in v1 the point is. Every sweep before this measured a row
+relaxed towards v0, or all of v1 at once, and none measured v1 with a row made
+better. grxcp's board plan has to decide whether to hold its interface chip to
+something tighter than v1, and tighter in what.
+
+**What it runs.** On the 128 × 64 tile, 38 settings on a data set's five
+networks: 190 evaluations, about a quarter of an hour on five jobs.
+
+- v1.
+- Each of v1's six rows taken away alone, which is the most that tightening
+  that row could buy. The activation DAC at all 8 of an operand's bits, the
+  ADC at 12 bits, and each noise row and each of a weight's rows switched off.
+- Each row one notch tighter alone: a bit more in a converter, and half the
+  noise or the error. Crosstalk's field has a step of 1/256, so half of v1's
+  2% is run as 1.2%, and half of that as 0.4%.
+- Those notches in pairs, in threes and all six; and all six, two notches.
+- The two converters with nothing else.
+- v1's rows and two tighter sets under a laser of 4 to 64 times grxcp's B5,
+  with the hidden rescale a bit down.
+
+No option is new, and `pta_mnist.c` is untouched. The mode checks every run
+against its own row: the tile, the converters, which rows are on, each row's
+size to the Q8.8 it is held in, that a row which is on has a size and one
+which is off has none, that a row named for a laser is that laser, and that
+the first row is v1 as every mode before this ran it. 28 errors planted one at
+a time each fail it: 21 in a result's line after the fact, and 7 in the script
+itself. On each data set v1's five lines are byte for byte the `geometry`
+mode's. The sweep was run twice, the second time with eight settings more,
+and the 150 lines the two share are byte for byte alike on all three sets.
+
+**What a row buys.** v1's loss less the setting's, network by network, mean
+and standard error over the five:
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| v1 loses | 0.34 ± 0.07 | 1.16 ± 0.14 | 1.23 ± 0.13 |
+| One row gone: the activation DAC's | 0.06 ± 0.03 | −0.01 ± 0.03 | 0.06 ± 0.05 |
+| the ADC's, at 12 bits | 0.08 ± 0.08 | **0.26 ± 0.09** | 0.15 ± 0.06 |
+| the receiver's noise | **0.17 ± 0.03** | **0.31 ± 0.14** | 0.20 ± 0.07 |
+| the shot noise | **0.20 ± 0.03** | **0.26 ± 0.11** | **0.52 ± 0.14** |
+| programming error | 0.05 ± 0.03 | −0.04 ± 0.07 | 0.12 ± 0.06 |
+| crosstalk | −0.01 ± 0.03 | −0.08 ± 0.11 | 0.13 ± 0.09 |
+| One row a notch: 7 activation bits | 0.03 ± 0.02 | 0.02 ± 0.05 | 0.10 ± 0.08 |
+| an 8-bit ADC | 0.07 ± 0.08 | 0.29 ± 0.06 | 0.15 ± 0.08 |
+| receiver noise 0.25 LSB | 0.13 ± 0.05 | 0.10 ± 0.07 | 0.17 ± 0.04 |
+| 30 photons | 0.12 ± 0.03 | 0.11 ± 0.11 | 0.26 ± 0.07 |
+| programming error 0.5 LSB | 0.04 ± 0.02 | −0.05 ± 0.07 | 0.13 ± 0.04 |
+| crosstalk 1.2% | 0.02 ± 0.03 | −0.06 ± 0.08 | 0.06 ± 0.07 |
+| A notch together: both converters | 0.14 ± 0.05 | 0.24 ± 0.07 | 0.26 ± 0.03 |
+| both noise rows | 0.17 ± 0.04 | 0.30 ± 0.12 | 0.43 ± 0.10 |
+| both of a weight's rows | 0.03 ± 0.03 | 0.08 ± 0.07 | 0.08 ± 0.02 |
+| the ADC and both noise rows | 0.19 ± 0.06 | **0.62 ± 0.10** | **0.61 ± 0.06** |
+| the other three | 0.09 ± 0.05 | 0.04 ± 0.03 | 0.11 ± 0.07 |
+| all six | 0.28 ± 0.05 | 0.76 ± 0.07 | 0.72 ± 0.06 |
+| All six, two notches | 0.31 ± 0.07 | 0.98 ± 0.07 | 1.01 ± 0.11 |
+
+And what is then lost, against the same weights on the host:
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| v1 | 0.34 ± 0.07 | 1.16 ± 0.14 | 1.23 ± 0.13 |
+| The ADC and both noise rows a notch tighter | 0.15 ± 0.02 | 0.54 ± 0.22 | 0.62 ± 0.07 |
+| All six a notch tighter | **0.06 ± 0.02** | **0.39 ± 0.15** | **0.50 ± 0.08** |
+| All six, two notches | 0.03 ± 0.02 | 0.18 ± 0.08 | 0.22 ± 0.06 |
+| The ADC and both noise rows gone | 0.11 ± 0.03 | 0.22 ± 0.12 | 0.48 ± 0.06 |
+| The converters alone: v1's 6 activation bits and 7-bit ADC | 0.12 ± 0.07 | 0.37 ± 0.08 | 0.27 ± 0.06 |
+| a notch tighter, 7 and 8 | 0.02 ± 0.04 | 0.02 ± 0.09 | 0.10 ± 0.06 |
+
+**On Fashion-MNIST v1's point is in three rows.** The ADC's quantisation, the
+receiver's noise and the shot noise are each worth a quarter to a third of a
+point taken away. The activation DAC's sixth bit, programming error at 1 LSB
+and crosstalk at 2% are worth nothing there: −0.01, −0.04 and −0.08, each
+inside its error. The section above could not see this. Relaxed to v0, those
+three rows cost 0.30, 0.65 and 0.78 on the core's tile. They are dear to
+loosen and free to hold.
+
+**One more bit is all the ADC has to give.** On Fashion-MNIST an 8-bit ADC
+buys 0.29 and a 12-bit one 0.26. With nothing else on the tile, v1's two
+converters cost 0.37 there, and a notch tighter 0.02.
+
+**The inverted set spreads it.** Its shot noise is half a point by itself.
+Every other row is between 0.06 and 0.20, and with the ADC and both noise
+rows gone it still loses 0.48, where Fashion-MNIST loses 0.22 and MNIST 0.11.
+Programming error and crosstalk are worth an eighth of a point each there and
+little or nothing on the other two, which is the light again: those are the
+errors a weight carries to a sum by what it is lit with.
+
+**On MNIST it is the two noise rows**, 0.17 and 0.20, and little else.
+
+**The rows do not add, and not the same way.** Taken away one at a time, the
+six buy 0.55, 0.70 and 1.18 summed, where v1 loses 0.34, 1.16 and 1.23. On
+MNIST either noise row gone gets half or more of what there is. On
+Fashion-MNIST no one row gets a third: the ADC and both noise rows gone
+together buy 0.93, and singly 0.83.
+
+**All six a notch tighter cost 0.06, 0.39 and 0.50.** That puts Fashion-MNIST
+where v1 puts MNIST. Two notches halve it again.
+
+**The ADC and both noise rows are four fifths of it.** A notch on those three
+buys 0.62 of the 0.76 on Fashion-MNIST and 0.61 of the 0.72 on the inverted
+set, and 0.19 of the 0.28 on MNIST. A notch on the other three, by itself,
+buys 0.04 to 0.11.
+
+**Under a laser.** The receiver's noise as a laser of that many times grxcp's
+B5 fixes it, the hidden rescale a bit down, and the other rows at v1's; at
+v1's with an 8-bit ADC and 30 photons; and all a notch tighter. "As budgeted"
+is each set at the rule's rescale with the receiver's noise the budget's.
+
+| MNIST | v1's rows | The ADC and the light | All six |
+|---|---|---|---|
+| As budgeted | 0.34 ± 0.07 | 0.15 ± 0.02 | 0.06 ± 0.02 |
+| Laser × 4 | **0.35 ± 0.06** | 0.25 ± 0.06 | 0.23 ± 0.04 |
+| × 8 | 0.22 ± 0.06 | **0.11 ± 0.03** | **0.08 ± 0.03** |
+| × 16 | 0.19 ± 0.06 | 0.09 ± 0.04 | 0.12 ± 0.03 |
+| × 32 | 0.19 ± 0.07 | 0.12 ± 0.04 | 0.11 ± 0.02 |
+| × 64 | 0.18 ± 0.09 | 0.09 ± 0.04 | 0.09 ± 0.01 |
+
+| Fashion-MNIST | v1's rows | The ADC and the light | All six |
+|---|---|---|---|
+| As budgeted | 1.16 ± 0.14 | 0.54 ± 0.22 | 0.39 ± 0.15 |
+| Laser × 4 | 1.93 ± 0.34 | 1.57 ± 0.35 | 1.44 ± 0.32 |
+| × 8 | **1.19 ± 0.13** | 0.74 ± 0.20 | 0.68 ± 0.17 |
+| × 16 | 0.96 ± 0.07 | **0.55 ± 0.17** | **0.40 ± 0.15** |
+| × 32 | 0.88 ± 0.10 | 0.42 ± 0.18 | 0.38 ± 0.13 |
+| × 64 | 0.84 ± 0.10 | 0.40 ± 0.15 | 0.31 ± 0.16 |
+
+| MNIST, inverted | v1's rows | The ADC and the light | All six |
+|---|---|---|---|
+| As budgeted | 1.23 ± 0.13 | 0.62 ± 0.07 | 0.50 ± 0.08 |
+| Laser × 4 | 2.29 ± 0.29 | 1.76 ± 0.22 | 1.63 ± 0.25 |
+| × 8 | 1.37 ± 0.16 | 0.91 ± 0.14 | 0.75 ± 0.13 |
+| × 16 | **1.17 ± 0.12** | **0.64 ± 0.11** | **0.54 ± 0.12** |
+| × 32 | 1.12 ± 0.13 | 0.63 ± 0.12 | 0.53 ± 0.12 |
+| × 64 | 1.11 ± 0.11 | 0.67 ± 0.11 | 0.49 ± 0.09 |
+
+In bold, the least laser within a tenth of a point of that column's own
+budget. v1's rows take 4, 8 and 16 times B5's, as the sections above found.
+Either tighter set takes 8, 16 and 16: twice the laser on MNIST and on
+Fashion-MNIST, and no more at all on the inverted set.
+
+**The rows are worth more than the laser.** At 8 times B5's laser
+Fashion-MNIST loses 1.19 at v1's rows, and 0.74 with an 8-bit ADC and 30
+photons. Eight times more laser at v1's rows gets it to 0.84. The inverted
+set is the same: 1.37, then 0.91, against 1.11. Of the two, the bit is the
+larger on Fashion-MNIST, 0.29 alone as budgeted against 0.11, and the photons
+on the inverted set, 0.26 against 0.15.
+
+**What was predicted.** Ten things before the first run was read, and three
+more before the second.
+
+1. That on Fashion-MNIST the ADC's row gone would buy 0.25 to 0.4. Right:
+   0.26.
+2. That the shot noise gone would buy 0.2 to 0.35. Right: 0.26.
+3. That the receiver's noise gone would buy 0.1 to 0.2. High of it, 0.31, and
+   inside its error.
+4. That the activation DAC's row gone would buy 0.1 to 0.2. Wrong: nothing.
+5. That programming error and crosstalk gone would each buy under a tenth.
+   Right: nothing.
+6. That all six a notch tighter would lose 0.45 to 0.6 on Fashion-MNIST, 0.5
+   to 0.7 on the inverted set and 0.10 to 0.18 on MNIST. Right for the
+   inverted set, 0.50. A little better on Fashion-MNIST, 0.39, and better on
+   MNIST, 0.06.
+7. That two notches would lose 0.2 to 0.3 on Fashion-MNIST. Just under: 0.18.
+8. That v1's two converters with nothing else would cost 0.4 to 0.6 there,
+   half of v1's point. Just under, and a third of it: 0.37.
+9. That on the inverted set the shot noise gone would buy the most and
+   programming error next. Right about the first, 0.52. Wrong about the
+   second: programming error is fifth of the six.
+10. That the tighter rows would take twice v1's laser on each set: 8, 16 and
+    32. Right on two. On the inverted set they take 16, which is v1's.
+11. That a notch on the ADC and both noise rows would buy 0.55 to 0.7 of what
+    all six buy on Fashion-MNIST. Right: 0.62 of 0.76.
+12. That a notch on the other three would buy under a tenth. Right on two
+    sets, 0.04 and 0.09, and 0.11 on the inverted one.
+13. That those three rows under a laser would be within a tenth of their own
+    budget at 16 times B5's on Fashion-MNIST. Right.
+
+Five right, seven partly, one wrong. The wrong one is the finding: the
+activation DAC's sixth bit costs nothing here.
+
+**What this is not.** A price. It says what a bit or a halving buys in points,
+and what one costs in silicon and in light is grxcp's to set beside it. A
+network trained for the tile, or trained well, as above: these are the same
+fifteen networks. The light's row under a laser as a laser would have it: the
+row is photons per LSB, held where the budget puts it while the laser
+multiplies, and a real laser moves both; a pair's shot noise also follows all
+the light it is lit with, which this model does not have. One notch of
+crosstalk is 1.2% and not 1%. One tile. And a model: none of it is a
+measurement of a tile.
 
 ---
 
