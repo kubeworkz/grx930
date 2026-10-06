@@ -14,11 +14,18 @@
 # beside the core's 8x8 (default "64x8 128x64 256x64 256x128").  Nor is `source`;
 # SOURCE_TILE and SOURCE_BUSES set its tile and its buses (default 256x64 and 4).
 # Nor is `laser`; LASER_TILES sets its tiles (default "256x64 128x64").
-# Nor is `fill`; FILL_TILE sets its tile (default 128x64).
+# Nor is `fill`; FILL_TILE sets its tile (default 128x64) and FILL_TIMES the
+# lasers it runs, in multiples of grxcp's B5 (default "2 4 8").
+#
+# MNIST_DIR need not be MNIST.  Any set in its format and under its four file
+# names is a workload: Fashion-MNIST is one.  And PIXELS=inverted gives a new
+# WORK_DIR the same images with every pixel taken from 255, the page lit and the
+# ink dark.  A WORK_DIR is one workload for good, since its networks were
+# trained on what it holds, and PIXELS has to say the same each time.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,17p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,24p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -26,14 +33,33 @@ jobs=${JOBS:-4}
 export PTA_WORK=$work
 
 mkdir -p "$work/data" "$work/nets" "$work/out"
-for f in train-images-idx3-ubyte train-labels-idx1-ubyte t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
-    [ -s "$work/data/$f" ] || gzip -dc "$mnist/$f.gz" > "$work/data/$f"
-done
 cflags="-O2 -std=c99 -Wall -Wextra -pedantic -I$here"
 ${CC:-gcc} $cflags -o "$work/pta_mnist" "$here/pta_mnist.c" "$here/pta_tile_model.c" -lm
 ${CC:-gcc} $cflags -DPTA_MODEL_ABLATE_QROUND -o "$work/pta_mnist_qround" \
     "$here/pta_mnist.c" "$here/pta_tile_model.c" -lm
 "$work/pta_mnist" selftest
+
+# the data, as it came or inverted.  data/pixels says which a directory holds,
+# and is written before a file is, so that a run cut short is not finished the
+# other way; a directory made before there was a choice holds them as they came
+pixels=${PIXELS:-as-is}
+[ "$pixels" = as-is ] || [ "$pixels" = inverted ] || { echo "PIXELS is as-is or inverted" >&2; exit 2; }
+if [ -s "$work/data/pixels" ] || [ -s "$work/data/train-images-idx3-ubyte" ]; then
+    held=as-is
+    [ ! -s "$work/data/pixels" ] || held=$(cat "$work/data/pixels")
+    [ "$held" = "$pixels" ] || {
+        echo "$work holds its pixels $held and PIXELS asks for $pixels: a work directory is one or the other" >&2
+        exit 2; }
+fi
+echo "$pixels" > "$work/data/pixels"
+for f in train-images-idx3-ubyte train-labels-idx1-ubyte t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
+    [ ! -s "$work/data/$f" ] || continue
+    gzip -dc "$mnist/$f.gz" > "$work/data/$f.part"
+    if [ "$pixels" = inverted ] && [ "$f" != "${f%images-idx3-ubyte}" ]; then
+        "$work/pta_mnist" invert "$work/data/$f.part" "$work/data/$f.part" > /dev/null
+    fi
+    mv "$work/data/$f.part" "$work/data/$f"
+done
 
 # Fig. 3(c) of arXiv:2105.00227, zero attack strength, B = 1..10
 ref="94.85 96.41 97.59 97.76 97.67 97.81 97.83 97.61 97.81 97.73"
@@ -635,7 +661,11 @@ if [ "$what" = fill ]; then
     rest="--rows $rows --cols ${tile#*x} --impair quant,thermal,shot,prog,xtalk --abits 6 --adcbits 7 --photons8 15 --prog 1 --xtalk 0.02"
     shifts="0 -1 -2"
     gains="0 1 2"
-    times="2 4 8"
+    times=${FILL_TIMES:-2 4 8}
+    # the laser the clip columns and the second table are read at: 4 times B5's
+    # if it was run, or else the first that was
+    at=4
+    case " $times " in *" 4 "*) ;; *) at=${times%% *} ;; esac
     for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
     for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
     # fill_opts SHIFT GAIN TIMES: the options for one run
@@ -695,21 +725,23 @@ if [ "$what" = fill ]; then
     }
     echo "== fill: the $tile tile, five networks, mean and standard error.  Points lost against the"
     echo "== network as trained, on the host; a laser is in multiples of grxcp's B5"
-    printf '%-18s %14s %14s %14s %14s %14s %14s' "rescale, gain" "units clipped%" "weights clip%" "scaled, host" "laser x2" "x4" "x8"
+    printf '%-18s %14s %14s %14s' "rescale, gain" "units clipped%" "weights clip%" "scaled, host"
+    lead="laser x"
+    for m in $times; do printf ' %14s' "$lead$m"; lead=x; done
     echo
     for h in $shifts; do for g in $gains; do
         printf '%-18s' "$h bits, $g bits"
-        fill_cell hidclip "$h" "$g" 4; fill_cell w1clip "$h" "$g" 4; fill_cell scaled "$h" "$g" 4
+        fill_cell hidclip "$h" "$g" "$at"; fill_cell w1clip "$h" "$g" "$at"; fill_cell scaled "$h" "$g" "$at"
         for m in $times; do fill_cell loss "$h" "$g" "$m"; done
         echo
     done; done
-    echo "== fill: the receiver's noise in LSB of an 8-bit ADC at each layer's shift, at 4 times B5's"
+    echo "== fill: the receiver's noise in LSB of an 8-bit ADC at each layer's shift, at $at times B5's"
     echo "== laser, and the light a shot sends a column on layer 2, in lines"
     printf '%-18s %14s %14s %14s' "rescale, gain" "layer 1" "layer 2" "lines, layer 2"
     echo
     for h in $shifts; do for g in $gains; do
         printf '%-18s' "$h bits, $g bits"
-        fill_cell lsb1 "$h" "$g" 4; fill_cell lsb2 "$h" "$g" 4; fill_cell lit2 "$h" "$g" 4
+        fill_cell lsb1 "$h" "$g" "$at"; fill_cell lsb2 "$h" "$g" "$at"; fill_cell lit2 "$h" "$g" "$at"
         echo
     done; done
 fi

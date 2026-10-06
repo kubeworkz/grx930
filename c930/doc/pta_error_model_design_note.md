@@ -33,6 +33,11 @@ hidden layer's rescale, set one bit under the clip rule, clips 0.65% of the
 units that fire, costs 0.02 points, and loses at any laser what the rule's
 rescale loses at twice it. A second bit buys nothing, and a gain on the first
 layer's weights does not pay.
+**And on another workload, the same day** (§5, at its end): all of the above
+is MNIST. On Fashion-MNIST, and on MNIST with every pixel inverted, v1 costs
+1.2 points on a 128 × 64 tile where it costs 0.34 on MNIST. Every row of the
+budget costs two to seven times as much, the dear rows are different ones,
+and the laser that was enough is not.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1352,6 +1357,276 @@ a gain a unit, each to its own largest weight, would clip none, and needs a
 rescale a unit to take it back, where the stage on grxcp's chiplet has one a
 command. One tile. And a model: none of it is a measurement of a tile.
 
+### Does the budget hold on another workload?
+
+*Added 2026-10-05.* `sim/pta_mnist.sh DIR WORK geometry`, `budget`, `laser`
+and `fill`, with `DIR` another data set's four files, or MNIST's and
+`PIXELS=inverted`. Reported, not gated.
+
+**Why.** Every figure in this section is MNIST's: one data set, on which a
+784-100-10 network is right 97.5% of the time and most of an image is dark.
+grxcp's board plan holds its interface chip to v1 on those figures, sizes a
+laser on them, and asks in its open question 7 whether they survive a second
+workload. Depth was tried, above, and v1 held. Nothing had tried another data
+set.
+
+**The two.** Fashion-MNIST (Xiao, Rasul and Vollgraf, arXiv:1708.07747) is ten
+kinds of clothing in MNIST's format, file for file: 60,000 and 10,000 images
+of 28 × 28 under the same four names, as its repository
+(`zalandoresearch/fashion-mnist`) serves them. The harness takes it as it is.
+And MNIST inverted, every pixel taken from 255: the same digits with the page
+lit and the ink dark. It was meant as a control, the same task with more
+light.
+
+**The harness.** `pta_mnist invert IN OUT` writes an idx image file with every
+pixel taken from 255, and `PIXELS=inverted` has the script make a new work
+directory's images that way. A work directory records which it holds, in
+`data/pixels`, and the script refuses to run it the other way, because its
+networks were trained on what it holds. `FILL_TIMES` sets the lasers `fill`
+runs.
+
+Nothing else changed, and that was checked. The 80 lines of `laser` on MNIST
+and the 40 on each new workload were printed by the harness as it stood before
+this and again by this one, and are byte for byte the same; so are the 135
+lines of `fill` on Fashion-MNIST and both its tables. What `PIXELS=inverted` writes was compared
+with the same inversion done separately in Python, and the four files are the
+same. The self-test holds `invert` on three made-up images, and six errors
+planted in it one at a time each fail it.
+
+The networks are the harness's own: `train` as it stands, five seeds, 8-bit
+weights and then 6. Nothing was retuned.
+
+**What it ran.** On each workload, `geometry` on the core's tile both ways and
+on 128 × 64, which grxcp's B10 has as its working tile; `budget` on the core's
+tile; `laser` on 128 × 64; and `fill` there at 2, 4, 8 and 16 times grxcp's
+B5. That is 680 evaluations a workload and about an hour on five jobs.
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| The five networks, on the host | 97.17 to 97.81% | 86.87 to 87.99% | 91.32 to 94.46% |
+| Mean pixel of the test images, of full scale | 0.13 | 0.29 | 0.87 |
+| Light a shot sends a column on layer 1 of a 128 × 64 tile, in lines: the mean and the most | 14.8, 83.0 | 32.3, 115.8 | 95.0, 125.0 |
+| The same on layer 2 | 6.7, 12.0 | 3.8, 10.5 | 3.5, 5.6 |
+| The 8-bit ADC's shift there, layer 1 | 11 on all five | 11 on four, 12 on one | 12 on three, 11 on two |
+| Layer 2 | 9 on all five | 9 on four, 8 on one | 8 on three, 7 on two |
+
+The light is the pixels. A 128-row tile takes the 784 inputs in seven shots,
+and the mean pixel times 784 over seven is 14.8, 32.1 and 97.2 lines.
+
+**The inverted set is not a clean control.** The trainer does worse on it:
+93.4% at the mean, for the same digits that give 97.5%. It does not take its
+inputs less their mean, which is the likely reason and was not tested. So two
+things differ from MNIST there, the light and the network, and nothing here
+separates them.
+
+**v1 does not hold.** Points lost against the same weights on the host, five
+networks, mean and standard error. The core's tile is at the core's cut; with
+a layer a GEMM it reads the same to within its errors.
+
+| | MNIST, 8 × 8 | 128 × 64 | Fashion-MNIST, 8 × 8 | 128 × 64 | Inverted, 8 × 8 | 128 × 64 |
+|---|---|---|---|---|---|---|
+| The quantisers, 8-bit ADC | 0.03 ± 0.02 | 0.02 ± 0.04 | 0.13 ± 0.06 | 0.06 ± 0.07 | 0.17 ± 0.11 | −0.01 ± 0.05 |
+| The same, 6-bit ADC | 0.22 ± 0.06 | 0.43 ± 0.18 | 1.24 ± 0.37 | 1.51 ± 0.28 | 0.85 ± 0.30 | 1.08 ± 0.33 |
+| v0's rows alone: 5 activation bits | 0.17 ± 0.05 | 0.13 ± 0.06 | 0.59 ± 0.13 | 0.51 ± 0.11 | 0.71 ± 0.19 | 0.65 ± 0.12 |
+| thermal 1 | 0.29 ± 0.02 | 0.28 ± 0.06 | 1.35 ± 0.39 | 1.38 ± 0.31 | 0.82 ± 0.20 | 0.65 ± 0.12 |
+| 3 photons | 0.49 ± 0.03 | 0.68 ± 0.04 | 1.15 ± 0.23 | 2.16 ± 0.14 | 1.60 ± 0.19 | 3.05 ± 0.48 |
+| programming 4 | 0.30 ± 0.02 | 0.20 ± 0.10 | 0.89 ± 0.11 | 0.80 ± 0.12 | 1.83 ± 0.24 | 1.57 ± 0.16 |
+| crosstalk 10% | 0.19 ± 0.07 | 0.21 ± 0.05 | 1.24 ± 0.30 | 0.96 ± 0.24 | 1.27 ± 0.44 | 1.32 ± 0.40 |
+| v0's rows together, 8-bit ADC | 1.41 ± 0.09 | 1.83 ± 0.04 | 4.09 ± 0.61 | 4.65 ± 0.50 | 6.59 ± 1.00 | 8.04 ± 0.71 |
+| v0, at its 6-bit ADC | 1.49 ± 0.06 | 2.17 ± 0.12 | 4.73 ± 0.66 | 5.27 ± 0.43 | 7.14 ± 1.18 | 8.57 ± 0.63 |
+| **v1** | 0.26 ± 0.06 | 0.34 ± 0.07 | **1.06 ± 0.26** | **1.16 ± 0.14** | **1.10 ± 0.22** | **1.23 ± 0.13** |
+| v1, six minutes of TFLT's drift | 0.37 ± 0.04 | 0.33 ± 0.09 | 1.18 ± 0.18 | 1.24 ± 0.18 | 2.70 ± 0.73 | 1.42 ± 0.35 |
+| v1, an hour of it | 0.81 ± 0.21 | 0.51 ± 0.07 | 4.39 ± 0.89 | 1.84 ± 0.39 | 23.52 ± 5.81 | 3.18 ± 1.27 |
+| v1, four hours of it | 5.18 ± 2.31 | 0.74 ± 0.07 | 19.55 ± 3.07 | 3.50 ± 0.41 | 62.76 ± 5.08 | 17.77 ± 3.02 |
+| v1, 46 hours of it | 65.54 ± 5.06 | 9.36 ± 0.96 | 62.48 ± 5.86 | 23.26 ± 1.48 | 81.98 ± 0.99 | 68.12 ± 2.92 |
+| v1, an hour of TFLN's | 22.62 ± 4.79 | 2.81 ± 0.22 | 45.48 ± 4.91 | 8.37 ± 1.47 | 75.65 ± 2.39 | 38.58 ± 5.56 |
+| v1, an hour of TFLT's, then calibrated | 0.22 ± 0.05 | 0.21 ± 0.05 | 1.04 ± 0.20 | 1.18 ± 0.09 | 1.31 ± 0.51 | 1.14 ± 0.18 |
+
+On 128 × 64, v1 costs 3.4 times what it costs on MNIST on one and 3.6 times
+on the other, which is five and six standard errors from MNIST's. On the
+core's tile it is four times. v0 costs 5.3 and 8.6 points where it cost 2.2.
+
+**On Fashion-MNIST the tile is no worse. The network has less to spare.** The
+probe gives the error that reaches the ten outputs, in percent of their rms,
+on 128 × 64:
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| v1 | 7.9 | 7.8 | 12.4 |
+| Thermal 1, alone | 8.1 | 7.4 | 9.8 |
+| 3 photons, alone | 10.8 | 9.0 | 20.3 |
+| Programming 4, alone | 7.1 | 6.9 | 14.7 |
+| Crosstalk 10%, alone | 18.8 | 16.5 | 19.3 |
+| v1, an hour of TFLT's drift | 9.4 | 10.6 | 25.1 |
+| v1, four hours of it | 13.6 | 19.8 | 42.1 |
+| The median image's lead under v1, in multiples of the rms error at the outputs | 7.8 ± 0.2 | 3.6 ± 0.2 | 5.4 ± 0.4 |
+
+Fashion-MNIST's outputs come back about as wrong as MNIST's do, under v1 and
+under each row alone, and it loses three and a half times the points. Only
+under four hours of drift are they half again as wrong. What differs is the
+last line: the
+probe's `margin`, an image's largest output less its next, over its `sigma`.
+The median image leads by 7.8 errors on MNIST and by 3.6 on Fashion-MNIST. A
+network that is right 87% of the time has its answers closer together, and the
+same error turns more of them.
+
+The inverted set has both. Its lead is 5.4, and its outputs are half again as
+wrong under v1. The rows that do it are the ones that scale with light:
+programming error and shot noise each put twice the error on its outputs that
+they put on MNIST's, and an hour's drift more than that, where crosstalk and
+thermal noise put about the same. A weight's error reaches a sum by what the
+weight is lit with, and that set lights three rows in four.
+
+**And the loss does not follow the light.** Fashion-MNIST lights 2.2 times the
+rows MNIST does and the inverted set 6.4 times, and the two lose the same.
+
+**Every row costs more, and the dear ones are not the same.** `budget`, on the
+core's tile, means of five. One row at a time from each end, as above:
+
+| Row, v0 ↔ v1 | MNIST: relaxed from v1 | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| Activation DAC, 5 ↔ 6 bits | −0.10 | −0.30 | −0.59 |
+| ADC, 6 ↔ 7 bits | −0.12 | −0.59 | −0.79 |
+| Receiver noise, 1 ↔ 0.5 LSB of an 8-bit ADC | −0.19 | **−0.86** | −0.65 |
+| Light, 3 ↔ 15 photons per such LSB | **−0.34** | −0.69 | −1.35 |
+| Programming error, 4 ↔ 1 weight LSB | −0.33 | −0.65 | **−1.87** |
+| Crosstalk, 10% ↔ 2% | −0.16 | −0.78 | −1.05 |
+| Summed | 1.24 | 3.87 | 6.30 |
+| The same six tightened from v0, summed | 1.21 | 3.76 | 5.68 |
+| v0's five rows alone at an 8-bit ADC, summed | 1.28 | 4.54 | 5.38 |
+| The five at once | 1.38 | 3.95 | 6.42 |
+
+No row was worth more than 0.34 on MNIST. On Fashion-MNIST the dearest is the
+receiver's noise, at 0.86, and then crosstalk. On the inverted set it is
+programming error, at 1.87, and then the light. The two rows that were cheapest
+on MNIST were the converters' bits, a tenth of a point each. They are 0.30 and
+0.59 on one and 0.59 and 0.79 on the other.
+
+**And they do not add the same way.** On MNIST v0's five rows at once cost
+their sum, 1.38 for 1.28. On Fashion-MNIST they cost 0.87 of it, and on the
+inverted set 1.19 of it.
+
+Inside v1, shot noise at 15 photons is worth 0.23 and 0.28 by itself. Both
+noise rows halved again, a quarter of an LSB and 30 photons, buy 0.19 and
+0.22. So more than half of v1's point is not its noise. It is what is left:
+its two converters, its programming error and its crosstalk.
+
+**Drift costs more, and on the inverted set far more.** What it adds to v1 on
+128 × 64:
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| Six minutes of TFLT's | −0.01 | +0.08 | +0.19 |
+| An hour | +0.17 | +0.68 | +1.95 |
+| Four hours | +0.40 | +2.34 | +16.54 |
+| An hour, then calibrated | −0.13 | +0.02 | −0.09 |
+
+Calibration returns all three to their v1. How long one holds is the
+workload's: an hour on the inverted set costs five times what four hours cost
+on MNIST. On the core's tile it is worse again on every one, as it was.
+
+**The laser.** `laser`, on 128 × 64: v1's other rows, and the receiver's noise
+as a laser of that many times grxcp's B5 fixes it.
+
+| | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| v1 as budgeted | 0.34 ± 0.07 | 1.16 ± 0.14 | 1.23 ± 0.13 |
+| B5's laser, times 1 | 13.56 ± 1.14 | 23.90 ± 3.49 | 40.87 ± 4.46 |
+| times 2 | 2.74 ± 0.19 | 10.38 ± 2.19 | 17.47 ± 2.89 |
+| times 4 | 0.75 ± 0.07 | 4.16 ± 0.89 | 5.35 ± 0.90 |
+| times 8 | **0.35 ± 0.06** | 1.93 ± 0.29 | 1.99 ± 0.27 |
+| times 16 | 0.22 ± 0.04 | 1.26 ± 0.14 | **1.27 ± 0.18** |
+| times 32 | 0.20 ± 0.06 | **1.04 ± 0.13** | 1.15 ± 0.16 |
+| times 64 | 0.19 ± 0.05 | 1.00 ± 0.14 | 1.04 ± 0.14 |
+| The receiver's noise at B5's laser, layer 1 and 2, in 8-bit LSB | 1.98, 7.94 | 1.79, 9.53 | 1.39, 22.23 |
+
+Eight times B5's laser came within a tenth of a point of v1 on MNIST. Each of
+the others is three quarters of a point over there. The inverted set is within
+a tenth at 16. Fashion-MNIST at 16 is 0.10 over, which is the line and inside
+its scatter, and under at 32.
+
+Half an LSB of receiver's noise a layer, which is the budget's row, costs 0.15,
+0.16 and 0.19 over none. That much held. A second half does not: 0.19, 0.86
+and 0.65, in the table of rows above.
+
+**How the network is put on the tile.** `fill`, on 128 × 64. No gain on the
+first layer's weights:
+
+| | Firing units that clip | The scaling alone | Laser × 2 | × 4 | × 8 | × 16 |
+|---|---|---|---|---|---|---|
+| Fashion-MNIST, the rule's rescale | 0.01% | 0.03 ± 0.01 | 10.38 ± 2.19 | 4.16 ± 0.89 | 1.93 ± 0.29 | 1.26 ± 0.14 |
+| One bit less | 0.90% | 0.02 ± 0.01 | 4.39 ± 0.91 | 1.93 ± 0.34 | **1.19 ± 0.13** | 0.96 ± 0.07 |
+| Two bits less | 10.32% | 0.21 ± 0.08 | 2.28 ± 0.27 | 1.29 ± 0.14 | 0.98 ± 0.08 | 0.89 ± 0.07 |
+| Inverted, the rule's rescale | 0.00% | 0.02 ± 0.02 | 17.47 ± 2.89 | 5.35 ± 0.90 | 1.99 ± 0.27 | 1.27 ± 0.18 |
+| One bit less | 2.75% | 0.04 ± 0.04 | 6.01 ± 0.87 | 2.29 ± 0.29 | 1.37 ± 0.16 | **1.17 ± 0.12** |
+| Two bits less | 22.27% | 0.61 ± 0.33 | 3.57 ± 0.42 | 2.22 ± 0.37 | 1.86 ± 0.36 | 1.81 ± 0.37 |
+
+A bit less of rescale is still half the laser. At 4 times B5's it loses 1.93
+on Fashion-MNIST, which is what the rule's rescale loses at 8, and 2.29 against
+1.99 on the inverted set. Within a tenth of a point of v1 then takes 8 times
+B5's laser on Fashion-MNIST and 16 on the inverted set, where MNIST took 4.
+
+A second bit bought MNIST nothing. On Fashion-MNIST it pays at every laser
+run: 1.29 at 4 times for 1.93. On the inverted set it pays at 2, is level at
+4 and costs at 8 and 16, and it clips 22% of the units that fire.
+
+A gain on the first layer's weights is worse than none at every laser on all
+three. On the inverted set it is ruinous:
+
+| One bit of gain, the rule's rescale | Weights that clip | That alone | Laser × 8 |
+|---|---|---|---|
+| MNIST | 0.38% | 0.14 ± 0.08 | 0.50 ± 0.16 |
+| Fashion-MNIST | 0.73% | 0.34 ± 0.08 | 2.67 ± 0.43 |
+| MNIST, inverted | 0.15% | 3.05 ± 0.82 | 5.83 ± 1.14 |
+
+Fifteen weights in ten thousand saturate and three points go. On that set an
+8-bit ADC's full scale is about 32 or 64 lines' worth of sum, and the mean
+shot lights 95. Its sums are small differences of a great deal of light, and a
+weight that clips is light that no longer cancels. Two bits clip 2.1% and cost
+26 points.
+
+**What was predicted.** Written before each run was read. Fourteen things.
+
+1. That the inverted networks would train to about MNIST's accuracy. Wrong:
+   91.3 to 94.5%.
+2. That a shot would light about 111 lines of 128 on their first layer.
+   Partly: 95. The 784 inputs go in seven shots, and the last is 16 rows.
+3. That their first layer's 8-bit shift would rise to 12 or 13. Partly: 12 on
+   three networks, 11 on two.
+4. That their second layer's shift would stay at 9 or go to 10. Wrong: it
+   fell, to 8 or 7.
+5. That 8 or 4 times B5's laser would still do on the inverted set. Wrong: 16.
+6. That v1 would cost within 0.15 of MNIST's 0.34 there. Wrong: 1.23.
+7. That Fashion-MNIST's networks would reach 85 to 88%. Right: 86.9 to 88.0.
+8. That a shot would light about 32 lines on its first layer and at most about
+   110. Right: 32.3 and 115.8.
+9. That v1 would cost 0.8 to 1.5 points on it. Right: 1.16.
+10. That it would be within a tenth of v1 at 8 or 16 times B5's laser. Partly:
+    at 16 it is on the line, 0.10 over.
+11. That a bit less of rescale would still halve the laser on Fashion-MNIST
+    and would not on the inverted set, whose second layer's shift had already
+    fallen. Right for one and wrong for the other: it halves both.
+12. That crosstalk would be the dearest of v0's rows on 128 × 64 on both, by a
+    wide margin on the inverted set. Wrong: the light is, on both, 2.16 and
+    3.05 against crosstalk's 0.96 and 1.32. It was the dearest on MNIST too.
+13. That v1 on the core's tile would cost 0.8 to 1.2 on Fashion-MNIST and
+    about 1 on the inverted set. Right: 1.06 and 1.10.
+14. That the dearest row to relax from v1 would be a converter's bit on
+    Fashion-MNIST and crosstalk on the inverted set. Wrong on both: the
+    receiver's noise, and programming error.
+
+Four right, four partly, six wrong. Every one about the inverted set's
+network was wrong or partly so: it is not MNIST with more light.
+
+**What this is not.** A network trained for the tile: none of these was
+trained with the tile's errors in the loop, and one that was may take more of
+them. A network trained well: the trainer is MNIST's, unchanged, and a better
+one would move the inverted set's figures most. Another kind of network:
+Fashion-MNIST is MNIST's size and shape, and no convolution, residual path or
+attention has been run. A version of the budget that holds: nothing here says
+what tightening which rows would buy. The drift is the fits' and the cells
+still drift independently. And a model: none of it is a measurement of a tile.
+
 ---
 
 ## 6. Order
@@ -1427,3 +1702,10 @@ command. One tile. And a model: none of it is a measurement of a tile.
    bits and a quarter at six, and §5's budget records what that cost. A
    requirement on a receiver or on the light has to name the ADC it stands
    beside, or be in a unit of the signal. `pta_mnist --probe` prints both.
+9. **Nothing here is trained for the tile.** `pta_mnist train` trains on the
+   host, and the tile is only ever evaluated. §5's last section found v1 at
+   over a point on two data sets, and every figure in it is a network that
+   never saw the errors it is then run under. Training with the model in the
+   forward pass is the usual remedy, and this harness cannot say what it would
+   give back. Its trainer also takes its inputs as they come: on images that
+   are mostly lit it reaches 93% where the same digits, dark, give 97.5%.
