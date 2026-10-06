@@ -391,6 +391,21 @@ static int load_set(const char *dir, const char *images, const char *labels, int
     return 0;
 }
 
+/* An idx image file, in memory, with every pixel taken from 255: the same
+ * pictures with the page lit and the ink dark.  Nothing else about a workload
+ * changes, so what a run on it does differently is what the light does.
+ * Returns the pixels inverted, or -1 if b is not 28 x 28 images. */
+static long invert_idx(uint8_t *b, long len)
+{
+    long i;
+    if (!b || len < 16 || be32(b) != 2051 || be32(b + 8) != 28 || be32(b + 12) != 28 ||
+        len != 16 + (long)be32(b + 4) * N_IN)
+        return -1;
+    for (i = 16; i < len; ++i)
+        b[i] = (uint8_t)(255 - b[i]);
+    return len - 16;
+}
+
 /* ------------------------------------------------------------------------- */
 
 /* The network on quantised weights wq, as a digital computer runs it. */
@@ -2844,6 +2859,35 @@ static int cmd_selftest(void)
         free(w2);
     }
 
+    /* 12. invert.  Three made-up images: every pixel is 255 less what it was,
+     *     the header is untouched, twice is the file it started as, and a file
+     *     that is not 28 x 28 images, or is short of the images its header
+     *     counts, is refused and left alone. */
+    {
+        static uint8_t src[16 + 3 * N_IN], got[16 + 3 * N_IN];
+        int i, flipped, twice, refused;
+        memset(src, 0, sizeof src);
+        src[2] = 8; src[3] = 3; src[7] = 3; src[11] = 28; src[15] = 28;
+        for (i = 16; i < (int)sizeof src; ++i)
+            src[i] = (uint8_t)((i * 37 + i / 7) & 255);
+        memcpy(got, src, sizeof src);
+        flipped = invert_idx(got, sizeof got) == 3 * N_IN && memcmp(got, src, 16) == 0;
+        for (i = 16; i < (int)sizeof src; ++i)
+            if (got[i] + src[i] != 255)
+                flipped = 0;
+        twice = invert_idx(got, sizeof got) == 3 * N_IN && memcmp(got, src, sizeof src) == 0;
+        got[15] = 27;                               /* 28 x 27: not ours */
+        refused = invert_idx(got, sizeof got) == -1 && invert_idx(src, sizeof src - 1) == -1 &&
+                  memcmp(got + 16, src + 16, sizeof src - 16) == 0 &&
+                  src[16] == (uint8_t)((16 * 37 + 16 / 7) & 255);
+        if (!flipped || !twice || !refused)
+            ++errors;
+        printf("  invert: %d pixels, each 255 less what it was under the header it had: %s; twice is "
+               "the file it started as: %s; 28 x 27 images and a file a byte short are refused "
+               "and left alone: %s\n", 3 * N_IN, flipped ? "as it should be" : "WRONG",
+               twice ? "as it should be" : "WRONG", refused ? "as it should be" : "WRONG");
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -2851,6 +2895,7 @@ static int cmd_selftest(void)
 static void help(void)
 {
     printf("pta_mnist selftest\n"
+           "pta_mnist invert IN OUT   an idx file of 28 x 28 images, every pixel taken from 255\n"
            "pta_mnist train --data DIR --din 8|16 --wbits B --seed S --out NET [--from NET] [--verbose 1]\n"
            "  --hidden H      hidden layers, each 100 wide (1, which is D3; up to 8)\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
@@ -2897,6 +2942,25 @@ int main(int argc, char **argv)
         return cmd_train(argc, argv);
     if (argc >= 2 && strcmp(argv[1], "eval") == 0)
         return cmd_eval(argc, argv);
+    if (argc == 4 && strcmp(argv[1], "invert") == 0) {
+        long len = 0, n;
+        uint8_t *b = read_file(argv[2], &len);
+        FILE *f;
+        if ((n = invert_idx(b, len)) < 0) {
+            fprintf(stderr, "pta_mnist: %s missing or not an idx file of 28 x 28 images\n", argv[2]);
+            free(b);
+            return 1;
+        }
+        f = fopen(argv[3], "wb");
+        if (!f || fwrite(b, 1, (size_t)len, f) != (size_t)len || fclose(f) != 0) {
+            fprintf(stderr, "pta_mnist: cannot write %s\n", argv[3]);
+            free(b);
+            return 1;
+        }
+        free(b);
+        printf("invert: %ld pixels\n", n);
+        return 0;
+    }
     help();
     return argc >= 2 && strcmp(argv[1], "help") == 0 ? 0 : 2;
 }
