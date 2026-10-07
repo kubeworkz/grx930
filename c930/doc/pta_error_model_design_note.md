@@ -65,6 +65,10 @@ networks trained before.
 grxcp holds the row a source's lines share to 1% and not 2%, on what the
 networks trained before lose on the inverted set. Held as grxcp holds the
 chip, the 1% buys the reference networks nothing on any of the three sets.
+grxcp kept the 1% all the same. **And the second, the same day** (§5, at its
+end): version 2's rows under a laser. Training with noise does not buy laser.
+Over its own budget a reference network loses what an old one does, and the
+laser the brightest workload needs is 16 times grxcp's B5 for both kinds.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2377,7 +2381,147 @@ side of the line, as in the section on a source's noise. A tile trained
 against a source: the reference networks were trained with Gaussian noise on
 their sums. The two rows a line carries at any size but 5%. v1, another tile,
 or a source through an offset. And whether grxcp keeps its 1% is grxcp's to
-say: this says what it buys.
+say: this says what it buys. *grxcp kept it, the same day: its B16 stands,
+with the 2% recorded as a way back if a comb cannot be had at the 1%.*
+
+### The laser a trained network needs
+
+*Added 2026-10-07.* `sim/pta_mnist.sh DIR WORK reflaser`. Reported, not
+gated.
+
+**Why.** The laser is most of what a MAC costs on grxcp's board. `tighten`
+put version 2's rows under lasers on the networks trained before, with the
+hidden rescale a bit down, and grxcp reads them as needing 8, 16 and 16 times
+its B5 on the three data sets: the least laser at which they are within a
+tenth of a point of what they lose as budgeted. A reference network was
+trained with Gaussian noise on its sums, and a receiver's noise is Gaussian
+noise on a sum. If training for the tile buys any hardware back, this is
+where it should.
+
+**What it runs.** The second mode on the reference networks. At version 2's
+rows on the 128 × 64 tile, eleven rows: as budgeted; and under lasers of 2, 4,
+8, 16 and 32 times B5's, with the hidden rescale a bit down and at the rule's.
+Under a laser the receiver's noise is `--thermalline`, rows / 512 of one
+line's light over the multiple and the same in every layer, and the light's
+row stays the budget's 30 photons, as in `tighten`. The networks trained
+before run beside the reference row for row. That is 110 evaluations and
+eight to eleven minutes on five jobs.
+
+The mode checks every network and every run against its place, as `refsource`
+does, and a run's laser besides: the noise it was asked for has to be the
+multiple its name says, every layer of the line it printed has to be at that
+fraction of a line to the Q8.8 it is held in, the hidden rescale has to be a
+bit down where its name says and the rule's where it does not, and as
+budgeted there is no laser. 70 errors planted one at a time each fail:
+44 in a training's line or a run's, after the fact; 17 in the script; and 9 in the
+tables' own code, which the check does not see and which each move the
+tables.
+
+Of the lines, 25 of the old networks' on each data set are byte for byte what
+`tighten` wrote for the same runs, as budgeted and at 4 to 32 times a bit
+down, and both kinds' as budgeted are byte for byte what `refsource` wrote.
+
+**What came of it.** Five networks of each kind, mean and standard error.
+What a network loses under a laser, less what the same network loses as
+budgeted, in points:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted, points lost | 0.15 ± 0.02 | 0.07 ± 0.05 | 0.54 ± 0.22 | 0.47 ± 0.13 | 0.62 ± 0.07 | 0.52 ± 0.05 |
+| Over that, the rescale a bit down: 2 times B5's laser | +0.67 ± 0.06 | +0.65 ± 0.10 | +3.53 ± 0.89 | +4.06 ± 0.32 | +4.68 ± 0.82 | +4.23 ± 0.35 |
+| 4 times | +0.10 ± 0.05 | +0.18 ± 0.03 | +1.03 ± 0.30 | +1.10 ± 0.13 | +1.14 ± 0.16 | +0.96 ± 0.12 |
+| 8 times | −0.04 ± 0.03 | +0.03 ± 0.02 | +0.20 ± 0.14 | +0.09 ± 0.06 | +0.30 ± 0.10 | +0.17 ± 0.07 |
+| 16 times | −0.06 ± 0.04 | +0.03 ± 0.02 | +0.01 ± 0.08 | −0.10 ± 0.10 | +0.02 ± 0.08 | −0.02 ± 0.06 |
+| 32 times | −0.03 ± 0.04 | +0.02 ± 0.03 | −0.12 ± 0.06 | −0.17 ± 0.08 | +0.01 ± 0.07 | −0.08 ± 0.04 |
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Over its budget, at the rule's rescale: 2 times B5's laser | +2.31 ± 0.16 | +2.72 ± 0.71 | +9.52 ± 2.14 | +11.94 ± 0.52 | +16.78 ± 3.07 | +18.18 ± 1.08 |
+| 4 times | +0.45 ± 0.06 | +0.56 ± 0.10 | +3.32 ± 0.87 | +3.92 ± 0.34 | +4.56 ± 0.90 | +4.12 ± 0.36 |
+| 8 times | +0.07 ± 0.02 | +0.14 ± 0.02 | +0.91 ± 0.33 | +1.05 ± 0.11 | +1.05 ± 0.19 | +0.86 ± 0.07 |
+| 16 times | −0.03 ± 0.03 | +0.07 ± 0.02 | +0.20 ± 0.10 | +0.29 ± 0.05 | +0.27 ± 0.03 | +0.23 ± 0.06 |
+| 32 times | −0.05 ± 0.03 | +0.06 ± 0.02 | +0.03 ± 0.11 | +0.08 ± 0.05 | +0.07 ± 0.04 | +0.05 ± 0.04 |
+
+grxcp's rule, read as its `pta_tighten.py` reads it, on means to the
+hundredth:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The laser it needs, a bit down | 8 times | 8 times | 16 times | 8 times | 16 times | 16 times |
+| At the rule's rescale | 8 times | 16 times | 32 times | 32 times | 32 times | 32 times |
+
+**Training with noise does not buy laser.** Under each laser a reference
+network is over its own budget by what an old one is over its own. At 4 times,
+a bit down, it is 0.18, 1.10 and 0.96 of a point for 0.10, 1.03 and 1.14.
+Seed by seed, on the two harder sets, not one of the twenty differences is
+clear of chance for five networks, and the largest is 1.3 of its errors
+(grxcp's `pta_reference_laser.py` takes them).
+
+**So by the rule one laser of the three is halved, and by a hundredth of a
+point.** The reference networks need 8, 8 and 16 times for the old ones' 8,
+16 and 16. On Fashion-MNIST at 8 times they are 0.09 ± 0.06 over their budget,
+against a tenth. The laser the brightest workload needs is 16 times for both
+kinds. And the rule reads to the hundredth: the old networks' 8 on MNIST is
+0.096 over at 4 times, which it reads as a tenth and not within one.
+
+**It is not that the noise was the wrong size to have trained for.** The
+probe puts the error on the second layer's sums, of their rms and averaged
+over five networks (the runs' `e2`), at 7 to 8% as budgeted for both kinds on
+all three sets. At 4 times a bit down it is 8% on MNIST, 9% on Fashion-MNIST
+and 14% on the inverted set, for both kinds. These networks were trained with
+10% on every sum. A network trained with noise the size of what a small laser
+puts on its sums loses to that laser what one trained with none does. Why is
+not known, and nothing here was run to say.
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| The networks trained before, right, percent: 16 times, a bit down | 97.36 | 86.92 | 92.72 |
+| The networks trained before, right, percent: 8 times, a bit down | 97.34 | 86.74 | 92.45 |
+| 8 times less 16, network by network | −0.02 ± 0.02 | −0.19 ± 0.08 | **−0.28 ± 0.05** |
+| The reference networks, right, percent: 16 times, a bit down | 97.65 | 87.51 | 94.88 |
+| The reference networks, right, percent: 8 times, a bit down | 97.65 | 87.33 | 94.70 |
+| 8 times less 16, network by network | −0.01 ± 0.02 | −0.19 ± 0.08 | **−0.19 ± 0.02** |
+| The reference at 8, less the old ones at 16, seed by seed | **+0.29 ± 0.09** | +0.40 ± 0.17 | **+1.97 ± 0.56** |
+| Over its budget at 8 times: the reference less the old, seed by seed | +0.07 ± 0.04 | −0.11 ± 0.13 | −0.13 ± 0.13 |
+
+**Half the laser costs a reference network a fifth of a point on the two
+harder sets**, 0.19 on each, and at half the laser it is still ahead of an old
+network at all of it: by 0.29, 0.40 and 1.97 points. That is what the eight
+epochs and the noise bought on the host, carried through. None of it is the
+laser's.
+
+**The rescale a bit down still halves the laser at version 2.** At the rule's
+rescale the networks trained before need 8, 32 and 32 times and the reference
+16, 32 and 32. Only the old networks on MNIST get nothing from the bit.
+
+**What was predicted.** Written before the mode was written out, on
+2026-10-07. Four things.
+
+1. That with the rescale a bit down the reference networks would need half
+   the laser the old ones do on the two harder sets, 8 times and not 16, and
+   on MNIST 4 and not 8. Wrong on two of the three: 8, 8 and 16. Right on
+   Fashion-MNIST, by a hundredth of a point.
+2. That at 4 times, on the two harder sets, the reference networks would be
+   over their budget by 0.2 to 0.5 of a point, where the old ones are over
+   theirs by 1.0 and 1.1. Wrong: 1.10 and 0.96.
+3. That at the rule's rescale the reference networks would need twice the
+   laser they need a bit down. Right on MNIST, 16 for 8, and on the inverted
+   set, 32 for 16. On Fashion-MNIST it is four times, 32 for 8, the 8 being
+   the one that turns on a hundredth.
+4. That in how often they are right the reference networks at 8 times would
+   be ahead of the old ones at 16 on all three sets. Right: 0.29, 0.40 and
+   1.97, the first and the last outside their errors.
+
+The run was designed to find a smaller laser, and did not find one.
+
+**What this is not.** A laser: the receiver's noise is Gaussian and the
+light's row does not move with it, where a real laser moves both. A fine
+scale: the multiples are octaves, and "8 times" is somewhere above 4 and no
+more than 8. Held: no drift and no source's noise under any laser. v1,
+another tile, or the first layer's weights written larger, which `fill` ran
+for the networks trained before. And a network trained against a receiver's
+noise as the tile makes it, a layer at a time and by the light: these were
+trained with one fraction of every sum's rms.
 
 ---
 

@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -36,10 +36,13 @@
 # theirs.  A mode added after that date runs the reference networks.
 # `refsource` is the first, and not part of `all`: REFSOURCE_TILE and
 # REFSOURCE_BUSES set its tile and its buses (default 128x64 and 2).
+# `reflaser` is the second: REFLASER_TILE sets its tile (default 128x64) and
+# REFLASER_TIMES the lasers it runs, in multiples of grxcp's B5 (default
+# "2 4 8 16 32").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,38p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,41p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -1418,6 +1421,180 @@ the lines together, alone|the source: together, 0.02|the source: together, 0.01
 all three, a line and the level at 5%|  all three: 0.02, 0.05, 0.05|  all three: 0.01, 0.05, 0.05
 the same, at the end of six minutes|six minutes and all three: 0.02, 0.05, 0.05|six minutes and all three: 0.01, 0.05, 0.05
 ROWS
+fi
+
+# `reflaser`: the laser the reference networks need.  grxcp sizes its laser as a
+# multiple of its B5: the least at which a set of rows is within a tenth of a
+# point of what it loses as budgeted.  `tighten` put version 2's rows under
+# lasers on the networks trained before, the hidden rescale a bit down, and
+# they need 8, 16 and 16 times on the three data sets.  A reference network
+# was trained with noise on its sums, and a receiver's noise is noise on a
+# sum.  This runs version 2's rows under lasers of 2 to 32 times B5's on the
+# reference networks, with the hidden rescale a bit down and at the rule's,
+# and the networks trained before beside them row for row.  The receiver's row
+# is the laser's and the light's row is held at the budget's, as in `tighten`.
+# It trains the reference networks where they are not there.
+if [ "$what" = reflaser ]; then
+    tile=${REFLASER_TILE:-128x64}
+    rows=${tile%x*}
+    lasers=${REFLASER_TIMES:-2 4 8 16 32}
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --photons8 30 --prog 1 --xtalk 0.02"
+    # reflaser_line TIMES: the receiver's noise under that laser, of a line's light
+    reflaser_line() { awk -v r="$rows" -v m="$1" 'BEGIN { printf "%.10g", r / 512 / m }'; }
+    # row|options: version 2 as budgeted, and its rows under each laser twice
+    {
+        echo "as budgeted|--impair $all --abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+        for m in $lasers; do
+            echo "the rescale a bit down, laser x$m|--impair $all $r --hidshift -1 --thermalline $(reflaser_line "$m")"
+        done
+        for m in $lasers; do
+            echo "the rule's rescale, laser x$m|--impair $all $r --thermalline $(reflaser_line "$m")"
+        done
+    } | sed "s/|/|--rows $rows --cols ${tile#*x} /; s/\$/ --probe 1/" > "$work/out/reflaser_settings.txt"
+    # reflaser_one NET ROW ARGS...: one test-set pass, its line to
+    # out/reflaser.d/NET_ROW.txt
+    reflaser_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/reflaser.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/reflaser.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f reflaser_one
+    # reflaser_row NAME: a row's name as a file's
+    reflaser_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # reflaser_net SEED KIND: the network's file, trained before or the reference
+    reflaser_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "$(reflaser_net $sd $k) $(reflaser_row "$name") --seed $sd $setting"; done
+        done < "$work/out/reflaser_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'reflaser_one "$@"' _
+
+    # reflaser_file SEED KIND NAME: the file reflaser_one wrote for that run
+    reflaser_file() { echo "$work/out/reflaser.d/$(basename "$(reflaser_net "$1" "$2")" .net)_$(reflaser_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its rows are
+    # version 2's, written out again here; under a laser the receiver's noise
+    # has to be that laser's in what it was asked, rows / 512 over the multiple
+    # its name says, and in every layer of the line it printed, to the Q8.8 it
+    # is held in; the hidden rescale has to be a bit down where its name says
+    # and the rule's where it does not; and as budgeted there is no laser.
+    reflaser_ok=yes
+    reflaser_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(reflaser_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || reflaser_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(reflaser_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v rows="$rows" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = m == 5 && asked("abits") == 6 && asked("adcbits") == 8 && asked("photons8") == 30 &&
+                               asked("prog") == 1 && asked("xtalk") == 0.02 && !("drift" in given) && !("src" in given) &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        laser = match(name, /laser x[0-9]+$/)
+                        times = laser ? substr(name, RSTART + 7) + 0 : 0
+                        down = (name ~ /a bit down/) ? 1 : 0
+                        if (laser) sane = sane && times > 0 && !("thermal8" in given) &&
+                                          near(asked("thermalline") * 512 * times / rows, 1, 1e-6) &&
+                                          (down == (("hidshift" in given) ? 1 : 0)) && (!down || want["hidshift"] == -1) &&
+                                          (down || name ~ /^the rule.s rescale, /)
+                        else sane = sane && name == "as budgeted" && asked("thermal8") == 0.25 &&
+                                    !("thermalline" in given) && !("hidshift" in given) }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               near(v["photons8"] / 30, 1, 0.03) && near(v["prog"], 1, 1e-9) &&
+                               near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == "none" && v["hours"] == 0 && !("src" in v)
+                          if (laser) {
+                              line = (2 ^ (v["din"] - 1) - 1) * 2 ^ (v["din"] - 1)
+                              nl = split(v["thermal_l"], tl, ","); split(v["S"], sv, ",")
+                              ok = ok && nl == 2 && v["thermalline"] == want["thermalline"] + 0
+                              for (i = 1; i <= nl; ++i)
+                                  ok = ok && near(tl[i] * 2 ^ sv[i] / line, want["thermalline"], 2 ^ sv[i] / 512 / line)
+                              if (down) ok = ok && v["hidshift"] == -1 && v["w1gain"] == 0
+                              else ok = ok && !("hidshift" in v) && !("w1gain" in v)
+                          } else ok = ok && near(v["thermal8"], 0.25, 1e-6) && !("thermalline" in v) && !("hidshift" in v) }
+                END { exit !(NR == 2 && ok) }' || reflaser_ok=NO
+            reflaser_runs=$((reflaser_runs + 1))
+        done < "$work/out/reflaser_settings.txt"
+    done; done
+    echo "== reflaser: $reflaser_runs runs, each of them the network and the row its place says: $reflaser_ok"
+    [ "$reflaser_ok" = yes ] || exit 1
+
+    # reflaser_stat KIND NAME: five networks' loss, mean and standard error,
+    # and that less the same networks' as budgeted, network by network
+    reflaser_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(reflaser_file $sd "$1" "as budgeted")"
+            sed 's/^/B /' "$(reflaser_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # reflaser_right NAME: how often the five networks of each kind are right
+    # in a row, and the reference less the one trained before, seed by seed
+    reflaser_right() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(reflaser_file $sd before "$1")"
+            sed 's/^/B /' "$(reflaser_file $sd reference "$1")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; as += a; ass += a * a; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f %7.2f +-%4.2f", as / n, se(as, ass, n), s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    echo "== reflaser: the $tile tile at v2, five networks, mean and standard error.  Points lost against"
+    echo "== the same weights on the host under a laser, in multiples of grxcp's B5, and that less the"
+    echo "== same networks as budgeted.  The reference networks are $PTA_REF_EPOCHS epochs with noise of $PTA_REF_NOISE"
+    printf '%-36s %14s %14s %14s %14s' "" "before loses" "over budget" "reference" "over budget"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        for k in before reference; do reflaser_stat $k "$name"; done
+        echo
+    done < "$work/out/reflaser_settings.txt"
+    echo "== reflaser: how often they are right, percent, and the reference less the one trained"
+    echo "== before, seed by seed"
+    printf '%-36s %14s %14s %14s' "" "before" "reference" "the difference"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        reflaser_right "$name"
+        echo
+    done < "$work/out/reflaser_settings.txt"
 fi
 
 exit $((gate_status | ablate_status))
