@@ -69,6 +69,11 @@ grxcp kept the 1% all the same. **And the second, the same day** (§5, at its
 end): version 2's rows under a laser. Training with noise does not buy laser.
 Over its own budget a reference network loses what an old one does, and the
 laser the brightest workload needs is 16 times grxcp's B5 for both kinds.
+**And the third** (§5, at its end): drift from three minutes to four hours.
+Under heavy drift a reference network loses half to two thirds of what an
+old one does. At grxcp's six minutes nothing can be told between them, and
+after a calibration the reference networks are about a tenth of a point
+short of their budget on two data sets.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2522,6 +2527,140 @@ another tile, or the first layer's weights written larger, which `fill` ran
 for the networks trained before. And a network trained against a receiver's
 noise as the tile makes it, a layer at a time and by the light: these were
 trained with one fraction of every sum's rms.
+
+### How long a calibration holds for a trained network
+
+*Added 2026-10-07.* `sim/pta_mnist.sh DIR WORK refdrift`. Reported, not
+gated.
+
+**Why.** grxcp calibrates its version 2 every six minutes (its B15). That was
+chosen on the networks trained before, for which an hour of TFLT's drift adds
+0.67 and 1.99 points on the two harder data sets, and it left unrun the
+interval that would hold a tenth of a point on the inverted set, where six
+minutes adds 0.28. `refsource` drifted the reference networks for six minutes
+and no longer.
+
+**What it runs.** The third mode on the reference networks. At version 2 on
+the 128 × 64 tile on two buses, thirteen rows: as budgeted; after 3, 6, 15
+and 30 minutes and 1, 2 and 4 hours of TFLT's fitted drift; after an hour of
+it and then a calibration; after an hour of TFLN's; and held, with a source's
+three rows at 1%, 5% and 5%, at the end of 6 minutes, 30 minutes and an hour.
+The networks trained before run beside the reference row for row, which
+gives them four intervals `v2` did not. That is 130 evaluations and ten to
+eleven minutes on five jobs.
+
+The mode checks every network and every run against its place, as the two
+before it do: a run has to have drifted for the hours its name says, by
+TFLT's fit unless its name says TFLN's, to have taken steps of drift if it
+drifted at all, to have been calibrated only where its name says, and to
+have a source's three rows if it is held and none if it is not. 80 errors
+planted one at a time each fail: 52 in a training's line or a run's, after the
+fact; 19 in the script; and 9 in the tables' own code, which the check does not
+see and which each move the tables.
+
+Of the lines, 35 of the old networks' on each data set are byte for byte what
+`v2` wrote for the same runs, and the 30 that both kinds share with
+`refsource` are byte for byte its.
+
+**What came of it.** Five networks of each kind, mean and standard error.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted, points lost | 0.15 ± 0.02 | 0.07 ± 0.05 | 0.54 ± 0.22 | 0.47 ± 0.13 | 0.62 ± 0.07 | 0.52 ± 0.05 |
+| What a row adds to that: 3 minutes of TFLT's drift | −0.00 ± 0.03 | +0.03 ± 0.01 | −0.01 ± 0.10 | +0.08 ± 0.04 | +0.14 ± 0.11 | −0.01 ± 0.07 |
+| 6 minutes | −0.06 ± 0.04 | +0.01 ± 0.01 | +0.08 ± 0.06 | +0.07 ± 0.09 | +0.28 ± 0.27 | +0.08 ± 0.11 |
+| 15 minutes | +0.00 ± 0.03 | +0.07 ± 0.03 | +0.19 ± 0.08 | +0.08 ± 0.04 | +0.33 ± 0.44 | +0.46 ± 0.25 |
+| 30 minutes | +0.04 ± 0.03 | +0.11 ± 0.02 | +0.27 ± 0.14 | +0.18 ± 0.08 | +0.54 ± 0.56 | +0.64 ± 0.22 |
+| An hour | +0.12 ± 0.05 | +0.07 ± 0.03 | +0.67 ± 0.31 | +0.32 ± 0.09 | +1.99 ± 1.26 | +1.26 ± 0.46 |
+| 2 hours | +0.25 ± 0.04 | +0.13 ± 0.04 | +1.41 ± 0.28 | +0.57 ± 0.04 | +5.75 ± 1.75 | +3.30 ± 0.93 |
+| 4 hours | +0.37 ± 0.08 | +0.36 ± 0.03 | +2.36 ± 0.57 | +1.31 ± 0.26 | +16.07 ± 3.09 | +7.18 ± 1.53 |
+| An hour, then calibrated | −0.06 ± 0.03 | +0.09 ± 0.02 | +0.02 ± 0.11 | +0.13 ± 0.10 | −0.01 ± 0.05 | −0.01 ± 0.05 |
+| An hour of TFLN's | +2.35 ± 0.17 | +1.11 ± 0.18 | +7.29 ± 1.50 | +4.23 ± 1.00 | +37.38 ± 5.74 | +25.12 ± 5.09 |
+| Held, with a source at 1%, 5%, 5%: 6 minutes | +0.04 ± 0.02 | +0.04 ± 0.03 | +0.06 ± 0.15 | +0.15 ± 0.08 | +0.48 ± 0.29 | +0.24 ± 0.20 |
+| 30 minutes | +0.15 ± 0.06 | +0.08 ± 0.04 | +0.39 ± 0.13 | +0.20 ± 0.08 | +0.76 ± 0.67 | +0.87 ± 0.39 |
+| An hour | +0.19 ± 0.03 | +0.12 ± 0.03 | +0.82 ± 0.34 | +0.29 ± 0.12 | +2.26 ± 1.34 | +1.53 ± 0.60 |
+
+Seed by seed, with those outside chance at one in twenty for five networks in
+bold (grxcp's `pta_reference_drift.py` takes them):
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| What drift adds, the reference less the old, seed by seed: 30 minutes | +0.06 ± 0.04 | −0.09 ± 0.12 | +0.10 ± 0.45 |
+| What drift adds, the reference less the old, seed by seed: an hour | −0.06 ± 0.08 | −0.35 ± 0.23 | −0.74 ± 0.90 |
+| What drift adds, the reference less the old, seed by seed: 2 hours | −0.11 ± 0.05 | **−0.83 ± 0.25** | −2.45 ± 1.46 |
+| What drift adds, the reference less the old, seed by seed: 4 hours | −0.02 ± 0.08 | −1.05 ± 0.77 | −8.89 ± 3.63 |
+| What drift adds, the reference less the old, seed by seed: an hour of TFLN's | **−1.24 ± 0.30** | **−3.06 ± 0.79** | **−12.26 ± 4.30** |
+| An hour, then calibrated: the reference less the old | **+0.15 ± 0.05** | +0.10 ± 0.12 | +0.00 ± 0.07 |
+
+**Under heavy drift a reference network loses half to two thirds of what an
+old one does.** An hour of TFLN's adds 1.11, 4.23 and 25.12 points for 2.35,
+7.29 and 37.38, and that is clear on all three sets. Of TFLT's, two hours on
+Fashion-MNIST is clear, 0.57 for 1.41. An hour of it is 0.32 for 0.67 and
+1.26 for 1.99 and is not clear, and four hours on the inverted set is 7.18
+for 16.07 at two and a half errors. The section before this one found that
+the same networks buy nothing back of a laser. They do of drift, where there
+is a lot of it.
+
+**At half an hour and under nothing can be told between them.** None of the
+twelve differences is clear. On the inverted set the reference networks are
+no better at a quarter of an hour, 0.46 for 0.33, or at half, 0.64 for 0.54.
+
+**At six minutes the reference networks are inside a tenth of a point on all
+three sets, in the mean.** 0.01, 0.07 and 0.08, where the old ones are at
+−0.06, 0.08 and 0.28. Two of those three have errors their own size. For the
+old networks on the inverted set three minutes adds 0.14 ± 0.11: no interval
+that was run holds a tenth there.
+
+**A calibration does not quite return a reference network to where it
+started.** After an hour of drift and a calibration the old networks are
+−0.06, 0.02 and −0.01 of a point from their budget, and the reference
+networks 0.09, 0.13 and −0.01. MNIST's 0.09 ± 0.02 is clear and is nine
+images in ten thousand; on that set a calibrated reference network is no
+better off than one left to drift for the hour, 0.09 for 0.07. Fashion-MNIST's
+0.13 ± 0.10 is not clear. Why is not known. And every drift row in this note
+starts from weights as they were written, not from a calibration, so what a
+calibrated and then drifted tile costs has not been run for either kind:
+`eval --post-hours` is there for it.
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| The reference networks held, right, percent: 6 minutes | 97.64 | 87.27 | 94.63 |
+| The reference networks held, right, percent: 30 minutes | 97.61 | 87.21 | 93.99 |
+| The reference networks held, right, percent: an hour | 97.57 | 87.12 | 93.33 |
+| The networks trained before held, 6 minutes | 97.26 | 86.88 | 92.27 |
+| The reference at an hour, less the old at 6 minutes, seed by seed | +0.31 ± 0.12 | +0.24 ± 0.13 | +1.06 ± 1.04 |
+
+**Held at the end of an hour, a reference network is level with an old one
+held at the end of six minutes, or ahead of it.** 0.31, 0.24 and 1.06 points
+ahead in the mean, and clear on none of the three. Against itself at six
+minutes it gives up 0.07, 0.15 and 1.30.
+
+**What was predicted.** Written before the mode was written out, on
+2026-10-07. Five things.
+
+1. That an hour of drift would add less to the reference networks' budget
+   than to the old ones' on the inverted set: 0.5 to 1.0 of a point, for 1.99.
+   Less, yes, at 1.26, which is outside what was said; and seed by seed the
+   difference is not clear.
+2. That on Fashion-MNIST an hour would add 0.3 to 0.6, for 0.67, and on MNIST
+   under a tenth, for 0.12. Right: 0.32 and 0.07.
+3. That a calibration after an hour would return the reference networks to
+   their budget, within a tenth on all three sets. Wrong on Fashion-MNIST,
+   0.13, and right by a hundredth on MNIST, 0.09. What it missed is the
+   finding above.
+4. That on the inverted set the reference networks would be over their
+   budget by 0.1 to 0.3 at a quarter of an hour and 0.2 to 0.6 at half. Wrong
+   twice: 0.46 and 0.64.
+5. That in how often they are right the reference networks held at the end
+   of an hour would be ahead of the old ones held at the end of six minutes
+   on all three sets. Right in the mean, and clear on none.
+
+**What this is not.** A ring's drift: both fits are a Mach-Zehnder's bias,
+every cell drifts on its own, and none drift together. An interval between
+the seven that were run. A network trained against a drifted weight: these
+were trained with Gaussian noise on their sums. The predictive and shadow
+schedulers, v1, or another tile. And an interval that starts from a
+calibration, as every interval on a tile does.
 
 ---
 
