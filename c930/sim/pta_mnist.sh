@@ -27,10 +27,17 @@
 # WORK_DIR the same images with every pixel taken from 255, the page lit and the
 # ink dark.  A WORK_DIR is one workload for good, since its networks were
 # trained on what it holds, and PIXELS has to say the same each time.
+#
+# The reference networks, since 2026-10-06 (grxcp's B17): each seed's 6-bit
+# network trained for 8 epochs with noise of 0.1 on its sums, which is
+# WORK_DIR/nets/d8_b6_sN_n0.1_e8.net.  `TRAINED_NOISES=0.1 ... trained` makes
+# them and prints what a tile costs them.  Every mode above was run on the
+# networks trained before, d8_b6_sN.net, and still is: its recorded lines are
+# theirs.  A mode added after that date runs the reference networks.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,29p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,36p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
