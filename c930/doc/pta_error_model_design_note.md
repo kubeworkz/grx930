@@ -61,6 +61,10 @@ grxcp kept its version 2 on that, and made the networks trained for eight
 epochs with 10% of noise the reference (its B17): a mode added to this
 harness after 2026-10-06 runs those, and every mode before it is of the
 networks trained before.
+**And the first mode on the reference networks, 2026-10-07** (§5, at its end):
+grxcp holds the row a source's lines share to 1% and not 2%, on what the
+networks trained before lose on the inverted set. Held as grxcp holds the
+chip, the 1% buys the reference networks nothing on any of the three sets.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2227,6 +2231,153 @@ after that date runs the reference networks, and the script's header says so
 where the next one will be written. What a tile costs the reference networks
 is in the tables above, at 128 × 64 on two buses, at v1 and at version 2, as
 budgeted and held, and nowhere else.
+
+### Does a trained network need the 1%?
+
+*Added 2026-10-07.* `sim/pta_mnist.sh DIR WORK refsource`. Reported, not
+gated.
+
+**Why.** grxcp's B16 holds the row a source's lines share to 1% rms a shot and
+not 2%. It was chosen on what the networks trained before lose on the inverted
+set, where a source's three rows add 0.37 of a point at 2% and 0.28 at 1%, and
+it lists a network trained for the tile among what would reopen it. Its B17
+has since made such networks the reference, and the section above held them at
+the 1% and at nothing else.
+
+**What it runs.** The first mode on the reference networks, which is what the
+script's header says of a mode added after 2026-10-06. The script now names
+them in one place, `ref_net`, and trains them where they are not there,
+`train_ref`. In a work directory with none, the five it trained and their
+training lines are byte for byte the files `trained` wrote.
+
+On each data set, at grxcp's version 2 on the 128 × 64 tile on two buses,
+eleven rows: as budgeted; the lines together at 1, 2 and 5%; a line on its own
+at 5% and the lines' level at 5%; the three at 2%, 5%, 5% and at 1%, 5%, 5%;
+six minutes of TFLT's drift; and six minutes with each of those two. The last
+is the chip as grxcp holds it. The networks trained before run beside the
+reference row for row, because the 1% was chosen on them. That is 110
+evaluations and seven to nine minutes on five jobs.
+
+The mode checks every network and every run against its place. A reference
+network's training line has to say the header's eight epochs and its noise of
+0.1, and the noise put on each layer to a twentieth; one trained before has to
+say neither. A run has to be of the network that training wrote, by its
+accuracy on the host and its epochs, its six rows have to be version 2's,
+written out again in the check, and its drift and its source's three sizes
+have to be the ones its row's name says, in what it was asked and in the line
+it printed. 84 errors planted one at a time each fail: 54 in a training's
+line or a run's, after the fact; 20 in the script, six of them in how a
+reference network is trained, each run in a directory that had to train its
+own; and 10 in the tables' own code, which the check does not see and which
+each move the tables. Of the script's, the check fails all but one, and that
+one the trainer refuses before the check is reached: a network started from
+another seed's.
+
+Of the lines, 50 of the old networks' on each data set are byte for byte what
+`v2` wrote for the same runs, the other five being the one row `v2` did not
+have, six minutes with the three at 2%. And the ten of the reference networks'
+that `trained` also ran are byte for byte its.
+
+**What came of it.** Five networks of each kind, mean and standard error.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted, points lost | 0.15 ± 0.02 | 0.07 ± 0.05 | 0.54 ± 0.22 | 0.47 ± 0.13 | 0.62 ± 0.07 | 0.52 ± 0.05 |
+
+What a row adds to that, in points, network by network:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The lines together, 1% | 0.01 ± 0.02 | 0.03 ± 0.02 | 0.04 ± 0.04 | 0.02 ± 0.03 | 0.13 ± 0.08 | 0.00 ± 0.03 |
+| 2% | 0.02 ± 0.02 | 0.06 ± 0.03 | 0.03 ± 0.04 | −0.06 ± 0.02 | 0.24 ± 0.05 | 0.05 ± 0.05 |
+| 5% | 0.02 ± 0.05 | 0.08 ± 0.03 | 0.01 ± 0.08 | 0.06 ± 0.03 | 0.90 ± 0.13 | 0.46 ± 0.10 |
+| A line on its own, 5% | 0.05 ± 0.05 | 0.04 ± 0.04 | 0.14 ± 0.12 | 0.16 ± 0.08 | 0.25 ± 0.07 | 0.00 ± 0.03 |
+| The lines' level, 5% | 0.03 ± 0.03 | 0.02 ± 0.02 | 0.01 ± 0.07 | 0.02 ± 0.05 | 0.17 ± 0.06 | 0.12 ± 0.20 |
+| All three: 2%, 5%, 5% | 0.06 ± 0.03 | 0.06 ± 0.03 | 0.09 ± 0.13 | 0.06 ± 0.06 | 0.37 ± 0.07 | 0.24 ± 0.24 |
+| All three: 1%, 5%, 5% | 0.04 ± 0.04 | 0.07 ± 0.04 | 0.04 ± 0.11 | 0.03 ± 0.05 | 0.28 ± 0.06 | 0.16 ± 0.19 |
+| Six minutes of TFLT's drift | −0.06 ± 0.04 | 0.01 ± 0.01 | 0.08 ± 0.06 | 0.07 ± 0.09 | 0.28 ± 0.27 | 0.08 ± 0.11 |
+| Six minutes and 2%, 5%, 5% | 0.09 ± 0.02 | 0.02 ± 0.04 | 0.07 ± 0.14 | 0.11 ± 0.09 | 0.59 ± 0.32 | 0.20 ± 0.20 |
+| Six minutes and 1%, 5%, 5% | 0.04 ± 0.02 | 0.04 ± 0.03 | 0.06 ± 0.15 | 0.15 ± 0.08 | 0.48 ± 0.29 | 0.24 ± 0.20 |
+
+And the question itself. How often a network is right with the row the lines
+share at 1%, less how often at 2%, in points, network by network:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The lines together, alone | +0.02 ± 0.02 | +0.03 ± 0.01 | −0.01 ± 0.03 | **−0.08 ± 0.02** | +0.11 ± 0.06 | +0.04 ± 0.03 |
+| Among the three | +0.02 ± 0.02 | −0.01 ± 0.01 | +0.05 ± 0.02 | +0.03 ± 0.03 | **+0.09 ± 0.02** | +0.08 ± 0.06 |
+| Held: the three, six minutes on | **+0.04 ± 0.00** | −0.02 ± 0.02 | +0.01 ± 0.04 | −0.03 ± 0.04 | +0.12 ± 0.06 | −0.04 ± 0.04 |
+| Held, right, percent: the shared row at 2% | 97.22 | 97.66 | 86.87 | 87.30 | 92.15 | 94.67 |
+| Held, right, percent: the shared row at 1% | 97.26 | 97.64 | 86.88 | 87.27 | 92.27 | 94.63 |
+
+The two rows of a pair run from one seed. The source's draws are seeded from
+it and not from their size, so a pair shares them at half the size, and a
+pair's difference has an error of a few hundredths of a point. A hundredth is
+one image in the ten thousand. With five networks a difference has to be 2.8
+of its errors to be outside chance at one in twenty, and those in bold are.
+One of them is four images.
+
+**Held as grxcp holds the chip, the 1% buys the reference networks nothing.**
+At the end of six minutes, with a line and the level at 5%, they are right
+97.66, 87.30 and 94.67% of the time with the shared row at 2% and 97.64, 87.27
+and 94.63% at 1%. The difference is the wrong way on all three sets and clear
+on none.
+
+**As budgeted it may buy them what it bought the old ones, and that is not
+shown.** With no drift, among the three rows, the 1% is worth 0.08 ± 0.06 to
+the reference networks on the inverted set. It was worth 0.09 ± 0.02 to the
+networks trained before, which is the 0.09 grxcp's B16 has and is five of its
+errors. The same size, at nearly four times the error.
+
+**One result is the other way.** With the row alone on Fashion-MNIST the
+reference networks are right eight images more often at 2% than at 1%, and by
+the rule above that is clear. Among the three and held it is not there. A
+network can be right a little more often for a little more noise on a sum
+that sits at a quantiser's edge; nothing here was run to say that is what
+this is.
+
+**The rows themselves cost a trained network less on the inverted set.** The
+lines together at 2% add 0.05 of a point where they add 0.24 to the networks
+trained before, and at 5% 0.46 for 0.90. A line on its own at 5% adds nothing
+for 0.25. Seed by seed that last is 0.24 ± 0.05 less, and it is the one row of
+the ten there whose difference is clear (grxcp's `pta_shared_row.py` takes
+them).
+
+**And the three together are still not shown inside a tenth there.** 0.24 ±
+0.24 at 2% and 0.16 ± 0.19 at 1%, each with an error its own size. It is one
+network of the five: the lines' level at 5% costs seed 4 0.86 of a point, and
+the other four between 0.26 gained and 0.17 lost. On MNIST and on
+Fashion-MNIST the three add 0.06 at 2%.
+
+**What was predicted.** Written before the mode was run on anything, on
+2026-10-07. Five things.
+
+1. That on MNIST and on Fashion-MNIST the 1% would buy the reference networks
+   nothing that can be told: inside a tenth either way, with and without the
+   drift. Right: −0.01 and −0.02 on MNIST, +0.03 and −0.03 on Fashion-MNIST.
+2. That on the inverted set the three rows at 2%, 5%, 5% would add 0.15 to
+   0.30 to the reference networks' budget, where they add 0.37 to the old
+   ones'. Right, 0.24, and with an error of 0.24 it could not well have been
+   wrong.
+3. That on the inverted set the 1% would buy the reference networks less than
+   the 0.09 it bought the old ones: 0.00 to 0.08, as budgeted. At its edge:
+   0.08 ± 0.06, which is not less than 0.09 in any way that can be told.
+4. That held at 2% and not at 1% the reference networks would lose 0.78 to
+   0.90 on the inverted set, where held at 1% they lose 0.76. Wrong: 0.72.
+   Held, the 2% is the better of the two there, inside its error.
+5. That a network trained for the tile needs the 1% less than the old ones
+   did, and that on no set does it buy one a tenth of a point. The second is
+   right: 0.08 at the most, in nine cells. The first is suggested and not
+   shown: held, the 1% is worth 0.06, 0.05 and 0.16 less to a reference
+   network than to the old one of its seed, and only MNIST's six images are
+   clear.
+
+**What this is not.** A source: the term is first order and on the host's
+side of the line, as in the section on a source's noise. A tile trained
+against a source: the reference networks were trained with Gaussian noise on
+their sums. The two rows a line carries at any size but 5%. v1, another tile,
+or a source through an offset. And whether grxcp keeps its 1% is grxcp's to
+say: this says what it buys.
 
 ---
 
