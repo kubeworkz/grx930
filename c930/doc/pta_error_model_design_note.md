@@ -57,6 +57,10 @@ epochs, the inverted set's networks are two points better on the tile, with
 no noise in the training at all. Noise on the sums as they train is worth
 half a point on Fashion-MNIST and nothing that five networks can tell on the
 other two. And version 2 buys a trained network what it bought the others.
+grxcp kept its version 2 on that, and made the networks trained for eight
+epochs with 10% of noise the reference (its B17): a mode added to this
+harness after 2026-10-06 runs those, and every mode before it is of the
+networks trained before.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2197,6 +2201,33 @@ were the three sizes of noise. A full grid: noise under the old stopping rule
 was tried once, on one network, and stopped at two epochs. Another kind of
 network, or a tile, as everywhere above.
 
+**grxcp then chose, and nothing here was run again.** *The same day.* Two
+things. Its B14 stands: the interface chip is held to version 2, because
+version 2 is worth to a trained network what it was worth to the others. And
+its B17 makes the networks trained for eight epochs with 10% of noise the
+reference: a sweep run from 2026-10-06 uses them, and no sweep before it is
+run again.
+
+In this harness the reference networks are `nets/d8_b6_sN_n0.1_e8.net`, one a
+seed, and
+
+    TRAINED_NOISES=0.1 sim/pta_mnist.sh DIR WORK trained
+
+makes them in a work directory and prints the two tables above with two rows
+each, the networks trained before and the reference. That is 40 evaluations
+and three to four minutes on five jobs where the networks exist. Run on MNIST's
+and on Fashion-MNIST's work directories it passed its check and wrote the
+lines it had written before, byte for byte.
+
+What that leaves as it was. Every mode above this section runs the networks
+trained before and its recorded lines are theirs: `budget`, `geometry`,
+`source`, `laser`, `fill`, `tighten`, `v2` and the rest. None was run on the
+reference networks, and each still reproduces what it recorded. A mode added
+after that date runs the reference networks, and the script's header says so
+where the next one will be written. What a tile costs the reference networks
+is in the tables above, at 128 × 64 on two buses, at v1 and at version 2, as
+budgeted and held, and nowhere else.
+
 ---
 
 ## 6. Order
@@ -2276,7 +2307,8 @@ network, or a tile, as everywhere above.
    end: Gaussian noise on the sums as a network trains is worth half a point
    on Fashion-MNIST and nothing that can be told on the other two, and how
    long a network is trained mattered more. The tile itself has still not
-   been in a training's forward pass.* As this item stood: `pta_mnist train` trains on the
+   been in a training's forward pass. Those networks are the reference since
+   that day (grxcp's B17).* As this item stood: `pta_mnist train` trains on the
    host, and the tile is only ever evaluated. §5's last section found v1 at
    over a point on two data sets, and every figure in it is a network that
    never saw the errors it is then run under. Training with the model in the
