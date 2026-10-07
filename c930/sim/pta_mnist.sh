@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -38,11 +38,14 @@
 # REFSOURCE_BUSES set its tile and its buses (default 128x64 and 2).
 # `reflaser` is the second: REFLASER_TILE sets its tile (default 128x64) and
 # REFLASER_TIMES the lasers it runs, in multiples of grxcp's B5 (default
-# "2 4 8 16 32").
+# "2 4 8 16 32").  `refdrift` is the third: REFDRIFT_TILE and REFDRIFT_BUSES
+# set its tile and its buses (default 128x64 and 2), REFDRIFT_HOURS the
+# intervals it drifts for (default "0.05 0.1 0.25 0.5 1 2 4") and REFDRIFT_HELD
+# those it holds a source at the end of (default "0.1 0.5 1").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,41p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,44p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -1595,6 +1598,176 @@ if [ "$what" = reflaser ]; then
         reflaser_right "$name"
         echo
     done < "$work/out/reflaser_settings.txt"
+fi
+
+# `refdrift`: how long a calibration holds for a reference network.  grxcp
+# calibrates its version 2 every six minutes (its B15), chosen on what an
+# hour of TFLT's drift adds to the networks trained before: 0.67 and 1.99
+# points on the two harder data sets.  `refsource` ran six minutes on the
+# reference networks and nothing longer.  This runs version 2 after three
+# minutes to four hours of TFLT's drift on the reference networks, after an
+# hour and then calibrated, after an hour of TFLN's, and held: a source's
+# three rows at 1%, 5% and 5% at the end of six minutes, half an hour and an
+# hour.  The networks trained before run beside them row for row, with more
+# intervals than `v2` gave them.  It trains the reference networks where they
+# are not there.
+if [ "$what" = refdrift ]; then
+    tile=${REFDRIFT_TILE:-128x64}
+    buses=${REFDRIFT_BUSES:-2}
+    hours=${REFDRIFT_HOURS:-0.05 0.1 0.25 0.5 1 2 4}
+    heldh=${REFDRIFT_HELD:-0.1 0.5 1}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    # row|options: version 2 as budgeted, drifted, calibrated, and held
+    {
+        echo "as budgeted|--impair $all $r"
+        for h in $hours; do echo "TFLT's drift, $h h|--impair $all,drift $r --drift tflt --hours $h"; done
+        echo "TFLT's drift, 1 h, then calibrated|--impair $all,drift $r --drift tflt --hours 1 --calibrate 16"
+        echo "TFLN's drift, 1 h|--impair $all,drift $r --drift tfln --hours 1"
+        for h in $heldh; do
+            echo "held, $h h|--impair $all,drift $r --drift tflt --hours $h --src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
+        done
+    } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refdrift_settings.txt"
+    # refdrift_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refdrift.d/NET_ROW.txt
+    refdrift_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refdrift.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refdrift.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refdrift_one
+    # refdrift_row NAME: a row's name as a file's
+    refdrift_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refdrift_net SEED KIND: the network's file, trained before or the reference
+    refdrift_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "$(refdrift_net $sd $k) $(refdrift_row "$name") --seed $sd $setting"; done
+        done < "$work/out/refdrift_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refdrift_one "$@"' _
+
+    # refdrift_file SEED KIND NAME: the file refdrift_one wrote for that run
+    refdrift_file() { echo "$work/out/refdrift.d/$(basename "$(refdrift_net "$1" "$2")" .net)_$(refdrift_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; it drifted for the hours its
+    # name says, by TFLT's fit unless its name says TFLN's, and took steps of
+    # drift if it drifted at all; it was calibrated only where its name says;
+    # and a held run has a source's three rows at 1%, 5% and 5% through a
+    # balanced pair, and no other run has a source.
+    refdrift_ok=yes
+    refdrift_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refdrift_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refdrift_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(refdrift_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        budgeted = (name == "as budgeted") ? 1 : 0
+                        hours = match(name, /, [0-9.]+ h/) ? substr(name, RSTART + 2, RLENGTH - 4) + 0 : 0
+                        kind = budgeted ? "none" : (name ~ /^TFLN/) ? "tfln" : "tflt"
+                        cal = (name ~ /then calibrated$/) ? 16 : 0
+                        is_held = (name ~ /^held, /) ? 1 : 0
+                        sane = sane && (budgeted || hours > 0) && (name ~ /^(as budgeted|TFL[TN].s drift, |held, )/) &&
+                               ((!budgeted) == (("drift" in on) ? 1 : 0)) && ((!budgeted) == (("drift" in given) ? 1 : 0)) &&
+                               (budgeted || want["drift"] == kind) && asked("hours") == hours && asked("calibrate") == cal &&
+                               asked("src") == 0.01 * is_held && asked("srcline") == 0.05 * is_held &&
+                               asked("srcflat") == 0.05 * is_held && asked("buses") == nb * is_held }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == kind && v["hours"] == hours && v["cal"] == cal &&
+                               (v["steps"] > 0) == (!budgeted) && !("hidshift" in v) && !("thermalline" in v)
+                          if (is_held) ok = ok && v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] == 0.05 &&
+                                            v["srcsign"] == "pair" && v["buses"] == nb
+                          else ok = ok && !("src" in v) }
+                END { exit !(NR == 2 && ok) }' || refdrift_ok=NO
+            refdrift_runs=$((refdrift_runs + 1))
+        done < "$work/out/refdrift_settings.txt"
+    done; done
+    echo "== refdrift: $refdrift_runs runs, each of them the network and the row its place says: $refdrift_ok"
+    [ "$refdrift_ok" = yes ] || exit 1
+
+    # refdrift_stat KIND NAME: five networks' loss, mean and standard error,
+    # and what the row adds to that kind as budgeted, network by network
+    refdrift_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refdrift_file $sd "$1" "as budgeted")"
+            sed 's/^/B /' "$(refdrift_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refdrift_right NAME: how often the five networks of each kind are right
+    # in a row, and the reference less the one trained before, seed by seed
+    refdrift_right() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refdrift_file $sd before "$1")"
+            sed 's/^/B /' "$(refdrift_file $sd reference "$1")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; as += a; ass += a * a; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f %7.2f +-%4.2f", as / n, se(as, ass, n), s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    echo "== refdrift: the $tile tile on $buses buses at v2, five networks, mean and standard error.  Points"
+    echo "== lost against the same weights on the host, and what a row adds to its own networks as"
+    echo "== budgeted, network by network.  Held is with a source's three rows at 1%, 5% and 5%"
+    printf '%-36s %14s %14s %14s %14s' "" "before loses" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        for k in before reference; do refdrift_stat $k "$name"; done
+        echo
+    done < "$work/out/refdrift_settings.txt"
+    echo "== refdrift: how often they are right, percent, and the reference less the one trained"
+    echo "== before, seed by seed"
+    printf '%-36s %14s %14s %14s' "" "before" "reference" "the difference"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        refdrift_right "$name"
+        echo
+    done < "$work/out/refdrift_settings.txt"
 fi
 
 exit $((gate_status | ablate_status))
