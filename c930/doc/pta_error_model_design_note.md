@@ -51,6 +51,12 @@ Fashion-MNIST, and cost three to four tenths of a point on the inverted set
 at either version. grxcp then set the calibration to every six minutes and
 the lines together to 1%. With everything it is then held to, version 2 loses
 0.19, 0.60 and 1.09 points on the three sets.
+**And a network trained for the tile, the same day** (§5, at its end): every
+network above was trained on its host and stopped early. Trained for eight
+epochs, the inverted set's networks are two points better on the tile, with
+no noise in the training at all. Noise on the sums as they train is worth
+half a point on Fashion-MNIST, a quarter on the inverted set and nothing on
+MNIST. And version 2 buys a trained network what it bought the others.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2000,6 +2006,167 @@ was not rerun. Two buses, one tile, and the same fifteen networks, none
 trained for the tile. And version 2 is grxcp's name for a set of rows this
 harness ran. Nothing here says it is the right set.
 
+### A network trained for the tile
+
+*Added 2026-10-06.* `pta_mnist train --sumnoise F --epochs N`, and
+`sim/pta_mnist.sh DIR WORK trained`. Reported, not gated.
+
+**Why.** Every network in this note was trained on its host and then run on a
+tile it had never seen. Each section since the second data set says so, and
+§7's item 9 calls training with the errors in the loop the usual remedy and
+says this harness cannot tell what it would give back. grxcp's B14 lists it
+first among the things that would reopen its version 2.
+
+**The trainer.** `--sumnoise F` gives every sum of every layer, before its
+bias, Gaussian noise of F times that layer's rms, drawn afresh for each image
+at each step. That is a tile as a network being trained can be shown it: the
+probe puts a tile's error at about a tenth of its sums' rms at v1. The rms is
+the layer's own, tracked as training moves it, and the gradient is taken
+through the noisy sums. `--epochs N` runs N epochs, where the trainer has
+always stopped at the first whose held-out accuracy fails to rise.
+
+That rule turned out to matter more than the noise. A noisy network stops at
+once by it: the first try, at a tenth, ran two epochs and came out half a
+point worse on its host than the network it was meant to improve. So every
+network here is trained for eight epochs, and one of them with no noise, to
+tell the noise from the epochs.
+
+With neither option the trainer is what it was. Two networks trained again
+without them, one on MNIST and one on Fashion-MNIST, are byte for byte the
+files this note has used, and their training lines are the same lines. With
+`--sumnoise` a training's line says what was put on each layer's sums over
+its last epoch: 4.98 to 4.99%, 9.96 to 9.98% and 19.87 to 19.96% of their rms
+for 5, 10 and 20% asked.
+
+**What it runs.** On each data set, each seed's 6-bit network again from the
+same 8-bit one, for eight epochs, with no noise and with 5, 10 and 20% of it:
+twenty networks. Then all twenty-five, those and the five trained before, on
+the 128 × 64 tile on two buses at grxcp's v1 and its version 2, as budgeted
+and held: with a source's three rows at 1%, 5% and 5%, at the end of six
+minutes of drift. 100 evaluations, and with the training about a quarter of
+an hour on five jobs, or twice that on the inverted set, whose images are
+dense.
+
+The mode checks every network and every run against its place. A training's
+line has to say its epochs and its noise, and the noise put on each layer has
+to be what was asked to a twentieth, and none where none was asked. A run has
+to be of the network its training wrote, by its accuracy on the host and its
+epochs, and its rows are written out a second time in the check. 44 errors
+planted one at a time each fail: 8 in the trainer's noise, against the
+self-test; 26 in a training's line or a run's, after the fact; and 10 in the
+script. The twenty lines a data set's old networks give here are byte for
+byte what `v2` wrote for the same runs.
+
+**What came of it.** Accuracy, percent, five networks, mean and standard
+error.
+
+| Fashion-MNIST | On its host | v1 | Version 2 | v1, held | Version 2, held |
+|---|---|---|---|---|---|
+| Trained as before | 87.48 ± 0.19 | 86.32 ± 0.18 | 86.94 ± 0.20 | 86.11 ± 0.14 | 86.88 ± 0.09 |
+| 8 epochs, no noise | 87.66 ± 0.16 | 86.30 ± 0.22 | 87.13 ± 0.13 | 86.28 ± 0.18 | 87.04 ± 0.16 |
+| 8 epochs, noise of 5% | 87.75 ± 0.15 | 86.60 ± 0.25 | 87.21 ± 0.24 | 86.47 ± 0.12 | 87.13 ± 0.14 |
+| 8 epochs, noise of 10% | **87.89 ± 0.16** | 86.77 ± 0.26 | **87.41 ± 0.13** | 86.69 ± 0.25 | **87.27 ± 0.13** |
+| 8 epochs, noise of 20% | 87.27 ± 0.14 | **86.82 ± 0.15** | 87.06 ± 0.16 | **86.88 ± 0.14** | 87.03 ± 0.11 |
+
+| MNIST, inverted | On its host | v1 | Version 2 | v1, held | Version 2, held |
+|---|---|---|---|---|---|
+| Trained as before | 93.36 ± 0.54 | 92.13 ± 0.56 | 92.74 ± 0.55 | 91.76 ± 0.65 | 92.27 ± 0.63 |
+| 8 epochs, no noise | **95.55 ± 0.36** | 94.17 ± 0.59 | **94.88 ± 0.46** | 93.63 ± 0.70 | 94.51 ± 0.53 |
+| 8 epochs, noise of 5% | 95.48 ± 0.35 | 93.98 ± 0.53 | 94.83 ± 0.43 | 93.69 ± 0.62 | 94.45 ± 0.51 |
+| 8 epochs, noise of 10% | 95.38 ± 0.33 | **94.42 ± 0.37** | 94.86 ± 0.36 | **94.18 ± 0.54** | **94.63 ± 0.53** |
+| 8 epochs, noise of 20% | 94.12 ± 0.47 | 93.45 ± 0.45 | 93.74 ± 0.47 | 93.32 ± 0.46 | 93.60 ± 0.47 |
+
+| MNIST | On its host | v1 | Version 2 | v1, held | Version 2, held |
+|---|---|---|---|---|---|
+| Trained as before | 97.45 ± 0.10 | 97.11 ± 0.13 | 97.30 ± 0.11 | 97.05 ± 0.10 | 97.26 ± 0.10 |
+| 8 epochs, no noise | 97.74 ± 0.10 | **97.52 ± 0.10** | 97.66 ± 0.10 | 97.46 ± 0.10 | 97.57 ± 0.09 |
+| 8 epochs, noise of 5% | 97.75 ± 0.08 | 97.52 ± 0.08 | 97.60 ± 0.08 | 97.44 ± 0.10 | 97.54 ± 0.08 |
+| 8 epochs, noise of 10% | 97.75 ± 0.06 | 97.49 ± 0.06 | **97.68 ± 0.04** | 97.44 ± 0.04 | **97.64 ± 0.07** |
+| 8 epochs, noise of 20% | **97.76 ± 0.03** | 97.50 ± 0.02 | 97.63 ± 0.04 | **97.48 ± 0.03** | 97.60 ± 0.04 |
+
+And the same as this note has always given it, points lost against the
+network's own accuracy on its host:
+
+| | Fashion-MNIST: v1 | Version 2 | Inverted: v1 | Version 2 | MNIST: v1 | Version 2 |
+|---|---|---|---|---|---|---|
+| Trained as before | 1.16 ± 0.14 | 0.54 ± 0.22 | 1.23 ± 0.13 | 0.62 ± 0.07 | 0.34 ± 0.07 | 0.15 ± 0.02 |
+| 8 epochs, no noise | 1.35 ± 0.16 | 0.53 ± 0.08 | 1.37 ± 0.25 | 0.67 ± 0.11 | 0.21 ± 0.04 | 0.08 ± 0.05 |
+| 8 epochs, noise of 5% | 1.14 ± 0.13 | 0.54 ± 0.11 | 1.50 ± 0.21 | 0.65 ± 0.11 | 0.23 ± 0.03 | 0.15 ± 0.01 |
+| 8 epochs, noise of 10% | 1.12 ± 0.22 | 0.47 ± 0.13 | 0.97 ± 0.06 | 0.52 ± 0.05 | 0.26 ± 0.05 | 0.07 ± 0.05 |
+| 8 epochs, noise of 20% | 0.46 ± 0.10 | 0.21 ± 0.11 | 0.67 ± 0.08 | 0.38 ± 0.08 | 0.25 ± 0.04 | 0.13 ± 0.02 |
+
+**The epochs matter more than the noise.** Eight of them with no noise raise a
+network's accuracy on its host by 0.18 of a point on Fashion-MNIST, 0.29 on
+MNIST and 2.19 on the inverted set, and its accuracy on a v1 tile by nothing,
+0.41 and 2.04. The inverted set's networks were not trained: by the rule this
+harness has always stopped on, they ran four epochs and came out at 93.4%,
+and at eight they are at 95.5%. That is half of what the section on a second
+workload put down to their inputs. Every accuracy this note gives for that
+set is two points low for it.
+
+**What those networks lose is still what was said.** A network's loss against
+its own host accuracy moves little: 1.35 for 1.16 on Fashion-MNIST at v1,
+1.37 for 1.23 on the inverted set, and 0.21 for 0.34 on MNIST, which is the
+one that moves. The budget's price in points was not the artefact. The
+accuracies were.
+
+**Noise at the tile's own size buys half a point where there was a point to
+buy.** At 10%, on a v1 tile, a network is right 0.47 of a point more often
+than the same network trained without noise on Fashion-MNIST, 0.25 more on the
+inverted set, and no more on MNIST. It costs nothing on the host: those
+networks are the best there on Fashion-MNIST and within a fifth of a point of
+the best on the other two. Held, with a source and an interval's drift, it is
+worth 0.41 and 0.55.
+
+**Twice the tile's size cuts the loss by two thirds and gives up accuracy to
+do it.** At 20% a network loses 0.46 points to a v1 tile on Fashion-MNIST
+where the others lose 1.1 to 1.35, and 0.67 for 1.0 to 1.5 on the inverted
+set. It also starts 0.4 to 0.6 of a point lower on its host than the other
+eight-epoch networks on Fashion-MNIST, and 1.3 to 1.4 lower on the inverted
+set. On the tile it is level with the 10%
+network at v1 on Fashion-MNIST and a point behind it on the inverted set. A
+smaller loss is not a better network, and points lost is the wrong score for
+this.
+
+**Version 2 buys a trained network what it bought the others.** With 10% of
+noise, version 2 is 0.64 of a point over v1 on Fashion-MNIST, 0.44 on the
+inverted set and 0.19 on MNIST. For the networks trained before it is 0.62,
+0.61 and 0.19. Training and the tighter rows add: the 10% network at version
+2 is 1.09, 2.73 and 0.57 points over the old one at v1.
+
+**And training alone is about what version 2 was.** On a v1 tile the 10%
+network is at 86.77 on Fashion-MNIST, where the old one at version 2 is at
+86.94: 0.17 short, and inside their errors. On the other two sets the trained
+network at v1 is ahead of the old one at version 2, by 0.19 on MNIST and 1.68
+on the inverted set, and on both it is the epochs that do it.
+
+**What was predicted.** Written before the runs were read. Four things.
+
+1. That eight epochs would raise Fashion-MNIST's accuracy on the host by 0.3
+   to 0.7, with or without noise, and that 10% of noise would stay within 0.3
+   of none. Partly: 0.18 without and 0.41 with, and the two are 0.23 apart.
+2. That the network with no noise would lose about what the old ones lose,
+   and 10% of noise would halve it: 0.4 to 0.7 on Fashion-MNIST, under 0.2 on
+   MNIST, 0.5 to 0.8 on the inverted set. Right about the first. Wrong about
+   the second: 1.12, 0.26 and 0.97. It takes 20% to halve it.
+3. That on Fashion-MNIST a network trained with noise would be at least as
+   accurate on a v1 tile as an old one at version 2. Not quite: 0.17 short at
+   10% and 0.12 at 20%, inside their errors.
+4. That held at version 2 on the inverted set a network trained with noise
+   would lose 0.6 to 0.9. Right at 10%, 0.76.
+
+And nothing here predicted the epochs. The run was designed to measure noise,
+and the control put in to hold the epochs still is the larger result.
+
+**What this is not.** The tile in the loop. The noise is Gaussian, the same
+fraction on every layer, and independent from sum to sum. A tile's error has a
+quantiser's steps in it, a crosstalk that follows the image and a programming
+error that stays put for a GEMM, and none of those was shown to a network
+here. A tuned trainer: eight epochs was chosen once and not searched, and so
+were the three sizes of noise. A full grid: noise under the old stopping rule
+was tried once, on one network, and stopped at two epochs. Another kind of
+network, or a tile, as everywhere above.
+
 ---
 
 ## 6. Order
@@ -2075,7 +2242,11 @@ harness ran. Nothing here says it is the right set.
    bits and a quarter at six, and §5's budget records what that cost. A
    requirement on a receiver or on the light has to name the ADC it stands
    beside, or be in a unit of the signal. `pta_mnist --probe` prints both.
-9. **Nothing here is trained for the tile.** `pta_mnist train` trains on the
+9. **Nothing here is trained for the tile.** *Tried on 2026-10-06, §5, at its
+   end: Gaussian noise on the sums as a network trains is worth half a point
+   on Fashion-MNIST and nothing on MNIST, and how long a network is trained
+   mattered more. The tile itself has still not been in a training's forward
+   pass.* As this item stood: `pta_mnist train` trains on the
    host, and the tile is only ever evaluated. §5's last section found v1 at
    over a point on two data sets, and every figure in it is a network that
    never saw the errors it is then run under. Training with the model in the

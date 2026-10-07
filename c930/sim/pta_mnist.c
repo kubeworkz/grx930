@@ -72,6 +72,7 @@
  *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
+ *                   [--sumnoise F] [--epochs N]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
  */
 #include "pta_tile_model.h"
@@ -475,14 +476,49 @@ static void adam(float *w, const float *g, float *m, float *v, int n, long t)
     }
 }
 
+static double gauss01(uint64_t *s);
+
+#define SUM_TRACK 0.01          /* how fast a layer's mean square follows its batches */
+
+/* One sum's noise in training: frac of the layer's rms, sqrt(ms).  Adds the
+ * sum's square to the batch's and the noise's square to the epoch's, so that
+ * what was put on can be reported beside what was asked for. */
+static float sum_noise(double sum, double frac, double ms, uint64_t *rng, double *bsq, double *nsq)
+{
+    const double e = frac * sqrt(ms) * gauss01(rng);
+    *bsq += sum * sum;
+    *nsq += e * e;
+    return (float)e;
+}
+
+/* What train() did besides train: the noise it put on each layer's sums, as a
+ * fraction of their rms, over the last epoch it ran.  Zeros if it put none. */
+typedef struct {
+    double got[MAX_L];
+} train_report;
+
 /* Trains net, already allocated for its depth, at wbits: from Glorot or, if
- * start is given, from start's weights. */
+ * start is given, from start's weights.
+ *
+ * sumnoise is the tile, as a network being trained can be shown it.  A tile
+ * returns each layer's sums with an error on them, and the probe measures that
+ * error as a fraction of the sums' rms (section 5: about a tenth at v1).  With
+ * sumnoise F every sum of every layer, before its bias, is given Gaussian noise
+ * of F times that layer's rms, drawn afresh for each image at each step.  The
+ * rms is the layer's own, tracked as training moves it.  The gradient is taken
+ * through the noisy sums.  Nothing else changes, and at F of zero nothing does:
+ * no draw is made and the network is the one this always trained.
+ *
+ * epochs, if it is not zero, is how many to run, in place of stopping when the
+ * held-out accuracy first fails to rise. */
 static void train(mlp *net, const dataset *tr, const dataset *te, int din, int wbits, int seed,
-                  const mlp *start, int verbose)
+                  const mlp *start, int verbose, double sumnoise, int epochs, train_report *rep)
 {
     const int H = net->hidden, L = H + 1;
     uint64_t ri = 0x243F6A8885A308D3ull ^ (uint64_t)(uint32_t)seed;                /* init */
     uint64_t rs = 0x13198A2E03707344ull ^ (uint64_t)(uint32_t)seed ^ ((uint64_t)wbits << 32);
+    uint64_t rn = 0xA4093822299F31D0ull ^ (uint64_t)(uint32_t)seed ^ ((uint64_t)wbits << 32);  /* noise */
+    double ms[MAX_L], bsq[MAX_L], nsq[MAX_L], ssq[MAX_L];    /* a layer's mean square; a batch's, the epoch's */
     float *wq[MAX_L], *g[MAX_L], *m[MAX_L], *v[MAX_L];
     float gb[MAX_L][N_HID], mb[MAX_L][N_HID], vb[MAX_L][N_HID];
     int *order = (int *)malloc(N_TRAIN * sizeof(int));
@@ -522,9 +558,13 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
     }
     for (i = 0; i < N_TRAIN; ++i)
         order[i] = i;
+    memset(rep, 0, sizeof *rep);
+    memset(ms, 0, sizeof ms);
 
     for (epoch = 0; epoch < MAX_EPOCHS; ++epoch) {
         int first;
+        memset(nsq, 0, sizeof nsq);
+        memset(ssq, 0, sizeof ssq);
         for (i = N_TRAIN - 1; i > 0; --i) {
             const int j = (int)(splitmix64(&rs) % (uint64_t)(i + 1));
             const int s = order[i];
@@ -539,6 +579,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                 memset(g[l], 0, (size_t)layer_size(H, l) * sizeof(float));
                 memset(gb[l], 0, sizeof gb[l]);
             }
+            memset(bsq, 0, sizeof bsq);
             for (j = 0; j < bs; ++j) {
                 const int idx = order[first + j];
                 const uint8_t *px = tr->x + (size_t)idx * N_IN;
@@ -555,6 +596,8 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                     float zz = net->b[0][n];
                     for (k = 0; k < cnt; ++k)
                         zz += row[nz[k]] * x[k];
+                    if (sumnoise > 0.0)
+                        zz += sum_noise(zz - net->b[0][n], sumnoise, ms[0], &rn, &bsq[0], &nsq[0]);
                     z[0][n] = zz;
                     h[0][n] = zz > 0.0f ? zz : 0.0f;
                 }
@@ -564,6 +607,8 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                         float zz = net->b[l][n];
                         for (k = 0; k < N_HID; ++k)
                             zz += row[k] * h[l - 1][k];
+                        if (sumnoise > 0.0)
+                            zz += sum_noise(zz - net->b[l][n], sumnoise, ms[l], &rn, &bsq[l], &nsq[l]);
                         z[l][n] = zz;
                         h[l][n] = zz > 0.0f ? zz : 0.0f;
                     }
@@ -572,6 +617,8 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                     float zz = net->b[H][o];
                     for (n = 0; n < N_HID; ++n)
                         zz += wq[H][o * N_HID + n] * h[H - 1][n];
+                    if (sumnoise > 0.0)
+                        zz += sum_noise(zz - net->b[H][o], sumnoise, ms[H], &rn, &bsq[H], &nsq[H]);
                     z2[o] = zz;
                     if (zz > zmax)
                         zmax = zz;
@@ -619,14 +666,27 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                 adam(net->w[l], g[l], m[l], v[l], layer_size(H, l), t);
                 adam(net->b[l], gb[l], mb[l], vb[l], layer_out(H, l), t);
             }
+            /* a layer's mean square follows the batches: the first sets it, and
+             * so the first batch of all is trained without noise */
+            if (sumnoise > 0.0)
+                for (l = 0; l < L; ++l) {
+                    const double now = bsq[l] / ((double)bs * layer_out(H, l));
+                    ssq[l] += bsq[l];
+                    ms[l] = (t == 1) ? now : (1.0 - SUM_TRACK) * ms[l] + SUM_TRACK * now;
+                }
         }
+        for (l = 0; l < L; ++l)
+            rep->got[l] = ssq[l] > 0.0 ? sqrt(nsq[l] / ssq[l]) : 0.0;
         for (l = 0; l < L; ++l)
             quantise(net->w[l], wq[l], layer_size(H, l), din, wbits);
         net->val_acc = digital_accuracy(net, wq, tr, N_TRAIN, N_ALL - N_TRAIN);
         net->epochs  = epoch + 1;
         if (verbose)
             fprintf(stderr, "  epoch %d: held out %.2f%%\n", epoch + 1, net->val_acc);
-        if (net->val_acc > best)
+        if (epochs > 0) {
+            if (epoch + 1 >= epochs)
+                break;
+        } else if (net->val_acc > best)
             best = net->val_acc;
         else if (epoch > 0)
             break;
@@ -1524,18 +1584,25 @@ static int load_mnist(const char *dir, dataset *tr, dataset *te)
 static int cmd_train(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--din", "--wbits", "--seed", "--out", "--from",
-        "--verbose", "--hidden", NULL};
+        "--verbose", "--hidden", "--sumnoise", "--epochs", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *out = opt(argc, argv, "--out", NULL);
     const char *from = opt(argc, argv, "--from", NULL);
     const int din = atoi(opt(argc, argv, "--din", "16")), wbits = atoi(opt(argc, argv, "--wbits", "0"));
     const int seed = atoi(opt(argc, argv, "--seed", "1"));
     const int hidden = atoi(opt(argc, argv, "--hidden", "1"));
+    const char *noise_opt = opt(argc, argv, "--sumnoise", NULL), *epochs_opt = opt(argc, argv, "--epochs", NULL);
+    const double sumnoise = noise_opt ? atof(noise_opt) : 0.0;
+    const int epochs = epochs_opt ? atoi(epochs_opt) : 0;
+    train_report rep;
     dataset tr, te;
     mlp net, from_net, *start = NULL;
+    int l;
     if (check_opts(argc, argv, names) != 0 || !data || !out || (din != 8 && din != 16) ||
-        wbits < 0 || wbits > din || hidden < 1 || hidden > MAX_HID) {
+        wbits < 0 || wbits > din || hidden < 1 || hidden > MAX_HID ||
+        sumnoise < 0.0 || sumnoise > 1.0 || epochs < 0 || epochs > MAX_EPOCHS) {
         fprintf(stderr, "pta_mnist train: --data DIR --din 8|16 --wbits 0..D --seed S --out NET "
-                        "[--from NET] [--hidden 1..%d]\n", MAX_HID);
+                        "[--from NET] [--hidden 1..%d] [--sumnoise 0..1] [--epochs 0..%d]\n",
+                MAX_HID, MAX_EPOCHS);
         return 2;
     }
     if (from) {
@@ -1553,7 +1620,8 @@ static int cmd_train(int argc, char **argv)
     memset(&net, 0, sizeof net);
     if (mlp_alloc(&net, hidden) != 0)
         return 2;
-    train(&net, &tr, &te, din, wbits, seed, start, atoi(opt(argc, argv, "--verbose", "0")));
+    train(&net, &tr, &te, din, wbits, seed, start, atoi(opt(argc, argv, "--verbose", "0")), sumnoise,
+          epochs, &rep);
     if (save_net(out, &net) != 0) {
         fprintf(stderr, "pta_mnist: cannot write %s\n", out);
         return 2;
@@ -1562,6 +1630,14 @@ static int cmd_train(int argc, char **argv)
            din, wbits, seed, net.from_bits, net.from_epochs, net.epochs, net.val_acc, net.test_acc);
     if (hidden > 1)
         printf(" hidden=%d", hidden);
+    /* Said only when asked for, so that a line without them is the line it was. */
+    if (noise_opt) {
+        printf(" sumnoise=%g got=", sumnoise);
+        for (l = 0; l <= hidden; ++l)
+            printf("%s%.4f", l ? "," : "", rep.got[l]);
+    }
+    if (epochs_opt)
+        printf(" fixed_epochs=%d", epochs);
     printf("\n");
     return 0;
 }
@@ -2888,6 +2964,34 @@ static int cmd_selftest(void)
                twice ? "as it should be" : "WRONG", refused ? "as it should be" : "WRONG");
     }
 
+    /* 13. the noise a network is trained with.  200,000 sums of a layer whose
+     *     rms is 2, at a tenth: the noise's rms is a fifth and its mean is
+     *     none, whatever the sum; the two accumulators hold the sums' squares
+     *     and the noise's; and a layer whose rms is not yet known gets none. */
+    {
+        uint64_t rng = 20261006;
+        double bsq = 0.0, nsq = 0.0, mean = 0.0, own = 0.0, sums = 0.0, with = 0.0;
+        const int N = 200000;
+        int i, ok;
+        for (i = 0; i < N; ++i) {
+            const double sum = (double)(i % 5) - 2.0;
+            const double e = sum_noise(sum, 0.1, 4.0, &rng, &bsq, &nsq);
+            mean += e;
+            own  += e * e;
+            sums += sum * sum;
+            with += e * sum;
+        }
+        ok = fabs(sqrt(own / N) - 0.2) < 0.002 && fabs(mean / N) < 0.002 && fabs(with / N) < 0.002 &&
+             fabs(nsq - own) < 1e-6 * own && fabs(bsq - sums) < 1e-9 * sums && sums == 2.0 * N;
+        bsq = nsq = 0.0;
+        ok = ok && sum_noise(3.0, 0.1, 0.0, &rng, &bsq, &nsq) == 0.0f && nsq == 0.0 && bsq == 9.0;
+        if (!ok)
+            ++errors;
+        printf("  training noise: a tenth of an rms of 2 is %.4f over %d sums, with a mean of %+.4f, and "
+               "none before the rms is known: %s\n", sqrt(own / N), N, mean / N,
+               ok ? "as it should be" : "WRONG");
+    }
+
     printf("selftest %s\n", errors ? "FAILED" : "passed");
     return errors ? 1 : 0;
 }
@@ -2898,6 +3002,8 @@ static void help(void)
            "pta_mnist invert IN OUT   an idx file of 28 x 28 images, every pixel taken from 255\n"
            "pta_mnist train --data DIR --din 8|16 --wbits B --seed S --out NET [--from NET] [--verbose 1]\n"
            "  --hidden H      hidden layers, each 100 wide (1, which is D3; up to 8)\n"
+           "  --sumnoise F    train with Gaussian noise on every layer's sums, F of their rms (0)\n"
+           "  --epochs N      run N epochs, in place of stopping when held-out accuracy stops rising\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
            "  --images N      first N test images (10000)\n"
            "  --seed S        model reset and per-GEMM seeds (1)\n"
