@@ -55,8 +55,8 @@ the lines together to 1%. With everything it is then held to, version 2 loses
 network above was trained on its host and stopped early. Trained for eight
 epochs, the inverted set's networks are two points better on the tile, with
 no noise in the training at all. Noise on the sums as they train is worth
-half a point on Fashion-MNIST, a quarter on the inverted set and nothing on
-MNIST. And version 2 buys a trained network what it bought the others.
+half a point on Fashion-MNIST and nothing that five networks can tell on the
+other two. And version 2 buys a trained network what it bought the others.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2110,10 +2110,11 @@ its own host accuracy moves little: 1.35 for 1.16 on Fashion-MNIST at v1,
 one that moves. The budget's price in points was not the artefact. The
 accuracies were.
 
-**Noise at the tile's own size buys half a point where there was a point to
-buy.** At 10%, on a v1 tile, a network is right 0.47 of a point more often
-than the same network trained without noise on Fashion-MNIST, 0.25 more on the
-inverted set, and no more on MNIST. It costs nothing on the host: those
+**Noise at the tile's own size buys half a point on Fashion-MNIST.** At 10%,
+on a v1 tile, a network is right 0.47 of a point more often than the same
+network trained without noise on Fashion-MNIST, 0.25 more on the inverted
+set, and no more on MNIST. The 0.25 is inside its error (below). It costs
+nothing on the host: those
 networks are the best there on Fashion-MNIST and within a fifth of a point of
 the best on the other two. Held, with a source and an interval's drift, it is
 worth 0.41 and 0.55.
@@ -2139,6 +2140,35 @@ network is at 86.77 on Fashion-MNIST, where the old one at version 2 is at
 86.94: 0.17 short, and inside their errors. On the other two sets the trained
 network at v1 is ahead of the old one at version 2, by 0.19 on MNIST and 1.68
 on the inverted set, and on both it is the epochs that do it.
+
+**How sure.** A row's error above is the scatter of its five networks, and
+most of that scatter is the networks' own: on the inverted set seed 4 is the
+lowest of all four rows trained here. Two rows of the same seeds are better
+compared seed by seed, where a
+difference has its own error. The mode does not print those. grxcp's
+`docs/designs/pta_trained.py` holds each network's figures as this mode's
+lines gave them, computes these tables from them again cell for cell, and
+takes the differences:
+
+| Seed by seed | MNIST | Fashion-MNIST | MNIST, inverted |
+|---|---|---|---|
+| Eight epochs with no noise, over trained as before: on the host | +0.29 ± 0.14 | +0.18 ± 0.28 | **+2.19 ± 0.49** |
+| On a v1 tile | +0.41 ± 0.15 | −0.02 ± 0.22 | **+2.04 ± 0.68** |
+| Noise of 10%, over none: on a v1 tile | −0.03 ± 0.07 | +0.46 ± 0.18 | +0.24 ± 0.28 |
+| At version 2 | +0.02 ± 0.06 | **+0.29 ± 0.07** | −0.02 ± 0.18 |
+| v1, held | −0.01 ± 0.10 | +0.41 ± 0.21 | +0.54 ± 0.26 |
+| Version 2 over v1, the same network: trained as before | **+0.19 ± 0.06** | **+0.62 ± 0.10** | **+0.61 ± 0.06** |
+| With noise of 10% | **+0.19 ± 0.04** | **+0.65 ± 0.15** | **+0.44 ± 0.03** |
+| The 10% network at v1, over the old one at version 2 | +0.19 ± 0.10 | −0.17 ± 0.24 | **+1.67 ± 0.46** |
+
+With five networks a difference has to be 2.8 of its own errors to be outside
+chance at one in twenty, and those in bold are. So, of what is said above.
+The epochs are clear on the inverted set, two to three errors on MNIST, and
+not shown on Fashion-MNIST. The noise's half point on Fashion-MNIST is 2.5
+errors at v1 and clear at version 2; on the inverted set it is not shown at
+either, and held it is two errors. What version 2 buys is clear for every
+kind of network. And a figure here can differ in the last digit from the
+paragraphs above, which subtract two rounded means.
 
 **What was predicted.** Written before the runs were read. Four things.
 
@@ -2244,9 +2274,9 @@ network, or a tile, as everywhere above.
    beside, or be in a unit of the signal. `pta_mnist --probe` prints both.
 9. **Nothing here is trained for the tile.** *Tried on 2026-10-06, §5, at its
    end: Gaussian noise on the sums as a network trains is worth half a point
-   on Fashion-MNIST and nothing on MNIST, and how long a network is trained
-   mattered more. The tile itself has still not been in a training's forward
-   pass.* As this item stood: `pta_mnist train` trains on the
+   on Fashion-MNIST and nothing that can be told on the other two, and how
+   long a network is trained mattered more. The tile itself has still not
+   been in a training's forward pass.* As this item stood: `pta_mnist train` trains on the
    host, and the tile is only ever evaluated. §5's last section found v1 at
    over a point on two data sets, and every figure in it is a network that
    never saw the errors it is then run under. Training with the model in the
