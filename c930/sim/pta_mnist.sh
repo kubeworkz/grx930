@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -18,6 +18,9 @@
 # lasers it runs, in multiples of grxcp's B5 (default "2 4 8").
 # Nor is `tighten`; TIGHTEN_TILE sets its tile (default 128x64).
 # Nor is `v2`; V2_TILE and V2_BUSES set its tile and its buses (default 128x64 and 2).
+# Nor is `trained`, which trains twenty more networks; TRAINED_NOISES sets the noise
+# they are trained with (default "0 0.05 0.1 0.2"), TRAINED_EPOCHS for how long (8),
+# and TRAINED_TILE and TRAINED_BUSES the tile.
 #
 # MNIST_DIR need not be MNIST.  Any set in its format and under its four file
 # names is a workload: Fashion-MNIST is one.  And PIXELS=inverted gives a new
@@ -27,7 +30,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,26p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,29p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -1050,6 +1053,165 @@ if [ "$what" = v2 ]; then
     awk -F'|' '$1 == "v1" { print $2 }' "$work/out/v2_settings.txt" | while IFS= read -r name; do
         printf '%-44s' "$name"
         for ver in v1 v2; do v2_stat "$(v2_named "$ver" "$name")" "$(v2_named "$ver" "as budgeted")"; done
+        echo
+    done
+fi
+
+# `trained`: a network trained for the tile.  Every network above was trained on
+# the host and then run on a tile it had never seen, and every figure since the
+# second data set carries that caveat.  `pta_mnist train --sumnoise F` puts
+# Gaussian noise of F of a layer's rms on every sum while it trains, which is
+# the tile as a network being trained can be shown it: the probe puts a tile's
+# error at about a tenth of the sums' rms at v1.  This trains each seed's 6-bit
+# network again from the same 8-bit network, for a fixed number of epochs, with
+# no noise and with three sizes of it.  The one with none is there to tell the
+# noise from the epochs: the networks above stop when their held-out accuracy
+# first fails to rise, and a noisy one stops at once by that rule.  Every
+# network is then run at grxcp's v1 and v2, as budgeted and with everything
+# grxcp holds a version to: its source's three rows, at the end of six minutes
+# of drift.
+if [ "$what" = trained ]; then
+    tile=${TRAINED_TILE:-128x64}
+    buses=${TRAINED_BUSES:-2}
+    noises=${TRAINED_NOISES:-0 0.05 0.1 0.2}
+    epochs=${TRAINED_EPOCHS:-8}
+    export PTA_TRAINED_EPOCHS=$epochs
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    v1r="--abits 6 --adcbits 7 --thermal8 0.5 --photons8 15 --prog 1 --xtalk 0.02"
+    v2r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    held="--drift tflt --hours 0.1 --src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
+    {
+        echo "v1|$gopt --impair $all $v1r --probe 1"
+        echo "v2|$gopt --impair $all $v2r --probe 1"
+        echo "v1, held|$gopt --impair $all,drift $v1r $held --probe 1"
+        echo "v2, held|$gopt --impair $all,drift $v2r $held --probe 1"
+    } > "$work/out/trained_settings.txt"
+    # train_noisy SEED NOISE: that seed's 6-bit network again, with that noise,
+    # for the mode's epochs
+    train_noisy() {
+        local net="$PTA_WORK/nets/d8_b6_s$1_n$2_e$PTA_TRAINED_EPOCHS.net"
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 6 \
+            --seed "$1" --from "$PTA_WORK/nets/d8_b8_s$1.net" --sumnoise "$2" \
+            --epochs "$PTA_TRAINED_EPOCHS" --out "$net" > "$net.log"
+    }
+    # trained_one NET ROW ARGS...: one test-set pass, its line to
+    # out/trained.d/NET_ROW.txt.  Not eval_one's name, which is its arguments:
+    # a held row's, beside a network trained here, are longer than a file's
+    # name may be.
+    trained_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/trained.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/trained.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f train_noisy trained_one
+    # trained_row NAME: a row's name as a file's
+    trained_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # trained_net SEED KIND: the network's file; a kind of "before" is the one
+    # trained above, and any other is a noise
+    trained_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else echo "d8_b6_s$1_n$2_e$epochs.net"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for f in $noises; do for s in 1 2 3 4 5; do echo "$s $f"; done; done |
+        xargs -P "$jobs" -L 1 bash -c 'train_noisy "$@"' _
+    for f in before $noises; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "$(trained_net $sd "$f") $(trained_row "$name") --seed $sd $setting"; done
+        done < "$work/out/trained_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'trained_one "$@"' _
+
+    # trained_file SEED KIND NAME: the file trained_one wrote for that run
+    trained_file() { echo "$work/out/trained.d/$(basename "$(trained_net "$1" "$2")" .net)_$(trained_row "$3").txt"; }
+    # Every network has to be the one its row says, and every run the version
+    # its column says.  A network trained here: its training's own line says
+    # the epochs it ran and the noise it was asked for, and how much was put on
+    # each layer's sums over its last epoch, which has to be that to a
+    # twentieth, and none where none was asked.  A run: the
+    # network it ran is the one that training wrote, by its accuracy on the
+    # host and its epochs; and its rows are the version's, written out again
+    # here, with or without the drift and the source that holding it adds.
+    trained_ok=yes
+    trained_runs=0
+    for f in before $noises; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(trained_net $sd "$f").log"
+        awk -v f="$f" -v e="$epochs" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (f == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && v["sumnoise"] == f + 0 && n == 2 && v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i)
+                         ok = ok && ((f + 0 == 0) ? g[i] == 0 : (g[i] > 0.95 * f && g[i] < 1.05 * f)) }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || trained_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(trained_file $sd "$f" "$name")" | awk -v name="$name" -v tile="$tile" -v nb="$buses" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { two = (name ~ /^v2/); is_held = (name ~ /held/)
+                          ok = v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == (is_held ? "0x5f" : "0x57") && v["abits"] == 6 &&
+                               v["adcbits"] == (two ? 8 : 7) && near(v["thermal8"], two ? 0.25 : 0.5, 1e-6) &&
+                               near(v["photons8"] / (two ? 30 : 15), 1, 0.03) && v["prog"] == 1 &&
+                               near(v["xtalk"], 0.02, 1 / 512) && !("hidshift" in v) && !("thermalline" in v)
+                          if (is_held) ok = ok && v["drift"] == "tflt" && v["hours"] == 0.1 && v["cal"] == 0 && v["steps"] > 0 &&
+                                            v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] == 0.05 &&
+                                            v["buses"] == nb && v["srcsign"] == "pair"
+                          else ok = ok && v["drift"] == "none" && v["hours"] == 0 && !("src" in v) }
+                END { exit !(NR == 2 && ok) }' || trained_ok=NO
+            trained_runs=$((trained_runs + 1))
+        done < "$work/out/trained_settings.txt"
+    done; done
+    echo "== trained: $trained_runs runs, each of them the network and the version its place says: $trained_ok"
+    [ "$trained_ok" = yes ] || exit 1
+
+    # trained_stat FIELD KIND [NAME]: five networks' mean and standard error.
+    # host is a network's accuracy on its host; acc its accuracy on the tile;
+    # loss the one less the other; epochs and got are its training's
+    trained_stat() {
+        local field=$1 f=$2 sd
+        for sd in 1 2 3 4 5; do
+            if [ $# -lt 3 ]; then cat "$work/nets/$(trained_net $sd "$f").log"
+            else cat "$(trained_file $sd "$f" "$3")"; fi
+        done | awk -v field="$field" '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              if (field == "loss") x = v["digital"] - v["acc"]
+              else if (field == "host") x = v["digital"]
+              else if (field == "got1" || field == "got2") { split(v["got"], g, ","); x = 100 * g[substr(field, 4)] }
+              else x = v[field]
+              s += x; ss += x * x; n++ }
+            END { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                  printf " %7.2f +-%4.2f", m, (n > 1) ? sqrt(var / (n - 1)) : 0 }'
+    }
+    trained_label() {
+        if [ "$1" = before ]; then echo "trained as before"
+        elif [ "$1" = 0 ]; then echo "$epochs epochs, no noise"
+        else echo "$epochs epochs, noise of $1"; fi
+    }
+    echo "== trained: the $tile tile on $buses buses, five networks, mean and standard error.  A network's"
+    echo "== accuracy on its host and on the tile, percent.  Held is with a source's three rows at"
+    echo "== 1%, 5% and 5%, at the end of six minutes of TFLT's drift"
+    printf '%-28s %14s %14s %14s %14s %14s' "" "on its host" "v1" "v2" "v1, held" "v2, held"
+    echo
+    for f in before $noises; do
+        printf '%-28s' "$(trained_label "$f")"
+        trained_stat host "$f"
+        while IFS='|' read -r name setting; do trained_stat acc "$f" "$name"; done < "$work/out/trained_settings.txt"
+        echo
+    done
+    echo "== trained: the same, as points lost against the network's own accuracy on its host; and"
+    echo "== its training: epochs, and the noise put on each layer's sums, percent of their rms"
+    printf '%-28s %14s %14s %14s %14s %14s %14s %14s' "" "v1" "v2" "v1, held" "v2, held" "epochs" "layer 1" "layer 2"
+    echo
+    for f in before $noises; do
+        printf '%-28s' "$(trained_label "$f")"
+        while IFS='|' read -r name setting; do trained_stat loss "$f" "$name"; done < "$work/out/trained_settings.txt"
+        trained_stat epochs "$f"
+        if [ "$f" != before ]; then trained_stat got1 "$f"; trained_stat got2 "$f"; fi
         echo
     done
 fi
