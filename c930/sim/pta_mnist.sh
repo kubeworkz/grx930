@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -34,10 +34,12 @@
 # them and prints what a tile costs them.  Every mode above was run on the
 # networks trained before, d8_b6_sN.net, and still is: its recorded lines are
 # theirs.  A mode added after that date runs the reference networks.
+# `refsource` is the first, and not part of `all`: REFSOURCE_TILE and
+# REFSOURCE_BUSES set its tile and its buses (default 128x64 and 2).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,36p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,38p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -93,6 +95,23 @@ eval_one() {
         > "$PTA_WORK/out/$tag.d/$(basename "$net" .net)_$(echo "$*" | tr -c 'A-Za-z0-9.,' '_').txt"
 }
 export -f train_one eval_one
+
+# The reference networks (grxcp's B17; the header): a seed's 6-bit network
+# trained from its 8-bit one for PTA_REF_EPOCHS epochs, with noise of
+# PTA_REF_NOISE of a layer's rms on its sums.  `trained` writes the same files
+# under the same names when it is asked for that noise and those epochs.
+export PTA_REF_NOISE=0.1 PTA_REF_EPOCHS=8
+# ref_net SEED: that seed's reference network, by its file's name
+ref_net() { echo "d8_b6_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"; }
+# train_ref SEED: that network, unless it is already there
+train_ref() {
+    local net
+    net="$PTA_WORK/nets/$(ref_net "$1")"
+    [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 6 \
+        --seed "$1" --from "$PTA_WORK/nets/d8_b8_s$1.net" --sumnoise "$PTA_REF_NOISE" \
+        --epochs "$PTA_REF_EPOCHS" --out "$net" > "$net.log"
+}
+export -f ref_net train_ref
 
 # compare TAG: each width's five-network mean in out/TAG.d against the curve,
 # by the criterion; returns 0 if it holds
@@ -1221,6 +1240,184 @@ if [ "$what" = trained ]; then
         if [ "$f" != before ]; then trained_stat got1 "$f"; trained_stat got2 "$f"; fi
         echo
     done
+fi
+
+# `refsource`: does a network trained for the tile need the 1%?  grxcp's B16
+# holds the row a source's lines share to 1% and not 2%, on what the networks
+# trained before lose on the inverted set, and lists a network trained for the
+# tile among what would reopen it.  This is the first mode on the reference
+# networks (the header).  It runs them at grxcp's version 2 with a source's
+# noise through a balanced pair: the lines together at 1, 2 and 5%, a line and
+# the level at 5%, the three at 2%, 5%, 5% and at 1%, 5%, 5%, six minutes of
+# drift, and six minutes with each of those two.  The networks trained before
+# run beside them row for row, because the 1% was chosen on those.  It trains
+# the reference networks where they are not there.
+if [ "$what" = refsource ]; then
+    tile=${REFSOURCE_TILE:-128x64}
+    buses=${REFSOURCE_BUSES:-2}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    # row|options: version 2's eleven rows
+    {
+        echo "as budgeted|--impair $all $r"
+        for x in 0.01 0.02 0.05; do echo "the source: together, $x|--impair $all $r --src $x"; done
+        echo "  a line, 0.05|--impair $all $r --srcline 0.05 --buses $buses"
+        echo "  level, 0.05|--impair $all $r --srcflat 0.05 --buses $buses"
+        for x in 0.02 0.01; do
+            echo "  all three: $x, 0.05, 0.05|--impair $all $r --src $x --srcline 0.05 --srcflat 0.05 --buses $buses"
+        done
+        echo "six minutes of TFLT's drift|--impair $all,drift $r --drift tflt --hours 0.1"
+        for x in 0.02 0.01; do
+            echo "six minutes and all three: $x, 0.05, 0.05|--impair $all,drift $r --drift tflt --hours 0.1 --src $x --srcline 0.05 --srcflat 0.05 --buses $buses"
+        done
+    } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refsource_settings.txt"
+    # refsource_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refsource.d/NET_ROW.txt
+    refsource_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refsource.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refsource.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refsource_one
+    # refsource_row NAME: a row's name as a file's
+    refsource_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refsource_net SEED KIND: the network's file, trained before or the reference
+    refsource_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "$(refsource_net $sd $k) $(refsource_row "$name") --seed $sd $setting"; done
+        done < "$work/out/refsource_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refsource_one "$@"' _
+
+    # refsource_file SEED KIND NAME: the file refsource_one wrote for that run
+    refsource_file() { echo "$work/out/refsource.d/$(basename "$(refsource_net "$1" "$2")" .net)_$(refsource_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A reference network: its training's own line says the
+    # header's epochs and noise, and the noise put on each layer's sums, which
+    # has to be that to a twentieth; one trained before says neither.  A run:
+    # the network it ran is the one that training wrote, by its accuracy on the
+    # host and its epochs; its six rows are version 2's, written out again
+    # here; and the drift and the source's three sizes are its name's, in what
+    # it was asked and in the line it printed.
+    refsource_ok=yes
+    refsource_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refsource_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refsource_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(refsource_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function after(str, key,    p) { p = index(str, key); return p ? substr(str, p + length(key)) + 0 : 0 }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        split("6 8 0.25 30 1 0.02", r, " ")
+                        sane = asked("abits") == r[1] && asked("adcbits") == r[2] && asked("thermal8") == r[3] &&
+                               asked("photons8") == r[4] && asked("prog") == r[5] && asked("xtalk") == r[6] &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        drifts = (name ~ /six minutes/) ? 1 : 0
+                        ns = after(name, "together, "); nl = after(name, "a line, "); nf = after(name, "level, ")
+                        if (name ~ /all three: /) { split(substr(name, index(name, "all three: ") + 11), t3, ", ")
+                                                    ns = t3[1] + 0; nl = t3[2] + 0; nf = t3[3] + 0 }
+                        lit = (ns > 0 || nl > 0 || nf > 0) ? 1 : 0
+                        sane = sane && (drifts == (("drift" in on) ? 1 : 0)) && (drifts == (("drift" in given) ? 1 : 0)) &&
+                               (!drifts || want["drift"] == "tflt") && asked("hours") == 0.1 * drifts &&
+                               !("calibrate" in given) && asked("src") == ns && asked("srcline") == nl &&
+                               asked("srcflat") == nf && (name == "as budgeted") == (!drifts && !lit) &&
+                               asked("buses") == ((nl > 0 || nf > 0) ? nb : 0) }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) &&
+                               v["abits"] == r[1] && v["adcbits"] == r[2] && near(v["thermal8"], r[3], 1e-6) &&
+                               near(v["photons8"] / r[4], 1, 0.03) && near(v["prog"], r[5], 1e-9) &&
+                               near(v["xtalk"], r[6], 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == (drifts ? "tflt" : "none") && v["hours"] == 0.1 * drifts && v["cal"] == 0 &&
+                               (v["steps"] > 0) == drifts && !("hidshift" in v) && !("thermalline" in v)
+                          if (lit) ok = ok && v["src"] == ns && v["srcline"] == nl && v["srcflat"] == nf &&
+                                        v["srcsign"] == "pair" && v["buses"] == ((nl > 0 || nf > 0) ? nb : 1)
+                          else ok = ok && !("src" in v) }
+                END { exit !(NR == 2 && ok) }' || refsource_ok=NO
+            refsource_runs=$((refsource_runs + 1))
+        done < "$work/out/refsource_settings.txt"
+    done; done
+    echo "== refsource: $refsource_runs runs, each of them the network and the row its place says: $refsource_ok"
+    [ "$refsource_ok" = yes ] || exit 1
+
+    # refsource_stat KIND NAME: five networks' loss, mean and standard error,
+    # and what the row adds to that kind as budgeted, network by network
+    refsource_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refsource_file $sd "$1" "as budgeted")"
+            sed 's/^/B /' "$(refsource_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refsource_buys KIND AT2 AT1: how often five networks are right in each of
+    # two rows, and the second less the first, network by network
+    refsource_buys() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refsource_file $sd "$1" "$2")"
+            sed 's/^/B /' "$(refsource_file $sd "$1" "$3")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; as += a; ass += a * a; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f %7.2f +-%4.2f", as / n, se(as, ass, n), s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    echo "== refsource: the $tile tile on $buses buses at v2, five networks, mean and standard error.  Points"
+    echo "== lost against the same weights on the host, and what a row adds to its own networks as"
+    echo "== budgeted, network by network.  The reference networks are $PTA_REF_EPOCHS epochs with noise of $PTA_REF_NOISE"
+    printf '%-44s %14s %14s %14s %14s' "" "before loses" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-44s' "$name"
+        for k in before reference; do refsource_stat $k "$name"; done
+        echo
+    done < "$work/out/refsource_settings.txt"
+    echo "== refsource: what the 1% buys.  How often five networks are right with the row the lines"
+    echo "== share at 2% and at 1%, percent, and the second less the first, network by network"
+    printf '%-44s %14s %14s %14s %14s %14s %14s' "" "before, at 2%" "at 1%" "the 1% buys" "reference, 2%" "at 1%" "the 1% buys"
+    echo
+    while IFS='|' read -r label two one; do
+        printf '%-44s' "$label"
+        for k in before reference; do refsource_buys $k "$two" "$one"; done
+        echo
+    done <<'ROWS'
+the lines together, alone|the source: together, 0.02|the source: together, 0.01
+all three, a line and the level at 5%|  all three: 0.02, 0.05, 0.05|  all three: 0.01, 0.05, 0.05
+the same, at the end of six minutes|six minutes and all three: 0.02, 0.05, 0.05|six minutes and all three: 0.01, 0.05, 0.05
+ROWS
 fi
 
 exit $((gate_status | ablate_status))
