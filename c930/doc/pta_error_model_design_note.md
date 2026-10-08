@@ -74,6 +74,12 @@ Under heavy drift a reference network loses half to two thirds of what an
 old one does. At grxcp's six minutes nothing can be told between them, and
 after a calibration the reference networks are about a tenth of a point
 short of their budget on two data sets.
+**And the fourth** (§5, at its end): the operating cycle, an interval that
+starts from a calibration. That shortfall is the calibration's own. With no
+drift at all a calibration costs the reference networks 0.08 ± 0.01 of a
+point on MNIST, where the probe has the tile's sums as far off as they were,
+to a hundredth of the error. An interval that starts from a calibration ends
+where one from weights as written does, to what five networks tell.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2661,6 +2667,192 @@ the seven that were run. A network trained against a drifted weight: these
 were trained with Gaussian noise on their sums. The predictive and shadow
 schedulers, v1, or another tile. And an interval that starts from a
 calibration, as every interval on a tile does.
+
+### An interval that starts from a calibration
+
+*Added 2026-10-07.* `sim/pta_mnist.sh DIR WORK refcycle`. Reported, not
+gated.
+
+**Why.** Every drift row in this note aged a tile from weights as they were
+written. A tile in use is never that. It is calibrated, drifts for an
+interval and is calibrated again, so what grxcp's six minutes end in is a
+calibrated tile and six minutes of drift. The section before this one found
+the reference networks 0.09 and 0.13 of a point short of their budget after
+an hour of drift and a calibration, and could not say whether that was the
+calibration or the hour.
+
+**What it runs.** The fourth mode on the reference networks. At version 2 on
+the 128 × 64 tile on two buses, with TFLT's fitted drift, nineteen rows: as
+budgeted; calibrated as written, with no drift at all; aged six minutes and
+an hour and then calibrated; a cycle, which is a tile aged an interval,
+calibrated, and aged the interval again, at 3, 6, 15 and 30 minutes and an
+hour; aged an hour, calibrated, and six minutes more; aged from weights as
+written for 6 and 30 minutes and an hour; and held, with a source's three
+rows at 1%, 5% and 5%, at the end of each of those three intervals from
+weights as written and as a cycle. A cycle is `eval --hours H --calibrate 16
+--post-hours H`. The calibration is C3's as `eval` has had it: 16 probes a
+cell, three passes, a trim step of a quarter of a weight's LSB, and taken
+before the light is set up, so that it sees no source. The networks trained
+before run beside the reference row for row. That is 190 evaluations, and
+19 to 45 minutes a data set on five jobs: a calibrated run is slower.
+
+The mode checks every network and every run against its place, as the three
+before it do: a run has to have drifted for the hours its name says before
+its calibration and after it, by TFLT's fit, to have taken steps of drift if
+it drifted at all, to have been calibrated with 16 probes where its name
+says calibrated or a cycle and not at all elsewhere, and to have a source's
+three rows if it is held and none if it is not. 94 errors planted one at
+a time each fail: 63 in a training's line or a run's, after the fact; 22 in the
+script; and 9 in the tables' own code, which the check does not see and which
+each move the tables.
+
+Of the lines, 80 on each data set, eight rows of both kinds, are byte for byte
+what `refdrift` wrote for the same runs.
+
+**What came of it.** Five networks of each kind, mean and standard error.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted, points lost | 0.15 ± 0.02 | 0.07 ± 0.05 | 0.54 ± 0.22 | 0.47 ± 0.13 | 0.62 ± 0.07 | 0.52 ± 0.05 |
+| What a row adds to that: calibrated as written, no drift | −0.05 ± 0.04 | +0.08 ± 0.01 | +0.03 ± 0.11 | +0.15 ± 0.12 | +0.06 ± 0.06 | −0.05 ± 0.04 |
+| Aged 6 minutes, then calibrated | −0.04 ± 0.05 | +0.09 ± 0.01 | +0.02 ± 0.08 | +0.13 ± 0.13 | +0.14 ± 0.07 | +0.00 ± 0.06 |
+| Aged an hour, then calibrated | −0.06 ± 0.03 | +0.09 ± 0.02 | +0.02 ± 0.11 | +0.13 ± 0.10 | −0.01 ± 0.05 | −0.01 ± 0.05 |
+| A cycle of 3 minutes | −0.04 ± 0.04 | +0.07 ± 0.03 | +0.06 ± 0.07 | +0.14 ± 0.10 | +0.34 ± 0.33 | +0.02 ± 0.07 |
+| A cycle of 6 minutes | −0.05 ± 0.04 | +0.08 ± 0.04 | +0.16 ± 0.06 | +0.16 ± 0.08 | +0.14 ± 0.25 | +0.09 ± 0.08 |
+| A cycle of 15 minutes | −0.02 ± 0.06 | +0.08 ± 0.04 | +0.10 ± 0.22 | +0.23 ± 0.12 | +0.14 ± 0.32 | +0.25 ± 0.10 |
+| A cycle of 30 minutes | −0.01 ± 0.05 | +0.14 ± 0.02 | +0.37 ± 0.12 | +0.05 ± 0.10 | +0.98 ± 0.64 | +0.45 ± 0.27 |
+| A cycle of an hour | +0.08 ± 0.08 | +0.14 ± 0.04 | +0.50 ± 0.18 | +0.38 ± 0.12 | +2.34 ± 0.21 | +1.58 ± 0.39 |
+| Aged an hour, calibrated, 6 minutes more | −0.04 ± 0.06 | +0.09 ± 0.02 | −0.04 ± 0.12 | +0.10 ± 0.13 | +0.35 ± 0.24 | +0.28 ± 0.10 |
+| From weights as written: 6 minutes | −0.06 ± 0.04 | +0.01 ± 0.01 | +0.08 ± 0.06 | +0.07 ± 0.09 | +0.28 ± 0.27 | +0.08 ± 0.11 |
+| 30 minutes | +0.04 ± 0.03 | +0.11 ± 0.02 | +0.27 ± 0.14 | +0.18 ± 0.08 | +0.54 ± 0.56 | +0.64 ± 0.22 |
+| An hour | +0.12 ± 0.05 | +0.07 ± 0.03 | +0.67 ± 0.31 | +0.32 ± 0.09 | +1.99 ± 1.26 | +1.26 ± 0.46 |
+| Held, from weights as written: 6 minutes | +0.04 ± 0.02 | +0.04 ± 0.03 | +0.06 ± 0.15 | +0.15 ± 0.08 | +0.48 ± 0.29 | +0.24 ± 0.20 |
+| 30 minutes | +0.15 ± 0.06 | +0.08 ± 0.04 | +0.39 ± 0.13 | +0.20 ± 0.08 | +0.76 ± 0.67 | +0.87 ± 0.39 |
+| An hour | +0.19 ± 0.03 | +0.12 ± 0.03 | +0.82 ± 0.34 | +0.29 ± 0.12 | +2.26 ± 1.34 | +1.53 ± 0.60 |
+| Held, at the end of a cycle: 6 minutes | +0.02 ± 0.03 | +0.11 ± 0.06 | +0.12 ± 0.11 | +0.11 ± 0.10 | +0.29 ± 0.31 | +0.28 ± 0.21 |
+| 30 minutes | +0.07 ± 0.04 | +0.12 ± 0.04 | +0.48 ± 0.19 | +0.25 ± 0.09 | +1.30 ± 0.66 | +0.61 ± 0.24 |
+| An hour | +0.14 ± 0.08 | +0.17 ± 0.04 | +0.55 ± 0.18 | +0.33 ± 0.13 | +2.39 ± 0.28 | +1.87 ± 0.38 |
+
+Seed by seed, with those outside chance at one in twenty for five networks in
+bold (grxcp's `pta_reference_cycle.py` takes them):
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| Calibrated as written: the reference less the old | **+0.13 ± 0.04** | +0.12 ± 0.15 | −0.11 ± 0.06 |
+| What an hour of drift first adds to a calibration, the reference | +0.01 ± 0.01 | −0.02 ± 0.04 | +0.04 ± 0.02 |
+| and the old networks | −0.01 ± 0.02 | −0.01 ± 0.04 | **−0.07 ± 0.02** |
+| A 6-minute cycle less the calibrated tile, the reference | +0.00 ± 0.04 | +0.02 ± 0.04 | +0.14 ± 0.09 |
+| A cycle less the same interval from weights as written, the reference: 6 minutes | +0.08 ± 0.04 | +0.09 ± 0.10 | +0.02 ± 0.04 |
+| A cycle less the same interval from weights as written, the reference: 30 minutes | +0.04 ± 0.04 | −0.13 ± 0.10 | −0.19 ± 0.28 |
+| A cycle less the same interval from weights as written, the reference: an hour | +0.07 ± 0.04 | +0.06 ± 0.12 | +0.33 ± 0.68 |
+| and the old networks: 6 minutes | +0.02 ± 0.01 | +0.08 ± 0.04 | −0.14 ± 0.16 |
+| and the old networks: 30 minutes | −0.06 ± 0.05 | +0.10 ± 0.14 | +0.44 ± 0.69 |
+| and the old networks: an hour | −0.05 ± 0.10 | −0.17 ± 0.27 | +0.34 ± 1.28 |
+| An hour, calibrated, 6 minutes more, less the 6-minute cycle: the reference | +0.01 ± 0.03 | −0.06 ± 0.08 | +0.18 ± 0.10 |
+| and the old networks | +0.01 ± 0.04 | −0.20 ± 0.10 | +0.21 ± 0.29 |
+
+**The shortfall is the calibration's own, and not the hour's.** A tile
+calibrated as it was written, with no drift at all, costs the reference
+networks 0.08 ± 0.01 of a point on MNIST, 0.15 ± 0.12 on Fashion-MNIST and
+−0.05 ± 0.04 on the inverted set, and the old networks −0.05, 0.03 and 0.06.
+MNIST's is clear: each of the five networks loses, 5 to 11 images in ten
+thousand. An hour of drift before the calibration adds 0.01 ± 0.01, −0.02 ±
+0.04 and 0.04 ± 0.02 to that for the reference networks. One of the twelve
+such figures is clear, the old networks' on the inverted set after an hour,
+and it is a gain; one in twelve is what chance gives.
+
+**On MNIST it is not that the calibrated tile's sums are further off.** The
+probe, in the same runs:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The first layer's sums, off by, % of their rms (`e1`): as budgeted | 7.12 | 6.18 | 6.75 | 6.86 | 7.99 | 4.62 |
+| calibrated | 7.17 | 6.22 | 6.85 | 6.92 | 8.45 | 4.78 |
+| The second's (`e2`): as budgeted | 7.10 | 7.36 | 7.37 | 7.94 | 6.81 | 7.11 |
+| calibrated | 7.12 | 7.38 | 7.37 | 7.92 | 6.90 | 7.18 |
+| Right, as the probe predicts from the error, % (`pred_res`): as budgeted | 97.27 | 97.56 | 86.46 | 86.95 | 92.59 | 94.83 |
+| calibrated | 97.28 | 97.56 | 86.47 | 86.94 | 92.58 | 94.85 |
+| Right, as run, %: as budgeted | 97.30 | 97.68 | 86.94 | 87.41 | 92.74 | 94.86 |
+| calibrated | 97.35 | 97.60 | 86.91 | 87.27 | 92.68 | 94.91 |
+
+On MNIST the reference networks' first layer is off by 6.18% of its sums'
+rms as budgeted and 6.22% calibrated, the second by 7.36% and 7.38%, and the
+accuracy the probe predicts from that error is 97.56% for both. As run they
+are right 97.68% of the time as budgeted and 97.60% calibrated. What a
+calibration leaves in a cell stays there until the next calibration, where a
+programming error is drawn again at every weight write: that is a difference
+between the two tiles that a sum's rms does not see. Whether it is the cause
+is not known, and nothing here was run to say. On the inverted set the first
+layer's sums are 4 to 6% further off calibrated, and there a calibration
+costs neither kind anything that is clear.
+
+**At the end of a six-minute cycle the reference networks are 0.08, 0.16 and
+0.09 over their budget.** From weights as written six minutes left them 0.01,
+0.07 and 0.08 over. None of the three is clear. Against the calibrated tile
+the six minutes add 0.00 ± 0.04, 0.02 ± 0.04 and 0.14 ± 0.09: on MNIST and
+Fashion-MNIST what the cycle ends over by is the calibration's, and on the
+inverted set it is the interval's. A three-minute cycle ends 0.07, 0.14 and
+0.02 over, so a shorter interval buys none of the calibration's back.
+
+**A cycle ends where the same interval from weights as written does, to what
+five networks tell.** None of the eighteen differences is clear. So the
+drift rows of the sections before this one stand as the ends of intervals.
+On MNIST the reference networks' three are all over, by 0.04 to 0.08.
+
+**Two draws of the same six minutes are as much as two tenths apart.** In
+this model a cell's drift is a random walk, and what it walked before a
+calibration does not enter what it walks after. So a tile aged an hour,
+calibrated and aged six minutes more is another draw of the six-minute
+cycle's end. They differ by 0.01 on MNIST for both kinds, and by −0.20 and
+0.21 for the old networks and −0.06 and 0.18 for the reference on the other
+two sets, none of it clear. On the inverted set the reference networks' six
+minutes is now drawn three times: 0.08 ± 0.11 from weights as written, 0.09 ±
+0.08 at the end of the cycle, and 0.28 ± 0.10 after the hour's calibration.
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| The reference networks held at the end of a cycle, right, percent: 6 minutes | 97.57 | 87.30 | 94.58 |
+| The reference networks held at the end of a cycle, right, percent: 30 minutes | 97.56 | 87.16 | 94.25 |
+| The reference networks held at the end of a cycle, right, percent: an hour | 97.51 | 87.09 | 92.99 |
+| The same held from weights as written, 6 minutes | 97.64 | 87.27 | 94.63 |
+| The cycle less that, seed by seed | +0.06 ± 0.05 | −0.03 ± 0.11 | +0.05 ± 0.02 |
+| The networks trained before, held at the end of a 6-minute cycle | 97.28 | 86.82 | 92.46 |
+| The reference less those, seed by seed | +0.30 ± 0.12 | **+0.48 ± 0.15** | **+2.12 ± 0.72** |
+
+**Held at the end of a six-minute cycle the reference networks are where
+they were held from weights as written.** Within 0.07 of a point on all
+three sets, and none of the differences clear. They are 0.30, 0.48 and 2.12
+points ahead of the old networks held the same way, and ahead of them in the
+mean in every one of the nineteen rows on every set.
+
+**What was predicted.** Written before the mode was written out, on
+2026-10-07. Five things.
+
+1. That the shortfall is the calibration's own: that a tile calibrated as
+   written would leave the reference networks 0.05 to 0.13 short on MNIST
+   and 0.05 to 0.20 on Fashion-MNIST, and within 0.05 on the inverted set,
+   and the old networks within 0.07 on all three. Right: 0.08, 0.15 and
+   −0.05, the last at its edge, and −0.05, 0.03 and 0.06.
+2. That a six-minute cycle would end 0.08 to 0.14 over on MNIST, 0.15 to
+   0.25 on Fashion-MNIST and 0.00 to 0.15 on the inverted set for the
+   reference networks, and so over a tenth on Fashion-MNIST. Right in the
+   mean, 0.08, 0.16 and 0.09, and Fashion-MNIST's is not clear of a tenth.
+3. That a three-minute cycle would be within 0.05 of a six-minute one on
+   MNIST and Fashion-MNIST. Right: 0.07 for 0.08 and 0.14 for 0.16.
+4. That what a tile was before its calibration would not matter: an hour,
+   a calibration and six minutes within a tenth of the six-minute cycle on
+   all three sets for both kinds. Wrong in three cells of six, by 0.18 to
+   0.21, and clear in none. What it missed is how far apart two draws are.
+5. That held at the end of a six-minute cycle the reference networks would
+   be ahead of the old ones by at least 0.2, 0.2 and 1.5 points. Right:
+   0.30, 0.48 and 2.12.
+
+**What this is not.** A schedule: it is one calibration, where a tile in use
+has had hundreds, and nothing here says the shortfall does or does not
+build. Another calibration: more probes, a finer trim, or one taken with the
+light lit. The cause of what a calibration costs a trained network. A ring's
+drift: the fit is a Mach-Zehnder's bias and every cell drifts on its own.
+The predictive and shadow schedulers, v1, or another tile.
 
 ---
 
