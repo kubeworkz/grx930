@@ -74,12 +74,14 @@ Under heavy drift a reference network loses half to two thirds of what an
 old one does. At grxcp's six minutes nothing can be told between them, and
 after a calibration the reference networks are about a tenth of a point
 short of their budget on two data sets.
-**And the fourth** (§5, at its end): the operating cycle, an interval that
-starts from a calibration. That shortfall is the calibration's own. With no
-drift at all a calibration costs the reference networks 0.08 ± 0.01 of a
-point on MNIST, where the probe has the tile's sums as far off as they were,
-to a hundredth of the error. An interval that starts from a calibration ends
-where one from weights as written does, to what five networks tell.
+**And the fourth** (§5): the operating cycle, an interval that starts from a
+calibration. It read a calibration as costing the reference networks 0.08 ±
+0.01 of a point on MNIST by itself. **The fifth, 2026-10-08** (§5, at its end)
+took that apart, and it was not the calibration. A calibrated run's probes
+put every image onto other draws of noise than it meets as budgeted, the tile
+as budgeted on those draws is as far short, and the trims a calibration
+writes add 0.02 ± 0.02. A row of this note moves by 0.02 to 0.07 of a point
+when nothing changes but its draw.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -2626,7 +2628,10 @@ better off than one left to drift for the hour, 0.09 for 0.07. Fashion-MNIST's
 0.13 ± 0.10 is not clear. Why is not known. And every drift row in this note
 starts from weights as they were written, not from a calibration, so what a
 calibrated and then drifted tile costs has not been run for either kind:
-`eval --post-hours` is there for it.
+`eval --post-hours` is there for it. *Corrected 2026-10-08: it does return
+it. A calibrated row and the row as budgeted do not meet the same draws of
+noise, and this tenth of a point was the draws: the last section of this
+one.*
 
 | | MNIST | Fashion-MNIST | Inverted |
 |---|---|---|---|
@@ -2672,6 +2677,15 @@ calibration, as every interval on a tile does.
 
 *Added 2026-10-07.* `sim/pta_mnist.sh DIR WORK refcycle`. Reported, not
 gated.
+
+**Corrected 2026-10-08, by the section after this one.** A calibrated row
+here and a row that is not do not meet the same draws of noise: a
+calibration's probes are GEMMs, and every GEMM of a run takes the next seed.
+So each figure below that sets one against the other is the draws as well as
+what it names. That is a calibration's cost, a cycle over the row as
+budgeted, a cycle against weights as written, and held against held. What
+this section reads as the calibration's own cost was the draws. Its figures
+stand, and so does what it reads between two calibrated rows.
 
 **Why.** Every drift row in this note aged a tile from weights as they were
 written. A tile in use is never that. It is calibrated, drifts for an
@@ -2751,7 +2765,8 @@ bold (grxcp's `pta_reference_cycle.py` takes them):
 | An hour, calibrated, 6 minutes more, less the 6-minute cycle: the reference | +0.01 ± 0.03 | −0.06 ± 0.08 | +0.18 ± 0.10 |
 | and the old networks | +0.01 ± 0.04 | −0.20 ± 0.10 | +0.21 ± 0.29 |
 
-**The shortfall is the calibration's own, and not the hour's.** A tile
+~~**The shortfall is the calibration's own, and not the hour's.**~~ *Not the
+hour's, and not the calibration's: the draws'.* A tile
 calibrated as it was written, with no drift at all, costs the reference
 networks 0.08 ± 0.01 of a point on MNIST, 0.15 ± 0.12 on Fashion-MNIST and
 −0.05 ± 0.04 on the inverted set, and the old networks −0.05, 0.03 and 0.06.
@@ -2761,8 +2776,8 @@ thousand. An hour of drift before the calibration adds 0.01 ± 0.01, −0.02 ±
 such figures is clear, the old networks' on the inverted set after an hour,
 and it is a gain; one in twelve is what chance gives.
 
-**On MNIST it is not that the calibrated tile's sums are further off.** The
-probe, in the same runs:
+**On MNIST it is not that the calibrated tile's sums are further off.** *Nor
+is the tile any worse: the next section.* The probe, in the same runs:
 
 | | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
 |---|---|---|---|---|---|---|
@@ -2787,7 +2802,9 @@ layer's sums are 4 to 6% further off calibrated, and there a calibration
 costs neither kind anything that is clear.
 
 **At the end of a six-minute cycle the reference networks are 0.08, 0.16 and
-0.09 over their budget.** From weights as written six minutes left them 0.01,
+0.09 over their budget.** *Over the row as budgeted, which is the draws as
+well. Over the tile as budgeted on the cycle's own draws it is 0.02, 0.02 and
+0.11: the next section.* From weights as written six minutes left them 0.01,
 0.07 and 0.08 over. None of the three is clear. Against the calibrated tile
 the six minutes add 0.00 ± 0.04, 0.02 ± 0.04 and 0.14 ± 0.09: on MNIST and
 Fashion-MNIST what the cycle ends over by is the calibration's, and on the
@@ -2853,6 +2870,211 @@ build. Another calibration: more probes, a finer trim, or one taken with the
 light lit. The cause of what a calibration costs a trained network. A ring's
 drift: the fit is a Mach-Zehnder's bias and every cell drifts on its own.
 The predictive and shadow schedulers, v1, or another tile.
+
+### What a calibration costs: its trims, and its draws
+
+*Added 2026-10-08.* `sim/pta_mnist.sh DIR WORK refcal`. Reported, not gated.
+
+**Why.** The section before this one found that a tile calibrated as it was
+written, with no drift at all, costs the reference networks 0.08 ± 0.01 of a
+point on MNIST, and read that as the calibration's own cost. grxcp asked what
+in the calibration it was, before making it a row of its budget. Reading
+`eval` for that turned up a second difference between the two runs.
+
+A calibrated run writes trims. With no drift a cell's trim is minus the mean
+of the programming errors its last pass of probes happened to meet, rounded
+to the trim's step: about a quarter of an LSB at 16 probes, where the
+programming error it averaged is one LSB and is drawn again at every weight
+load. It is nothing the cell will meet again.
+
+And a calibrated run meets other draws. Each probe is six GEMMs, three
+passes on each of two banks, and every GEMM of a run takes the run's next
+seed. So the first batch of images in a run calibrated with 16 probes meets
+the noise and the programming errors of the 97th GEMM, where the run as
+budgeted meets the first's. The two rows the section before compared differ
+in both, and it took them for one.
+
+**What it runs.** The fifth mode on the reference networks. Version 2 on the
+128 × 64 tile with no drift anywhere, twenty-two rows: as budgeted;
+calibrated with 1, 4, 16 and 64 probes a cell; *probes only* at each of
+those, which is `eval --calibrate N --trimmax 0`, the probes taken and a trim
+that can hold nothing written, and so the calibrated run's draws on the tile
+as budgeted; 16 probes at a trim step of a sixteenth and of a 256th of a
+weight's LSB, and 64 at a 256th; and other draws, the tile seeded with the
+network's seed and 10 D more, as budgeted on six of them and calibrated and
+probes only, at 16 probes, on the first two. A calibrated row less its
+probes-only row is the trims and nothing else. And the tile as budgeted on
+twelve other draws, the six other seeds and the six probes-only rows, says
+how far a network moves when nothing changes but its draw. The networks
+trained before run beside the reference row for row. That is 220
+evaluations, and 23 to 50 minutes a data set on five jobs with other runs
+beside them.
+
+The mode checks every network and every run against its place, as the four
+before it do: a run's name says whether it was calibrated, with how many
+probes, whether its trims were written, at what trim step and on which draw,
+and those have to be what it was asked and what its line printed; nothing in
+it drifts, and no source is lit. 109 errors planted one at a time each fail:
+64 in a training's line or a run's, after the fact; 24 in the script; and 21
+in the tables' own code, which the check does not see and which each move the
+tables. The planted-error runs calibrate with 16, 1 and 2 probes, since a
+calibration takes as long on 200 images as on ten thousand: the rows are the
+same code with other numbers in their names.
+
+Of the lines, 20 on each data set, the row as budgeted and the one calibrated
+with 16 probes for both kinds, are byte for byte what `refcycle` wrote.
+
+**What came of it.** Five networks of each kind, mean and standard error,
+with those outside chance at one in twenty for five networks in bold. First
+what the trims add: how often right with the same probes taken and nothing
+written, less right calibrated, network by network. The two runs meet the
+same draws.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Calibrated with 1 probe a cell | −0.03 ± 0.03 | +0.01 ± 0.04 | +0.18 ± 0.09 | +0.15 ± 0.13 | +0.70 ± 0.58 | +0.24 ± 0.19 |
+| 4 probes | −0.03 ± 0.02 | +0.01 ± 0.02 | +0.12 ± 0.05 | −0.09 ± 0.05 | +0.06 ± 0.14 | +0.02 ± 0.05 |
+| 16 probes | +0.02 ± 0.02 | +0.02 ± 0.02 | +0.06 ± 0.02 | +0.01 ± 0.05 | −0.05 ± 0.06 | −0.03 ± 0.05 |
+| 64 probes | +0.00 ± 0.02 | +0.00 ± 0.01 | −0.02 ± 0.03 | −0.04 ± 0.04 | +0.05 ± 0.06 | +0.01 ± 0.02 |
+| 16 probes, a trim step of 1/16 LSB | +0.02 ± 0.02 | +0.01 ± 0.02 | +0.01 ± 0.03 | +0.02 ± 0.04 | −0.04 ± 0.04 | +0.00 ± 0.06 |
+| 16 probes, 1/256 | +0.01 ± 0.02 | +0.01 ± 0.01 | +0.00 ± 0.02 | +0.00 ± 0.04 | −0.03 ± 0.04 | −0.01 ± 0.06 |
+| 64 probes, 1/256 | +0.01 ± 0.02 | +0.01 ± 0.02 | −0.02 ± 0.03 | −0.02 ± 0.05 | +0.08 ± 0.03 | +0.03 ± 0.02 |
+| 16 probes, on draw 1 | −0.01 ± 0.02 | −0.04 ± 0.03 | +0.02 ± 0.08 | +0.01 ± 0.04 | +0.06 ± 0.05 | +0.06 ± 0.03 |
+| 16 probes, on draw 2 | +0.01 ± 0.03 | −0.02 ± 0.02 | **+0.06 ± 0.02** | −0.02 ± 0.04 | +0.05 ± 0.12 | +0.01 ± 0.02 |
+| 16 probes, a network's mean over the three draws | +0.01 ± 0.01 | −0.01 ± 0.01 | +0.05 ± 0.03 | +0.00 ± 0.03 | +0.02 ± 0.04 | +0.01 ± 0.03 |
+
+**It is not the trims.** At 16 probes they add 0.02 ± 0.02, 0.01 ± 0.05 and
+−0.03 ± 0.05 to what the reference networks lose, and over the three draws
+that were calibrated on −0.01 ± 0.01, 0.00 ± 0.03 and 0.01 ± 0.03, with 0.01,
+0.05 and 0.02 for the old networks. More probes and a finer trim change
+nothing that can be seen. With one probe a cell the trim a cell is left with
+is as large as its programming error, and the trims add 0.01, 0.15 and 0.24
+to the reference networks and −0.03, 0.18 and 0.70 to the old ones: more on
+the harder sets, and clear on none. Of the 54 differences in this table one
+is outside chance at one in twenty, the old networks' on Fashion-MNIST's
+second draw at 0.06 ± 0.02, where chance gives 2.7.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Calibrated with 16 probes, less as budgeted | −0.05 ± 0.04 | **+0.08 ± 0.01** | +0.03 ± 0.11 | +0.15 ± 0.12 | +0.06 ± 0.06 | −0.05 ± 0.04 |
+| The same probes and nothing written, less as budgeted: the draws | −0.07 ± 0.05 | **+0.07 ± 0.02** | −0.03 ± 0.12 | +0.14 ± 0.09 | +0.11 ± 0.05 | −0.02 ± 0.08 |
+| The first less the second: the trims | +0.02 ± 0.02 | +0.02 ± 0.02 | +0.06 ± 0.02 | +0.01 ± 0.05 | −0.05 ± 0.06 | −0.03 ± 0.05 |
+
+**It was the draws.** For the reference networks the same probes with
+nothing written are 0.07 ± 0.02, 0.14 ± 0.09 and −0.02 ± 0.08 short of the row
+as budgeted, which is nearly all of what the calibrated row is. MNIST's is
+3.8 of its errors: outside chance by the test, and chance all the same, as
+the next table and the check after it show.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Right on the twelve other draws, percent | 97.32 | 97.60 | 86.97 | 87.34 | 92.63 | 94.90 |
+| The row as budgeted, less a network's mean over them | −0.014 ± 0.042 | **+0.078 ± 0.027** | −0.037 ± 0.116 | +0.072 ± 0.078 | +0.115 ± 0.048 | −0.042 ± 0.047 |
+| A network's standard deviation from draw to draw | 0.063 | 0.051 | 0.145 | 0.135 | 0.094 | 0.107 |
+| The five networks' mean's | 0.036 | 0.023 | 0.071 | 0.057 | 0.057 | 0.036 |
+| Points lost to the tile: the row as budgeted | 0.15 ± 0.02 | 0.07 ± 0.05 | 0.54 ± 0.22 | 0.47 ± 0.13 | 0.62 ± 0.07 | 0.52 ± 0.05 |
+| over all thirteen draws | 0.14 ± 0.04 | 0.14 ± 0.03 | 0.51 ± 0.12 | 0.54 ± 0.07 | 0.72 ± 0.11 | 0.48 ± 0.06 |
+
+**A row moves when nothing changes but its draw.** A network's accuracy on
+the tile as budgeted has a standard deviation from draw to draw of 0.05 to
+0.14 of a point, and the five networks' mean of 0.02 to 0.07. Two rows that
+do not share their draws differ by 0.03, 0.08 and 0.05 for the reference
+networks at one standard deviation, with nothing else changed. In every mode
+of this note a calibrated row and a row that is not are two such rows. Rows
+that are both calibrated with as many probes share theirs, and so do rows
+that are both not: drift and a source have streams of their own, and a
+laser's size scales the ones there are.
+
+**The row as budgeted is one draw, and on MNIST a favourable one for the
+reference networks.** It is 0.08 ± 0.03 above their mean over the twelve
+other draws, 2.9 of its errors, and the calibrated run's draws are one of the
+twelve: that is where the 0.08 of the section before this one came from.
+Over all thirteen draws the reference
+networks lose 0.14, 0.54 and 0.48 of a point to the tile, and the networks
+trained before 0.14, 0.51 and 0.72. Seed by seed that difference is 0.01 ±
+0.04, 0.03 ± 0.10 and −0.24 ± 0.13: on MNIST and Fashion-MNIST a network
+trained for the tile loses to the tile as budgeted what one that was not
+does.
+
+A tile's seed in the row as budgeted is the seed its network was trained
+with, and in the other draws it is not. Nothing in the trainer or the model
+ties the two: the trainer's noise is its own generator's and the tile's
+streams are seeded from the run's seed and a GEMM's index. But 2.9 errors
+asked for a check, and it was made by hand: five networks of each kind that
+no sweep had run, seeds 6 to 10, trained as `train_one` and `train_ref` train
+them, on MNIST, each on the tile as budgeted at its own seed and at six
+others.
+
+| | The tile at the network's own seed | At six other seeds, mean | The first less the second, network by network |
+|---|---|---|---|
+| Five new networks trained as the reference are, seeds 6 to 10 | 97.57 | 97.55 | +0.02 ± 0.03 |
+| Five trained as the old ones are | 97.23 | 97.28 | −0.05 ± 0.04 |
+
+It is not there. The five networks of the sweeps had a favourable draw.
+
+**The cycle's rows again, each over the tile as budgeted on its own draws.**
+`refcycle`'s calibrated rows all calibrate with 16 probes, so the row here
+that took 16 probes and wrote nothing is the tile as budgeted on their draws.
+What each adds to it, in place of what it adds to the row as budgeted:
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Calibrated as written | +0.02 ± 0.02 | +0.02 ± 0.02 | +0.06 ± 0.02 | +0.01 ± 0.05 | −0.05 ± 0.06 | −0.03 ± 0.05 |
+| Aged 6 minutes, then calibrated | +0.03 ± 0.02 | +0.02 ± 0.01 | +0.05 ± 0.04 | −0.01 ± 0.06 | +0.03 ± 0.05 | +0.01 ± 0.05 |
+| Aged an hour, then calibrated | +0.01 ± 0.02 | +0.02 ± 0.02 | +0.06 ± 0.02 | −0.01 ± 0.02 | −0.12 ± 0.04 | +0.01 ± 0.05 |
+| A cycle of 3 minutes | +0.03 ± 0.02 | +0.00 ± 0.03 | +0.09 ± 0.10 | +0.00 ± 0.03 | +0.23 ± 0.31 | +0.04 ± 0.04 |
+| A cycle of 6 minutes | +0.02 ± 0.03 | +0.02 ± 0.04 | +0.19 ± 0.07 | +0.02 ± 0.02 | +0.03 ± 0.21 | +0.11 ± 0.09 |
+| A cycle of 15 minutes | +0.05 ± 0.04 | +0.01 ± 0.05 | +0.14 ± 0.14 | +0.09 ± 0.07 | +0.04 ± 0.34 | **+0.26 ± 0.07** |
+| A cycle of 30 minutes | **+0.06 ± 0.01** | **+0.08 ± 0.02** | **+0.41 ± 0.08** | −0.09 ± 0.06 | +0.87 ± 0.63 | +0.47 ± 0.27 |
+| A cycle of an hour | +0.14 ± 0.06 | +0.07 ± 0.04 | **+0.54 ± 0.17** | +0.24 ± 0.09 | **+2.23 ± 0.24** | **+1.60 ± 0.42** |
+| Aged an hour, calibrated, 6 minutes more | +0.03 ± 0.02 | +0.03 ± 0.02 | +0.00 ± 0.05 | −0.04 ± 0.09 | +0.24 ± 0.25 | **+0.30 ± 0.09** |
+
+At the end of a six-minute cycle the reference networks are 0.02 ± 0.04, 0.02
+± 0.02 and 0.11 ± 0.09 over, where the section before had 0.08, 0.16 and 0.09.
+Fashion-MNIST, where no interval that was run ended within a tenth, is
+within one at 3, 6, 15 and 30 minutes. On the inverted set a three-minute
+cycle ends 0.04 over and a six-minute one 0.11. That set's six minutes for
+the reference networks is now drawn three times, each over its own draws:
+0.08 ± 0.11 from weights as written, 0.11 ± 0.09 at the end of the cycle, and
+0.30 ± 0.09 after an hour and a calibration. For the old networks on
+Fashion-MNIST a six-minute cycle ends 0.19 ± 0.07 over.
+
+**What was wrong in the section before this one, and what was not.** The test
+was not wrong about the 0.08. One in twenty is wrong once in twenty, and this
+note has read some hundreds of such differences; one of them at 2.9 errors is
+not a surprise. What was wrong was to read the calibrated rows of `refcycle`,
+which share their draws, as so many findings of the same cost. That section's
+figures stand. So does what it reads between two calibrated rows: an
+interval's own, what came before a calibration, what holding adds. And its
+probe was right, that the calibrated tile's sums are no further off.
+
+**What was predicted.** Written before anything was run for this, on
+2026-10-07. Five things, and a sixth before the check by hand.
+
+1. That it is not the trims: that the probes taken and nothing written would
+   leave the reference networks 0.05 to 0.11 short on MNIST, and the trims
+   themselves add within 0.03 there and within 0.08 on the other two sets.
+   Right: 0.07, and 0.02, 0.01 and −0.03.
+2. That more probes would not buy it back: the trims within 0.05 on MNIST at
+   4, 64 and 256 probes, and at one probe adding 0.00 to 0.10 on MNIST and
+   0.05 to 0.60 on the inverted set. Right where it was run, 0.01 and 0.00 and,
+   at one probe, 0.01 and 0.24; 256 probes were not run.
+3. That a finer trim step would do nothing, within 0.03 on MNIST. Right.
+4. That the row as budgeted is a favourable draw for the reference networks
+   on MNIST, by 0.02 to 0.09 over the other draws. Right: 0.08.
+5. That for the networks trained before the trims at 16 probes are within
+   0.06 on MNIST, and nothing they show on any set is clear. Right on the
+   first, 0.02. On the second, one of their 27 differences is clear.
+6. That it was chance: that for five new reference networks the tile at
+   their own seed would be within 0.05 of their mean over six others, and
+   not 0.08 above. Right: 0.02 ± 0.03.
+
+**What this is not.** A calibration with something to correct: nothing here
+drifts, and what a calibration is worth when there is drift to take out is
+`refcycle`'s rows, as the last table has them. Another calibration than C3's
+as `eval` has it. The held rows, with a source's rows lit: those are one
+draw each as well, and were not run on others. The check by hand is MNIST
+only, and not a mode. Version 1, or another tile.
 
 ---
 
