@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -41,11 +41,14 @@
 # "2 4 8 16 32").  `refdrift` is the third: REFDRIFT_TILE and REFDRIFT_BUSES
 # set its tile and its buses (default 128x64 and 2), REFDRIFT_HOURS the
 # intervals it drifts for (default "0.05 0.1 0.25 0.5 1 2 4") and REFDRIFT_HELD
-# those it holds a source at the end of (default "0.1 0.5 1").
+# those it holds a source at the end of (default "0.1 0.5 1").  `refcycle` is
+# the fourth: REFCYCLE_TILE and REFCYCLE_BUSES set its tile and its buses
+# (default 128x64 and 2), REFCYCLE_HOURS the intervals it cycles at (default
+# "0.05 0.1 0.25 0.5 1") and REFCYCLE_HELD those it holds (default "0.1 0.5 1").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,44p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,47p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -1768,6 +1771,190 @@ if [ "$what" = refdrift ]; then
         refdrift_right "$name"
         echo
     done < "$work/out/refdrift_settings.txt"
+fi
+
+# `refcycle`: an interval that starts from a calibration.  Every drift row
+# above ages a tile from weights as they were written.  A tile in use is
+# never that: it is calibrated, drifts for an interval, and is calibrated
+# again.  `refdrift` found a calibration leaves the reference networks about
+# a tenth of a point short of where they started on two data sets, and
+# could not say whether that was the calibration or the hour before it.  This
+# runs version 2 calibrated as it was written, with no drift at all;
+# calibrated after six minutes and after an hour; at the end of a cycle, which
+# is a tile aged an interval, calibrated, and aged the interval again; an hour
+# and a calibration and six minutes more, to see whether what came before a
+# calibration matters; and held, with a source's three rows at 1%, 5% and 5%,
+# at the end of a cycle and at the end of the same interval from weights as
+# written.  Both kinds of network, row for row.  It trains the reference
+# networks where they are not there.
+if [ "$what" = refcycle ]; then
+    tile=${REFCYCLE_TILE:-128x64}
+    buses=${REFCYCLE_BUSES:-2}
+    hours=${REFCYCLE_HOURS:-0.05 0.1 0.25 0.5 1}
+    heldh=${REFCYCLE_HELD:-0.1 0.5 1}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    d="--impair $all,drift $r --drift tflt"
+    src="--src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
+    # row|options
+    {
+        echo "as budgeted|--impair $all $r"
+        echo "calibrated|--impair $all $r --calibrate 16"
+        for h in 0.1 1; do echo "aged $h h, calibrated|$d --hours $h --calibrate 16"; done
+        for h in $hours; do echo "cycle of $h h|$d --hours $h --calibrate 16 --post-hours $h"; done
+        echo "aged 1 h, calibrated, 0.1 h more|$d --hours 1 --calibrate 16 --post-hours 0.1"
+        for h in $heldh; do echo "as written, $h h|$d --hours $h"; done
+        for h in $heldh; do echo "held, as written, $h h|$d --hours $h $src"; done
+        for h in $heldh; do echo "held, cycle of $h h|$d --hours $h --calibrate 16 --post-hours $h $src"; done
+    } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refcycle_settings.txt"
+    # refcycle_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refcycle.d/NET_ROW.txt
+    refcycle_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refcycle.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refcycle.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refcycle_one
+    # refcycle_row NAME: a row's name as a file's
+    refcycle_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refcycle_net SEED KIND: the network's file, trained before or the reference
+    refcycle_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            for sd in 1 2 3 4 5; do echo "$(refcycle_net $sd $k) $(refcycle_row "$name") --seed $sd $setting"; done
+        done < "$work/out/refcycle_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refcycle_one "$@"' _
+
+    # refcycle_file SEED KIND NAME: the file refcycle_one wrote for that run
+    refcycle_file() { echo "$work/out/refcycle.d/$(basename "$(refcycle_net "$1" "$2")" .net)_$(refcycle_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; and its name says how it was
+    # aged, whether it was calibrated and how it was aged after, which have to
+    # be what it was asked and what its line printed.  A cycle is aged the
+    # same before its calibration and after.  A held run has a source's three
+    # rows at 1%, 5% and 5% through a balanced pair, and no other run has one.
+    refcycle_ok=yes
+    refcycle_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refcycle_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refcycle_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(refcycle_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        is_held = (name ~ /^held, /) ? 1 : 0
+                        base = is_held ? substr(name, 7) : name
+                        cyc = (base ~ /^cycle of [0-9.]+ h$/) ? 1 : 0
+                        hours = match(base, /[0-9.]+ h/) ? substr(base, RSTART, RLENGTH - 2) + 0 : 0
+                        rest = hours > 0 ? substr(base, RSTART + RLENGTH) : ""
+                        more = match(rest, /[0-9.]+ h more$/) ? substr(rest, RSTART, RLENGTH - 7) + 0 : 0
+                        post = cyc ? hours : more
+                        cal = (cyc || base ~ /calibrated/) ? 16 : 0
+                        drifts = (hours > 0) ? 1 : 0
+                        known = base == "as budgeted" || base == "calibrated" || cyc ||
+                                base ~ /^aged [0-9.]+ h, calibrated(, [0-9.]+ h more)?$/ || base ~ /^as written, [0-9.]+ h$/
+                        sane = sane && known && (base != "as budgeted" || (!cal && !drifts && !is_held)) &&
+                               (drifts == (("drift" in on) ? 1 : 0)) && (drifts == (("drift" in given) ? 1 : 0)) &&
+                               (!drifts || want["drift"] == "tflt") && asked("hours") == hours &&
+                               asked("calibrate") == cal && asked("post-hours") == post && (post == 0 || cal == 16) &&
+                               asked("src") == 0.01 * is_held && asked("srcline") == 0.05 * is_held &&
+                               asked("srcflat") == 0.05 * is_held && asked("buses") == nb * is_held }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == (drifts ? "tflt" : "none") && v["hours"] == hours && v["cal"] == cal &&
+                               v["post_hours"] == post && (v["steps"] > 0) == drifts &&
+                               !("hidshift" in v) && !("thermalline" in v)
+                          if (is_held) ok = ok && v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] == 0.05 &&
+                                            v["srcsign"] == "pair" && v["buses"] == nb
+                          else ok = ok && !("src" in v) }
+                END { exit !(NR == 2 && ok) }' || refcycle_ok=NO
+            refcycle_runs=$((refcycle_runs + 1))
+        done < "$work/out/refcycle_settings.txt"
+    done; done
+    echo "== refcycle: $refcycle_runs runs, each of them the network and the row its place says: $refcycle_ok"
+    [ "$refcycle_ok" = yes ] || exit 1
+
+    # refcycle_stat KIND NAME: five networks' loss, mean and standard error,
+    # and what the row adds to that kind as budgeted, network by network
+    refcycle_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcycle_file $sd "$1" "as budgeted")"
+            sed 's/^/B /' "$(refcycle_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refcycle_right NAME: how often the five networks of each kind are right
+    # in a row, and the reference less the one trained before, seed by seed
+    refcycle_right() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcycle_file $sd before "$1")"
+            sed 's/^/B /' "$(refcycle_file $sd reference "$1")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; as += a; ass += a * a; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f %7.2f +-%4.2f", as / n, se(as, ass, n), s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    echo "== refcycle: the $tile tile on $buses buses at v2, five networks, mean and standard error.  Points"
+    echo "== lost against the same weights on the host, and what a row adds to its own networks as"
+    echo "== budgeted, network by network.  A cycle is aged, calibrated and aged the same again"
+    printf '%-36s %14s %14s %14s %14s' "" "before loses" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        for k in before reference; do refcycle_stat $k "$name"; done
+        echo
+    done < "$work/out/refcycle_settings.txt"
+    echo "== refcycle: how often they are right, percent, and the reference less the one trained"
+    echo "== before, seed by seed"
+    printf '%-36s %14s %14s %14s' "" "before" "reference" "the difference"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-36s' "$name"
+        refcycle_right "$name"
+        echo
+    done < "$work/out/refcycle_settings.txt"
 fi
 
 exit $((gate_status | ablate_status))
