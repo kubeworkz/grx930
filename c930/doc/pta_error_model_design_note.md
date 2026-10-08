@@ -82,6 +82,13 @@ put every image onto other draws of noise than it meets as budgeted, the tile
 as budgeted on those draws is as far short, and the trims a calibration
 writes add 0.02 ± 0.02. A row of this note moves by 0.02 to 0.07 of a point
 when nothing changes but its draw.
+**And the sixth, the same day** (§5, at its end): the working point on ten
+draws, each row read over a row that meets its noise. On the inverted set
+the reference networks' six-minute cycle ends 0.12 ± 0.03 of a point over, and
+a three-minute one 0.08 ± 0.02; on the other two sets six minutes is inside a
+tenth. Held as grxcp holds the chip, over ten draws, they are right 97.59,
+87.30 and 94.65% of the time. What training for the tile buys is in what
+holding adds.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -3075,6 +3082,159 @@ drifts, and what a calibration is worth when there is drift to take out is
 as `eval` has it. The held rows, with a source's rows lit: those are one
 draw each as well, and were not run on others. The check by hand is MNIST
 only, and not a mode. Version 1, or another tile.
+
+### The working point over draws
+
+*Added 2026-10-08.* `sim/pta_mnist.sh DIR WORK refdraws`. Reported, not gated.
+
+**Why.** The section before this one found that a row moves when nothing
+changes but its draw, and that every row of this note before it is one draw.
+It left two things on one draw each. A six-minute cycle on the inverted set
+for the reference networks, which is what sizes grxcp's B15, had been drawn
+three times, at 0.08, 0.11 and 0.30 of a point over the tile as budgeted, and
+a tenth was not pinned between them. And the rows grxcp quotes for the chip
+as it is held, with six minutes of drift and a source's rows, were one draw.
+grxcp asked for the first to be pinned before it decided anything, and the
+second folded in.
+
+**What it runs.** The sixth mode on the reference networks. Version 2 on the
+128 × 64 tile on two buses, five rows on each of ten draws: as budgeted;
+held, which is six minutes of TFLT's drift from weights as written and a
+source's three rows at 1%, 5% and 5%; probes only, a calibration's 16 probes
+taken and nothing written; and a cycle, aged an interval, calibrated and aged
+it again, of three minutes and of six. Draw D seeds the tile with the
+network's seed and 10 D more, which moves its noise, its drift's walk and its
+source; draw 0 is the one every mode before this ran. A cycle is read over
+the probes-only row of its draw, and the held row and the probes-only one
+over the as-budgeted row of their draw: each pair meets the same noise. The
+networks trained before run beside the reference row for row. That is 500
+evaluations a data set, and 2.9 hours for the three side by side on four jobs
+each.
+
+The mode checks every network and every run against its place, as the five
+before it do: a run's name says its draw, whether it drifted and for how long
+before a calibration and after, whether its probes were taken and its trims
+written, and whether a source is lit, and those have to be what it was asked
+and what its line printed. 111 errors planted one at a time each fail:
+69 in a training's line or a run's, after the fact; 24 in the script; and 18
+in the tables' own code, which the check does not see and which each move the
+tables. The planted-error runs take two draws and not ten.
+
+Of the lines, 130 on each data set are byte for byte what `refcal` and
+`refcycle` wrote for the same runs: the five rows of draw 0, the as-budgeted
+row of draws 1 to 6, and the probes-only row of draws 1 and 2.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of ten draws, with its standard error from the five networks, each averaged
+over its ten draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| A cycle of 3 minutes, over the probes-only row of its draw: the mean of ten draws | −0.008 ± 0.011 | −0.002 ± 0.012 | +0.017 ± 0.021 | +0.031 ± 0.016 | **+0.295 ± 0.064** | **+0.076 ± 0.019** |
+| the standard deviation from draw to draw | 0.037 | 0.028 | 0.068 | 0.085 | 0.165 | 0.059 |
+| draws of the ten at a tenth or over | 0 | 0 | 1 | 2 | 10 | 4 |
+| A cycle of 6 minutes: the mean of ten draws | +0.010 ± 0.017 | −0.007 ± 0.009 | +0.087 ± 0.038 | **+0.066 ± 0.019** | **+0.411 ± 0.078** | **+0.119 ± 0.030** |
+| the standard deviation from draw to draw | 0.033 | 0.023 | 0.121 | 0.083 | 0.205 | 0.057 |
+| draws of the ten at a tenth or over | 0 | 0 | 5 | 5 | 8 | 8 |
+| Probes only, over the as-budgeted row of its draw | −0.003 ± 0.011 | +0.001 ± 0.012 | +0.030 ± 0.017 | +0.028 ± 0.022 | **+0.030 ± 0.008** | −0.014 ± 0.012 |
+
+The inverted set, draw by draw: the five networks' mean of what a cycle adds.
+
+| | Draw 0 | Draw 1 | Draw 2 | Draw 3 | Draw 4 | Draw 5 | Draw 6 | Draw 7 | Draw 8 | Draw 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| The reference networks, a cycle of 3 minutes | +0.04 | +0.12 | +0.05 | +0.03 | +0.03 | +0.00 | +0.15 | +0.17 | +0.04 | +0.13 |
+| The reference networks, a cycle of 6 minutes | +0.11 | +0.18 | +0.12 | +0.18 | +0.12 | +0.10 | +0.01 | +0.05 | +0.19 | +0.13 |
+| The networks trained before, a cycle of 3 minutes | +0.23 | +0.45 | +0.36 | +0.18 | +0.20 | +0.69 | +0.20 | +0.27 | +0.13 | +0.24 |
+| The networks trained before, a cycle of 6 minutes | +0.03 | +0.43 | +0.46 | +0.07 | +0.45 | +0.47 | +0.44 | +0.65 | +0.48 | +0.62 |
+
+**On the inverted set a six-minute cycle ends over a tenth of a point in the
+mean, and a three-minute one under it.** 0.12 ± 0.03 and 0.08 ± 0.02 for the
+reference networks, and the five networks' mean is at a tenth or over on 8 of
+the ten draws at six minutes and on 4 at three. Neither is far from a tenth:
+six minutes is 0.6 of its errors over it and three 1.3 under, and six costs
+0.04 ± 0.04 more than three. From draw to draw the six-minute figure has a
+standard deviation of 0.06 and runs from 0.01 to 0.19; draw 0, the one the
+section before had, is 0.11.
+
+**On MNIST and Fashion-MNIST six minutes is inside a tenth.** −0.01 ± 0.01 and
+0.07 ± 0.02 for the reference networks. On Fashion-MNIST the five networks'
+mean is at a tenth or over on 5 of the ten draws.
+
+**For the networks trained before, neither interval is inside a tenth on the
+inverted set.** A three-minute cycle ends 0.30 ± 0.06 over and a six-minute
+one 0.41 ± 0.08. On Fashion-MNIST their six minutes is 0.09 ± 0.04.
+
+**Probes taken and nothing written move nothing.** Over the as-budgeted row
+of the same seed the probes-only row is within 0.03 of a point on every set
+for both kinds. The two do not share draws, and over ten the draws average
+out. One of the six is outside chance by the test, the old networks' on the
+inverted set at 0.030 ± 0.008. Nothing in the model tells the two rows apart
+but their draws, and one in six at that size is no more than the section
+before this one found of such tests.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Held: right, percent, on draw 0, which is every mode's before this | 97.26 | 97.64 | 86.88 | 87.27 | 92.27 | 94.63 |
+| over ten draws | 97.227 ± 0.105 | 97.586 ± 0.046 | 86.794 ± 0.138 | 87.297 ± 0.117 | 91.965 ± 0.645 | 94.645 ± 0.356 |
+| the standard deviation from draw to draw | 0.075 | 0.033 | 0.110 | 0.073 | 0.234 | 0.069 |
+| What holding adds, over the as-budgeted row of its draw | **+0.075 ± 0.026** | **+0.025 ± 0.007** | **+0.205 ± 0.037** | +0.062 ± 0.039 | **+0.683 ± 0.141** | **+0.251 ± 0.038** |
+| Points lost to the tile so held, over ten draws | 0.22 ± 0.01 | 0.17 ± 0.03 | 0.68 ± 0.11 | 0.59 ± 0.09 | 1.40 ± 0.24 | 0.74 ± 0.08 |
+| As budgeted: right, over ten draws | 97.303 ± 0.104 | 97.612 ± 0.048 | 86.999 ± 0.162 | 87.359 ± 0.141 | 92.648 ± 0.575 | 94.896 ± 0.347 |
+
+**The chip as it is held, over ten draws.** The reference networks are right
+97.59, 87.30 and 94.65% of the time and lose 0.17, 0.59 and 0.74 of a point to
+the tile; on draw 0 they are right 97.64, 87.27 and 94.63 and lose 0.11, 0.62
+and 0.76. The networks trained before are right 97.23, 86.79 and 91.96% of
+the time and lose 0.22, 0.68 and 1.40, for draw 0's 97.26, 86.88 and 92.27,
+and 0.19, 0.60 and 1.09. In none of the six cells is draw 0 clear of a
+network's mean over the other nine; the farthest is the old networks' on the
+inverted set, 0.34 ± 0.20 above.
+
+| | MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|
+| The reference less the old, seed by seed, over ten draws: right, held | **+0.36 ± 0.09** | **+0.50 ± 0.12** | **+2.68 ± 0.59** |
+| right, as budgeted | **+0.31 ± 0.09** | +0.36 ± 0.17 | **+2.25 ± 0.51** |
+| what holding adds | −0.05 ± 0.02 | **−0.14 ± 0.04** | −0.43 ± 0.17 |
+| what a 6-minute cycle adds | −0.02 ± 0.01 | −0.02 ± 0.05 | **−0.29 ± 0.07** |
+| what a 3-minute cycle adds | +0.01 ± 0.01 | +0.01 ± 0.03 | −0.22 ± 0.08 |
+| A 6-minute cycle over a 3-minute one, the reference | +0.00 ± 0.01 | +0.04 ± 0.03 | +0.04 ± 0.04 |
+
+**What training for the tile buys is in what holding adds.** The section
+before this one found that as budgeted a network trained for the tile loses
+what one that was not does. Six minutes of drift and a source's rows add
+0.03, 0.06 and 0.25 of a point to what the reference networks lose on the
+same draws, and 0.08, 0.20 and 0.68 to the old ones: less on all three sets,
+and clear on Fashion-MNIST. A six-minute cycle costs a reference network 0.29
+± 0.07 of a point less than the old one of its seed on the inverted set. Held,
+the reference networks are right 0.36, 0.50 and 2.68 points more often, clear
+on all three, where as budgeted they are 0.31, 0.36 and 2.25.
+
+**What was predicted.** Written before the mode was written out, on
+2026-10-08. Five things.
+
+1. That on the inverted set six minutes does not hold a tenth in the mean:
+   the reference networks' six-minute cycle 0.10 to 0.22 over and their
+   three-minute one 0.01 to 0.09. Right: 0.12 and 0.08.
+2. That on MNIST and Fashion-MNIST the six-minute mean is under 0.06. Right
+   on MNIST, −0.01. Wrong by a hundredth on Fashion-MNIST, 0.07, which is
+   still inside a tenth.
+3. That from draw to draw the inverted set's six-minute figure has a standard
+   deviation of 0.06 to 0.15. Right, at its edge: 0.06.
+4. That held, over ten draws, the reference networks are right 97.52 to
+   97.62, 87.12 to 87.32 and 94.50 to 94.80% of the time. Right: 97.59, 87.30
+   and 94.65.
+5. That holding adds 0.02 to 0.08, 0.05 to 0.20 and 0.15 to 0.35 of a point to
+   what the reference networks lose, and that held they are right 0.20 to
+   0.40, 0.25 to 0.55 and 2.0 to 2.6 points more often than the old ones.
+   Right on five of the six: 0.03, 0.06 and 0.25, and 0.36 and 0.50. The lead
+   on the inverted set is 2.68.
+
+**What this is not.** More networks: the ten draws are of the same five, and
+the errors here are those five's. Other intervals than three minutes and
+six. A draw of the drift alone: a draw moves the noise, the walk and the
+source together, and the pairing takes out the noise. A schedule: it is one
+calibration. Version 1, or another tile.
 
 ---
 
