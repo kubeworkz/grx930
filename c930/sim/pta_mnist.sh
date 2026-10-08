@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -45,10 +45,17 @@
 # the fourth: REFCYCLE_TILE and REFCYCLE_BUSES set its tile and its buses
 # (default 128x64 and 2), REFCYCLE_HOURS the intervals it cycles at (default
 # "0.05 0.1 0.25 0.5 1") and REFCYCLE_HELD those it holds (default "0.1 0.5 1").
+# `refcal` is the fifth: REFCAL_TILE sets its tile (default 128x64),
+# REFCAL_PROBES the probes a cell it calibrates with (default "1 4 16 64", and
+# 16 has to be one), REFCAL_STEPS the finer trim steps it tries at 16 probes,
+# in weight LSB (default "0.0625 0.00390625"), REFCAL_DRAWS the other draws it
+# calibrates on (default "1 2") and REFCAL_MORE those it only runs the tile as
+# budgeted on (default "3 4 5 6").  Draw D seeds the tile with the network's
+# seed and 10 D more.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,47p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,54p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -1955,6 +1962,272 @@ if [ "$what" = refcycle ]; then
         refcycle_right "$name"
         echo
     done < "$work/out/refcycle_settings.txt"
+fi
+
+# `refcal`: what in a calibration costs a network.  `refcycle` found a tile
+# calibrated as it was written, with no drift at all, costs the reference
+# networks 0.08 of a point on MNIST, and that the tile's sums are no further
+# off for it.  A calibrated run differs from the run as budgeted in two
+# things.  One is the trims it writes: with no drift a trim is minus the mean
+# of the programming errors its probes happened to meet, which is nothing a
+# cell will meet again.  The other is its draws: the probes are GEMMs, 6 a
+# probe, and every GEMM takes the next seed, so each image of a calibrated run
+# meets other noise and other programming errors than it does as budgeted.
+# This takes them apart.  `--calibrate N --trimmax 0` takes the probes and
+# writes nothing, which is the calibrated run's draws on the budgeted tile:
+# a calibrated row less that one is the trims and nothing else.  It runs both
+# at each number of probes, a finer trim step, and the tile as budgeted on
+# other draws, which says how far a network moves from one draw to the next
+# with nothing else changed.  Both kinds of network, row for row.  No drift
+# anywhere.
+if [ "$what" = refcal ]; then
+    tile=${REFCAL_TILE:-128x64}
+    probes=${REFCAL_PROBES:-1 4 16 64}
+    steps=${REFCAL_STEPS:-0.0625 0.00390625}
+    draws=${REFCAL_DRAWS:-1 2}
+    more=${REFCAL_MORE:-3 4 5 6}
+    case " $probes " in *" 16 "*) ;; *) echo "pta_mnist.sh: REFCAL_PROBES has to hold 16" >&2; exit 2 ;; esac
+    most=${probes##* }
+    fine=${steps##* }
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    b="--impair $all $r"
+    # row|options.  A row's name says its probes, its trim step if it is not
+    # the quarter LSB, and its draw if it is not the network's own seed.
+    {
+        echo "as budgeted|$b"
+        for n in $probes; do echo "calibrated, $n probes|$b --calibrate $n"; done
+        for n in $probes; do echo "probes only, $n probes|$b --calibrate $n --trimmax 0"; done
+        for x in $steps; do echo "calibrated, 16 probes, step $x|$b --calibrate 16 --trimstep $x"; done
+        [ "$most" = 16 ] || echo "calibrated, $most probes, step $fine|$b --calibrate $most --trimstep $fine"
+        for dd in $draws; do
+            echo "as budgeted, draw $dd|$b"
+            echo "calibrated, 16 probes, draw $dd|$b --calibrate 16"
+            echo "probes only, 16 probes, draw $dd|$b --calibrate 16 --trimmax 0"
+        done
+        for dd in $more; do echo "as budgeted, draw $dd|$b"; done
+    } | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refcal_settings.txt"
+    # refcal_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refcal.d/NET_ROW.txt
+    refcal_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refcal.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refcal.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refcal_one
+    # refcal_row NAME: a row's name as a file's
+    refcal_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refcal_net SEED KIND: the network's file, trained before or the reference
+    refcal_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    # refcal_draw NAME: the draw a row's name says, 0 if it says none
+    refcal_draw() { case "$1" in *", draw "*) echo "${1##*, draw }" ;; *) echo 0 ;; esac; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=$(refcal_draw "$name")
+            for sd in 1 2 3 4 5; do echo "$(refcal_net $sd $k) $(refcal_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/refcal_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refcal_one "$@"' _
+
+    # refcal_file SEED KIND NAME: the file refcal_one wrote for that run
+    refcal_file() { echo "$work/out/refcal.d/$(basename "$(refcal_net "$1" "$2")" .net)_$(refcal_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; nothing in it drifts and no
+    # source is lit; and its name says whether it was calibrated, with how many
+    # probes, whether the trims were written, at what trim step and on which
+    # draw, which have to be what it was asked and what its line printed.
+    refcal_ok=yes
+    refcal_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refcal_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refcal_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(refcal_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 && m == 5 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        base = name
+                        draw = 0
+                        if (match(base, /, draw [0-9]+$/)) { draw = substr(base, RSTART + 7) + 0; base = substr(base, 1, RSTART - 1) }
+                        step = 0.25
+                        stepped = 0
+                        if (match(base, /, step [0-9.]+$/)) { step = substr(base, RSTART + 7) + 0; stepped = 1; base = substr(base, 1, RSTART - 1) }
+                        only = (base ~ /^probes only, [0-9]+ probes$/) ? 1 : 0
+                        wrote = (base ~ /^calibrated, [0-9]+ probes$/) ? 1 : 0
+                        probes = match(base, /[0-9]+ probes$/) ? substr(base, RSTART, RLENGTH - 7) + 0 : 0
+                        known = base == "as budgeted" || only || wrote
+                        sane = sane && known && (!stepped || wrote) && ((only || wrote) == (probes > 0)) &&
+                               (name !~ /, draw 0$/) && (step > 0) && (step < 0.25 || !stepped) &&
+                               !has("drift") && !has("hours") && !has("post-hours") && !has("src") && !has("seed") &&
+                               has("calibrate") == (only || wrote) && asked("calibrate") == probes &&
+                               has("trimmax") == only && asked("trimmax") == 0 &&
+                               has("trimstep") == stepped && (!stepped || near(asked("trimstep"), step, 1e-12)) }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == "none" && v["hours"] == 0 && v["steps"] == 0 && v["post_hours"] == 0 &&
+                               v["cal"] == probes && near(v["trimstep"], step, 1e-12) && v["trimmax"] == (only ? 0 : 128) &&
+                               !("hidshift" in v) && !("thermalline" in v) && !("src" in v) }
+                END { exit !(NR == 2 && ok) }' || refcal_ok=NO
+            refcal_runs=$((refcal_runs + 1))
+        done < "$work/out/refcal_settings.txt"
+    done; done
+    echo "== refcal: $refcal_runs runs, each of them the network and the row its place says: $refcal_ok"
+    [ "$refcal_ok" = yes ] || exit 1
+
+    # refcal_stat KIND NAME: five networks' loss, mean and standard error,
+    # and what the row adds to that kind as budgeted, network by network
+    refcal_stat() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcal_file $sd "$1" "as budgeted")"
+            sed 's/^/B /' "$(refcal_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["digital"] - v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refcal_right NAME: how often the five networks of each kind are right
+    # in a row, and the reference less the one trained before, seed by seed
+    refcal_right() {
+        local sd
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcal_file $sd before "$1")"
+            sed 's/^/B /' "$(refcal_file $sd reference "$1")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; as += a; ass += a * a; next }
+              n++; s += x; ss += x * x; g = x - a; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f %7.2f +-%4.2f", as / n, se(as, ass, n), s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refcal_partner NAME: the row that took a calibrated row's probes, on its
+    # draw, and wrote nothing
+    refcal_partner() {
+        local n=${1#calibrated, } dd
+        n=${n%% probes*}
+        dd=$(refcal_draw "$1")
+        if [ "$dd" = 0 ]; then echo "probes only, $n probes"; else echo "probes only, $n probes, draw $dd"; fi
+    }
+    # refcal_trims KIND NAME: what the trims add: how often the five networks
+    # are right with the probes taken and nothing written, less calibrated,
+    # network by network
+    refcal_trims() {
+        local sd partner
+        partner=$(refcal_partner "$2")
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcal_file $sd "$1" "$partner")"
+            sed 's/^/B /' "$(refcal_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; g = a - x; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f", gs / n, se(gs, gss, n) }'
+    }
+    # refcal_draws KIND: the tile as budgeted on its other draws, which are
+    # the other seeds and the rows that took probes and wrote nothing.  How
+    # many; how often the five networks are right on them; the as-budgeted row
+    # less a network's mean over them, network by network; a network's
+    # standard deviation from draw to draw, rms over the five; and that of the
+    # five networks' mean
+    refcal_draws() {
+        local sd name setting r
+        for sd in 1 2 3 4 5; do
+            sed "s/^/O $sd 0 /" "$(refcal_file $sd "$1" "as budgeted")"
+            r=0
+            while IFS='|' read -r name setting; do
+                case "$name" in
+                "as budgeted, draw "*|"probes only, "*) r=$((r + 1)); sed "s/^/D $sd $r /" "$(refcal_file $sd "$1" "$name")" ;;
+                esac
+            done < "$work/out/refcal_settings.txt"
+        done | awk '
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "O") { own[$2] = x; next }
+              s[$2] += x; ss[$2] += x * x; n[$2]++; rs[$3] += x; rn[$3]++ }
+            END { for (sd = 1; sd <= 5; ++sd) { m = s[sd] / n[sd]; var = (ss[sd] - n[sd] * m * m) / (n[sd] - 1); if (var < 0) var = 0
+                                                 d = own[sd] - m; ds += d; dss += d * d; ms += m; vs += var; nd = n[sd] }
+                  for (r in rs) { q = rs[r] / rn[r]; qs += q; qss += q * q; nr++ }
+                  dm = ds / 5; dvar = dss / 5 - dm * dm; if (dvar < 0) dvar = 0
+                  qm = qs / nr; qvar = (qss - nr * qm * qm) / (nr - 1); if (qvar < 0) qvar = 0
+                  printf " %6d %9.3f %8.3f +-%5.3f %9.3f %9.3f", nd, ms / 5, dm, sqrt(dvar / 4), sqrt(vs / 5), sqrt(qvar) }'
+    }
+    echo "== refcal: the $tile tile at v2, no drift, five networks, mean and standard error.  Points"
+    echo "== lost against the same weights on the host, and what a row adds to its own networks as"
+    echo "== budgeted, network by network.  Probes only: the probes taken and no trim written"
+    printf '%-40s %14s %14s %14s %14s' "" "before loses" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-40s' "$name"
+        for k in before reference; do refcal_stat $k "$name"; done
+        echo
+    done < "$work/out/refcal_settings.txt"
+    echo "== refcal: how often they are right, percent, and the reference less the one trained"
+    echo "== before, seed by seed"
+    printf '%-40s %14s %14s %14s' "" "before" "reference" "the difference"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-40s' "$name"
+        refcal_right "$name"
+        echo
+    done < "$work/out/refcal_settings.txt"
+    echo "== refcal: what the trims add: right with the same probes taken and nothing written,"
+    echo "== less right calibrated, network by network.  The two runs meet the same draws"
+    printf '%-40s %14s %14s' "" "before" "reference"
+    echo
+    while IFS='|' read -r name setting; do
+        case "$name" in "calibrated, "*) ;; *) continue ;; esac
+        printf '%-40s' "$name"
+        for k in before reference; do refcal_trims $k "$name"; done
+        echo
+    done < "$work/out/refcal_settings.txt"
+    echo "== refcal: the tile as budgeted on its other draws: other seeds, and probes taken and"
+    echo "== nothing written.  How often right on them; the as-budgeted row less a network's mean"
+    echo "== over them, network by network; and the standard deviation from draw to draw"
+    printf '%-12s %6s %9s %15s %9s %9s' "" "draws" "right" "as budgeted less" "a network" "the mean"
+    echo
+    for k in before reference; do
+        printf '%-12s' "$k"
+        refcal_draws $k
+        echo
+    done
 fi
 
 exit $((gate_status | ablate_status))
