@@ -102,6 +102,17 @@ within 0.11 of a point of level lines on all three sets. At the tile's 6
 bits they end 0.07, 0.13 and 0.21 over. Scaled to the dimmest line, so that
 nothing is raised past a rail, a correction costs 2.8 dB of light and on
 Fashion-MNIST more than the comb did.
+**And the ninth, 2026-10-09** (§5, at its end): grxcp moved its source's third
+row to lines 20% off, read and corrected on the weights at 8 bits, and the
+working point is run as the chip is now held. Held for six minutes the
+reference networks lose 0.09 ± 0.03 of a point more on MNIST than with lines
+5% off and left alone, and nothing that can be told on the other two sets. A
+six-minute cycle with a source lit, which had been run on one draw and not
+read over its own, ends 0.07, 0.04 and 0.30 over the probes-only row of its
+draw. And `eval`'s trim step is a quarter of an 8-bit weight's LSB,
+a sixteenth of a 6-bit code, which is two bits finer than the DAC grxcp's
+calibration note asks for; at that DAC's step a cycle moves by 0.06 of a
+point at the most.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -3742,6 +3753,270 @@ light back is not modelled, nor a converter ranged again. A correction held
 in the trim, a cell at a time, was not run: the tile holds one trim a cell
 and a GEMM here is seven tiles of weights. Lines 40% off. Levels fixed for a
 run. Three draws of five networks. Version 1, or another tile.
+
+### The working point, with the source's third row moved
+
+*Added 2026-10-09.* `sim/pta_mnist.sh DIR WORK refpoint`. Reported, not gated.
+Nothing in `pta_mnist.c` changed for it.
+
+**Why.** grxcp moved its source's third row that day. A comb's lines are now
+level to 20% as they reach the tile, where the row had 5%; they are read at
+each calibration; and every row's weights are scaled by what its line read
+and written at 8 bits, which is the section before's `--levelfix weights8`.
+Two things here then wanted running. Every row a mode calls held has its
+lines 5% off and left alone. And a cycle was run with a source lit once:
+`refcycle`'s held cycle, on its one draw, read as how often right and not
+over the probes-only row of its draw, which `refcal` then found is how a
+cycle has to be read. `refcal` and `refdraws` cycle a tile with no light. So
+the working point grxcp quotes had not been run as the chip is now held, and
+its cycle with a source on no more than one draw.
+
+**What it runs.** The ninth mode on the reference networks. Version 2 on the
+128 × 64 tile on two buses, ten rows on each of five draws, which are
+`refdraws`'s first five.
+
+| Row | What it is |
+|---|---|
+| As budgeted | Version 2 and nothing else |
+| Held as it was | Six minutes of TFLT's drift from weights as written, and a source at 1%, 5% and lines 5% off |
+| Held, lines 20% off | The same with the comb the row now allows, and left alone |
+| Held as it now is | The same, read with sixteen shots a row and corrected on the weights at 8 bits |
+| Probes only | A calibration's 16 probes taken and no trim written |
+| A cycle | Aged six minutes, calibrated, aged six minutes again, with no source: `refdraws`'s |
+| A cycle, the source as it was | The same with the source at 1%, 5% and lines 5% off |
+| A cycle as it is now run | The same with lines 20% off, read and corrected on the weights at 8 bits |
+| A cycle, trim at 8 bits | The cycle with no source again, with `--trimstep 1` |
+| A cycle as it is now run, trim at 8 bits | The cycle as it is now run again, with `--trimstep 1` |
+
+A held row and the probes-only one are read over the as-budgeted row of
+their draw, and a cycle over the probes-only row of its draw: each pair
+meets the same noise, and neither the read nor the correction takes a seed
+of the run's. The networks trained before run beside the reference row for
+row. That is 500 evaluations a data set.
+
+**The trim's step.** The last two rows were added while the first eight were
+running, on reading `eval` for how a cycle's trim and the corrected weights
+meet in the DAC. They do not share its bits there. A trim is held in steps
+of `--trimstep`, in LSB of the operand, and the operand is an 8-bit weight
+whatever `B_w` is: `q(w, B_w)` keeps a weight at the operand's scale. The
+default is a quarter of one, which is a sixteenth of a 6-bit code, four bits
+below it. grxcp's calibration note asks for an 8-bit DAC behind a 6-bit code,
+whose step is a quarter of a code, one 8-bit LSB, and `calib` measured that
+step at version 1 alone. Every calibrated row of every mode since has run at
+the default. So a cycle as it is now run has its weights on the DAC's 8 bits
+and its trim two bits below them, which no 8-bit DAC holds. With `--trimstep
+1` the weights and the trim are on the same 8 bits. A trim rounded to one LSB
+is left 0.29 of one rms and one rounded to a quarter 0.07, beside a
+programming error of one that is drawn again at every write.
+
+**When the lines are read.** `eval` reads them when the evaluation starts.
+In a held row that is after six minutes of drift from weights as written,
+and in a cycle it is six minutes after the calibration, through what those
+six minutes left. A chip that reads at its calibration reads through a
+fresher tile. The lines do not move here, so that is all the difference
+there is.
+
+**How it ran.** In two parts. The first eight rows took 1.6 hours for the
+three data sets side by side on four jobs each. The two rows more took 34
+minutes, with the mode as it now stands running those two rows alone beside
+the 400 lines a data set the first part had written, and its check and its
+tables then taken over all ten. Those 400 lines were byte for byte the same
+after the second part as before it. Of them, 200 on each data set are byte
+for byte what `refdraws` wrote for the same runs: its four rows that this
+mode has too, on five draws. And the cycle with the source as it was, on the
+first draw, is byte for byte `refcycle`'s held cycle, ten lines a data set.
+
+The mode checks every network and every run against its place, as the eight
+before it do: a run's name says its draw, whether it is held or cycled,
+whether a source is lit and how far from level its lines are, whether they
+were read and corrected at 8 bits, and whether its trim is at 8 bits. A held
+row has to have drifted and not been calibrated; a cycle to have been aged,
+calibrated with its trims written, and aged again; and the probes-only row to
+have taken its probes and written nothing. A corrected row has to have run
+the tile at 8-bit weights and taken nothing off its sums, and no other row
+may have been read at all. A cycle whose name says its trim is at 8 bits has
+to have been asked a step of one and printed it, and every other row to have
+been asked none and printed a quarter.
+
+239 errors planted one at a time each fail: 146 in a training's line or a
+run's, after the fact; 53 in the script; and 40 in the tables' own code, which
+the check does not see and which each move the tables. A doctored line is put
+to the mode's check of the network it belongs to, twenty runs, with the check
+of all ten networks taken before the first and after the last. A changed
+script runs in a directory of its own, and a run it asks for that was already
+made, of the same network with the same options, is not made again. The
+planted-error runs are of 200 images, on two draws for the lines and the
+tables and on one for the script but where a change is to a draw's seed.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of five draws, with its standard error from the five networks, each averaged
+over its draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Held as it was: lines 5% off, left alone | +0.058 ± 0.028 | +0.000 ± 0.009 | **+0.231 ± 0.066** | +0.056 ± 0.061 | **+0.592 ± 0.212** | **+0.302 ± 0.057** |
+| Held, lines 20% off, left alone | **+0.490 ± 0.047** | **+0.403 ± 0.030** | **+0.991 ± 0.152** | **+0.461 ± 0.163** | **+2.201 ± 0.332** | **+1.770 ± 0.441** |
+| Held as it now is: lines 20% off, on the weights at 8 bits | **+0.096 ± 0.019** | **+0.086 ± 0.024** | **+0.222 ± 0.052** | +0.062 ± 0.050 | **+0.634 ± 0.187** | **+0.267 ± 0.016** |
+| Probes only | −0.015 ± 0.017 | +0.006 ± 0.017 | −0.038 ± 0.033 | +0.012 ± 0.023 | +0.038 ± 0.027 | +0.014 ± 0.019 |
+| A cycle, no source | +0.030 ± 0.031 | −0.013 ± 0.019 | +0.095 ± 0.052 | +0.046 ± 0.037 | +0.289 ± 0.141 | **+0.142 ± 0.045** |
+| A cycle, the source as it was | **+0.084 ± 0.029** | +0.029 ± 0.027 | **+0.224 ± 0.038** | +0.052 ± 0.024 | **+0.617 ± 0.143** | **+0.321 ± 0.074** |
+| A cycle as it is now run | **+0.128 ± 0.007** | +0.065 ± 0.027 | **+0.186 ± 0.055** | +0.043 ± 0.030 | **+0.574 ± 0.176** | **+0.302 ± 0.046** |
+| A cycle, no source, trim at 8 bits | +0.042 ± 0.030 | +0.010 ± 0.019 | +0.070 ± 0.048 | +0.032 ± 0.040 | +0.300 ± 0.134 | **+0.178 ± 0.041** |
+| A cycle as it is now run, trim at 8 bits | **+0.111 ± 0.016** | +0.049 ± 0.022 | **+0.226 ± 0.058** | +0.087 ± 0.038 | **+0.632 ± 0.182** | **+0.332 ± 0.060** |
+
+How often right, percent.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted | 97.304 ± 0.101 | 97.611 ± 0.047 | 86.966 ± 0.168 | 87.357 ± 0.144 | 92.655 ± 0.567 | 94.910 ± 0.349 |
+| Held as it was: lines 5% off, left alone | 97.245 ± 0.104 | 97.611 ± 0.042 | 86.735 ± 0.132 | 87.301 ± 0.092 | 92.063 ± 0.568 | 94.608 ± 0.397 |
+| Held, lines 20% off, left alone | 96.814 ± 0.102 | 97.208 ± 0.062 | 85.975 ± 0.063 | 86.896 ± 0.036 | 90.454 ± 0.513 | 93.140 ± 0.744 |
+| Held as it now is: lines 20% off, on the weights at 8 bits | 97.208 ± 0.099 | 97.525 ± 0.059 | 86.744 ± 0.125 | 87.295 ± 0.097 | 92.021 ± 0.622 | 94.643 ± 0.334 |
+| Probes only | 97.319 ± 0.098 | 97.604 ± 0.040 | 87.004 ± 0.141 | 87.346 ± 0.147 | 92.617 ± 0.564 | 94.896 ± 0.350 |
+| A cycle, no source | 97.289 ± 0.112 | 97.617 ± 0.057 | 86.909 ± 0.191 | 87.300 ± 0.181 | 92.328 ± 0.697 | 94.754 ± 0.369 |
+| A cycle, the source as it was | 97.235 ± 0.110 | 97.576 ± 0.066 | 86.780 ± 0.154 | 87.294 ± 0.144 | 92.000 ± 0.699 | 94.574 ± 0.412 |
+| A cycle as it is now run | 97.190 ± 0.100 | 97.539 ± 0.059 | 86.818 ± 0.179 | 87.302 ± 0.124 | 92.043 ± 0.736 | 94.594 ± 0.351 |
+| A cycle, no source, trim at 8 bits | 97.277 ± 0.109 | 97.595 ± 0.056 | 86.934 ± 0.188 | 87.313 ± 0.173 | 92.317 ± 0.680 | 94.718 ± 0.371 |
+| A cycle as it is now run, trim at 8 bits | 97.208 ± 0.099 | 97.556 ± 0.055 | 86.778 ± 0.183 | 87.258 ± 0.148 | 91.985 ± 0.737 | 94.564 ± 0.348 |
+
+One row over another on the same draws: how often right in the second, less
+in the first, network by network.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Held as it now is, over held as it was | +0.038 ± 0.029 | **+0.086 ± 0.027** | −0.009 ± 0.030 | +0.006 ± 0.030 | +0.042 ± 0.089 | −0.035 ± 0.069 |
+| Held with the lines left alone, over held as it was | **+0.432 ± 0.024** | **+0.403 ± 0.038** | **+0.760 ± 0.116** | **+0.405 ± 0.105** | **+1.609 ± 0.154** | **+1.468 ± 0.387** |
+| Held as it now is, over held with the lines left alone | **−0.394 ± 0.038** | **−0.317 ± 0.032** | **−0.769 ± 0.118** | **−0.399 ± 0.117** | **−1.567 ± 0.227** | **−1.503 ± 0.452** |
+| A cycle with the source as it was, over a cycle with none | +0.054 ± 0.038 | +0.042 ± 0.015 | +0.128 ± 0.051 | +0.006 ± 0.049 | **+0.328 ± 0.076** | **+0.180 ± 0.062** |
+| A cycle as it is now run, over a cycle with no source | **+0.098 ± 0.033** | **+0.078 ± 0.017** | **+0.090 ± 0.032** | −0.003 ± 0.062 | **+0.285 ± 0.063** | **+0.160 ± 0.036** |
+| A cycle as it is now run, over a cycle with the source as it was | +0.044 ± 0.025 | +0.036 ± 0.018 | −0.038 ± 0.037 | −0.008 ± 0.043 | −0.043 ± 0.062 | −0.019 ± 0.066 |
+| A cycle with its trim at 8 bits, over a cycle | +0.012 ± 0.005 | **+0.022 ± 0.007** | −0.025 ± 0.011 | −0.014 ± 0.022 | +0.011 ± 0.031 | +0.036 ± 0.017 |
+| A cycle as it is now run, its trim at 8 bits, over one as it is now run | −0.017 ± 0.014 | −0.016 ± 0.008 | **+0.041 ± 0.013** | +0.044 ± 0.043 | +0.058 ± 0.033 | +0.030 ± 0.025 |
+| A cycle as it is now run, its trim at 8 bits, over a cycle with its trim at 8 bits | **+0.070 ± 0.022** | **+0.039 ± 0.011** | **+0.156 ± 0.042** | +0.055 ± 0.040 | **+0.332 ± 0.072** | **+0.154 ± 0.048** |
+
+What the probe found on the lines and what its reading would leave, rms, and
+the share of the first layer's weights the correction left at the rail. The
+first two are the tile's and the seed's, and the same for both kinds of
+network and all three data sets.
+
+| | Found on the lines, rms | Left by the reading | Held at the rail, trained before: MNIST | Fashion-MNIST | Inverted | Reference: MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|---|---|---|---|---|
+| Held as it now is: lines 20% off, on the weights at 8 bits | 20.13% | 1.00% | 0.041% | 0.071% | 0.009% | 0.140% | 0.255% | 0.049% |
+| A cycle as it is now run | 20.13% | 0.99% | 0.041% | 0.071% | 0.009% | 0.141% | 0.255% | 0.049% |
+| A cycle as it is now run, trim at 8 bits | 20.13% | 1.00% | 0.041% | 0.071% | 0.009% | 0.141% | 0.255% | 0.049% |
+
+**Held, the move costs the reference networks 0.09 ± 0.03 of a point on
+MNIST, and nothing that can be told on the other two sets.** Held as it now
+is they are right 97.52, 87.30 and 94.64% of the time and lose 0.23, 0.59
+and 0.74 of a point to the tile; held as it was, 97.61, 87.30 and 94.61%,
+and 0.14, 0.58 and 0.78. Seed by seed the move is 0.09 ± 0.03, 0.01 ± 0.03
+and −0.04 ± 0.07: clear on MNIST alone, where it is under a tenth and five
+networks put it between 0.01 and 0.16. The section before had it at 0.05,
+0.06 and −0.05, with no drift and on three draws. For the networks trained
+before it is 0.04 ± 0.03, −0.01 ± 0.03 and 0.04 ± 0.09, none of them clear.
+
+**The read and the correction are part of the row.** Held with lines 20% off
+and left alone the reference networks lose 0.40 ± 0.03, 0.46 ± 0.16 and 1.77
+± 0.44 more than as budgeted, which is 0.40 ± 0.04, 0.41 ± 0.10 and 1.47 ±
+0.39 more than held as it was. The correction takes 0.32, 0.40 and 1.50 of
+that back.
+
+**A cycle with a source lit ends 0.30 of a point over on the inverted set,
+and under a tenth on the other two.** With no source a six-minute cycle ends
+−0.01 ± 0.02, 0.05 ± 0.04 and 0.14 ± 0.04 over the probes-only row of its
+draw on these five draws, where `refdraws`'s ten have −0.01, 0.07 and 0.12.
+With the source as it was it ends 0.03 ± 0.03, 0.05 ± 0.02 and 0.32 ± 0.07
+over, and as it is now run 0.07 ± 0.03, 0.04 ± 0.03 and 0.30 ± 0.05. So the
+source's rows add 0.04 ± 0.02, 0.01 ± 0.05 and 0.18 ± 0.06 at the end of a
+cycle as they were and 0.08 ± 0.02, −0.00 ± 0.06 and 0.16 ± 0.04 as they now
+are, clear on the inverted set either way and on MNIST as they now are. The
+move itself is 0.04 ± 0.02, −0.01 ± 0.04 and −0.02 ± 0.07 there, clear on no
+set. On the inverted set the cycle as it is now run is a tenth or more over
+on every one of the five draws: drift has 0.14 of its 0.30 and the source
+0.16. The networks trained before end 0.13 ± 0.01, 0.19 ± 0.05 and 0.57 ±
+0.18 over, a tenth or more on every set.
+
+**At the DAC's own step a cycle moves by 0.06 of a point at the most.** With
+`--trimstep 1` the cycle with no source costs the reference networks 0.02 ±
+0.01, −0.01 ± 0.02 and 0.04 ± 0.02 more and the cycle as it is now run −0.02
+± 0.01, 0.04 ± 0.04 and 0.03 ± 0.03; for the networks trained before, 0.01 ±
+0.01, −0.02 ± 0.01 and 0.01 ± 0.03, and −0.02 ± 0.01, 0.04 ± 0.01 and 0.06 ±
+0.03. Of the twelve, two are clear: the reference networks' cycle with no
+source on MNIST, and the old networks' cycle as it is now run on
+Fashion-MNIST. At that step a cycle as it is now run ends 0.05 ± 0.02, 0.09
+± 0.04 and 0.33 ± 0.06 over for the reference networks and the cycle with no
+source 0.01 ± 0.02, 0.03 ± 0.04 and 0.18 ± 0.04. For them no set changes
+sides of a tenth; for the old networks the cycle with no source on
+Fashion-MNIST does, from 0.10 to 0.07.
+
+**A trim and a correction on the same 8 bits do little to each other.** What
+the coarser trim costs the corrected cycle, less what it costs the cycle with
+no source, is −0.04 ± 0.01, 0.06 ± 0.05 and −0.01 ± 0.02 for the reference
+networks and −0.03 ± 0.01, 0.07 ± 0.02 and 0.05 ± 0.02 for the old ones:
+within 0.07 of a point, of both signs, and clear on MNIST for the first and
+on Fashion-MNIST for the second.
+
+**Six minutes of drift do nothing to the read.** The probe found the lines
+20.1% off, rms. Its reading would leave them 1.00% off where the tile was
+held from weights as written and 0.99% six minutes after a calibration,
+between 0.82% and 1.17% on any one run. On the three draws the section
+before read through a tile that had not drifted, sixteen shots a row left
+0.98% there and 0.99% here. The rail holds 0.14%, 0.25% and 0.05% of the
+reference networks' weights back.
+
+**What was predicted.** Seven things, written before the mode was written.
+Two more with the two rows that were added, written while the first eight
+rows ran and before any of them was read. What was written with the seven
+said that no cycle had been run with a source lit. That was wrong: `refcycle`
+ran one, on one draw. No prediction used it, and the fourth could have.
+
+1. That held as it now is, the reference networks lose 0.04 to 0.14, 0.02 to
+   0.18 and 0.10 to 0.32 more than as budgeted. Right on all three: 0.09,
+   0.06 and 0.27.
+2. That this is within 0.08 of the old holding on MNIST and 0.12 on
+   Fashion-MNIST, either way, and on the inverted set between 0.20 better and
+   0.05 worse. Right on the last two, 0.01 worse and 0.04 better. Wrong on
+   MNIST by under a hundredth: 0.086.
+3. That held with lines 20% off and left alone they lose 0.30 to 0.60, 0.30
+   to 0.90 and 1.2 to 2.6 more than as budgeted. Right: 0.40, 0.46 and 1.77.
+4. That a six-minute cycle with the source as it was ends 0.00 to 0.10, 0.03
+   to 0.20 and 0.20 to 0.50 over the probes-only row of its draw. Right:
+   0.03, 0.05 and 0.32.
+5. That a cycle as it is now run ends 0.03 to 0.14, 0.03 to 0.20 and 0.12 to
+   0.38 over, and on no set under the cycle with no source. Right in every
+   band: 0.07, 0.04 and 0.30. Wrong about Fashion-MNIST in the second part,
+   by three thousandths: −0.003 ± 0.062.
+6. That with the source on, the cycle is over a tenth on the inverted set,
+   under it on MNIST, and within 0.04 of it on Fashion-MNIST. Right on the
+   first two. Wrong on Fashion-MNIST, where it is 0.06 under.
+7. That the probe, read through a tile calibrated six minutes before, leaves
+   the lines 0.8% to 1.1% off, and the rail holds 0.05% to 0.30% of the
+   weights. Right of the mean, 0.99%, and of the rail to the two places it
+   was written to: 0.14%, 0.25% and 0.05%, the last of them 0.049%. A single
+   run leaves as much as 1.17%.
+8. That a cycle with no source and its trim at 8 bits ends within 0.03 of the
+   cycle as it has been run on MNIST and Fashion-MNIST, and between 0.02
+   better and 0.06 worse on the inverted set. Right on all three: 0.02 worse,
+   0.01 better and 0.04 worse.
+9. That a cycle as it is now run with its trim at 8 bits ends within 0.03 of
+   the one with the finer trim on MNIST and Fashion-MNIST and within 0.06 on
+   the inverted set; and that what the coarser trim costs it, less what it
+   costs the cycle with no source, is within 0.04 on every set. Right on
+   MNIST and the inverted set, 0.02 better and 0.03 worse, and −0.04 and
+   −0.01. Wrong on Fashion-MNIST in both: 0.04 worse, and 0.06.
+
+Not predicted: that the trim at 8 bits would be clear anywhere. It is two
+images in ten thousand on MNIST.
+
+**What this is not.** A chip: the weights are scaled at the host, in the
+harness, and the model's DAC has no rail for a weight and its trim together.
+A comb whose lines move: they are fixed for a run, so nothing here says how
+often they have to be read. A schedule: one calibration. A calibration that
+sees a source's noise: the probes are taken before the light is lit, as in
+every mode. Lines further off than 20%. Five draws and not ten, of the same
+five networks. A trim step between a quarter of an LSB and one, or coarser
+than one. Version 1, or another tile.
 
 ---
 
