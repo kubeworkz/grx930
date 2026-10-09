@@ -89,6 +89,12 @@ a three-minute one 0.08 ± 0.02; on the other two sets six minutes is inside a
 tenth. Held as grxcp holds the chip, over ten draws, they are right 97.59,
 87.30 and 94.65% of the time. What training for the tile buys is in what
 holding adds.
+**And the seventh, the same day** (§5, at its end): a probe that reads a comb
+line's level, `eval --levelprobe`, a row at full scale through a full-scale
+weight. Left alone, lines 20% off cost the reference networks 0.35, 0.40 and
+1.63 of a point and lines 40% off 2.01, 2.26 and 7.79. Read first with
+sixteen shots a row, both cost what level lines do. The probe takes none of
+the run's seeds, so the two rows of a pair meet the same noise.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1087,6 +1093,8 @@ column through, because that turns on how the tile signs a weight, which
 nothing has settled: `pair`, the weight alone, as a balanced pair of
 photodiodes has it; or `offset`, the weight and an offset the host takes off
 again from the operands it sent, as one photodiode would have it.
+*Since 2026-10-08 there is a fourth option, `--levelprobe P`, which reads
+each line's level before the first image and takes it off: §5, at its end.*
 
 **It is not in the contract.** The term is added on the host's side of the
 line, to the sums the tile returns: `a × (w + offset) × error`, summed over a
@@ -1163,6 +1171,8 @@ nothing built here measures a line's level, and it has to be levelled by
 something else or read by a probe with weights in it. This is an argument from
 how the probe is made and not a measurement: in this model the term is outside
 the tile, where the probe does not go.
+*A probe with weights in it was built on 2026-10-08: §5, at its end, "A
+line's level, and a probe that reads it".*
 
 **What was predicted.** Written while the first run was going and before any of
 it was read. Six things.
@@ -3235,6 +3245,226 @@ the errors here are those five's. Other intervals than three minutes and
 six. A draw of the drift alone: a draw moves the noise, the walk and the
 source together, and the pairing takes out the noise. A schedule: it is one
 calibration. Version 1, or another tile.
+
+### A line's level, and a probe that reads it
+
+*Added 2026-10-08.* `sim/pta_mnist.sh DIR WORK reflevel`, and `pta_mnist eval
+--levelprobe P`. Reported, not gated.
+
+**Why.** "What may the light do?" found that a comb line's level is a weight
+error the cell calibration cannot see: that probe reads each cell through a
+weight of zero, which a line's power multiplies. It said the level would have
+to be levelled by something else or read by a probe with weights in it.
+grxcp's plan asks for lines level to 5%, 0.2 dB, and records that nothing
+measures them. This is the probe with weights in it.
+
+**The probe.** `eval --levelprobe P`, after the light is set up and before the
+first image. Two patterns: the rows of one parity at a full-scale weight on
+every column and the rest at zero, then the other parity. Under each, one row
+a shot at full scale, P shots a row. A lit row's neighbours hold a weight of
+zero, so crosstalk brings it nothing. A shot's sum over what was asked for is
+one plus its line's error: its level, and the source's noise that shot. A
+line lights a row on every bus, so a line's reading is the mean over its
+rows, the shots and every column. What is read is taken off the line's
+level, to a step of 1/256. A run prints `levelprobe`, `level_found` and
+`level_left`, the lines' rms before and after, and only when the option is
+given: every line printed without it is what it was.
+
+Three things about how it is built.
+
+- **It draws from a seed of its own** and takes none of the run's GEMM seeds.
+  So a run meets the same noise with the probe and without it, and the two
+  can be read against each other. The cell calibration is not built that way,
+  which is what the section before the last one found the hard way. Checked
+  by hand: with a source so still that there is nothing to read, the line a
+  probed run prints is the unprobed run's but for the probe's three fields.
+- **It leaves the tile as it found it.** It writes no trim and ages nothing.
+  With drift on, its shots are counted on the drift clock as any shot is, P
+  times the tile's rows of them, against a step of 2^31.
+- **It is on the host's side of the line, as the light's term is.** The
+  light's share of a probe shot is added after the converter, as it is in an
+  evaluation, and what is read is taken off the model's own record of the
+  line. §4 is untouched and so are PTM-C and the RTL: the engine has no such
+  mode.
+
+The self-test holds four things: that with a still source, and crosstalk on,
+the light's share of every row's sum as `light_add()` has it is within half a
+step once the probe has run; that with a line's own noise on, what is left is
+that noise over the root of the shots a line gets, and is a line's own and
+not one error on them all; that level lines are left level and a light
+through an offset is refused; and that a GEMM gives the same sums before the
+probe and after it on a tile that has drifted. 16 errors planted in the probe's code
+one at a time each stop it. As first written it passed three of those: it
+checked the probe's own record and not the term an evaluation uses, it took
+its tolerance from the step it was checking, and it could not tell one error
+on every line from an error a line. It was tightened until none passed. One
+change that would be an error on a chip is none here and is not among them: a
+shot credited to another line, the line it then draws its light from. In
+this model a row's light is its line's and nothing else of the row's.
+
+**What it runs.** The seventh mode on the reference networks. Version 2 on the
+128 × 64 tile on two buses, thirteen rows on each of three draws. As
+budgeted. Lit, with the source's noise at grxcp's two rows, 1% for the lines
+together and 5% for a line on its own, and the lines level, or 5%, 20% or 40%
+rms off, each as it is and each read first with sixteen shots a row. The
+lines 20% off read with one shot a row and with sixty-four. And held as grxcp
+holds the chip, six minutes of TFLT's drift and the source's three rows at
+1%, 5% and 5%, as it is and read first. A lit row is read over the level row
+of its draw, and the level row and the two held rows over the as-budgeted
+row of their draw. The networks trained before run beside the reference row
+for row. That is 390 evaluations a data set, and 1.8 hours for the three side
+by side on four jobs each.
+
+The mode checks every network and every run against its place, as the six
+before it do: a run's name says its draw, whether it is lit, how far from
+level its lines are, whether they were read and with how many shots a row,
+and whether it drifted, and those have to be what it was asked and what its
+line printed. A row that was read also has to have found what its name says
+is there. 157 more errors planted one at a time each fail: 94 in a training's
+line or a run's, after the fact; 31 in the script; and 32 in the tables' own code,
+which the check does not see and which each move the tables. The
+planted-error runs take two draws and not three.
+
+Of the lines, 60 on each data set are byte for byte what `refdraws` wrote for
+the same runs: the as-budgeted row and the held row of draws 0 to 2. The
+sweep ran on the build before the self-test was tightened. Six of its lines,
+two a data set, run again on the build that is committed are byte for byte
+the same.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of three draws, with its standard error from the five networks, each averaged
+over its draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The level row, over the as-budgeted row of its draw | +0.049 ± 0.019 | **+0.031 ± 0.008** | **+0.161 ± 0.037** | +0.014 ± 0.036 | **+0.229 ± 0.044** | +0.056 ± 0.031 |
+| Lines 5% off, over the level row of its draw | −0.011 ± 0.033 | +0.002 ± 0.008 | −0.036 ± 0.047 | −0.039 ± 0.035 | +0.097 ± 0.114 | +0.157 ± 0.076 |
+| read first, sixteen shots a row | +0.011 ± 0.006 | **−0.021 ± 0.004** | −0.024 ± 0.015 | −0.002 ± 0.015 | +0.043 ± 0.025 | +0.006 ± 0.009 |
+| Lines 20% off | **+0.411 ± 0.047** | **+0.347 ± 0.012** | **+0.615 ± 0.159** | **+0.395 ± 0.134** | **+1.689 ± 0.383** | **+1.631 ± 0.538** |
+| read first | +0.003 ± 0.005 | **−0.021 ± 0.004** | −0.015 ± 0.016 | +0.005 ± 0.017 | +0.050 ± 0.034 | −0.007 ± 0.007 |
+| Lines 40% off | **+2.431 ± 0.192** | **+2.006 ± 0.072** | **+3.189 ± 0.754** | **+2.265 ± 0.448** | **+8.380 ± 1.159** | **+7.791 ± 2.261** |
+| read first | +0.010 ± 0.006 | **−0.021 ± 0.002** | −0.027 ± 0.015 | +0.002 ± 0.011 | +0.053 ± 0.028 | −0.002 ± 0.008 |
+| Level lines, read | +0.007 ± 0.005 | **−0.020 ± 0.003** | −0.025 ± 0.015 | −0.003 ± 0.014 | +0.043 ± 0.029 | +0.003 ± 0.009 |
+| Lines 20% off, read with one shot a row | **+0.023 ± 0.006** | −0.000 ± 0.017 | −0.032 ± 0.044 | +0.053 ± 0.050 | +0.149 ± 0.108 | +0.051 ± 0.024 |
+| read with sixty-four | +0.011 ± 0.007 | −0.002 ± 0.005 | −0.003 ± 0.011 | **+0.016 ± 0.005** | +0.017 ± 0.010 | −0.007 ± 0.013 |
+| Held, over the as-budgeted row of its draw | +0.069 ± 0.031 | +0.012 ± 0.015 | +0.175 ± 0.107 | +0.043 ± 0.072 | **+0.530 ± 0.172** | **+0.280 ± 0.066** |
+| held, and read first | +0.063 ± 0.029 | +0.010 ± 0.026 | **+0.207 ± 0.073** | +0.050 ± 0.040 | **+0.543 ± 0.141** | **+0.103 ± 0.028** |
+
+What a read buys: a read row less the row it was read from.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Level lines, read | −0.007 ± 0.005 | **+0.020 ± 0.003** | +0.025 ± 0.015 | +0.003 ± 0.014 | −0.043 ± 0.029 | −0.003 ± 0.009 |
+| Lines 5% off, read | −0.022 ± 0.039 | **+0.023 ± 0.008** | −0.012 ± 0.058 | −0.037 ± 0.022 | +0.054 ± 0.115 | +0.151 ± 0.074 |
+| Lines 20% off, read | **+0.408 ± 0.049** | **+0.367 ± 0.013** | **+0.630 ± 0.167** | **+0.390 ± 0.127** | **+1.639 ± 0.368** | **+1.639 ± 0.541** |
+| Lines 40% off, read | **+2.421 ± 0.191** | **+2.027 ± 0.070** | **+3.216 ± 0.763** | **+2.263 ± 0.442** | **+8.327 ± 1.151** | **+7.793 ± 2.268** |
+| Lines 20% off, read with one shot a row | **+0.389 ± 0.050** | **+0.347 ± 0.012** | **+0.647 ± 0.147** | +0.342 ± 0.141 | **+1.540 ± 0.354** | **+1.580 ± 0.548** |
+| read with sixty-four | **+0.400 ± 0.049** | **+0.349 ± 0.012** | **+0.619 ± 0.164** | **+0.379 ± 0.134** | **+1.672 ± 0.378** | **+1.638 ± 0.531** |
+| Held, and read | +0.006 ± 0.012 | +0.002 ± 0.026 | −0.031 ± 0.048 | −0.007 ± 0.047 | −0.013 ± 0.112 | +0.177 ± 0.090 |
+
+The lines themselves. They are the tile's and the seed's, and the same for
+both kinds of network and all three data sets.
+
+| | Found, rms | Left, rms | Should leave, by count |
+|---|---|---|---|
+| Level lines, read | 0.00% | 0.91% | 0.91% |
+| Lines 5% off, read | 5.02% | 0.92% | 0.91% |
+| Lines 20% off, read | 20.08% | 0.91% | 0.91% |
+| Lines 40% off, read | 40.17% | 0.92% | 0.91% |
+| Lines 20% off, read with one shot a row | 20.08% | 3.61% | 3.61% |
+| read with sixty-four | 20.08% | 0.45% | 0.46% |
+| Held, and read | 5.02% | 0.92% | 0.91% |
+
+**Left alone, a comb that is not level costs more than the tile does.** With
+lines 20% off the reference networks lose 0.35 ± 0.01, 0.40 ± 0.13 and 1.63 ±
+0.54 of a point more than with level lines, and with lines 40% off 2.01 ±
+0.07, 2.26 ± 0.45 and 7.79 ± 2.26. The tile as budgeted costs them 0.13, 0.50
+and 0.48 on these draws. Twice as far from level costs 5.8, 5.7 and 4.8 times
+as much. One comb at 40% costs one reference network 22.4 points on the
+inverted set, and one old network 16.0. Training for the tile's noise buys
+little against it: seed by seed, lines 20% off cost a reference network −0.06
+± 0.05, −0.22 ± 0.17 and −0.06 ± 0.62 against the old one, none of them clear.
+
+**At 5% it costs nothing that can be told on two sets, and may cost on the
+third.** 0.00 ± 0.01, −0.04 ± 0.04 and 0.16 ± 0.08 for the reference networks,
+and −0.01 ± 0.03, −0.04 ± 0.05 and 0.10 ± 0.11 for the old ones. None of the
+six is clear.
+
+**Read first, a comb costs nothing that can be seen, however far off it
+was.** At 5%, 20% and 40% alike the reference networks end within 0.03 of a
+point of level lines on every set, and the old ones within 0.06. The read
+buys what the comb cost: 0.37, 0.39 and 1.64 at 20%, and 2.03, 2.26 and 7.79
+at 40%.
+
+**What the probe leaves is the source's noise over its shots, and not the
+comb.** Sixteen shots a row leave 0.91% to 0.92% whatever was there, and on
+any one comb 0.79% to 1.05%. Counted, they should leave 0.91%: a shot's noise
+of 5.1% over the root of 32, and the rounding of the step. One shot a row
+leaves 3.61% for a count of 3.61%, and sixty-four 0.45% for 0.46%. By that
+count 14 shots a row leave a line within 1%.
+
+**One shot a row already takes back nearly all of it.** With lines 20% off and
+read with one shot the reference networks end 0.00 ± 0.02, 0.05 ± 0.05 and
+0.05 ± 0.02 over level lines, and the old ones 0.02 ± 0.01, −0.03 ± 0.04 and
+0.15 ± 0.11.
+
+**Held, the read buys nothing on two sets and may buy on the third.** Holding
+adds 0.01 ± 0.02, 0.04 ± 0.07 and 0.28 ± 0.07 to what the reference networks
+lose as budgeted, and 0.01 ± 0.03, 0.05 ± 0.04 and 0.10 ± 0.03 with the lines
+read first. On the inverted set the read buys 0.18 ± 0.09, which is 2.0 of
+its errors and not clear. It buys the old networks nothing on any set.
+
+**A read costs level lines nothing, and one cell says otherwise.** With lines
+that are level already, the six cells are within 0.05 of a point read or
+not. One is clear by five networks' rule: the reference networks on MNIST
+are right 0.020 ± 0.003 more often read, which is two images in ten thousand.
+It should not be there. What sixteen shots leave on a comb is centred on
+nothing: on a scratch build that prints it, the mean over a comb's 64 lines
+is 0.007% over the mode's fifteen combs, and never over 0.11% on one. So the
+two rows were run by hand on seven more draws, MNIST and the reference
+networks only: −0.011 ± 0.006, the other way, and over all ten −0.002 ± 0.004.
+Of the 36 read rows set beside level lines, 6 are clear by that rule, none by
+more than 0.03 of a point, and they go both ways. Four of the six are that
+one cell seen four times: the sixteen-shot rows of a network on a draw take
+the same probe draws whatever the lines' level, and what is left on them is
+the same to 0.07%. That is the rule misfiring on differences of an image or
+two, where five networks happen to agree, as the section before the last
+found of it.
+
+**What was predicted.** Written before the probe was written or anything was
+run for it, on 2026-10-08. Five things.
+
+1. That left alone, lines 20% off cost the reference networks 0.1 to 0.6 of a
+   point on MNIST, 0.2 to 1.2 on Fashion-MNIST and 0.8 to 4 on the inverted
+   set, and lines 40% off 0.6 to 3, 1 to 6 and 4 to 15. Right on all six, in
+   bands that wide: 0.35, 0.40 and 1.63, and 2.01, 2.26 and 7.79.
+2. That read with sixteen shots a row they are within 0.05, 0.08 and 0.10 of
+   level lines on the three sets, at 5%, 20% and 40% alike. Right: within
+   0.03 on every set.
+3. That what the probe leaves is 0.8% to 1.1% whatever was there. Right:
+   0.91% to 0.92%.
+4. That at 5% the read buys nothing that can be seen on MNIST and
+   Fashion-MNIST, within 0.04, and 0.00 to 0.20 on the inverted set. Right:
+   0.02, −0.04 and 0.15.
+5. That held, the read moves the reference networks by less than 0.05 on
+   MNIST and 0.08 on Fashion-MNIST, and buys 0.00 to 0.20 on the inverted
+   set. Right: 0.00, −0.01 and 0.18.
+
+Not predicted: that one shot a row would be enough, or that one comb could
+cost one network 22 points.
+
+**What this is not.** A correction that is built. What the probe reads is
+taken off the line's level in the model, exactly, to its step. Where a chip
+would apply it is not modelled: on the weights as they are written, on a
+row's drive, or on a row's inputs at the host, and each would cost something
+this does not count. It is first order, as the light's own term is, and a line's
+light does not pass the converter. A line 40% rms off is a Gaussian here,
+which puts one line in 160 at less than no light: that row is a stress and
+not a comb. The three levels are one comb scaled, and not three combs. The
+levels are fixed for a run. An error that scales a row and is not its line's
+would read the same. Three draws of five networks. Version 1, or another
+tile.
 
 ---
 

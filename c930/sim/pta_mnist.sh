@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -54,11 +54,17 @@
 # seed and 10 D more.  `refdraws` is the sixth: REFDRAWS_TILE and
 # REFDRAWS_BUSES set its tile and its buses (default 128x64 and 2),
 # REFDRAWS_DRAWS the draws it runs (default "0 1 2 3 4 5 6 7 8 9") and
-# REFDRAWS_HOURS the intervals it cycles at (default "0.05 0.1").
+# REFDRAWS_HOURS the intervals it cycles at (default "0.05 0.1").  `reflevel`
+# is the seventh: REFLEVEL_TILE and REFLEVEL_BUSES set its tile and its buses
+# (default 128x64 and 2), REFLEVEL_DRAWS the draws it runs (default "0 1 2"),
+# REFLEVEL_LINES how far from level it leaves a comb's lines (default
+# "0.05 0.2 0.4"), and REFLEVEL_SHOTS the other shots a row it reads them
+# with, beside 16, at REFLEVEL_AT (default "1 64", at 0.2, which has to be
+# one of the lines).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,58p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,63p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -2438,6 +2444,273 @@ if [ "$what" = refdraws ]; then
     sed 's/, draw [0-9]*|.*//' "$work/out/refdraws_settings.txt" | awk '!seen[$0]++' | while read -r base; do
         printf '%-26s' "$base"
         for k in before reference; do refdraws_over $k "$base"; done
+        echo
+    done
+fi
+
+# `reflevel`: a comb's lines that are not level, and a probe that reads them.
+# grxcp's plan asks for lines level to 5% and says nothing built measures a
+# line's level: the cell calibration probes through a weight of zero, which a
+# line's power multiplies.  `eval --levelprobe P` is that measurement: a row
+# at full scale against a full-scale weight, its neighbours' weights at zero,
+# P shots a row, and what it reads taken off the line.  This lights the tile
+# with a source's noise at the plan's two rows, 1% for the lines together and
+# 5% for a line on its own, and then leaves the lines level, or off by 5%,
+# 20% and 40% rms, each as it is and each read with sixteen shots a row; the
+# middle one read with one shot and with sixty-four; and the tile held as
+# grxcp holds the chip, six minutes of drift on, as it is and read.  The probe
+# draws from a seed of its own, so a row that is read meets the noise the row
+# that is not does, and every lit row meets the noise of the level row of its
+# draw.  A draw D seeds the tile with the network's seed and 10 D more, which
+# moves its noise, its drift's walk, its source and which lines are high.
+# Both kinds of network, row for row.
+if [ "$what" = reflevel ]; then
+    tile=${REFLEVEL_TILE:-128x64}
+    buses=${REFLEVEL_BUSES:-2}
+    draws=${REFLEVEL_DRAWS:-0 1 2}
+    lines=${REFLEVEL_LINES:-0.05 0.2 0.4}
+    shots=${REFLEVEL_SHOTS:-1 64}
+    at=${REFLEVEL_AT:-0.2}
+    case " $lines " in *" $at "*) ;; *) echo "reflevel: REFLEVEL_AT has to be one of REFLEVEL_LINES" >&2; exit 2 ;; esac
+    case " $shots " in *" 16 "*) echo "reflevel: REFLEVEL_SHOTS are the shots beside 16" >&2; exit 2 ;; esac
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    b="--impair $all $r"
+    d="--impair $all,drift $r --drift tflt"
+    n="--src 0.01 --srcline 0.05 --buses $buses"
+    src="--src 0.01 --srcline 0.05 --srcflat 0.05 --buses $buses"
+    # row|options.  Every row's name ends in its draw.
+    for dd in $draws; do
+        echo "as budgeted, draw $dd|$b"
+        echo "lit, lines level, draw $dd|$b $n"
+        echo "lit, lines level, read, draw $dd|$b $n --levelprobe 16"
+        for x in $lines; do
+            echo "lit, lines to $x, draw $dd|$b $n --srcflat $x"
+            echo "lit, lines to $x, read, draw $dd|$b $n --srcflat $x --levelprobe 16"
+        done
+        for p in $shots; do echo "lit, lines to $at, read with $p, draw $dd|$b $n --srcflat $at --levelprobe $p"; done
+        echo "held, as written, 0.1 h, draw $dd|$d --hours 0.1 $src"
+        echo "held, as written, 0.1 h, read, draw $dd|$d --hours 0.1 $src --levelprobe 16"
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/reflevel_settings.txt"
+    # reflevel_one NET ROW ARGS...: one test-set pass, its line to
+    # out/reflevel.d/NET_ROW.txt
+    reflevel_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/reflevel.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/reflevel.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f reflevel_one
+    # reflevel_row NAME: a row's name as a file's
+    reflevel_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # reflevel_net SEED KIND: the network's file, trained before or the reference
+    reflevel_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            for sd in 1 2 3 4 5; do echo "$(reflevel_net $sd $k) $(reflevel_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/reflevel_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'reflevel_one "$@"' _
+
+    # reflevel_file SEED KIND NAME: the file reflevel_one wrote for that run
+    reflevel_file() { echo "$work/out/reflevel.d/$(basename "$(reflevel_net "$1" "$2")" .net)_$(reflevel_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; its seed is its draw's; and its
+    # name says whether it is lit, how far from level its lines are, whether
+    # they were read and with how many shots a row, and whether it drifted,
+    # which have to be what it was asked and what its line printed.  A row that
+    # was read also has to have found what its name says is there: nothing on
+    # level lines, and otherwise within four parts in ten of it, which sixty-four
+    # lines drawn at that rms are.
+    reflevel_ok=yes
+    reflevel_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(reflevel_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || reflevel_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(reflevel_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        probe = 0
+                        if (match(base, /, read with [0-9]+$/)) { probe = substr(base, RSTART + 12) + 0; base = substr(base, 1, RSTART - 1) }
+                        else if (match(base, /, read$/)) { probe = 16; base = substr(base, 1, RSTART - 1) }
+                        budget = (base == "as budgeted") ? 1 : 0
+                        is_held = (base == "held, as written, 0.1 h") ? 1 : 0
+                        level = (base == "lit, lines level") ? 1 : 0
+                        uneven = (base ~ /^lit, lines to [0-9.]+$/) ? 1 : 0
+                        flat = uneven ? substr(base, 15) + 0 : 0.05 * is_held
+                        lit = level + uneven + is_held
+                        sane = sane && drawn && (budget + lit == 1) && !(budget && probe) && (!uneven || flat > 0) && m == 5 + is_held &&
+                               (is_held == (("drift" in on) ? 1 : 0)) && (is_held == has("drift")) && !has("seed") &&
+                               (!is_held || want["drift"] == "tflt") && has("hours") == is_held && asked("hours") == 0.1 * is_held &&
+                               !has("calibrate") && !has("post-hours") && !has("trimmax") && !has("trimstep") &&
+                               has("src") == lit && asked("src") == 0.01 * lit && has("srcline") == lit && asked("srcline") == 0.05 * lit &&
+                               has("srcflat") == (flat > 0) && asked("srcflat") == flat && has("buses") == lit && asked("buses") == nb * lit &&
+                               !has("srcsign") && has("levelprobe") == (probe > 0) && asked("levelprobe") == probe }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == (is_held ? "tflt" : "none") && v["hours"] == 0.1 * is_held && (v["steps"] > 0) == is_held &&
+                               v["cal"] == 0 && v["post_hours"] == 0 && near(v["trimstep"], 0.25, 1e-12) &&
+                               v["trimmax"] == 128 && !("hidshift" in v) && !("thermalline" in v)
+                          if (lit) ok = ok && v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] + 0 == flat &&
+                                        v["srcsign"] == "pair" && v["buses"] == nb
+                          else ok = ok && !("src" in v)
+                          if (probe) ok = ok && v["levelprobe"] == probe && ("level_left" in v) &&
+                                          ((flat > 0) ? near(v["level_found"] / flat, 1, 0.4) : v["level_found"] == 0)
+                          else ok = ok && !("levelprobe" in v) && !("level_found" in v) && !("level_left" in v) }
+                END { exit !(NR == 2 && ok) }' || reflevel_ok=NO
+            reflevel_runs=$((reflevel_runs + 1))
+        done < "$work/out/reflevel_settings.txt"
+    done; done
+    echo "== reflevel: $reflevel_runs runs, each of them the network and the row its place says: $reflevel_ok"
+    [ "$reflevel_ok" = yes ] || exit 1
+
+    # reflevel_partner NAME: the row a row is read over, which meets its
+    # noise: the level row of its draw for a lit row, read or not, and the
+    # as-budgeted row of its draw for the level row and for the two held
+    # rows.  The as-budgeted row of a draw is read over the first draw's
+    reflevel_partner() {
+        local base=${1%, draw *} dd=${1##*, draw }
+        case "$base" in
+        "as budgeted") echo "as budgeted, draw ${draws%% *}" ;;
+        "lit, lines level") echo "as budgeted, draw $dd" ;;
+        "lit, "*) echo "lit, lines level, draw $dd" ;;
+        *) echo "as budgeted, draw $dd" ;;
+        esac
+    }
+    # reflevel_unread BASE: the row a read row was read from
+    reflevel_unread() { echo "${1%, read*}"; }
+    # reflevel_stat KIND NAME: how often the five networks are right in a row,
+    # mean and standard error, and what the row adds over its partner, network
+    # by network
+    reflevel_stat() {
+        local sd partner
+        partner=$(reflevel_partner "$2")
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(reflevel_file $sd "$1" "$partner")"
+            sed 's/^/B /' "$(reflevel_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = a - x; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # reflevel_over KIND BASE: a row over all its draws.  How often right, and
+    # what it adds over its partner: the mean; its standard error, from the
+    # five networks, each averaged over its draws; and the standard deviation
+    # from draw to draw of the five networks' mean
+    reflevel_over() {
+        local sd dd name
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do
+                name="$2, draw $dd"
+                sed "s/^/A $sd $dd /" "$(reflevel_file $sd "$1" "$(reflevel_partner "$name")")"
+                sed "s/^/B $sd $dd /" "$(reflevel_file $sd "$1" "$name")"
+            done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "A") { a = x; next }
+              g = a - x
+              rn[$2] += x; gn[$2] += g; cn[$2]++; rd[$3] += x; gd[$3] += g; cd[$3]++ }
+            END { for (k in cn) { x = rn[k] / cn[k]; g = gn[k] / cn[k]; rs += x; rss += x * x; gs += g; gss += g * g; nn++ }
+                  for (k in cd) { x = rd[k] / cd[k]; g = gd[k] / cd[k]; ds += x; dss += x * x; hs += g; hss += g * g; nd++ }
+                  printf " %8.3f +-%5.3f %6.3f %7.3f +-%5.3f %6.3f", rs / nn, dev(rs, rss, nn) / sqrt(nn), dev(ds, dss, nd),
+                         gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+    }
+    # reflevel_read KIND BASE: a read row over all its draws, against the row
+    # it was read from.  What the read buys, which is the read row less the
+    # other, network by network: the mean, its standard error from the five
+    # networks each averaged over its draws, and the standard deviation from
+    # draw to draw of the five networks' mean.  And the lines themselves, in
+    # percent, a mean over the runs of each run's rms: what was there, and
+    # what the probe left
+    reflevel_read() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do
+                sed "s/^/A $sd $dd /" "$(reflevel_file $sd "$1" "$(reflevel_unread "$2"), draw $dd")"
+                sed "s/^/B $sd $dd /" "$(reflevel_file $sd "$1" "$2, draw $dd")"
+            done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "A") { a = x; next }
+              g = x - a
+              gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++; fs += v["level_found"]; ls += v["level_left"]; runs++ }
+            END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                  for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                  printf " %7.3f +-%5.3f %6.3f %7.2f %6.2f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd),
+                         100 * fs / runs, 100 * ls / runs }'
+    }
+    echo "== reflevel: the $tile tile on $buses buses at v2, five networks, mean and standard error.  How"
+    echo "== often right, percent, and what a row adds over the row it is read over, network by"
+    echo "== network: a lit row over the level row of its draw, the level row and the held rows"
+    echo "== over the as-budgeted row of their draw, and that over the first draw's"
+    printf '%-40s %14s %14s %14s %14s' "" "before right" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-40s' "$name"
+        for k in before reference; do reflevel_stat $k "$name"; done
+        echo
+    done < "$work/out/reflevel_settings.txt"
+    echo "== reflevel: a row over its draws.  How often right, and what it adds over the row it is"
+    echo "== read over: the mean, its standard error from five networks each averaged over its"
+    echo "== draws, and the standard deviation from draw to draw of the five networks' mean"
+    printf '%-32s %25s %24s %25s %24s' "" "before right" "and adds" "reference right" "and adds"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/reflevel_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-32s' "$base"
+        for k in before reference; do reflevel_over $k "$base"; done
+        echo
+    done
+    echo "== reflevel: what a read buys: a read row less the row it was read from, network by"
+    echo "== network, over its draws, with its standard error and its standard deviation from draw"
+    echo "== to draw; and the lines, percent rms: what was there, and what the probe left"
+    printf '%-32s %24s %14s %24s %14s' "" "before: buys" "found, left" "reference: buys" "found, left"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/reflevel_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        case "$base" in *", read"*) ;; *) continue ;; esac
+        printf '%-32s' "$base"
+        for k in before reference; do reflevel_read $k "$base"; done
         echo
     done
 fi

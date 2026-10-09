@@ -1331,6 +1331,105 @@ static int calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *t
     return 0;
 }
 
+/*
+ * The level probe.  Nothing else here measures a line's level: the cell probe
+ * above reads each cell through a weight of zero, which a line's power
+ * multiplies and so says nothing of.  This reads it through a weight that is
+ * not zero.  A row at full scale against a full-scale weight on every column,
+ * with its neighbours' weights at zero so that crosstalk brings it nothing,
+ * and a shot's sum over what was asked for is one plus that line's error: its
+ * level, and the source's noise that shot.  `repeats` shots a row average the
+ * noise; a line lights a row on every bus, and every column of a shot reads
+ * it.
+ *
+ * What it reads it takes off the line's level, to a step of 1 / LEVEL_STEP:
+ * the host scales that line's inputs by it.  First order, as the light's own
+ * term is.
+ *
+ * It draws from a seed of its own and takes none of the run's GEMM seeds, so
+ * a run meets the same noise with the probe and without it.  The cell
+ * calibration is not built that way, and `refcal` is what that cost to find.
+ * It writes no trim and ages nothing.  With drift on, its shots are counted on
+ * the drift clock as any shot is, `repeats` times the tile's rows of them,
+ * against a step of 2^31.
+ *
+ * Returns 0, or -1 if it could not run: no light, a light through an offset,
+ * or no shots.  *found and *left are the rms of the lines' levels before it
+ * and after.
+ */
+#define LEVEL_STEP 256.0
+
+static int level_probe(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, uint32_t seed,
+                       int repeats, gemm_buf *g, double *found, double *left)
+{
+    const int k = tile->rows, n = tile->cols;
+    const int32_t full = (int32_t)((((int64_t)1 << (tile->din_w - 1)) - 1));
+    const int quant = (cfg->impair & PTA_QUANT) != 0;
+    const int64_t pa = quant ? contract_quant(full, (int)cfg->act_bits, tile->din_w) : full;
+    const int64_t pw = quant ? contract_quant(full, (int)cfg->w_bits, tile->din_w) : full;
+    const int quantised = quant && cfg->adc_bits != 0;
+    const int64_t codes = quantised ? (((int64_t)1 << (cfg->adc_bits - 1)) - 1) : 0;
+    const double asked = (double)pa * (double)pw;
+    const uint32_t own = seed ^ 0x1E7E1u;
+    uint32_t count = 0;                 /* its own GEMMs: the run's counter is not touched */
+    double *sum;
+    pta_cfg c = *cfg;
+    int parity, rep, r, col, shot, s, i;
+
+    if (!light.on || light.offset || repeats < 1 || pa == 0 || pw == 0 || k < 2)
+        return -1;
+    sum = (double *)calloc((size_t)light.lines, sizeof *sum);
+    if (!sum)
+        return -1;
+    /* a range with room for a line at twice its level */
+    for (s = 0; quantised && s < 40 && 2 * pa * pw > (codes << s); ++s)
+        ;
+    c.adc_shift = (uint32_t)(quantised ? s : 0);
+    *found = 0.0;
+    for (i = 0; i < light.lines; ++i)
+        *found += light.level[i] * light.level[i];
+    for (parity = 0; parity < 2; ++parity) {
+        const int rows = (k - parity + 1) / 2;          /* the rows of this parity */
+        memset(g->B, 0, (size_t)k * n * sizeof g->B[0]);
+        for (r = parity; r < k; r += 2)
+            for (col = 0; col < n; ++col)
+                g->B[r * n + col] = (int32_t)pw;
+        memset(g->A, 0, (size_t)rows * k * sizeof g->A[0]);
+        for (shot = 0; shot < rows; ++shot)
+            g->A[shot * k + parity + 2 * shot] = full;  /* one row a shot */
+        for (rep = 0; rep < repeats; ++rep) {
+            c.seed = gemm_seed(own, count);
+            if (pta_gemm(&c, tile, dev, 0, rows, n, k, g->A, g->B, g->C) < 0) {
+                free(sum);
+                return -1;
+            }
+            for (shot = 0; shot < rows; ++shot) {
+                const int line = (parity + 2 * shot) % light.lines;
+                uint64_t st = ((uint64_t)own << 32) | (uint32_t)(count * (uint32_t)k + (uint32_t)shot);
+                double eps, lit, got = 0.0;
+                st = splitmix64(&st);
+                eps = light.level[line] + (light.all > 0.0 ? light.all * gauss01(&st) : 0.0);
+                eps += light.line > 0.0 ? light.line * gauss01(&st) : 0.0;
+                lit = floor(asked * eps + 0.5);         /* the light's share, as light_add() rounds it */
+                for (col = 0; col < n; ++col)
+                    got += (double)g->C[shot * n + col] + lit;
+                sum[line] += got / (n * asked) - 1.0;
+            }
+            ++count;
+        }
+    }
+    *left = 0.0;
+    for (i = 0; i < light.lines; ++i) {
+        const double read = sum[i] / ((double)repeats * light.buses);
+        light.level[i] -= floor(read * LEVEL_STEP + 0.5) / LEVEL_STEP;
+        *left += light.level[i] * light.level[i];
+    }
+    *found = sqrt(*found / light.lines);
+    *left  = sqrt(*left / light.lines);
+    free(sum);
+    return 0;
+}
+
 /* ------------------------------------------------------------------------- */
 
 /* The smallest shift s for which round(v / 2^s) <= lim. */
@@ -1747,7 +1846,7 @@ static int cmd_eval(int argc, char **argv)
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
-        "--w1gain", NULL};
+        "--w1gain", "--levelprobe", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1768,6 +1867,7 @@ static int cmd_eval(int argc, char **argv)
     const double src_flat = atof(opt(argc, argv, "--srcflat", "0"));
     const char *src_sign = opt(argc, argv, "--srcsign", "pair");
     const int buses = atoi(opt(argc, argv, "--buses", "1"));
+    const int levelprobe = atoi(opt(argc, argv, "--levelprobe", "0"));
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
@@ -1785,6 +1885,7 @@ static int cmd_eval(int argc, char **argv)
     uint32_t gemm = 0;
     uint64_t steps = 0, post_steps = 0;
     long sats = 0, elements = 0, per_image = 0, r;
+    double level_found = 0.0, level_left = 0.0;
     int right = 0, base, m, k, o, l, H;
 
     memset(&pr, 0, sizeof pr);
@@ -1955,6 +2056,13 @@ static int cmd_eval(int argc, char **argv)
     if (lit && light_setup(hn, cfg, seed, src_all, src_line, src_flat, buses,
                            strcmp(src_sign, "offset") == 0) != 0)
         return 2;
+    /* The lines' levels, read once the light is lit and before the first image. */
+    if (levelprobe != 0 &&
+        (levelprobe < 0 || !lit ||
+         level_probe(&dev, &cfg[0], &tile, seed, levelprobe, g, &level_found, &level_left) != 0)) {
+        fprintf(stderr, "pta_mnist: --levelprobe takes shots a row, and needs a light through a pair\n");
+        return 2;
+    }
     for (l = 0; l <= H; ++l)
         per_image += (long)layer_out(H, l) * ((layer_in(l) + tile_rows - 1) / tile_rows);
     for (base = 0; base < images; base += MAX_M) {
@@ -2005,6 +2113,10 @@ static int cmd_eval(int argc, char **argv)
     if (lit)
         printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
                buses, src_sign);
+    /* And the level probe only when it was taken: what the lines were, and what it left. */
+    if (levelprobe)
+        printf(" levelprobe=%d level_found=%.4f level_left=%.4f", levelprobe, level_found,
+               level_left);
     /* The noise as a laser fixes it, and what that is in each layer's own LSB:
      * `thermal` earlier in the line is the first layer's. */
     if (thermalline) {
@@ -2534,6 +2646,166 @@ static int cmd_selftest(void)
         pta_device_free(&dev);
         gemm_free(g);
     }
+
+    /* 8b. the level probe.  With crosstalk on, nothing else impaired and the
+     *     source still, a shot through a full-scale weight reads its line's
+     *     level exactly, its neighbours' weights being zero.  So after it the
+     *     light's share of a row's sum, as light_add() has it, is within half
+     *     the probe's step on every row: the line the probe corrected is the
+     *     line that lights that row.  With a line's own noise on, what it
+     *     leaves is that noise over the root of the shots a line gets, a row
+     *     on every bus, and a line's own: not one error on them all.  Level
+     *     lines are left level.  It refuses a light it
+     *     cannot read: none, or one through an offset.  And it leaves the
+     *     tile as it found it. */
+    {
+        const int D = 8, H = 1, R = 16, NB = 4;
+        const int32_t full = (1 << (D - 1)) - 1;
+        const double sigma = 0.2, noise = 0.05;
+        const double step = 1.0 / 256.0;        /* the probe's, written out: its own cannot move this */
+        pta_tile tile;
+        pta_device dev;
+        pta_cfg cfg[MAX_L];
+        host_net hz;
+        gemm_buf *g;
+        int32_t *a;
+        int64_t *y;
+        double found = 0.0, left = 0.0, before = 0.0, worst = 0.0, quiet = 0.0, noisy = 0.0;
+        double flat = 1.0, apart = 0.0, mean = 0.0, want;
+        int ran = 1, refused = 1, pass, r, c, i;
+
+        tile_rows = 64;
+        tile_cols = 12;
+        gemm_k = 64;
+        gemm_n = 12;
+        tile.rows = tile_rows;
+        tile.cols = tile_cols;
+        tile.din_w = D;
+        tile.acc_w = ACC_W;
+        g = gemm_alloc();
+        ran &= host_alloc(&hz, D, H) == 0;
+        a = (int32_t *)calloc((size_t)layer_in(0), sizeof *a);
+        y = (int64_t *)calloc((size_t)layer_out(H, 0), sizeof *y);
+        pta_device_init(&dev, &tile);
+        pta_model_reset(&dev, 99);
+        memset(cfg, 0, sizeof cfg);
+        ran &= g != NULL && a != NULL && y != NULL;
+        /* a first layer whose first tile is all weights of full scale */
+        for (c = 0; ran && c < tile_cols; ++c)
+            for (r = 0; r < tile_rows; ++r)
+                hz.w[0][c * layer_in(0) + r] = full;
+        /* no light, and a light through an offset */
+        light_free();
+        refused &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) != 0;
+        ran &= light_setup(&hz, cfg, 7, 0.0, 0.0, sigma, NB, 1) == 0;
+        refused &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) != 0;
+        /* a still source, through a tile whose rows leak 2% into their
+         * neighbours: one shot a row reads it.  The light's share of each
+         * row's sum, over what the row asked for, before the probe and after */
+        cfg[0].impair = PTA_XTALK;
+        cfg[0].xtalk  = 5;
+        ran &= light_setup(&hz, cfg, 7, 0.0, 0.0, sigma, NB, 0) == 0;
+        for (pass = 0; ran && pass < 2; ++pass) {
+            double most = 0.0;
+            for (r = 0; r < tile_rows; ++r) {
+                memset(a, 0, (size_t)layer_in(0) * sizeof *a);
+                memset(y, 0, (size_t)layer_out(H, 0) * sizeof *y);
+                a[r] = full;
+                light.base = 0;
+                light_add(&hz, &cfg[0], 0, 1, a, y);
+                for (c = 0; c < tile_cols; ++c) {
+                    const double share = fabs((double)y[c]) / ((double)full * full);
+                    if (share > most)
+                        most = share;
+                }
+            }
+            if (pass == 0) {
+                before = most;
+                ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &quiet, &left) == 0;
+            } else {
+                worst = most;
+            }
+        }
+        /* a line's own noise: R shots a row, on NB buses */
+        ran &= light_setup(&hz, cfg, 7, 0.0, noise, sigma, NB, 0) == 0;
+        ran &= level_probe(&dev, &cfg[0], &tile, 7, R, g, &found, &noisy) == 0;
+        /* and line by line: what is left on one line is not what is left on the next */
+        for (i = 0; ran && i < light.lines; ++i)
+            mean += light.level[i] / light.lines;
+        for (i = 0; ran && i < light.lines; ++i)
+            apart += (light.level[i] - mean) * (light.level[i] - mean) / (light.lines - 1);
+        apart = sqrt(apart);
+        /* level lines */
+        ran &= light_setup(&hz, cfg, 7, 0.0, 0.0, 0.0, NB, 0) == 0;
+        ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &flat) == 0;
+        want = sqrt(noise * noise / (R * NB) + step * step / 12.0);
+        printf("selftest: the level probe: lines %.3f rms off put up to %.3f of a row's sum on it, and "
+               "%.5f once read with the source still; with a line's noise of %.2f, %d shots a row on %d "
+               "buses leave %.4f, and %.4f from line to line, for %.4f; level lines are left %.5f; no "
+               "light, or an offset's: %s: %s\n",
+               quiet, before, worst, noise, R, NB, noisy, apart, want, flat,
+               refused ? "refused" : "TAKEN",
+               ran && refused && quiet > sigma / 2 && before > sigma / 2 && worst <= 0.5 * step + 1e-4 &&
+               noisy > want / 1.3 && noisy < want * 1.3 && apart > want / 1.3 && apart < want * 1.3 &&
+               flat == 0.0 ? "as it should be" : "WRONG");
+        if (!ran || !refused || quiet <= sigma / 2 || before <= sigma / 2 || worst > 0.5 * step + 1e-4)
+            errors += fail("the level probe does not read a still line's level");
+        if (noisy <= want / 1.3 || noisy >= want * 1.3 || apart <= want / 1.3 || apart >= want * 1.3 ||
+            flat != 0.0)
+            errors += fail("the level probe leaves more or less than the source's noise");
+        /* And it leaves the tile as it found it.  Drifted and with a
+         * programming error on, a GEMM at one seed gives the same sums before
+         * the probe and after it; and the drift clock has counted the probe's
+         * shots, R times the tile's rows, and nothing else. */
+        {
+            int64_t *was = (int64_t *)malloc((size_t)tile_rows * tile_cols * sizeof *was);
+            uint32_t clock0 = 0, clock1 = 0;
+            int same = 1;
+
+            cfg[0].impair   = PTA_DRIFT | PTA_PROG_ERR;
+            cfg[0].sigma_pr = 256;
+            drift_fit(&cfg[0], 5.0);
+            pta_drift_age(&dev, &cfg[0], hours_to_steps(TEST_HOURS));
+            ran &= was != NULL && light_setup(&hz, cfg, 7, 0.0, noise, sigma, NB, 0) == 0;
+            for (pass = 0; ran && pass < 2; ++pass) {
+                memset(g->A, 0, (size_t)tile_rows * tile_rows * sizeof g->A[0]);
+                for (r = 0; r < tile_rows; ++r) {
+                    g->A[r * tile_rows + r] = full;
+                    for (c = 0; c < tile_cols; ++c)
+                        g->B[r * tile_cols + c] = (r * 7 + c * 3) % 31 - 15;
+                }
+                cfg[0].seed = gemm_seed(5, 0);
+                ran &= pta_gemm(&cfg[0], &tile, &dev, 0, tile_rows, tile_cols, tile_rows, g->A, g->B,
+                                g->C) >= 0;
+                for (i = 0; i < tile_rows * tile_cols; ++i) {
+                    if (pass == 0)
+                        was[i] = (int64_t)g->C[i];
+                    else
+                        same &= was[i] == (int64_t)g->C[i];
+                }
+                if (pass == 0) {
+                    clock0 = dev.count;
+                    ran &= level_probe(&dev, &cfg[0], &tile, 7, R, g, &found, &left) == 0;
+                    clock1 = dev.count;
+                }
+            }
+            printf("selftest: the level probe leaves the tile as it found it: drifted and with a "
+                   "programming error on, a GEMM's sums are %s before it and after, and the drift "
+                   "clock counted %u shots for %d: %s\n", same ? "the same" : "DIFFERENT",
+                   (unsigned)(clock1 - clock0), R * tile_rows,
+                   ran && same && clock1 - clock0 == (uint32_t)(R * tile_rows) ? "as it should be"
+                                                                                : "WRONG");
+            if (!ran || !same || clock1 - clock0 != (uint32_t)(R * tile_rows))
+                errors += fail("the level probe does not leave the tile as it found it");
+            free(was);
+        }
+        light_free();
+        host_free(&hz);
+        free(a);
+        free(y);
+        pta_device_free(&dev);
+        gemm_free(g);
+    }
     /* 9. the light.  Its share is the exact product of the operands with each
      *    line's error, so where the tile's own sums are exact it can be read
      *    back: one fraction for a whole shot when the lines move together, one
@@ -3030,6 +3302,8 @@ static void help(void)
            "  --buses B       the tile's rows as B runs that share their lines (1)\n"
            "  --srcsign pair|offset   what a line's light reaches a column through: its weight\n"
            "                  alone, or its weight and an offset the host takes off (pair)\n"
+           "  --levelprobe P  read each line's level through a full-scale weight, P shots a row,\n"
+           "                  and take it off; with a seed of its own, so the run's draws stay (0)\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
