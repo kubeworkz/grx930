@@ -819,7 +819,15 @@ static gemm_buf *gemm_alloc(void)
  * A shot's draws are its image's, its layer's and its tile's, so neither the
  * cut nor the batch moves one.  With no light set up, tile_batch() is what it
  * was.
+ *
+ * What the level probe reads can also be applied where a chip could apply it,
+ * in place of being taken off this model's own record of a line: on the
+ * weights as the host writes them, or on the inputs as it sends them, a row at
+ * a time.  level_apply() sets that up, and with none set up tile_batch() is
+ * again what it was.
  */
+enum { FIX_NONE = 0, FIX_WEIGHTS, FIX_WEIGHTS8, FIX_INPUTS };
+
 static struct {
     int      on;
     double   all, line, flat;
@@ -831,6 +839,15 @@ static struct {
     double  *eps;               /* a shot's error, a line */
     double  *ae;                /* and its activations, each times its line's error */
     int32_t *wq[MAX_L];         /* the weights as the tile quantises them */
+    /* a correction from what the level probe read: level_apply() */
+    int      keep;              /* the probe keeps its readings and leaves the lines alone */
+    int      fix;               /* where they are applied: FIX_NONE, or one of the others */
+    double  *read;              /* a line's level as the probe read it */
+    double  *scale;             /* what that line's rows are scaled by */
+    double   gain;              /* what the scaling takes off every sum; 1 if nothing */
+    int32_t *as;                /* a layer's inputs as scaled, a batch of them */
+    long     scaled, clipped;   /* weights or inputs scaled, of those not zero; and of
+                                   those, the ones raised and held back by the rail */
 } light;
 
 static double gauss01(uint64_t *s);
@@ -841,9 +858,32 @@ static void light_free(void)
     free(light.level);
     free(light.eps);
     free(light.ae);
+    free(light.read);
+    free(light.scale);
+    free(light.as);
     for (l = 0; l < MAX_L; ++l)
         free(light.wq[l]);
     memset(&light, 0, sizeof light);
+}
+
+/* The weights as the tile quantises them, for the light's term: a network's, or
+ * the same network's as a correction has rewritten them.  Returns 0, or -1. */
+static int light_weights(const host_net *hn, const pta_cfg *cfg)
+{
+    int i, l;
+
+    for (l = 0; l <= hn->hidden; ++l) {
+        const int P = layer_size(hn->hidden, l);
+        const int quant = (cfg[l].impair & PTA_QUANT) != 0;
+        if (!light.wq[l])
+            light.wq[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+        if (!light.wq[l])
+            return -1;
+        for (i = 0; i < P; ++i)
+            light.wq[l][i] = quant ? contract_quant(hn->w[l][i], (int)cfg[l].w_bits, hn->din)
+                                   : hn->w[l][i];
+    }
+    return 0;
 }
 
 /* Returns 0, or -1 if the buses do not divide the tile's rows or memory ran out.
@@ -852,7 +892,7 @@ static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, do
                        double line, double flat, int buses, int offset)
 {
     uint64_t s = ((uint64_t)seed << 32) | 0x11697u;
-    int i, l;
+    int i;
 
     light_free();
     if (buses < 1 || tile_rows % buses != 0)
@@ -867,21 +907,12 @@ static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, do
     light.level  = (double *)malloc((size_t)light.lines * sizeof *light.level);
     light.eps    = (double *)malloc((size_t)light.lines * sizeof *light.eps);
     light.ae     = (double *)malloc((size_t)tile_rows * sizeof *light.ae);
-    if (!light.level || !light.eps || !light.ae) {
+    light.read   = (double *)calloc((size_t)light.lines, sizeof *light.read);
+    light.scale  = (double *)calloc((size_t)light.lines, sizeof *light.scale);
+    if (!light.level || !light.eps || !light.ae || !light.read || !light.scale ||
+        light_weights(hn, cfg) != 0) {
         light_free();
         return -1;
-    }
-    for (l = 0; l <= hn->hidden; ++l) {
-        const int P = layer_size(hn->hidden, l);
-        const int quant = (cfg[l].impair & PTA_QUANT) != 0;
-        light.wq[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
-        if (!light.wq[l]) {
-            light_free();
-            return -1;
-        }
-        for (i = 0; i < P; ++i)
-            light.wq[l][i] = quant ? contract_quant(hn->w[l][i], (int)cfg[l].w_bits, hn->din)
-                                   : hn->w[l][i];
     }
     for (i = 0; i < light.lines; ++i)
         light.level[i] = flat * gauss01(&s);
@@ -933,12 +964,59 @@ static void light_add(const host_net *hn, const pta_cfg *c, int l, int M, const 
         }
 }
 
+/* Whether a value rounded to `bits` as the contract rounds it would pass the
+ * rail and be held there.  bits = 0 is the operand's own width. */
+static int past_rail(double v, int bits, int din)
+{
+    const int b = (bits == 0 || bits >= din) ? din : bits;
+    const int h = din - b;
+    const double code = floor((v + (h ? ldexp(1.0, h - 1) : 0.0)) / ldexp(1.0, h));
+    const double lim = ldexp(1.0, b - 1);
+    return code > lim - 1.0 || code < -lim;
+}
+
+/* A value held inside an operand's range. */
+static int32_t in_range(double v, int din)
+{
+    const double hi = ldexp(1.0, din - 1) - 1.0, lo = -ldexp(1.0, din - 1);
+    return (int32_t)(v > hi ? hi : v < lo ? lo : v);
+}
+
+/*
+ * A layer's operands as a host that has read the lines sends them: each scaled
+ * for its row's line, rounded, and held at full scale where that would take it
+ * past.  c is the layer's: an activation the tile quantises is at the rail when
+ * its code is.  Counted as held back: one the scaling raised and the rail then
+ * stopped.
+ */
+static const int32_t *level_inputs(const host_net *hn, const pta_cfg *c, int M, int in,
+                                   const int32_t *a)
+{
+    const int bits = (c->impair & PTA_QUANT) ? (int)c->act_bits : 0;
+    int m, j;
+
+    for (m = 0; m < M; ++m)
+        for (j = 0; j < in; ++j) {
+            const int32_t av = a[m * in + j];
+            const double v = floor(av * light.scale[(j % tile_rows) % light.lines] + 0.5);
+            if (av != 0) {
+                ++light.scaled;
+                light.clipped += fabs(v) > fabs((double)av) && past_rail(v, bits, hn->din);
+            }
+            light.as[m * in + j] = in_range(v, hn->din);
+        }
+    return light.as;
+}
+
 /*
  * M images, their input operands a0 (M x 784), through the tile: bw->y[l] are
  * layer l's GEMM sums before the biases and bw->a[l], for l >= 1, the operands
  * layer l was given.  Layer l runs on weight bank l & 1, and every GEMM takes
  * the next seed.  Returns ADC saturations, or -1.  If a light is set up its
- * share is in the sums, and so in every operand after the first layer's.
+ * share is in the sums, and so in every operand after the first layer's.  If a
+ * correction for its lines is applied on the inputs, a layer's operands are
+ * scaled before they are sent, and what the scaling takes off its sums is
+ * divided out of them: bw->a[l] stays what the host worked out, unscaled.
  */
 static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile,
                        pta_device *dev, uint32_t seed, uint32_t *gemm, gemm_buf *g, int M,
@@ -954,6 +1032,8 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
         const int in = layer_in(l), out = layer_out(H, l);
         const int32_t *src = l == 0 ? a0 : bw->a[l];
         int64_t *y = bw->y[l];
+        if (light.on && light.fix == FIX_INPUTS)
+            src = level_inputs(hn, &cfg[l], M, in, src);
         memset(y, 0, (size_t)M * out * sizeof *y);
         for (n0 = 0; n0 < out; n0 += gemm_n) {
             const int N = (out - n0 < gemm_n) ? out - n0 : gemm_n;
@@ -977,6 +1057,9 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
         }
         if (light.on)
             light_add(hn, &cfg[l], l, M, src, y);
+        if (light.on && light.fix != FIX_NONE && light.gain != 1.0)
+            for (m = 0; m < M * out; ++m)
+                y[m] = (int64_t)floor((double)y[m] / light.gain + 0.5);
         if (l < H)
             for (m = 0; m < M; ++m)
                 for (n = 0; n < N_HID; ++n) {
@@ -1356,8 +1439,13 @@ static int calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *t
  * Returns 0, or -1 if it could not run: no light, a light through an offset,
  * or no shots.  *found and *left are the rms of the lines' levels before it
  * and after.
+ *
+ * With light.keep set it takes nothing off: the lines stay as they are, what
+ * it read is kept for level_apply(), and *left is what scaling each line's
+ * rows by its reading would leave.
  */
 #define LEVEL_STEP 256.0
+#define LEVEL_FLOOR 0.05        /* a line read under this share of its level is not scaled back */
 
 static int level_probe(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile, uint32_t seed,
                        int repeats, gemm_buf *g, double *found, double *left)
@@ -1420,14 +1508,103 @@ static int level_probe(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile
     }
     *left = 0.0;
     for (i = 0; i < light.lines; ++i) {
-        const double read = sum[i] / ((double)repeats * light.buses);
-        light.level[i] -= floor(read * LEVEL_STEP + 0.5) / LEVEL_STEP;
-        *left += light.level[i] * light.level[i];
+        const double read = floor(sum[i] / ((double)repeats * light.buses) * LEVEL_STEP + 0.5) / LEVEL_STEP;
+        if (light.keep) {
+            const double after = 1.0 + read < LEVEL_FLOOR ? 1.0 : (1.0 + light.level[i]) / (1.0 + read) - 1.0;
+            light.read[i] = read;
+            *left += after * after;
+        } else {
+            light.level[i] -= read;
+            *left += light.level[i] * light.level[i];
+        }
     }
     *found = sqrt(*found / light.lines);
     *left  = sqrt(*left / light.lines);
     free(sum);
     return 0;
+}
+
+/*
+ * What the level probe read, applied where a chip could apply it.  The model
+ * above takes a reading off its own record of the line, exactly; no chip can.
+ * A host that has read the lines can do two things with a reading r, and both
+ * are a row at a time, a row's line being its own on every bus:
+ *
+ *   on the weights  write every weight of the row as w / (1 + r).  FIX_WEIGHTS
+ *                   scales the weights as the host has them and leaves the
+ *                   tile to quantise them to its w_bits, as it does any
+ *                   weight.  FIX_WEIGHTS8 quantises them first, to the weights
+ *                   the network was trained for, scales those, and writes them
+ *                   at the operand's full width: the 8 bits grxcp's
+ *                   calibration note puts behind a 6-bit weight code
+ *   on the inputs   send every input of the row as a / (1 + r): FIX_INPUTS
+ *
+ * A dim line's row has to be raised, and a weight or an input at the rail
+ * cannot be.  Either it is held there, and that much is left uncorrected; or,
+ * with to_dimmest, every row is scaled down to the dimmest line's, nothing is
+ * raised, and every sum comes out smaller by that line's 1 + r, which
+ * tile_batch() divides out again.  That costs light: the converter sees less
+ * of everything.
+ *
+ * out receives the rewritten network when the weights are, and cfg its w_bits
+ * for FIX_WEIGHTS8.  Returns the network to give the tile, which is hn itself
+ * when the inputs are scaled; or NULL if it could not: no reading kept, a
+ * light through an offset, a line read under LEVEL_FLOOR of its level, or no
+ * memory.
+ */
+static const host_net *level_apply(host_net *out, const host_net *hn, pta_cfg *cfg, int fix,
+                                   int to_dimmest)
+{
+    const int D = hn->din, H = hn->hidden;
+    double ref;
+    int i, l, n, j;
+
+    if (!light.on || !light.keep || light.offset || fix == FIX_NONE)
+        return NULL;
+    ref = 1.0 + light.read[0];
+    for (i = 0; i < light.lines; ++i) {
+        if (1.0 + light.read[i] < LEVEL_FLOOR)
+            return NULL;
+        if (1.0 + light.read[i] < ref)
+            ref = 1.0 + light.read[i];
+    }
+    if (!to_dimmest)
+        ref = 1.0;
+    for (i = 0; i < light.lines; ++i)
+        light.scale[i] = ref / (1.0 + light.read[i]);
+    light.gain   = ref;
+    light.fix    = fix;
+    light.scaled = light.clipped = 0;
+    if (fix == FIX_INPUTS) {
+        light.as = (int32_t *)malloc((size_t)MAX_M * N_IN * sizeof(int32_t));
+        return light.as ? hn : NULL;
+    }
+    if (host_alloc(out, D, H) != 0)
+        return NULL;
+    for (l = 0; l < H; ++l)
+        out->sh[l] = hn->sh[l];
+    for (l = 0; l <= H; ++l) {
+        const int in = layer_in(l), outs = layer_out(H, l);
+        const int bits = (cfg[l].impair & PTA_QUANT) ? (int)cfg[l].w_bits : 0;
+        for (n = 0; n < outs; ++n) {
+            out->b[l][n] = hn->b[l][n];
+            for (j = 0; j < in; ++j) {
+                const int32_t w = hn->w[l][n * in + j];
+                const int32_t from = fix == FIX_WEIGHTS8 ? contract_quant(w, bits, D) : w;
+                const double v = floor(from * light.scale[(j % tile_rows) % light.lines] + 0.5);
+                if (from != 0) {
+                    ++light.scaled;
+                    light.clipped += fabs(v) > fabs((double)from) &&
+                                     past_rail(v, fix == FIX_WEIGHTS8 ? 0 : bits, D);
+                }
+                out->w[l][n * in + j] = in_range(v, D);
+            }
+        }
+    }
+    if (fix == FIX_WEIGHTS8)
+        for (l = 0; l <= H; ++l)
+            cfg[l].w_bits = (uint32_t)D;
+    return light_weights(out, cfg) == 0 ? out : NULL;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1846,7 +2023,7 @@ static int cmd_eval(int argc, char **argv)
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
-        "--w1gain", "--levelprobe", NULL};
+        "--w1gain", "--levelprobe", "--levelfix", "--levelref", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -1868,6 +2045,12 @@ static int cmd_eval(int argc, char **argv)
     const char *src_sign = opt(argc, argv, "--srcsign", "pair");
     const int buses = atoi(opt(argc, argv, "--buses", "1"));
     const int levelprobe = atoi(opt(argc, argv, "--levelprobe", "0"));
+    const char *levelfix = opt(argc, argv, "--levelfix", "ideal");
+    const char *levelref = opt(argc, argv, "--levelref", "none");
+    const int fix = strcmp(levelfix, "weights") == 0 ? FIX_WEIGHTS
+                  : strcmp(levelfix, "weights8") == 0 ? FIX_WEIGHTS8
+                  : strcmp(levelfix, "inputs") == 0 ? FIX_INPUTS : FIX_NONE;
+    const int to_dimmest = strcmp(levelref, "dimmest") == 0;
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
@@ -1875,6 +2058,8 @@ static int cmd_eval(int argc, char **argv)
     dataset tr, te;
     mlp net_s, *net = &net_s;
     host_net hn_s, *hn = &hn_s;
+    host_net hf_s;
+    const host_net *ht = hn;    /* the network the tile is given: hn, or hn as a correction rewrote it */
     gemm_buf *g;
     batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
     int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
@@ -1924,6 +2109,13 @@ static int cmd_eval(int argc, char **argv)
         (strcmp(src_sign, "pair") != 0 && strcmp(src_sign, "offset") != 0)) {
         fprintf(stderr, "pta_mnist: --src, --srcline and --srcflat are rms fractions under 1, "
                         "--buses divides --rows, and --srcsign is pair or offset\n");
+        return 2;
+    }
+    if ((fix == FIX_NONE && strcmp(levelfix, "ideal") != 0) ||
+        (!to_dimmest && strcmp(levelref, "none") != 0) || (fix == FIX_NONE && to_dimmest) ||
+        (fix != FIX_NONE && levelprobe <= 0)) {
+        fprintf(stderr, "pta_mnist: --levelfix is ideal, weights, weights8 or inputs, --levelref is "
+                        "none or dimmest, and anything but ideal and none needs --levelprobe\n");
         return 2;
     }
     /* The probe GEMM reads a cell through a weight of zero, where a pair sees
@@ -2056,11 +2248,19 @@ static int cmd_eval(int argc, char **argv)
     if (lit && light_setup(hn, cfg, seed, src_all, src_line, src_flat, buses,
                            strcmp(src_sign, "offset") == 0) != 0)
         return 2;
+    if (lit)
+        light.keep = fix != FIX_NONE;
     /* The lines' levels, read once the light is lit and before the first image. */
     if (levelprobe != 0 &&
         (levelprobe < 0 || !lit ||
          level_probe(&dev, &cfg[0], &tile, seed, levelprobe, g, &level_found, &level_left) != 0)) {
         fprintf(stderr, "pta_mnist: --levelprobe takes shots a row, and needs a light through a pair\n");
+        return 2;
+    }
+    /* And applied where a chip could, if it is not to come off the model's own line. */
+    if (fix != FIX_NONE && (ht = level_apply(&hf_s, hn, cfg, fix, to_dimmest)) == NULL) {
+        fprintf(stderr, "pta_mnist: --levelfix could not be applied: a line was read under a "
+                        "twentieth of its level\n");
         return 2;
     }
     for (l = 0; l <= H; ++l)
@@ -2072,7 +2272,7 @@ static int cmd_eval(int argc, char **argv)
         for (m = 0; m < M; ++m)
             for (k = 0; k < N_IN; ++k)
                 a1[m * N_IN + k] = pixel_operand(te.x[(size_t)(base + m) * N_IN + k], net->din);
-        if ((r = tile_batch(hn, cfg, &tile, &dev, seed, &gemm, g, M, a1, bw)) < 0) {
+        if ((r = tile_batch(ht, cfg, &tile, &dev, seed, &gemm, g, M, a1, bw)) < 0) {
             fprintf(stderr, "pta_mnist: pta_gemm refused a GEMM\n");
             return 2;
         }
@@ -2117,6 +2317,11 @@ static int cmd_eval(int argc, char **argv)
     if (levelprobe)
         printf(" levelprobe=%d level_found=%.4f level_left=%.4f", levelprobe, level_found,
                level_left);
+    /* And where it was applied, when that is not the model's own line: what the scaling
+     * took off every sum, and the share of what it scaled that the rail held back. */
+    if (fix != FIX_NONE)
+        printf(" levelfix=%s levelref=%s level_gain=%.4f level_clip=%.5f", levelfix, levelref,
+               light.gain, light.scaled ? (double)light.clipped / light.scaled : 0.0);
     /* The noise as a laser fixes it, and what that is in each layer's own LSB:
      * `thermal` earlier in the line is the first layer's. */
     if (thermalline) {
@@ -2215,6 +2420,38 @@ static int light_run(const host_net *hn, const pta_cfg *cfg, const pta_tile *til
     pta_device_free(&dev);
     gemm_free(g);
     return rc;
+}
+
+/* selftest's: how far a run's sums are from the exact product of the operands
+ * it was given with the weights the network was trained for, a layer at a
+ * time: rms over rms.  hn and cfg are the network's and the tile's as they were
+ * before any correction rewrote them. */
+static void level_error(const host_net *hn, const pta_cfg *cfg, int M, const int32_t *a0,
+                        const batch_ws *bw, double *e)
+{
+    const int D = hn->din, H = hn->hidden;
+    int l, m, n, j;
+
+    for (l = 0; l <= H; ++l) {
+        const int in = layer_in(l), out = layer_out(H, l);
+        const int quant = (cfg[l].impair & PTA_QUANT) != 0;
+        const int32_t *src = l == 0 ? a0 : bw->a[l];
+        double se = 0.0, sy = 0.0;
+        for (m = 0; m < M; ++m)
+            for (n = 0; n < out; ++n) {
+                int64_t exact = 0;
+                double d;
+                for (j = 0; j < in; ++j) {
+                    const int32_t av = src[m * in + j], wv = hn->w[l][n * in + j];
+                    exact += (int64_t)(quant ? contract_quant(av, (int)cfg[l].act_bits, D) : av) *
+                             (quant ? contract_quant(wv, (int)cfg[l].w_bits, D) : wv);
+                }
+                d = (double)bw->y[l][m * out + n] - (double)exact;
+                se += d * d;
+                sy += (double)exact * (double)exact;
+            }
+        e[l] = sy > 0.0 ? sqrt(se / sy) : 0.0;
+    }
 }
 
 static int cmd_selftest(void)
@@ -2806,6 +3043,243 @@ static int cmd_selftest(void)
         pta_device_free(&dev);
         gemm_free(g);
     }
+    /* 8c. what the probe reads, applied where a chip could.  A random network
+     *     on the working tile, two buses, a still source with its lines 8% off
+     *     and nothing else amiss, so that a layer's sums are the exact product
+     *     but for the light and for what a correction leaves.  Left alone they
+     *     are 8% off.  With the tile unquantised every correction leaves the
+     *     rounding of one operand and no more, on both layers, and holds
+     *     nothing at a rail; scaled to the dimmest line the sums come back as
+     *     they were.  With the tile at 6 bits, the weights written at 8 are
+     *     as good and the weights left to its 6 are not: the grid's rounding
+     *     is what is left.  Inputs at full scale cannot be raised: half are
+     *     held at the rail and their rows left as they were, unless every row
+     *     is scaled to the dimmest; and so with weights at the rail.  A line
+     *     read at 3% of its level is refused, and so is a reading that was
+     *     taken off and not kept.  A probe that keeps its reading leaves the
+     *     lines.  And a network that was rewritten is the one it came from in
+     *     its biases and its rescale. */
+    {
+        enum { F_W6 = 0, F_W8, F_IN, F_DIM, F_WDIM, F_N };
+        static const int fixes[F_N] = {FIX_WEIGHTS, FIX_WEIGHTS8, FIX_INPUTS, FIX_INPUTS, FIX_WEIGHTS8};
+        const int D = 8, H = 1, M = 16, NB = 2;
+        const double sigma = 0.08;
+        const double LEVEL_WORST = 0.016;       /* a fifth of what is there: the rounding of an operand */
+        const pta_tile tile = {128, 64, 8, ACC_W};
+        const size_t all_in = (size_t)MAX_M * N_IN * sizeof(int32_t);
+        host_net hn, hf, hw;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int32_t *a1 = (int32_t *)malloc(all_in);
+        pta_cfg cfg[MAX_L], run[MAX_L];
+        pta_device dev;
+        gemm_buf *g;
+        double found = 0.0, left = 0.0, none[2][2], e[2][F_N][2], full[2][2], gain[2] = {0.0, 0.0};
+        double clip_full = 0.0, was[64], left_most = 0.0, wfull[2][2], clip_w = 0.0;
+        long clipped = 0;                       /* by a correction scaled to the dimmest line: none */
+        int ran = 1, refused = 0, kept = 1, rest = 1, rails = 1, quant, kind, i, l, m;
+
+        /* the rail, as the contract's quantiser has it: a value is past it when
+         * rounding it and holding it in range are not the same thing */
+        for (i = -300; i <= 300; ++i) {
+            const double code6 = floor((i + 2) / 4.0) * 4.0;
+            rails &= past_rail(i, 6, D) == (code6 != (double)contract_quant(i, 6, D));
+            rails &= past_rail(i, 0, D) == (i > 127 || i < -128);
+            rails &= in_range(i, D) == (i > 127 ? 127 : i < -128 ? -128 : i);
+        }
+        tile_rows = tile.rows;
+        tile_cols = tile.cols;
+        gemm_k    = tile.rows * ((N_IN + tile.rows - 1) / tile.rows);
+        gemm_n    = tile.cols * ((N_HID + tile.cols - 1) / tile.cols);
+        g = gemm_alloc();
+        ran &= g != NULL && bw != NULL && a1 != NULL && host_alloc(&hn, D, H) == 0;
+        ran &= pta_device_init(&dev, &tile) == 0;
+        pta_model_reset(&dev, 0);
+        /* weights and inputs that a quarter more would not take to the rail */
+        for (l = 0; ran && l <= H; ++l)
+            for (i = 0; i < layer_size(H, l); ++i)
+                hn.w[l][i] = (int32_t)(splitmix64(&rs) % 193u) - 96;
+        hn.sh[0] = D + 3;
+        for (l = 0; ran && l <= H; ++l)
+            for (i = 0; i < layer_out(H, l); ++i)
+                hn.b[l][i] = (int64_t)(i * 37) - 900;
+        memset(a1, 0, all_in);
+        for (m = 0; ran && m < M; ++m)
+            for (i = 0; i < N_IN; ++i)
+                a1[m * N_IN + i] = (int32_t)(splitmix64(&rs) % 97u);
+        for (quant = 0; ran && quant < 2; ++quant) {
+            memset(cfg, 0, sizeof cfg);
+            for (l = 0; quant && l <= H; ++l) {
+                cfg[l].impair   = PTA_QUANT;
+                cfg[l].act_bits = 6;
+                cfg[l].w_bits   = 6;
+            }
+            light_free();
+            ran &= light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+            ran &= light_run(&hn, cfg, &tile, M, 0, a1, bw) == 0;
+            level_error(&hn, cfg, M, a1, bw, none[quant]);
+            for (kind = 0; ran && kind < F_N; ++kind) {
+                const host_net *ht;
+                memcpy(run, cfg, sizeof run);
+                ran &= light_setup(&hn, run, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+                for (i = 0; ran && i < light.lines; ++i)
+                    was[i] = light.level[i];
+                light.keep = 1;
+                ran &= level_probe(&dev, &run[0], &tile, 7, 1, g, &found, &left) == 0;
+                for (i = 0; ran && i < light.lines; ++i)
+                    kept &= light.level[i] == was[i] && light.lines == 64;
+                if (left > left_most)
+                    left_most = left;
+                ht = ran ? level_apply(&hf, &hn, run, fixes[kind], kind == F_DIM || kind == F_WDIM) : NULL;
+                ran &= ht != NULL && (ht == &hn) == (fixes[kind] == FIX_INPUTS);
+                /* a rewritten network is the one it came from in everything but its weights */
+                for (l = 0; ran && ht == &hf && l <= H; ++l) {
+                    rest &= l == H || hf.sh[l] == hn.sh[l];
+                    for (i = 0; i < layer_out(H, l); ++i)
+                        rest &= hf.b[l][i] == hn.b[l][i];
+                }
+                ran &= ran && light_run(ht, run, &tile, M, 0, a1, bw) == 0;
+                level_error(&hn, cfg, M, a1, bw, e[quant][kind]);
+                if (kind == F_DIM || kind == F_WDIM) {
+                    ran &= kind == F_DIM || light.gain == gain[quant];
+                    gain[quant] = light.gain;
+                    clipped += light.clipped;
+                } else {
+                    ran &= light.gain == 1.0;
+                }
+                ran &= light.scaled > 0;
+                if (ht == &hf)
+                    host_free(&hf);
+            }
+        }
+        /* inputs at full scale: held at the rail, or scaled to the dimmest.  And
+         * to the dimmest once more with the tile at its 6 bits, where an input
+         * that is lowered and still rounds to the top code is not one the rail
+         * held back */
+        for (m = 0; ran && m < M; ++m)
+            for (i = 0; i < N_IN; ++i)
+                a1[m * N_IN + i] = (1 << (D - 1)) - 1;
+        for (kind = 0; ran && kind < 3; ++kind) {
+            memset(cfg, 0, sizeof cfg);
+            for (l = 0; kind == 2 && l <= H; ++l) {
+                cfg[l].impair   = PTA_QUANT;
+                cfg[l].act_bits = 6;
+                cfg[l].w_bits   = 6;
+            }
+            ran &= light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+            light.keep = 1;
+            ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            ran &= ran && level_apply(&hf, &hn, cfg, FIX_INPUTS, kind != 0) == &hn;
+            ran &= ran && light_run(&hn, cfg, &tile, M, 0, a1, bw) == 0;
+            if (kind < 2)
+                level_error(&hn, cfg, M, a1, bw, full[kind]);
+            /* the first layer's inputs, which are all at full scale, and not the second's */
+            if (kind == 0 && ran) {
+                long up = 0;
+                for (i = 0; i < N_IN; ++i)
+                    up += light.scale[(i % tile_rows) % light.lines] > 1.006;
+                clip_full = (double)up / N_IN;
+                ran &= light.clipped >= (long)M * up;
+            } else if (ran) {
+                ran &= light.clipped == 0;
+            }
+        }
+        /* and weights at the rail, the same two ways: a first layer of them */
+        memset(cfg, 0, sizeof cfg);
+        for (m = 0; ran && m < M; ++m)
+            for (i = 0; i < N_IN; ++i)
+                a1[m * N_IN + i] = (int32_t)(splitmix64(&rs) % 97u);
+        ran &= ran && host_alloc(&hw, D, H) == 0;
+        for (l = 0; ran && l <= H; ++l) {
+            for (i = 0; i < layer_size(H, l); ++i)
+                hw.w[l][i] = l == 0 ? (1 << (D - 1)) - 1 : hn.w[l][i];
+            hw.sh[0] = D + 6;
+        }
+        for (kind = 0; ran && kind < 2; ++kind) {
+            const host_net *ht;
+            ran &= light_setup(&hw, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+            light.keep = 1;
+            ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            ht = ran ? level_apply(&hf, &hw, cfg, FIX_WEIGHTS, kind) : NULL;
+            ran &= ht == &hf;
+            ran &= ran && light_run(ht, cfg, &tile, M, 0, a1, bw) == 0;
+            level_error(&hw, cfg, M, a1, bw, wfull[kind]);
+            if (kind == 0 && ran)
+                clip_w = (double)light.clipped / light.scaled;
+            else if (ran)
+                ran &= light.clipped == 0;
+            if (ht == &hf)
+                host_free(&hf);
+        }
+        if (ran)
+            host_free(&hw);
+        /* a line at 3% of its level; and a reading that was taken off and not kept */
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+        if (ran) {
+            light.level[5] = -0.97;
+            light.keep = 1;
+            ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            refused = level_apply(&hf, &hn, cfg, FIX_INPUTS, 1) == NULL &&
+                      level_apply(&hf, &hn, cfg, FIX_WEIGHTS, 0) == NULL;
+        }
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+        ran &= ran && level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+        refused &= ran && level_apply(&hf, &hn, cfg, FIX_INPUTS, 0) == NULL;
+        {
+            /* unquantised: the most any correction leaves on either layer, and the
+             * two ways of writing the weights, which are then one */
+            double worst = 0.0;
+            int one = 1;
+            for (kind = 0; kind < F_N; ++kind)
+                for (l = 0; l <= H; ++l)
+                    if (e[0][kind][l] > worst)
+                        worst = e[0][kind][l];
+            for (l = 0; l <= H; ++l)
+                one &= e[0][F_W6][l] == e[0][F_W8][l];
+            printf("selftest: a line's level applied where a chip could: left alone the sums are %.3f "
+                   "and %.3f off; unquantised, on the weights leaves %.4f and %.4f, on the inputs "
+                   "%.4f and %.4f, to the dimmest %.4f and %.4f on the inputs and %.4f and %.4f on "
+                   "the weights, with %.2f of the sums taken off and put back and %ld held at a "
+                   "rail; at 6 bits, the weights written at 8 leave %.4f and at the tile's 6, %.4f; "
+                   "inputs at full scale: %.2f held and %.3f off, for %.4f to the dimmest; weights "
+                   "at the rail: %.2f held and %.3f off, for %.4f; a line at 3%%, and a reading "
+                   "not kept: %s; the lines as they were: %s, with %.4f to be left; the rest of a "
+                   "rewritten network: %s; the rail: %s: %s\n",
+                   none[0][0], none[0][1], e[0][F_W6][0], e[0][F_W6][1], e[0][F_IN][0],
+                   e[0][F_IN][1], e[0][F_DIM][0], e[0][F_DIM][1], e[0][F_WDIM][0], e[0][F_WDIM][1],
+                   gain[0], clipped, e[1][F_W8][0], e[1][F_W6][0], clip_full, full[0][0], full[1][0],
+                   clip_w, wfull[0][0], wfull[1][0],
+                   refused ? "refused" : "TAKEN", kept ? "kept" : "MOVED", left_most,
+                   rest ? "the same" : "DIFFERENT", rails ? "the contract's" : "NOT THE CONTRACT'S",
+                   ran && refused && kept && rest && rails && left_most < 0.003 && one &&
+                   none[0][0] > 0.05 && none[0][1] > 0.05 &&
+                   worst < LEVEL_WORST && clipped == 0 && gain[0] > 0.7 && gain[0] < 0.95 &&
+                   e[1][F_W8][0] < LEVEL_WORST && e[1][F_W6][0] > 1.5 * e[1][F_W8][0] &&
+                   e[1][F_W6][0] < none[1][0] && e[1][F_IN][0] < none[1][0] &&
+                   clip_full > 0.3 && clip_full < 0.7 && full[0][0] > 3.0 * full[1][0] &&
+                   full[1][0] < LEVEL_WORST && clip_w > 0.3 && clip_w < 0.7 &&
+                   wfull[0][0] > 3.0 * wfull[1][0] && wfull[1][0] < LEVEL_WORST
+                       ? "as it should be" : "WRONG");
+            if (!ran || !refused || !kept || !rest || !rails || left_most >= 0.003 || !one ||
+                none[0][0] <= 0.05 || none[0][1] <= 0.05 ||
+                worst >= LEVEL_WORST || clipped != 0 || gain[0] <= 0.7 || gain[0] >= 0.95)
+                errors += fail("a correction for a line's level does not level it");
+            if (e[1][F_W8][0] >= LEVEL_WORST || e[1][F_W6][0] <= 1.5 * e[1][F_W8][0] ||
+                e[1][F_W6][0] >= none[1][0] || e[1][F_IN][0] >= none[1][0])
+                errors += fail("a correction on the weights is not what its bits allow");
+            if (clip_full <= 0.3 || clip_full >= 0.7 || full[0][0] <= 3.0 * full[1][0] ||
+                full[1][0] >= LEVEL_WORST)
+                errors += fail("inputs at full scale are not held at the rail, or not levelled to the dimmest");
+            if (clip_w <= 0.3 || clip_w >= 0.7 || wfull[0][0] <= 3.0 * wfull[1][0] ||
+                wfull[1][0] >= LEVEL_WORST)
+                errors += fail("weights at the rail are not held there, or not levelled to the dimmest");
+        }
+        light_free();
+        host_free(&hn);
+        free(bw);
+        free(a1);
+        pta_device_free(&dev);
+        gemm_free(g);
+    }
     /* 9. the light.  Its share is the exact product of the operands with each
      *    line's error, so where the tile's own sums are exact it can be read
      *    back: one fraction for a whole shot when the lines move together, one
@@ -3304,6 +3778,11 @@ static void help(void)
            "                  alone, or its weight and an offset the host takes off (pair)\n"
            "  --levelprobe P  read each line's level through a full-scale weight, P shots a row,\n"
            "                  and take it off; with a seed of its own, so the run's draws stay (0)\n"
+           "  --levelfix ideal|weights|weights8|inputs   where what the probe read is applied:\n"
+           "                  taken off the model's own line (ideal); or a row at a time on the\n"
+           "                  weights as written, at the tile's bits or at 8, or on the inputs\n"
+           "  --levelref none|dimmest   a dim line's row held at the rail (none), or every row\n"
+           "                  scaled down to the dimmest line's and the sums divided back (none)\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"

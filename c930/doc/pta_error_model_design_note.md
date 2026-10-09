@@ -95,6 +95,13 @@ weight. Left alone, lines 20% off cost the reference networks 0.35, 0.40 and
 1.63 of a point and lines 40% off 2.01, 2.26 and 7.79. Read first with
 sixteen shots a row, both cost what level lines do. The probe takes none of
 the run's seeds, so the two rows of a pair meet the same noise.
+**And the eighth, the same day** (§5, at its end): the reading applied where a
+chip could apply it, `eval --levelfix`, and not taken off the model's own
+line. On the weights a row at a time, written at 8 bits, lines 20% off end
+within 0.11 of a point of level lines on all three sets. At the tile's 6
+bits they end 0.07, 0.13 and 0.21 over. Scaled to the dimmest line, so that
+nothing is raised past a rail, a correction costs 2.8 dB of light and on
+Fashion-MNIST more than the comb did.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1094,7 +1101,9 @@ nothing has settled: `pair`, the weight alone, as a balanced pair of
 photodiodes has it; or `offset`, the weight and an offset the host takes off
 again from the operands it sent, as one photodiode would have it.
 *Since 2026-10-08 there is a fourth option, `--levelprobe P`, which reads
-each line's level before the first image and takes it off: §5, at its end.*
+each line's level before the first image and takes it off: §5, at its end.
+And `--levelfix` and `--levelref`, which say where: off the model's own line,
+or on the weights or the inputs as a host would scale them.*
 
 **It is not in the contract.** The term is added on the host's side of the
 line, to the sums the tile returns: `a × (w + offset) × error`, summed over a
@@ -3465,6 +3474,274 @@ not a comb. The three levels are one comb scaled, and not three combs. The
 levels are fixed for a run. An error that scales a row and is not its line's
 would read the same. Three draws of five networks. Version 1, or another
 tile.
+
+### A line's level, corrected where a chip could
+
+*Added 2026-10-08.* `sim/pta_mnist.sh DIR WORK reffix`, and `pta_mnist eval
+--levelfix weights|weights8|inputs --levelref dimmest`. Reported, not gated.
+
+**Why.** The section before this one read a comb's lines and took what it
+read off the model's own record of each line, exactly. No chip can do that.
+grxcp named three places one could apply a reading and what each would cost,
+by reasoning, and asked for the correction to be modelled where a chip can
+apply it, the weights as written first: do their 6 bits eat the gain?
+
+**The corrections.** With `--levelfix` the level probe keeps its reading and
+leaves the model's lines as they are, and the reading r of a row's line is
+applied to the row at the host:
+
+| `--levelfix` | What the host does | What then quantises it |
+|---|---|---|
+| `ideal` | Nothing: the reading is taken off the model's line, as before | |
+| `weights` | Writes every weight of the row as w / (1 + r) | The tile, to its 6 bits, as any weight |
+| `weights8` | Takes the 6-bit weights the network was trained for, scales those, and writes them at the operand's 8 bits | Nothing more: the tile runs at 8-bit weights |
+| `inputs` | Sends every input of the row as a / (1 + r) | The tile, to its 6 bits, as any input |
+
+A dim line's row has to be raised, and a weight or an input at the rail
+cannot be. `--levelref none` holds it at the rail, and that much is left
+uncorrected. `--levelref dimmest` scales every row down to the dimmest
+line's, so that nothing is raised, and divides every sum by what that took
+off. The converter's range and the receiver's noise are left where they
+were, so the light that is lost is lost. A run prints `levelfix`, `levelref`,
+`level_gain`, which is what was left of every sum, and `level_clip`, the
+share of what it scaled, of what was not zero, that it raised and a rail
+held back. A line read at under a twentieth of its level is refused.
+
+Like the probe, it is on the host's side of the line: §4, PTM-C and the RTL
+are untouched, and a line printed without the option is what it was. No
+correction takes a seed of the run's.
+
+The self-test puts a random network on the working tile under a still source
+with its lines 8% off. Left alone a layer's sums are 8% and 10% off. With the
+tile unquantised every correction leaves the rounding of one operand, under
+1.4%, on both layers; scaled to the dimmest line the sums come back as they
+were and nothing is held at a rail. With the tile at 6 bits, the weights
+written at 8 leave 0.6% and the weights left to the tile's 6 leave 3.0%,
+which is the count below. Inputs at full scale, and weights at the rail, are
+half of them held and their rows left as they were, and levelled when scaled
+to the dimmest. A line at 3% of its level is refused, and so is a reading
+that was not kept. A rewritten network keeps its biases and its rescale. And
+the rail is the contract's quantiser's. 32 errors planted in that code one at
+a time each stop it. Over two passes it had passed four: a reading that was
+not kept, a weight past the rail, and a value held a unit out of range, for
+each of which a check was added; and a scale set where nothing read it, which
+was taken out. All of that was before the sweep.
+
+**The 6-bit grid, counted.** A 6-bit code is 4 LSB of an 8-bit weight. A
+weight that should move by d LSB, rounded to a code again, stays where it
+was with probability 1 − d/4 and is left d off, or goes to the next code and
+is left 4 − d off the other way: a mean square of 4d − d². That is more than
+the d² it started with when d is under 2, half a code. So a correction on
+6-bit weights makes a weight worse unless the line is off by enough to move
+it half a code, and past a whole code it leaves a fresh rounding against the
+one the network was trained with, 1.63 LSB rms. Seed 1's reference networks
+have first-layer weights of 24.4, 23.8 and 14.9 LSB rms, by hand: a line 5%
+off moves 10%, 9% and 3% of them half a code, and 1.63 LSB is what lines 7%,
+7% and 11% off would do. Written at 8 bits a weight is left 0.29 LSB.
+
+**What it runs.** The eighth mode on the reference networks. Version 2 on the
+128 × 64 tile on two buses, twenty rows on each of three draws, which are the
+section before's draws and its rows again where the two share them. As
+budgeted. Lit with level lines. Lines 5% and 20% off: left alone; read, with
+the reading taken off the model's line; and corrected five ways, on the
+weights at the tile's bits, at 8 bits, at 8 bits to the dimmest, on the
+inputs, and on the inputs to the dimmest. And held as grxcp holds the chip:
+left alone, read, on the weights at 8 bits, and on the inputs to the
+dimmest. Lines 40% off are not run: a Gaussian comb that uneven has lines at
+no light, which nothing scales back. A lit row is read over the level row of
+its draw, and the level row and the held rows over the as-budgeted row of
+their draw. The networks trained before run beside the reference row for
+row. That is 600 evaluations a data set, and 2.3 to 2.4 hours for the three
+side by side on four jobs each.
+
+The mode checks every network and every run against its place, as the seven
+before it do: a run's name says its draw, whether it is lit, how far from
+level its lines are, whether they were read, where the reading was applied
+and whether to the dimmest line, and whether it drifted. A run corrected at
+8 bits has to have run the tile at 8-bit weights, and no other may. One
+scaled to the dimmest has to have taken something off its sums and held
+nothing at a rail, and one that was not has to have taken nothing off.
+198 more errors planted one at a time each fail: 119 in a training's
+line or a run's, after the fact; 42 in the script; and 37 in the tables' own code,
+which the check does not see. Of those, 36 move the tables, and one stops the
+script on a row there is none of. The planted-error runs take two draws and
+not three.
+
+Of the lines, 240 on each data set are byte for byte what `reflevel` wrote
+for the same runs: its eight rows that this mode has too, on all three draws.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of three draws, with its standard error from the five networks, each averaged
+over its draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The level row, over the as-budgeted row of its draw | +0.049 ± 0.019 | **+0.031 ± 0.008** | **+0.161 ± 0.037** | +0.014 ± 0.036 | **+0.229 ± 0.044** | +0.056 ± 0.031 |
+| Lines 5% off, over the level row of its draw | −0.011 ± 0.033 | +0.002 ± 0.008 | −0.036 ± 0.047 | −0.039 ± 0.035 | +0.097 ± 0.114 | +0.157 ± 0.076 |
+| read, and taken off the model's own line | +0.011 ± 0.006 | **−0.021 ± 0.004** | −0.024 ± 0.015 | −0.002 ± 0.015 | +0.043 ± 0.025 | +0.006 ± 0.009 |
+| on the weights, at the tile's 6 bits | +0.005 ± 0.019 | +0.004 ± 0.015 | −0.062 ± 0.070 | +0.064 ± 0.027 | +0.161 ± 0.129 | +0.067 ± 0.062 |
+| on the weights, at 8 bits | −0.006 ± 0.009 | **−0.015 ± 0.005** | −0.032 ± 0.035 | +0.051 ± 0.032 | +0.009 ± 0.059 | +0.035 ± 0.025 |
+| on the weights at 8 bits, to the dimmest | +0.020 ± 0.019 | +0.003 ± 0.018 | +0.074 ± 0.057 | **+0.101 ± 0.036** | **+0.159 ± 0.045** | **+0.151 ± 0.020** |
+| on the inputs | +0.003 ± 0.012 | −0.018 ± 0.008 | −0.066 ± 0.055 | +0.057 ± 0.036 | −0.033 ± 0.028 | +0.082 ± 0.030 |
+| on the inputs, to the dimmest | +0.013 ± 0.017 | **+0.078 ± 0.010** | +0.023 ± 0.035 | +0.064 ± 0.058 | −0.033 ± 0.043 | +0.009 ± 0.023 |
+| Lines 20% off | **+0.411 ± 0.047** | **+0.347 ± 0.012** | **+0.615 ± 0.159** | **+0.395 ± 0.134** | **+1.689 ± 0.383** | **+1.631 ± 0.538** |
+| read, and taken off the model's own line | +0.003 ± 0.005 | **−0.021 ± 0.004** | −0.015 ± 0.016 | +0.005 ± 0.017 | +0.050 ± 0.034 | −0.007 ± 0.007 |
+| on the weights, at the tile's 6 bits | +0.045 ± 0.041 | **+0.066 ± 0.019** | −0.133 ± 0.078 | +0.135 ± 0.061 | +0.032 ± 0.202 | +0.209 ± 0.141 |
+| on the weights, at 8 bits | +0.034 ± 0.030 | **+0.049 ± 0.017** | −0.034 ± 0.018 | +0.024 ± 0.034 | **+0.090 ± 0.028** | +0.104 ± 0.040 |
+| on the weights at 8 bits, to the dimmest | **+0.273 ± 0.045** | **+0.132 ± 0.040** | **+0.716 ± 0.097** | **+0.648 ± 0.082** | **+0.888 ± 0.166** | **+0.746 ± 0.094** |
+| on the inputs | +0.078 ± 0.028 | +0.032 ± 0.017 | +0.057 ± 0.072 | +0.095 ± 0.037 | +0.271 ± 0.130 | **+0.436 ± 0.142** |
+| on the inputs, to the dimmest | **+0.325 ± 0.073** | **+0.245 ± 0.019** | **+0.869 ± 0.114** | **+0.803 ± 0.132** | **+0.842 ± 0.175** | **+0.688 ± 0.099** |
+| Held, over the as-budgeted row of its draw | +0.069 ± 0.031 | +0.012 ± 0.015 | +0.175 ± 0.107 | +0.043 ± 0.072 | **+0.530 ± 0.172** | **+0.280 ± 0.066** |
+| held: read, and taken off the model's own line | +0.063 ± 0.029 | +0.010 ± 0.026 | **+0.207 ± 0.073** | +0.050 ± 0.040 | **+0.543 ± 0.141** | **+0.103 ± 0.028** |
+| held: on the weights, at 8 bits | +0.065 ± 0.033 | **+0.032 ± 0.009** | +0.149 ± 0.093 | +0.067 ± 0.053 | **+0.559 ± 0.177** | **+0.119 ± 0.021** |
+| held: on the inputs, to the dimmest | +0.089 ± 0.033 | **+0.069 ± 0.012** | **+0.252 ± 0.076** | +0.071 ± 0.076 | **+0.544 ± 0.177** | **+0.154 ± 0.010** |
+
+What a read or a correction buys: the row less the row left alone.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| read, and taken off the model's own line | −0.022 ± 0.039 | **+0.023 ± 0.008** | −0.012 ± 0.058 | −0.037 ± 0.022 | +0.054 ± 0.115 | +0.151 ± 0.074 |
+| on the weights, at the tile's 6 bits | −0.016 ± 0.046 | −0.002 ± 0.012 | +0.026 ± 0.052 | **−0.103 ± 0.030** | −0.065 ± 0.080 | +0.090 ± 0.114 |
+| on the weights, at 8 bits | −0.005 ± 0.041 | **+0.017 ± 0.006** | −0.004 ± 0.017 | −0.090 ± 0.035 | +0.088 ± 0.156 | +0.122 ± 0.101 |
+| on the weights at 8 bits, to the dimmest | −0.031 ± 0.024 | −0.001 ± 0.023 | **−0.110 ± 0.038** | **−0.141 ± 0.045** | −0.062 ± 0.086 | +0.007 ± 0.078 |
+| on the inputs | −0.015 ± 0.026 | +0.020 ± 0.010 | +0.030 ± 0.030 | −0.096 ± 0.035 | +0.129 ± 0.111 | +0.075 ± 0.050 |
+| on the inputs, to the dimmest | −0.025 ± 0.048 | **−0.076 ± 0.009** | **−0.059 ± 0.017** | −0.103 ± 0.064 | +0.130 ± 0.118 | +0.149 ± 0.080 |
+| read, and taken off the model's own line | **+0.408 ± 0.049** | **+0.367 ± 0.013** | **+0.630 ± 0.167** | **+0.390 ± 0.127** | **+1.639 ± 0.368** | **+1.639 ± 0.541** |
+| on the weights, at the tile's 6 bits | **+0.367 ± 0.076** | **+0.281 ± 0.028** | **+0.749 ± 0.144** | +0.261 ± 0.116 | **+1.657 ± 0.342** | +1.423 ± 0.592 |
+| on the weights, at 8 bits | **+0.377 ± 0.044** | **+0.297 ± 0.017** | **+0.649 ± 0.147** | **+0.371 ± 0.125** | **+1.599 ± 0.400** | **+1.527 ± 0.521** |
+| on the weights at 8 bits, to the dimmest | +0.138 ± 0.059 | **+0.215 ± 0.051** | −0.101 ± 0.170 | −0.253 ± 0.137 | **+0.801 ± 0.251** | +0.885 ± 0.491 |
+| on the inputs | **+0.333 ± 0.037** | **+0.315 ± 0.017** | **+0.559 ± 0.094** | +0.301 ± 0.126 | **+1.419 ± 0.362** | **+1.195 ± 0.404** |
+| on the inputs, to the dimmest | +0.086 ± 0.074 | **+0.102 ± 0.012** | −0.254 ± 0.177 | −0.407 ± 0.165 | **+0.847 ± 0.270** | +0.943 ± 0.499 |
+| held: read, and taken off the model's own line | +0.006 ± 0.012 | +0.002 ± 0.026 | −0.031 ± 0.048 | −0.007 ± 0.047 | −0.013 ± 0.112 | +0.177 ± 0.090 |
+| held: on the weights, at 8 bits | +0.005 ± 0.013 | −0.020 ± 0.011 | +0.026 ± 0.028 | −0.025 ± 0.043 | −0.029 ± 0.155 | +0.161 ± 0.077 |
+| held: on the inputs, to the dimmest | −0.019 ± 0.014 | −0.057 ± 0.021 | −0.077 ± 0.057 | −0.029 ± 0.048 | −0.014 ± 0.099 | +0.126 ± 0.074 |
+
+What a correction did to the lines and to the sums. The first two columns
+are the tile's and the seed's, and the same for both kinds of network and all
+three data sets.
+
+| | Left on the lines, rms | Of every sum, left | Held at a rail, the reference networks: MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|---|---|
+| on the weights, at the tile's 6 bits | 0.93% | 1.0000 | 0.02% | 0.05% | 0.00% |
+| on the weights, at 8 bits | 0.93% | 1.0000 | 0.03% | 0.07% | 0.01% |
+| on the weights at 8 bits, to the dimmest | 0.93% | 0.8792 | 0.00% | 0.00% | 0.00% |
+| on the inputs | 0.93% | 1.0000 | 16.16% | 2.62% | 39.61% |
+| on the inputs, to the dimmest | 0.93% | 0.8792 | 0.00% | 0.00% | 0.00% |
+| on the weights, at the tile's 6 bits | 0.98% | 1.0000 | 0.12% | 0.22% | 0.04% |
+| on the weights, at 8 bits | 0.98% | 1.0000 | 0.14% | 0.25% | 0.05% |
+| on the weights at 8 bits, to the dimmest | 0.98% | 0.5242 | 0.00% | 0.00% | 0.00% |
+| on the inputs | 0.98% | 1.0000 | 20.52% | 11.57% | 42.84% |
+| on the inputs, to the dimmest | 0.98% | 0.5242 | 0.00% | 0.00% | 0.00% |
+| held: on the weights, at 8 bits | 0.93% | 1.0000 | 0.03% | 0.07% | 0.01% |
+| held: on the inputs, to the dimmest | 0.93% | 0.8794 | 0.00% | 0.00% | 0.00% |
+
+**Written at 8 bits, the weights take back nearly all a comb cost.** With
+lines 20% off and left alone the reference networks lose 0.35 ± 0.01, 0.40 ±
+0.13 and 1.63 ± 0.54 of a point to level lines. With the weights scaled and
+written at 8 bits they end 0.05 ± 0.02, 0.02 ± 0.03 and 0.10 ± 0.04 over:
+within 0.11 of a point on every set, at 20% and at 5% alike, and 86%, 94%
+and 94% of what the comb cost. Against the model's own correction that
+leaves 0.07 ± 0.02, 0.02 ± 0.03 and 0.11 ± 0.04. The rail holds 0.14%, 0.25%
+and 0.05% of the weights back. Of the five it is the only one that ends at a
+tenth or under on all three sets at 20%.
+
+**At the tile's 6 bits the grid does not eat the gain at 20%, and at 5% there
+is none to eat.** The scaled weights end 0.07 ± 0.02, 0.13 ± 0.06 and 0.21 ±
+0.14 over level lines at 20%: 81%, 66% and 87% taken back. The two more bits
+buy 0.02 ± 0.02, 0.11 ± 0.04 and 0.10 ± 0.13 on top of that, none of them
+clear. At 5% the 6-bit correction buys 0.00, −0.10 ± 0.03 and 0.09 ± 0.11:
+nothing, and on Fashion-MNIST a tenth lost, which is clear and which the
+count above says to expect.
+
+**Scaled to the dimmest line a correction pays in light, and on one set more
+than it buys.** With lines 20% off the dimmest line leaves 0.52 of every
+sum, 2.8 dB, and on a single comb 0.36 to 0.65. So scaled, the 8-bit weights
+end 0.13 ± 0.04, 0.65 ± 0.08 and 0.75 ± 0.09 over level lines and the inputs
+0.24 ± 0.02, 0.80 ± 0.13 and 0.69 ± 0.10. On Fashion-MNIST both are worse
+than leaving the comb alone, by 0.25 ± 0.14 and 0.41 ± 0.16. Held at the rail
+does better than scaled to the dimmest on every set, in either place. At 5%
+the dimmest line leaves 0.88 of a sum, 0.6 dB.
+
+**On the inputs, held at full scale, it works where few inputs are at full
+scale.** At 20% it ends 0.03 ± 0.02, 0.09 ± 0.04 and 0.44 ± 0.14 over level
+lines, with 21%, 12% and 43% of the inputs that are not zero held at the
+rail. On the inverted set, where 80.8% of pixels are at full scale, it still
+takes back 73% of what the comb cost.
+
+**At 5% there is little to buy, and what is clear is mostly cost.** Of the
+fifteen figures for what a place buys the reference networks there, four are
+clear, and three of those are costs: the 6-bit weights and the 8-bit ones to
+the dimmest on Fashion-MNIST, and the inputs to the dimmest on MNIST. The
+one that buys is two images in ten thousand on MNIST, the same two the
+section before found a read to buy there and seven more draws did not.
+
+**Held, the weights at 8 bits buy what the model's own correction bought.**
+0.16 ± 0.08 on the inverted set for the model's 0.18 ± 0.09, neither clear,
+and −0.02 ± 0.01 and −0.02 ± 0.04 on the other two. So corrected, the held
+tile ends 0.03, 0.07 and 0.12 over the tile as budgeted, where left alone it
+ends 0.01, 0.04 and 0.28.
+
+**For the networks trained before, the 6 bits do as well as the 8.** At 20%
+they end 0.04 ± 0.04, −0.13 ± 0.08 and 0.03 ± 0.20 over level lines at the
+tile's bits, and 0.03 ± 0.03, −0.03 ± 0.02 and 0.09 ± 0.03 at 8.
+
+**A comb 20% off and corrected at 8 bits costs half a tenth more than a comb
+5% off and left alone, on two sets.** Seed by seed, 0.05 ± 0.01, 0.06 ± 0.01
+and −0.05 ± 0.06 more: clear on MNIST and Fashion-MNIST and not on the
+inverted set. 5% is the row grxcp's plan asks of a comb.
+
+**What was predicted.** Written before any correction was written, on
+2026-10-08. Six things, and a seventh added after the corrections were
+tried by hand on one network and before the mode was written.
+
+1. That at the tile's 6 bits a correction buys nothing at 5%: within 0.05 of
+   the row left alone on MNIST and Fashion-MNIST, and 0.05 to 0.30 over level
+   lines on the inverted set. Right on MNIST and the inverted set, 0.00 and
+   0.07. Wrong on Fashion-MNIST, where it is a tenth worse than the row left
+   alone.
+2. That at 20% it ends 0.02 to 0.15, 0.02 to 0.20 and 0.25 to 0.90 over level
+   lines. Right on MNIST and Fashion-MNIST, 0.07 and 0.13. On the inverted
+   set it does better than predicted, 0.21.
+3. That at 8 bits it ends within 0.05, 0.08 and 0.10 of level lines at 5% and
+   within 0.08, 0.12 and 0.20 at 20%. Right on all six: −0.02, 0.05 and 0.04,
+   and 0.05, 0.02 and 0.10.
+4. That on the inputs at 20% it ends 0.03 to 0.20 and 0.02 to 0.20 over on
+   MNIST and Fashion-MNIST, and 0.5 to 1.3 on the inverted set with less than
+   half taken back, since four pixels in five are at full scale there. Right
+   on the first two, 0.03 and 0.09. Wrong on the inverted set: 0.44, and 73%
+   taken back. And that at 5% it ends within 0.05 and 0.08 and 0.05 to 0.25
+   over: right, −0.02, 0.06 and 0.08.
+5. That scaled to the dimmest the inputs lose 0.85 to 0.92 of a sum at 5% and
+   0.40 to 0.65 at 20%, and at 20% end 0.10 to 0.45, 0.3 to 1.2 and 0.2 to
+   1.0 over: no better than leaving the lines alone on the first two sets,
+   and better by half or more on the third. Right in every band: 0.88 and
+   0.52 of a sum, and 0.24, 0.80 and 0.69. Right about Fashion-MNIST and the
+   inverted set. Wrong about MNIST, where it buys a tenth.
+6. That held, the weights at 8 bits move the reference networks by less than
+   0.05 and 0.08 on MNIST and Fashion-MNIST and buy 0.00 to 0.25 on the
+   inverted set, and the inputs to the dimmest cost 0.00 to 0.10 and 0.00 to
+   0.25 and are within 0.15 on the third. Right: −0.02, −0.02 and 0.16, and
+   costs of 0.06 and 0.03 and 0.13 bought.
+7. That the 8-bit weights scaled to the dimmest cost what the inputs do so
+   scaled, the light and not the grid: within 0.10, 0.10 and 0.25 of them at
+   20%, and 0.05, 0.08 and 0.10 at 5%. Wrong on four of the six. At 20% the
+   inputs end 0.11 ± 0.06, 0.15 ± 0.06 and −0.06 ± 0.03 over the weights, none
+   of them clear.
+
+Not predicted, and seen in the try by hand: that a second layer's large
+weights on dim lines are what the rail holds, a few of a thousand.
+
+**What this is not.** A chip: the scaling is at the host, in the harness.
+Written at 8 bits the weights take the bits below the code that a trim would
+use, and the two are not modelled together. The correction is to the
+reading alone, and its error over what it scaled by is left. The source's
+noise is a share of a line's nominal light here, so a dim row raised has its
+noise raised with it. Scaled to the dimmest, a laser turned up to give the
+light back is not modelled, nor a converter ranged again. A correction held
+in the trim, a cell at a time, was not run: the tile holds one trim a cell
+and a GEMM here is seven tiles of weights. Lines 40% off. Levels fixed for a
+run. Three draws of five networks. Version 1, or another tile.
 
 ---
 
