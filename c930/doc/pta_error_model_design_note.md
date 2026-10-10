@@ -113,6 +113,15 @@ draw. And `eval`'s trim step is a quarter of an 8-bit weight's LSB,
 a sixteenth of a 6-bit code, which is two bits finer than the DAC grxcp's
 calibration note asks for; at that DAC's step a cycle moves by 0.06 of a
 point at the most.
+**And the tenth, 2026-10-10** (§5, at its end): grxcp kept the weight DAC at 8
+bits, and the cycle its interval rests on is run on that DAC, with a source
+lit and without, at three minutes and at six, over ten draws. With no source
+the reference networks' six-minute cycle ends 0.00, 0.04 and 0.15 of a point
+over the probes-only row of its draw and a three-minute one 0.00, 0.03 and
+0.11: on the inverted set neither holds a tenth, where at the finer step
+three minutes did. With the source lit six minutes ends 0.05, 0.12 and 0.32
+over and three 0.06, 0.07 and 0.27. Six minutes over three is clear nowhere
+for them.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -4017,6 +4026,222 @@ sees a source's noise: the probes are taken before the light is lit, as in
 every mode. Lines further off than 20%. Five draws and not ten, of the same
 five networks. A trim step between a quarter of an LSB and one, or coarser
 than one. Version 1, or another tile.
+
+### How long a calibration holds, on the DAC as it is specified
+
+*Added 2026-10-10.* `sim/pta_mnist.sh DIR WORK refhold`. Reported, not gated.
+Nothing in `pta_mnist.c` changed for it.
+
+**Why.** The section before found `eval`'s trim two bits finer than the DAC
+grxcp's calibration note asks for, and ran a six-minute cycle at that DAC's
+step on five draws. grxcp then kept the weight DAC at 8 bits. Its interval,
+six minutes, rests on `refdraws`: ten draws of a cycle with no source and the
+finer trim, at three minutes and at six. So that interval rested on a DAC
+the chiplet is not held to, and on a tile with no source. grxcp asked for
+the cycle on the DAC as it is specified, with the source lit, over the full
+ten draws.
+
+**What it runs.** The tenth mode on the reference networks. Version 2 on the
+128 × 64 tile on two buses, six rows on each of ten draws, which are
+`refdraws`'s.
+
+| Row | What it is |
+|---|---|
+| As budgeted | Version 2 and nothing else |
+| Probes only | A calibration's 16 probes taken and no trim written |
+| A cycle, no source | Aged an interval, calibrated, aged the interval again: three minutes, and six |
+| A cycle, the source lit | The same with the source at 1% and 5%, its lines 20% off, read with sixteen shots a row and corrected on the weights at 8 bits: three minutes, and six |
+
+Every cycle is run with `--trimstep 1`, the step an 8-bit DAC behind a 6-bit
+code holds. A cycle is read over the probes-only row of its draw, which
+meets its noise. The networks trained before run beside the reference row
+for row. That is 600 evaluations a data set, and 2.3 to 2.4 hours for the
+three side by side on four jobs each. A first run of it stopped fifty runs
+in when the machine slept, and it was begun again from its first run.
+
+The mode checks every network and every run against its place, as the nine
+before it do: a run's name says its draw, whether it is a cycle and of what
+interval, and whether a source is lit. A cycle has to have been aged its
+interval, calibrated with its trims written and aged its interval again,
+and its interval to be one of those asked for. Every cycle has to have been
+asked a trim step of one and printed it, and the other two rows to have been
+asked none and printed a quarter. A cycle with a source lit has to have its
+lines as far from level as the mode was asked, to have been read and
+corrected at 8 bits, and to have run the tile at 8-bit weights; and no other
+row may be lit, or read.
+
+182 errors planted one at a time each fail: 99 in a training's line or a
+run's, after the fact; 45 in the script; and 38 in the tables' own code, which
+the check does not see and which each move the tables. As for the mode before,
+a doctored line is put to the mode's check of the network it belongs to,
+with the check of all ten networks taken before the first and after the
+last; and a changed script is handed a run it asks for that was already
+made, of the same network with the same options. The planted-error runs are
+of 200 images, on two draws for the lines and the tables and on one for the
+script but where a change is to a draw's seed.
+
+Of the lines, 300 on each data set are byte for byte what two modes before
+wrote for the same runs: `refdraws`'s as-budgeted and probes-only rows on all
+ten draws, and `refpoint`'s two six-minute cycles at this step on its five.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of ten draws, with its standard error from the five networks, each averaged
+over its draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Probes only | −0.003 ± 0.011 | +0.001 ± 0.012 | +0.030 ± 0.017 | +0.028 ± 0.022 | **+0.030 ± 0.008** | −0.014 ± 0.012 |
+| A three-minute cycle, no source | −0.002 ± 0.011 | +0.001 ± 0.010 | +0.012 ± 0.028 | +0.034 ± 0.020 | **+0.407 ± 0.114** | **+0.114 ± 0.025** |
+| A three-minute cycle, the source lit | **+0.110 ± 0.020** | +0.063 ± 0.031 | **+0.175 ± 0.025** | +0.075 ± 0.039 | **+0.700 ± 0.168** | **+0.267 ± 0.037** |
+| A six-minute cycle, no source | +0.012 ± 0.018 | +0.004 ± 0.010 | +0.082 ± 0.035 | +0.038 ± 0.019 | **+0.436 ± 0.058** | **+0.148 ± 0.017** |
+| A six-minute cycle, the source lit | **+0.106 ± 0.005** | +0.049 ± 0.021 | **+0.226 ± 0.056** | **+0.120 ± 0.015** | **+0.733 ± 0.076** | **+0.317 ± 0.040** |
+
+How often right, percent.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted | 97.303 ± 0.104 | 97.612 ± 0.048 | 86.999 ± 0.162 | 87.359 ± 0.141 | 92.648 ± 0.575 | 94.896 ± 0.347 |
+| Probes only | 97.306 ± 0.097 | 97.611 ± 0.044 | 86.968 ± 0.163 | 87.331 ± 0.151 | 92.618 ± 0.574 | 94.911 ± 0.352 |
+| A three-minute cycle, no source | 97.308 ± 0.103 | 97.610 ± 0.049 | 86.956 ± 0.174 | 87.296 ± 0.153 | 92.211 ± 0.673 | 94.797 ± 0.335 |
+| A three-minute cycle, the source lit | 97.196 ± 0.106 | 97.548 ± 0.064 | 86.794 ± 0.157 | 87.256 ± 0.130 | 91.918 ± 0.698 | 94.643 ± 0.330 |
+| A six-minute cycle, no source | 97.294 ± 0.099 | 97.607 ± 0.051 | 86.886 ± 0.192 | 87.292 ± 0.162 | 92.182 ± 0.606 | 94.762 ± 0.347 |
+| A six-minute cycle, the source lit | 97.200 ± 0.099 | 97.562 ± 0.058 | 86.742 ± 0.200 | 87.211 ± 0.141 | 91.886 ± 0.619 | 94.593 ± 0.342 |
+
+One row over another on the same draws: how often right in the second, less
+in the first, network by network.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| A three-minute cycle with the source lit, over one with none | **+0.112 ± 0.027** | +0.062 ± 0.027 | **+0.162 ± 0.045** | +0.041 ± 0.050 | **+0.293 ± 0.070** | **+0.153 ± 0.043** |
+| A six-minute cycle with the source lit, over one with none | **+0.094 ± 0.018** | **+0.045 ± 0.015** | **+0.144 ± 0.050** | **+0.082 ± 0.024** | **+0.297 ± 0.036** | **+0.169 ± 0.030** |
+| With no source, a six-minute cycle over a three-minute one | +0.014 ± 0.016 | +0.003 ± 0.007 | **+0.070 ± 0.020** | +0.004 ± 0.025 | +0.029 ± 0.094 | +0.034 ± 0.033 |
+| With the source lit, a six-minute cycle over a three-minute one | −0.004 ± 0.016 | −0.014 ± 0.010 | +0.052 ± 0.055 | +0.045 ± 0.042 | +0.032 ± 0.125 | +0.050 ± 0.036 |
+
+Against `refdraws`, which ran the same ten draws of the cycle with no source
+at the default step, a quarter of an LSB: how often right there, less here,
+network by network. grxcp's model derives it from the two modes' lines, whose
+probes-only rows are the same lines.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| What `--trimstep 1` costs a three-minute cycle with no source, over `refdraws`'s | +0.007 ± 0.008 | +0.003 ± 0.008 | −0.005 ± 0.021 | +0.004 ± 0.012 | +0.112 ± 0.064 | +0.038 ± 0.017 |
+| and a six-minute one | +0.002 ± 0.009 | **+0.010 ± 0.004** | −0.005 ± 0.012 | −0.028 ± 0.010 | +0.025 ± 0.045 | +0.029 ± 0.027 |
+
+What the probe found on the lines and what its reading would leave, rms, and
+the share of the first layer's weights the correction left at the rail.
+
+| | Found on the lines, rms | Left by the reading | Held at the rail, trained before: MNIST | Fashion-MNIST | Inverted | Reference: MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|---|---|---|---|---|
+| A three-minute cycle, the source lit | 19.88% | 1.00% | 0.038% | 0.064% | 0.009% | 0.132% | 0.239% | 0.048% |
+| A six-minute cycle, the source lit | 19.88% | 1.00% | 0.038% | 0.065% | 0.009% | 0.132% | 0.239% | 0.048% |
+
+**With no source, neither interval holds a tenth on the inverted set.** The
+reference networks' six-minute cycle ends 0.00 ± 0.01, 0.04 ± 0.02 and 0.15
+± 0.02 over the probes-only row of its draw, and a three-minute one 0.00 ±
+0.01, 0.03 ± 0.02 and 0.11 ± 0.03. On the inverted set six minutes is 2.9 of
+its errors over a tenth, which five networks put outside chance, and three
+minutes 0.6 over, which they do not. By grxcp's rule, the longest interval
+whose cycle ends under a tenth with the shorter doing so too, a calibration
+holds six minutes on MNIST and Fashion-MNIST and no interval that was run on
+the inverted set.
+
+**The DAC's step is what moved three minutes there.** At the default step
+`refdraws` had −0.01 ± 0.01, 0.07 ± 0.02 and 0.12 ± 0.03 at six minutes and
+−0.00, 0.03 and 0.08 at three, and three minutes held on the inverted set.
+Seed for seed, `--trimstep 1` costs the reference networks 0.01, −0.03 and
+0.03 at six minutes and 0.00, 0.00 and 0.04 at three. Over both kinds all
+twelve such figures are within 0.12 of a point, and one is clear, a
+hundredth on MNIST. The inverted set's are not clear, and they are enough to
+cross a tenth.
+
+**With the source lit, six minutes holds on MNIST alone.** The cycle ends
+0.05 ± 0.02, 0.12 ± 0.01 and 0.32 ± 0.04 over at six minutes and 0.06 ± 0.03,
+0.07 ± 0.04 and 0.27 ± 0.04 at three. On Fashion-MNIST six minutes is 1.4 of
+its errors over a tenth and three 0.6 under, neither of them clear. On the
+inverted set both are clear of it, and the five networks' mean is at a tenth
+or over on every one of the ten draws at either interval. So held, the
+reference networks lose 0.19, 0.68 and 0.79 of a point to the tile at the
+end of six minutes and 0.20, 0.63 and 0.74 at the end of three.
+
+**Six minutes over three is clear nowhere for the reference networks.** 0.00
+± 0.01, 0.00 ± 0.03 and 0.03 ± 0.03 with no source, and −0.01 ± 0.01, 0.04 ±
+0.04 and 0.05 ± 0.04 with the source lit. On the inverted set, with no
+source, the last three of six minutes are 0.03 of the 0.15 a cycle ends
+over. For the networks trained before one of the six is clear: 0.07 ± 0.02
+on Fashion-MNIST with no source.
+
+**What the source adds does not depend on the interval.** 0.04 ± 0.02, 0.08 ±
+0.02 and 0.17 ± 0.03 at the end of six minutes, clear on all three sets, and
+0.06 ± 0.03, 0.04 ± 0.05 and 0.15 ± 0.04 at the end of three.
+
+**The draws.** From draw to draw the five networks' mean of the six-minute
+cycle with the source lit has a standard deviation of 0.04, 0.09 and 0.10,
+and on the inverted set it runs from 0.14 to 0.45. The five draws the
+section before ran have 0.05, 0.09 and 0.33, and the other five 0.05, 0.15
+and 0.30.
+
+**The networks trained before.** Their six-minute cycle ends 0.01 ± 0.02,
+0.08 ± 0.04 and 0.44 ± 0.06 over with no source and 0.11 ± 0.00, 0.23 ± 0.06
+and 0.73 ± 0.08 with the source lit. By the rule, with no source a
+calibration holds six minutes on MNIST and Fashion-MNIST for them and no
+interval on the inverted set, and with the source lit no interval on any
+set.
+
+**The read.** The probe found the lines 19.9% off, rms, and its reading would
+leave them 1.00% off at either interval, between 0.78% and 1.37% on any one
+run. The rail holds 0.13%, 0.24% and 0.05% of the reference networks'
+weights back.
+
+**What was predicted.** Nine things, written before the mode was run, for
+the reference networks.
+
+1. That with no source a six-minute cycle ends −0.02 to 0.05, 0.02 to 0.12
+   and 0.10 to 0.22 over. Right: 0.00, 0.04 and 0.15.
+2. That with no source a three-minute one ends −0.03 to 0.04, 0.00 to 0.08
+   and 0.05 to 0.16 over, and that six minutes costs 0.00 to 0.10 more than
+   three on the inverted set and within 0.04 on the other two. Right: 0.00,
+   0.03 and 0.11, and 0.03 more on the inverted set and 0.00 on each of the
+   other two.
+3. That with the source lit a six-minute cycle ends 0.02 to 0.10, 0.04 to
+   0.14 and 0.24 to 0.40 over. Right: 0.05, 0.12 and 0.32.
+4. That with the source lit a three-minute one ends 0.01 to 0.09, 0.02 to
+   0.12 and 0.18 to 0.36 over. Right: 0.06, 0.07 and 0.27.
+5. That what the source's rows add does not depend on the interval: at six
+   minutes 0.02 to 0.08, −0.02 to 0.10 and 0.10 to 0.22, and at three within
+   0.05 of that on every set. Right: 0.04, 0.08 and 0.17, and 0.06, 0.04 and
+   0.15.
+6. That by the rule, with no source, a calibration holds six minutes on
+   MNIST and Fashion-MNIST and three minutes or none on the inverted set;
+   and with the source lit, six minutes on MNIST, none on the inverted set,
+   and Fashion-MNIST within 0.04 of a tenth at six minutes. Right: none on
+   the inverted set either way, and 0.12 on Fashion-MNIST.
+7. That on the inverted set with no source the six-minute cycle's mean is
+   over a tenth, and that five networks do not put it over one. Right about
+   the mean, 0.148. Wrong about the five networks, by two thousandths: they
+   put it over 0.102.
+8. That the trim at 8 bits costs the cycle with no source within 0.04 of what
+   the finer trim did on the same ten draws, on every set at both intervals,
+   and under 0.03 on MNIST and Fashion-MNIST at six minutes. Right: 0.01,
+   −0.03 and 0.03, and 0.00, 0.00 and 0.04. For the networks trained before,
+   which the prediction was not of, it is 0.11 ± 0.06 on the inverted set at
+   three minutes.
+9. That the probe leaves the lines 0.9% to 1.1% off in the mean at both
+   intervals, and that the rail holds 0.14%, 0.25% and 0.05% of the
+   reference networks' weights to 0.02%. Right: 1.00%, and 0.13%, 0.24% and
+   0.05%.
+
+Not predicted: that the DAC's step, which no one figure shows clearly, is
+what decides whether three minutes holds on the inverted set.
+
+**What this is not.** A schedule: one calibration, where a tile in use has
+had hundreds. Other intervals than three minutes and six: what a cycle ends
+over on the inverted set is mostly there at three, and nothing here says
+what one minute would do. A trim step between a quarter of an LSB and one. A
+calibration that sees a source's noise: the probes are taken before the
+light is lit. A comb whose lines move. A chip: the weights are scaled at the
+host, and the model's DAC has no rail for a weight and its trim together.
+The ten draws are of the same five networks. Version 1, or another tile.
 
 ---
 
