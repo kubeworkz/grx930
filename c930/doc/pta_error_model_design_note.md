@@ -122,6 +122,14 @@ over the probes-only row of its draw and a three-minute one 0.00, 0.03 and
 three minutes did. With the source lit six minutes ends 0.05, 0.12 and 0.32
 over and three 0.06, 0.07 and 0.27. Six minutes over three is clear nowhere
 for them.
+**And the eleventh, the same day** (§5, at its end): grxcp kept its interval
+at six minutes, and the source's rows are run apart on the chip as it is
+held. On the inverted set about half of what the source adds at the end of a
+cycle is there with no noise at all: a comb 20% off, read and corrected,
+adds 0.08 ± 0.04 of the 0.15. Of the noise, a line's own is the part that
+shows: at 2% for its 5% it buys the reference networks 0.02, 0.06 and 0.06
+of a point, none of them clear, and at 1% 0.04, 0.08 and 0.05, all of them
+clear.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -4242,6 +4250,208 @@ calibration that sees a source's noise: the probes are taken before the
 light is lit. A comb whose lines move. A chip: the weights are scaled at the
 host, and the model's DAC has no rail for a weight and its trim together.
 The ten draws are of the same five networks. Version 1, or another tile.
+
+### The source's rows, on the chip as it is held
+
+*Added 2026-10-10.* `sim/pta_mnist.sh DIR WORK refrows`. Reported, not gated.
+Nothing in `pta_mnist.c` changed for it.
+
+**Why.** The section before found that at the end of a six-minute cycle the
+source's rows add 0.04, 0.08 and 0.17 of a point for the reference networks,
+and on the inverted set more than the cycle's drift does. Which of the rows
+it is had only been run a row at a time: `source`, `refsource` and
+`reflaser` light a tile that was not calibrated, with its lines 5% off and
+left alone. grxcp kept its interval at six minutes and asked what tightening
+a line's own noise would buy on the chip as it is now held.
+
+**What it runs.** The eleventh mode on the reference networks. Version 2 on
+the 128 × 64 tile on two buses, ten rows on each of five draws, which are
+`refpoint`'s. The tile as budgeted; a calibration's probes taken and nothing
+written; a six-minute cycle with no source; and that cycle with a source
+lit, its lines 20% off, read with sixteen shots a row and corrected on the
+weights at 8 bits, once for each of seven pairs of noise:
+
+| `--src` | `--srcline` | What it is |
+|---|---|---|
+| 0.01 | 0.05 | The chip as grxcp holds it |
+| 0.01 | 0.02 | A line's own noise tightened |
+| 0.01 | 0.01 | |
+| 0.01 | 0 | The shared row alone |
+| 0 | 0.05 | A line's own noise alone |
+| 0 | 0 | A comb 20% off, read and corrected, and no noise |
+| 0.02 | 0.05 | The shared row as it was before grxcp's B16 |
+
+Every cycle has `--trimstep 1`. A cycle is read over the probes-only row of
+its draw. The lit rows of a draw meet the same seeds, and differ in how much
+noise is drawn and not in which. The networks trained before run beside the
+reference row for row. That is 500 evaluations a data set, and two hours
+for the three side by side on four jobs each.
+
+The mode checks every network and every run against its place, as the ten
+before it do: a run's name says its draw, whether it is a cycle, whether a
+source is lit, and the source's noise for its lines together and for a line,
+which have to be what it was asked and what its line printed, and one of the
+pairs the mode was asked for. A lit cycle has to have its lines as far from
+level as the mode was asked, to have been read and corrected at 8 bits, and
+to have run the tile at 8-bit weights; and no other row may be lit, or read.
+
+196 errors planted one at a time each fail: 116 in a training's line or a
+run's, after the fact; 43 in the script; and 37 in the tables' own code, which
+the check does not see and which each move the tables. As for the two modes
+before, a doctored line is put to the mode's check of the network it belongs
+to, and a changed script is handed a run it asks for that was already made.
+
+Of the lines, 200 on each data set are byte for byte what `refhold` wrote for
+the same runs: its as-budgeted and probes-only rows and its two six-minute
+cycles, on these five draws.
+
+**What came of it.** What a row adds over the row it is read over: the mean
+of five draws, with its standard error from the five networks, each averaged
+over its draws. In bold, what five networks put outside chance at one in
+twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Probes only | −0.015 ± 0.017 | +0.006 ± 0.017 | −0.038 ± 0.033 | +0.012 ± 0.023 | +0.038 ± 0.027 | +0.014 ± 0.019 |
+| A cycle, no source | +0.042 ± 0.030 | +0.010 ± 0.019 | +0.070 ± 0.048 | +0.032 ± 0.040 | +0.300 ± 0.134 | **+0.178 ± 0.041** |
+| A cycle: together 1%, a line 5%: the chip as it is held | **+0.111 ± 0.016** | +0.049 ± 0.022 | **+0.226 ± 0.058** | +0.087 ± 0.038 | **+0.632 ± 0.182** | **+0.332 ± 0.060** |
+| A cycle: together 1%, a line 2% | **+0.074 ± 0.024** | +0.025 ± 0.028 | **+0.200 ± 0.062** | +0.024 ± 0.034 | **+0.524 ± 0.163** | **+0.273 ± 0.052** |
+| A cycle: together 1%, a line 1% | +0.082 ± 0.031 | +0.008 ± 0.024 | **+0.191 ± 0.062** | +0.006 ± 0.020 | **+0.489 ± 0.149** | **+0.278 ± 0.058** |
+| A cycle: together 1%, a line none | +0.082 ± 0.032 | +0.038 ± 0.024 | **+0.193 ± 0.062** | +0.047 ± 0.022 | **+0.462 ± 0.152** | **+0.249 ± 0.058** |
+| A cycle: together none, a line 5% | **+0.121 ± 0.026** | +0.066 ± 0.037 | **+0.232 ± 0.057** | +0.037 ± 0.020 | **+0.579 ± 0.173** | **+0.297 ± 0.053** |
+| A cycle: no noise | **+0.086 ± 0.026** | +0.018 ± 0.030 | **+0.162 ± 0.056** | +0.033 ± 0.022 | **+0.424 ± 0.142** | **+0.259 ± 0.066** |
+| A cycle: together 2%, a line 5% | **+0.134 ± 0.008** | +0.055 ± 0.025 | **+0.238 ± 0.066** | +0.063 ± 0.034 | **+0.726 ± 0.191** | **+0.384 ± 0.073** |
+
+How often right, percent.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| As budgeted | 97.304 ± 0.101 | 97.611 ± 0.047 | 86.966 ± 0.168 | 87.357 ± 0.144 | 92.655 ± 0.567 | 94.910 ± 0.349 |
+| Probes only | 97.319 ± 0.098 | 97.604 ± 0.040 | 87.004 ± 0.141 | 87.346 ± 0.147 | 92.617 ± 0.564 | 94.896 ± 0.350 |
+| A cycle, no source | 97.277 ± 0.109 | 97.595 ± 0.056 | 86.934 ± 0.188 | 87.313 ± 0.173 | 92.317 ± 0.680 | 94.718 ± 0.371 |
+| A cycle: together 1%, a line 5%: the chip as it is held | 97.208 ± 0.099 | 97.556 ± 0.055 | 86.778 ± 0.183 | 87.258 ± 0.148 | 91.985 ± 0.737 | 94.564 ± 0.348 |
+| A cycle: together 1%, a line 2% | 97.245 ± 0.108 | 97.579 ± 0.059 | 86.804 ± 0.186 | 87.321 ± 0.163 | 92.094 ± 0.718 | 94.623 ± 0.366 |
+| A cycle: together 1%, a line 1% | 97.237 ± 0.108 | 97.597 ± 0.058 | 86.813 ± 0.184 | 87.340 ± 0.146 | 92.128 ± 0.707 | 94.618 ± 0.349 |
+| A cycle: together 1%, a line none | 97.236 ± 0.108 | 97.566 ± 0.054 | 86.811 ± 0.189 | 87.298 ± 0.140 | 92.155 ± 0.708 | 94.647 ± 0.360 |
+| A cycle: together none, a line 5% | 97.198 ± 0.114 | 97.538 ± 0.070 | 86.772 ± 0.183 | 87.308 ± 0.136 | 92.038 ± 0.732 | 94.598 ± 0.362 |
+| A cycle: no noise | 97.233 ± 0.107 | 97.586 ± 0.062 | 86.842 ± 0.188 | 87.312 ± 0.140 | 92.193 ± 0.699 | 94.637 ± 0.363 |
+| A cycle: together 2%, a line 5% | 97.185 ± 0.099 | 97.549 ± 0.054 | 86.766 ± 0.190 | 87.283 ± 0.138 | 91.891 ± 0.748 | 94.512 ± 0.345 |
+
+What a source adds: a lit cycle less the cycle with no source on the same
+draws, network by network.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Together 1%, a line 5%: the chip as it is held | **+0.070 ± 0.022** | **+0.039 ± 0.011** | **+0.156 ± 0.042** | +0.055 ± 0.040 | **+0.332 ± 0.072** | **+0.154 ± 0.048** |
+| Together 1%, a line 2% | +0.032 ± 0.022 | +0.016 ± 0.016 | **+0.129 ± 0.042** | −0.008 ± 0.042 | **+0.223 ± 0.053** | +0.095 ± 0.038 |
+| Together 1%, a line 1% | +0.040 ± 0.025 | −0.002 ± 0.012 | +0.120 ± 0.044 | −0.027 ± 0.038 | **+0.189 ± 0.049** | +0.100 ± 0.043 |
+| Together 1%, a line none | +0.041 ± 0.024 | +0.029 ± 0.012 | **+0.122 ± 0.038** | +0.015 ± 0.050 | **+0.162 ± 0.048** | +0.071 ± 0.038 |
+| Together none, a line 5% | **+0.079 ± 0.019** | +0.057 ± 0.022 | **+0.161 ± 0.039** | +0.005 ± 0.041 | **+0.279 ± 0.070** | **+0.120 ± 0.033** |
+| No noise | +0.044 ± 0.022 | +0.008 ± 0.017 | **+0.092 ± 0.032** | +0.001 ± 0.043 | +0.124 ± 0.049 | +0.081 ± 0.044 |
+| Together 2%, a line 5% | **+0.092 ± 0.031** | +0.046 ± 0.018 | **+0.168 ± 0.045** | +0.030 ± 0.039 | **+0.426 ± 0.080** | **+0.206 ± 0.062** |
+
+What a row buys over the chip as it is held: how often right in it, less on
+the chip.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| Together 1%, a line 2% | **+0.038 ± 0.012** | +0.024 ± 0.010 | +0.027 ± 0.018 | +0.063 ± 0.026 | +0.109 ± 0.047 | +0.059 ± 0.024 |
+| Together 1%, a line 1% | +0.029 ± 0.018 | **+0.041 ± 0.006** | +0.036 ± 0.018 | **+0.082 ± 0.021** | **+0.143 ± 0.045** | **+0.054 ± 0.013** |
+| Together 1%, a line none | +0.029 ± 0.018 | +0.010 ± 0.011 | +0.034 ± 0.016 | +0.040 ± 0.028 | **+0.170 ± 0.043** | **+0.083 ± 0.016** |
+| Together none, a line 5% | −0.010 ± 0.016 | −0.018 ± 0.017 | −0.005 ± 0.009 | +0.050 ± 0.026 | **+0.053 ± 0.019** | +0.034 ± 0.023 |
+| No noise | +0.026 ± 0.014 | **+0.031 ± 0.009** | **+0.064 ± 0.018** | +0.054 ± 0.033 | **+0.208 ± 0.053** | **+0.073 ± 0.017** |
+| Together 2%, a line 5% | −0.022 ± 0.012 | −0.006 ± 0.007 | −0.012 ± 0.012 | +0.024 ± 0.015 | **−0.094 ± 0.018** | −0.052 ± 0.025 |
+
+What the probe found on the lines and what its reading would leave, rms,
+beside what the count says it should leave; and the share of the first
+layer's weights the correction left at the rail.
+
+| | Found on the lines, rms | Left by the reading | Counted | Held at the rail, the reference networks: MNIST | Fashion-MNIST | Inverted |
+|---|---|---|---|---|---|---|
+| Together 1%, a line 5%: the chip as it is held | 20.13% | 1.00% | 0.91% | 0.141% | 0.255% | 0.049% |
+| Together 1%, a line 2% | 20.13% | 0.47% | 0.41% | 0.140% | 0.254% | 0.049% |
+| Together 1%, a line 1% | 20.13% | 0.31% | 0.27% | 0.141% | 0.254% | 0.049% |
+| Together 1%, a line none | 20.13% | 0.25% | 0.21% | 0.142% | 0.255% | 0.049% |
+| Together none, a line 5% | 20.13% | 0.96% | 0.89% | 0.139% | 0.251% | 0.048% |
+| No noise | 20.13% | 0.15% | 0.11% | 0.142% | 0.255% | 0.049% |
+| Together 2%, a line 5% | 20.13% | 1.06% | 0.96% | 0.140% | 0.255% | 0.049% |
+
+**On the inverted set, about half of what the source adds is not noise.**
+The chip's source adds the reference networks 0.04 ± 0.01, 0.05 ± 0.04 and
+0.15 ± 0.05. The same comb with no noise at all, read and corrected, adds
+0.01 ± 0.02, 0.00 ± 0.04 and 0.08 ± 0.04, none of them clear. The noise is
+the rest, 0.03 ± 0.01, 0.05 ± 0.03 and 0.07 ± 0.02: clear on MNIST and on the
+inverted set, where it is under half of the whole. `reffix` had the same
+correction 0.11 ± 0.04 from the model's own on that set, with no drift.
+
+**Of the noise, a line's own is the part that shows.** The chip less the
+same source with no line noise is 0.01 ± 0.01, 0.04 ± 0.03 and 0.08 ± 0.02,
+clear on the inverted set. The chip less the same source with no shared
+noise is −0.02 ± 0.02, 0.05 ± 0.03 and 0.03 ± 0.02, clear on none.
+
+**A line at 2% buys half a tenth that five networks do not quite see, and at
+1% they see it.** 2% buys 0.02 ± 0.01, 0.06 ± 0.03 and 0.06 ± 0.02, at 2.3,
+2.4 and 2.5 of its errors. 1% buys 0.04 ± 0.01, 0.08 ± 0.02 and 0.05 ± 0.01,
+clear on all three. With a line at 2% a cycle ends 0.03 ± 0.03, 0.02 ± 0.03
+and 0.27 ± 0.05 over the probes-only row of its draw, where as the chip is
+held it ends 0.05, 0.09 and 0.33. On the inverted set it ends over a tenth
+with every row that was run: 0.26 ± 0.07 with no noise, and 0.18 ± 0.04 with
+no source.
+
+**The shared row at 2% costs the reference networks nothing that can be
+seen.** 0.01 ± 0.01, −0.02 ± 0.02 and 0.05 ± 0.02 more than at 1%, clear on
+none. For the networks trained before it costs 0.09 ± 0.02 on the inverted
+set, which is clear.
+
+**The read follows the count, a tenth over it.** A reading leaves the lines
+1.00% off with a line at 5%, 0.47% at 2%, 0.31% at 1%, 0.25% with the shared
+row alone and 0.15% with no noise, where the count has 0.91%, 0.41%, 0.27%,
+0.21% and 0.11%. With no noise what is left is the tile's own.
+
+**The networks trained before.** The chip's source adds them 0.07 ± 0.02,
+0.16 ± 0.04 and 0.33 ± 0.07, and the comb with no noise 0.04 ± 0.02, 0.09 ±
+0.03 and 0.12 ± 0.05. A line at 2% buys them 0.04 ± 0.01, 0.03 ± 0.02 and
+0.11 ± 0.05, clear on MNIST, and with it their cycle ends 0.07, 0.20 and
+0.52 over.
+
+**What was predicted.** Seven things, written before the mode was run. The
+expectation behind most of them was that a line's own noise is nearly all of
+what the source adds, and it was wrong: on the inverted set about half of it
+is not noise.
+
+1. That with no line noise the shared row alone adds within 0.04 of nothing
+   on every set, and that with no shared noise a line at 5% adds within 0.04
+   of what the chip does. Wrong on the inverted set in the first: 0.03, 0.01
+   and 0.07. Wrong on Fashion-MNIST in the second, by a hundredth: 0.02, 0.05
+   and 0.03 apart.
+2. That at 2% the source adds under half of what it does at 5% on the
+   inverted set, 0.00 to 0.08, and at 1% within 0.04 of what it adds with no
+   line noise. Wrong in the first: 0.095, which is 62% of it. In the second
+   right on MNIST and the inverted set and wrong on Fashion-MNIST by two
+   thousandths.
+3. That with a line at 2% a cycle ends 0.16 to 0.28 over on the inverted
+   set, and 0.02 to 0.10 on Fashion-MNIST. Right: 0.27 and 0.02.
+4. That a comb 20% off with no noise, read and corrected, adds −0.03 to 0.05
+   on every set. Right on MNIST and Fashion-MNIST, 0.01 and 0.00. Wrong on
+   the inverted set: 0.08.
+5. That the shared row at 2% adds within 0.05 of what it does at 1% on every
+   set. Right on MNIST and Fashion-MNIST, 0.01 and −0.02. Wrong on the
+   inverted set by two thousandths: 0.052.
+6. That a reading leaves the lines 1.0% off with a line at 5%, 0.35% to
+   0.50% at 2%, 0.22% to 0.33% at 1%, 0.16% to 0.26% with the shared row
+   alone and 0.08% to 0.25% with no noise. Right on all five: 1.00%, 0.47%,
+   0.31%, 0.25% and 0.15%.
+7. That for the networks trained before a line at 2% takes back more than
+   half of what the source adds on the inverted set. Wrong: 0.11 of 0.33, a
+   third.
+
+**What this is not.** A comb: no row here is a source that exists. Why the
+corrected comb costs what it does on the inverted set: the rail, the
+rounding to 8 bits and the read are not told apart here, and 0.08 ± 0.04 is
+not itself clear. Noise that goes with a line's own power: here it is a
+share of a line's nominal light. A level other than 20%, or an interval
+other than six minutes. A calibration that sees a source's noise. Five
+draws, of the same five networks. Version 1, or another tile.
 
 ---
 

@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -71,11 +71,16 @@
 # its tile and its buses (default 128x64 and 2), REFHOLD_DRAWS the draws it
 # runs (default "0 1 2 3 4 5 6 7 8 9"), REFHOLD_CYCLES the intervals it cycles
 # at, in hours (default "0.05 0.1"), and REFHOLD_LEVEL how far from level a
-# comb's lines are (default 0.2).
+# comb's lines are (default 0.2).  `refrows` is the eleventh: REFROWS_TILE and
+# REFROWS_BUSES set its tile and its buses (default 128x64 and 2),
+# REFROWS_DRAWS the draws it runs (default "0 1 2 3 4"), REFROWS_LEVEL how far
+# from level a comb's lines are (default 0.2), and REFROWS_ROWS the source's
+# noise in each lit row, as TOGETHER:LINE, the first of them the chip as it is
+# held (default "0.01:0.05 0.01:0.02 0.01:0.01 0.01:0 0:0.05 0:0 0.02:0.05").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,74p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,79p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -3669,6 +3674,322 @@ if [ "$what" = refhold ]; then
         base="cycle of $h h, lit, lines to $level, $w, $t"
         printf '%-84s' "$base"
         for k in before reference; do refhold_lines $k "$base"; done
+        echo
+    done
+fi
+
+# `refrows`: the source's rows, on the chip as it is held.  At the end of a
+# six-minute cycle the source's rows are the larger part of what the chip
+# loses on a workload that lights most of its rows, and every figure for one
+# of them alone is of a tile that was not calibrated, with its lines 5% off
+# and left alone.  This runs the cycle as grxcp now holds the chip, on five
+# draws, which are `refpoint`'s: the tile as budgeted; a calibration's probes
+# taken and nothing written; a six-minute cycle with no source; and that cycle
+# with the source lit, its lines 20% off, read and corrected on the weights at
+# 8 bits, once for each pair of noise asked for: for the lines together, and
+# for a line on its own.  The first pair is the chip as it is held, 1% and 5%.
+# Every cycle has its trim at 8 bits.  A cycle is read over the probes-only
+# row of its draw.  Both kinds of network, row for row.
+if [ "$what" = refrows ]; then
+    tile=${REFROWS_TILE:-128x64}
+    buses=${REFROWS_BUSES:-2}
+    draws=${REFROWS_DRAWS:-0 1 2 3 4}
+    level=${REFROWS_LEVEL:-0.2}
+    rows=${REFROWS_ROWS:-0.01:0.05 0.01:0.02 0.01:0.01 0.01:0 0:0.05 0:0 0.02:0.05}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    b="--impair $all $r"
+    d="--impair $all,drift $r --drift tflt"
+    fix="--levelprobe 16 --levelfix weights8"
+    # row|options.  Every row's name ends in its draw.
+    c="--hours 0.1 --calibrate 16 --post-hours 0.1"
+    for dd in $draws; do
+        echo "as budgeted, draw $dd|$b"
+        echo "probes only, draw $dd|$b --calibrate 16 --trimmax 0"
+        echo "cycle, no source, draw $dd|$d $c --trimstep 1"
+        for x in $rows; do
+            echo "cycle, together ${x%:*}, a line ${x#*:}, draw $dd|$d $c --src ${x%:*} --srcline ${x#*:} --buses $buses --srcflat $level $fix --trimstep 1"
+        done
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refrows_settings.txt"
+    # refrows_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refrows.d/NET_ROW.txt
+    refrows_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refrows.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refrows.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refrows_one
+    # refrows_row NAME: a row's name as a file's
+    refrows_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refrows_net SEED KIND: the network's file, trained before or the reference
+    refrows_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            for sd in 1 2 3 4 5; do echo "$(refrows_net $sd $k) $(refrows_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/refrows_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refrows_one "$@"' _
+
+    # refrows_file SEED KIND NAME: the file refrows_one wrote for that run
+    refrows_file() { echo "$work/out/refrows.d/$(basename "$(refrows_net "$1" "$2")" .net)_$(refrows_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; its seed is its draw's; and its
+    # name says whether it is a cycle, whether a source is lit, and the
+    # source's noise for its lines together and for a line, which have to be
+    # what it was asked and what its line printed, and one of the pairs the
+    # mode was asked for.  A cycle was aged six minutes, calibrated with its
+    # trims written, and aged six minutes again, with its trim at 8 bits: it
+    # was asked a step of one and printed it.  The probes-only row took its
+    # probes and wrote nothing, and it and the as-budgeted row were asked no
+    # step and printed a quarter.  A cycle with a source lit has its lines as
+    # far from level as the mode was asked, was read with sixteen shots a row
+    # and corrected on the weights at 8 bits, ran the tile at 8-bit weights
+    # and took nothing off its sums; and no other row is lit, or was read.
+    refrows_ok=yes
+    refrows_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refrows_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refrows_ok=NO
+        while IFS='|' read -r name setting; do
+            cat "$log" "$(refrows_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" -v lv="$level" -v rows="$rows" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                function ends(text, tail) { return length(text) >= length(tail) && substr(text, length(text) - length(tail) + 1) == tail }
+                function less(text, tail) { return substr(text, 1, length(text) - length(tail)) }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        budget = (base == "as budgeted") ? 1 : 0
+                        only = (base == "probes only") ? 1 : 0
+                        dark = (base == "cycle, no source") ? 1 : 0
+                        lit = (base ~ /^cycle, together [0-9.]+, a line [0-9.]+$/) ? 1 : 0
+                        together = 0; line = 0; known = 0
+                        if (lit) { split(base, part, ", "); together = substr(part[2], 10) + 0; line = substr(part[3], 8) + 0
+                                   nr = split(rows, rw, " ")
+                                   for (i = 1; i <= nr; ++i) { split(rw[i], xy, ":")
+                                                               if (xy[1] + 0 == together && xy[2] + 0 == line) known = 1 } }
+                        cyc = (dark || lit) ? 1 : 0
+                        h = 0.1 * cyc
+                        fixed = lit; coarse = cyc
+                        flat = lit ? lv + 0 : 0
+                        drifts = cyc
+                        cal = (cyc || only) ? 16 : 0
+                        sane = sane && drawn && (budget + only + dark + lit == 1) && lit == known && lv + 0 > 0.05 && m == 5 + drifts &&
+                               (drifts == (("drift" in on) ? 1 : 0)) && (drifts == has("drift")) && !has("seed") &&
+                               (!drifts || want["drift"] == "tflt") && has("hours") == drifts && asked("hours") == h * drifts &&
+                               has("calibrate") == (cal > 0) && asked("calibrate") == cal &&
+                               has("post-hours") == cyc && asked("post-hours") == h * cyc &&
+                               has("trimmax") == only && asked("trimmax") == 0 && !has("wbits") &&
+                               has("trimstep") == coarse && asked("trimstep") == coarse &&
+                               has("src") == lit && asked("src") == together && has("srcline") == lit && asked("srcline") == line &&
+                               has("srcflat") == lit && asked("srcflat") == flat && has("buses") == lit && asked("buses") == nb * lit &&
+                               !has("srcsign") && has("levelprobe") == fixed && asked("levelprobe") == 16 * fixed &&
+                               has("levelfix") == fixed && (!fixed || want["levelfix"] == "weights8") && !has("levelref") }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { ok = sane && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               v["wbits"] == (fixed ? 8 : 6) &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == (drifts ? "tflt" : "none") && v["hours"] == h * drifts && (v["steps"] > 0) == drifts &&
+                               v["cal"] == cal && v["post_hours"] == h * cyc && near(v["trimstep"], coarse ? 1 : 0.25, 1e-12) &&
+                               v["trimmax"] == (only ? 0 : 128) && !("hidshift" in v) && !("thermalline" in v)
+                          if (lit) ok = ok && v["src"] + 0 == together && v["srcline"] + 0 == line && v["srcflat"] + 0 == flat &&
+                                        v["srcsign"] == "pair" && v["buses"] == nb
+                          else ok = ok && !("src" in v)
+                          if (fixed) ok = ok && v["levelprobe"] == 16 && ("level_left" in v) && near(v["level_found"] / flat, 1, 0.4) &&
+                                          v["levelfix"] == "weights8" && v["levelref"] == "none" && v["level_gain"] == 1 && ("level_clip" in v)
+                          else ok = ok && !("levelprobe" in v) && !("level_found" in v) && !("level_left" in v) &&
+                                    !("levelfix" in v) && !("levelref" in v) && !("level_gain" in v) && !("level_clip" in v) }
+                END { exit !(NR == 2 && ok) }' || refrows_ok=NO
+            refrows_runs=$((refrows_runs + 1))
+        done < "$work/out/refrows_settings.txt"
+    done; done
+    echo "== refrows: $refrows_runs runs, each of them the network and the row its place says: $refrows_ok"
+    [ "$refrows_ok" = yes ] || exit 1
+
+    # refrows_partner NAME: the row a row is read over, which meets its
+    # noise: the as-budgeted row of its draw for the probes-only one, and the
+    # probes-only row of its draw for a cycle.  The as-budgeted row of a draw
+    # is read over the first draw's
+    refrows_partner() {
+        local base=${1%, draw *} dd=${1##*, draw }
+        case "$base" in
+        "as budgeted") echo "as budgeted, draw ${draws%% *}" ;;
+        "cycle, "*) echo "probes only, draw $dd" ;;
+        *) echo "as budgeted, draw $dd" ;;
+        esac
+    }
+    # refrows_stat KIND NAME: how often the five networks are right in a row,
+    # mean and standard error, and what the row adds over its partner, network
+    # by network
+    refrows_stat() {
+        local sd partner
+        partner=$(refrows_partner "$2")
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refrows_file $sd "$1" "$partner")"
+            sed 's/^/B /' "$(refrows_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = a - x; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refrows_pair KIND BASE OTHER: a row over all its draws, against another
+    # row of the same draws: how often right in the other, less in the row,
+    # network by network.  The mean; its standard error, from the five
+    # networks, each averaged over its draws; and the standard deviation from
+    # draw to draw of the five networks' mean
+    refrows_pair() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do
+                sed "s/^/A $sd $dd /" "$(refrows_file $sd "$1" "$3, draw $dd")"
+                sed "s/^/B $sd $dd /" "$(refrows_file $sd "$1" "$2, draw $dd")"
+            done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "A") { a = x; next }
+              g = a - x
+              gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+            END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                  for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                  printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+    }
+    # refrows_over KIND BASE: a row over all its draws.  How often right: the
+    # mean, its standard error from the five networks each averaged over its
+    # draws, and the draws' standard deviation; and what it adds over the row
+    # it is read over, the same three
+    refrows_over() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do sed "s/^/$sd $dd /" "$(refrows_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 3; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0; rn[$1] += x; cn[$1]++; rd[$2] += x; cd[$2]++ }
+            END { for (k in cn) { x = rn[k] / cn[k]; rs += x; rss += x * x; nn++ }
+                  for (k in cd) { x = rd[k] / cd[k]; ds += x; dss += x * x; nd++ }
+                  printf " %8.3f +-%5.3f %6.3f", rs / nn, dev(rs, rss, nn) / sqrt(nn), dev(ds, dss, nd) }'
+        # the row it is read over is its partner on its own draw, but for the
+        # as-budgeted row, whose partner is one row for all of them
+        if [ "$2" = "as budgeted" ]; then
+            local first=${draws%% *} sd2 dd2
+            for sd2 in 1 2 3 4 5; do
+                for dd2 in $draws; do
+                    sed "s/^/A $sd2 $dd2 /" "$(refrows_file $sd2 "$1" "as budgeted, draw $first")"
+                    sed "s/^/B $sd2 $dd2 /" "$(refrows_file $sd2 "$1" "as budgeted, draw $dd2")"
+                done
+            done | awk '
+                function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+                { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  x = v["acc"] + 0
+                  if ($1 == "A") { a = x; next }
+                  g = a - x; gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+                END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                      for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                      printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+        else
+            local p
+            p=$(refrows_partner "$2, draw 0")
+            refrows_pair "$1" "$2" "${p%, draw *}"
+        fi
+    }
+    # refrows_lines KIND BASE: a corrected row over its runs: what the probe
+    # found on the lines and what its reading would leave, percent rms, and
+    # the share of the weights the rail held back, percent
+    refrows_lines() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(refrows_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              fs += v["level_found"]; ls += v["level_left"]; cs += v["level_clip"]; runs++ }
+            END { printf " %7.2f %6.2f %6.3f", 100 * fs / runs, 100 * ls / runs, 100 * cs / runs }'
+    }
+    echo "== refrows: the $tile tile on $buses buses at v2, five networks, mean and standard error.  How"
+    echo "== often right, percent, and what a row adds over the row it is read over, network by"
+    echo "== network: the probes-only row over the as-budgeted row of its draw, a cycle over the"
+    echo "== probes-only row of its draw, and the as-budgeted row over the first draw's"
+    printf '%-92s %14s %14s %14s %14s' "" "before right" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-92s' "$name"
+        for k in before reference; do refrows_stat $k "$name"; done
+        echo
+    done < "$work/out/refrows_settings.txt"
+    echo "== refrows: a row over its draws.  How often right, and what it adds over the row it is"
+    echo "== read over: the mean, its standard error from five networks each averaged over its"
+    echo "== draws, and the standard deviation from draw to draw of the five networks' mean"
+    printf '%-84s %25s %24s %25s %24s' "" "before right" "and adds" "reference right" "and adds"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/refrows_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do refrows_over $k "$base"; done
+        echo
+    done
+    echo "== refrows: one row over another on the same draws: how often right in the second, less"
+    echo "== in the first, network by network over the draws, with its standard error and its"
+    echo "== standard deviation from draw to draw.  The two of a pair meet the same noise"
+    printf '%-92s %24s %24s' "" "before" "reference"
+    echo
+    held=${rows%% *}
+    hb="cycle, together ${held%:*}, a line ${held#*:}"
+    {
+        for x in $rows; do
+            echo "together ${x%:*}, a line ${x#*:}: over the cycle with no source|cycle, together ${x%:*}, a line ${x#*:}|cycle, no source"
+        done
+        for x in $rows; do
+            [ "$x" != "$held" ] || continue
+            echo "the chip as it is held, over together ${x%:*}, a line ${x#*:}|$hb|cycle, together ${x%:*}, a line ${x#*:}"
+        done
+    } | while IFS='|' read -r label one other; do
+        printf '%-92s' "$label"
+        for k in before reference; do refrows_pair $k "$one" "$other"; done
+        echo
+    done
+    echo "== refrows: the rows that are read and corrected: what the probe found on the lines and"
+    echo "== what its reading would leave, percent rms, and the share of the weights held at the rail,"
+    echo "== percent: a mean over the runs"
+    printf '%-84s %22s %22s' "" "before" "reference"
+    echo
+    for x in $rows; do
+        base="cycle, together ${x%:*}, a line ${x#*:}"
+        printf '%-84s' "$base"
+        for k in before reference; do refrows_lines $k "$base"; done
         echo
     done
 fi
