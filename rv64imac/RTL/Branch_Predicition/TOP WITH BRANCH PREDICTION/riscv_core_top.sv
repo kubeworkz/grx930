@@ -1593,7 +1593,7 @@ logic mem_read_req,mem_read_done,i_mem_write_done,o_mem_write_valid;
 riscv_core_dcache_top#(
     .BLOCK_OFFSET(2)
     ,.INDEX_WIDTH(7)
-    ,.TAG_WIDTH(20)
+    ,.TAG_WIDTH(64 - 5 - 7)    // was the stale 20; tag bits the index leaves
     ,.CORE_DATA_WIDTH(64)
     ,.ADDR_WIDTH(64)
     ,.AXI_DATA_WIDTH(256)

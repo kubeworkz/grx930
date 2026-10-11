@@ -1,7 +1,11 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:3
-`define BYTE_OFFSET 2:0
+// Index select must match the tag array's set select in the controller: the
+// set is addr[5 +: INDEX_WIDTH], never the literal addr[11:5] this file used
+// to carry (2**(7-INDEX_WIDTH) tag entries aliased onto one data line at
+// INDEX_WIDTH < 7).  See the controller for the failure mode.
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define DCACHE_INDEX 5 +: INDEX_WIDTH
+`define DCACHE_BLOCK_OFFSET 4:3
+`define DCACHE_BYTE_OFFSET 2:0
 
 
 module riscv_core_dcache_memory #(
@@ -136,7 +140,7 @@ always_ff @( posedge i_clk ) begin : FLUSH_WRITE_REPLACEMENT_BLOCK
         // Single write port at the line address with per-byte enables.
         for (int b = 0 ; b < 32 ; b = b + 1) begin
             if (be_all[b])
-                DATA_MEM [ i_addr_from_core[11 -: INDEX_WIDTH] ][ b*8 +: 8 ] <= wr_data_all[b*8 +: 8];
+                DATA_MEM [ i_addr_from_core[5 +: INDEX_WIDTH] ][ b*8 +: 8 ] <= wr_data_all[b*8 +: 8];
         end
     end
 end
@@ -153,7 +157,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
     if (!i_rst_n)
         read_data_reg <= 'b0;
     else if (i_rd_en)
-        read_data_reg <= DATA_MEM [ i_addr_from_core[11 -: INDEX_WIDTH] ];
+        read_data_reg <= DATA_MEM [ i_addr_from_core[5 +: INDEX_WIDTH] ];
 end
 
 always_comb begin : READ_SIZE_SELECT

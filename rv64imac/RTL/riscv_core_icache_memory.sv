@@ -1,7 +1,11 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:2
-`define BYTE_OFFSET 1:0
+// Index select must match the tag array's set select in the controller: the
+// set is addr[5 +: INDEX_WIDTH], never the literal addr[11:5] this file used
+// to carry (2**(7-INDEX_WIDTH) tag entries aliased onto one data line at
+// INDEX_WIDTH < 7).  See the controller for the failure mode.
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define ICACHE_INDEX 5 +: INDEX_WIDTH
+`define ICACHE_BLOCK_OFFSET 4:2
+`define ICACHE_BYTE_OFFSET 1:0
 
 module riscv_core_icache_memory #(
     parameter BLOCK_OFFSET_WIDTH = 3,
@@ -67,7 +71,7 @@ assign i_addr_from_core_3 = i_addr_from_core + 2'b11;
 always_ff @( posedge i_clk ) begin : FLUSH_WRITE_REPLACEMENT_BLOCK
     // BLOCK REPLACEMENT: a full 256-bit line is written at the fill address
     if (i_wr_en && i_block_replace) begin
-        INSTR_MEM [ i_fill_addr[11 -: INDEX_WIDTH] ] <= i_block_from_axi;
+        INSTR_MEM [ i_fill_addr[5 +: INDEX_WIDTH] ] <= i_block_from_axi;
     end
 end
 //          READ FROM MEMORY BLOCK           //
@@ -87,8 +91,8 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
         read_data_reg   <= 'b0;
         read_data_reg_2 <= 'b0;
     end else if (i_rd_en) begin
-        read_data_reg   <= INSTR_MEM [ i_addr_from_core[11 -: INDEX_WIDTH] ];
-        read_data_reg_2 <= INSTR_MEM [ i_addr_from_core_2[11 -: INDEX_WIDTH] ];
+        read_data_reg   <= INSTR_MEM [ i_addr_from_core[5 +: INDEX_WIDTH] ];
+        read_data_reg_2 <= INSTR_MEM [ i_addr_from_core_2[5 +: INDEX_WIDTH] ];
     end
 end
 

@@ -1,7 +1,12 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:3
-`define BYTE_OFFSET 2:0
+// INDEX/TAG SPLIT -- both selects derive from INDEX_WIDTH, never from literals.
+// A literal addr[11:5] set select over an INDEX_WIDTH-wide data array aliases
+// 2**(7-INDEX_WIDTH) tag entries onto one data line, so a fill can leave a
+// foreign tag VALID over that line and a later HIT serves the wrong line.
+//   index = addr[5 +: INDEX_WIDTH]   tag = addr[ADDR_WIDTH-1 : 5+INDEX_WIDTH]
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define DCACHE_INDEX 5 +: INDEX_WIDTH
+`define DCACHE_BLOCK_OFFSET 4:3
+`define DCACHE_BYTE_OFFSET 2:0
 `define OFFSET 5
 
 
@@ -62,13 +67,22 @@ module riscv_core_dcache_controller #(
 
 localparam CACHE_DEPTH = 2**INDEX_WIDTH ;
 
+// Tag storage width follows the index split (not the TAG_WIDTH parameter), so
+// a stale TAG_WIDTH cannot silently truncate the tag compare; it is kept for
+// interface compatibility and checked below in simulation.
+localparam TAG_W = ADDR_WIDTH - 5 - INDEX_WIDTH ;
+`ifndef SYNTHESIS
+initial if (TAG_WIDTH != TAG_W)
+    $error("dcache TAG_WIDTH=%0d but the index leaves %0d tag bits", TAG_WIDTH, TAG_W);
+`endif
+
 
 ///////////////////////////////////////////////
 //      INTERNAL REGISTERS AND MEMORIES      //
 ///////////////////////////////////////////////
 
 
-logic [  TAG_WIDTH-1 : 0  ] TAG_MEM  [0:CACHE_DEPTH-1];
+logic [  TAG_W-1 : 0  ] TAG_MEM  [0:CACHE_DEPTH-1];
 logic                      VALID_MEM [0:CACHE_DEPTH-1];
 
 
@@ -105,8 +119,8 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // UPDATE TAG and VALID MEM in case of BLOCK REPLACEMENT //
 
         if (update_en) begin
-           TAG_MEM       [  i_addr_from_core[`INDEX]   ] <= i_addr_from_core[`TAG];
-           VALID_MEM     [  i_addr_from_core[`INDEX]   ] <= 1'b1; 
+           TAG_MEM       [  i_addr_from_core[`DCACHE_INDEX]   ] <= i_addr_from_core[`TAG];
+           VALID_MEM     [  i_addr_from_core[`DCACHE_INDEX]   ] <= 1'b1; 
         end
     end
 end
@@ -115,7 +129,7 @@ end
 //            TAG COMPARISON BLOCK             //
 /////////////////////////////////////////////////
 
-assign   tag_hit    = (TAG_MEM[  i_addr_from_core[`INDEX]   ] == i_addr_from_core[`TAG]) &&  VALID_MEM[  i_addr_from_core[`INDEX]   ]; 
+assign   tag_hit    = (TAG_MEM[  i_addr_from_core[`DCACHE_INDEX]   ] == i_addr_from_core[`TAG]) &&  VALID_MEM[  i_addr_from_core[`DCACHE_INDEX]   ]; 
 
 
 
@@ -136,7 +150,7 @@ o_rd_en = 0;
 o_wr_en = 0;
 o_block_replace = 0;
 o_stall = 0;
-o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
 o_mem_read_req = 0;
 update_en = 0;
 
@@ -155,7 +169,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
 
@@ -177,7 +191,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end    
             end
@@ -201,7 +215,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end 
             end      
@@ -217,7 +231,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 1;
         update_en = 0;
 
@@ -238,7 +252,7 @@ case (STATE)
         o_wr_en = 1;
         o_block_replace = 1;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 1;
 
@@ -256,7 +270,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         
@@ -276,7 +290,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         NEXT = IDLE;
@@ -302,19 +316,19 @@ always_comb begin : FAULT_DETECTION
     case (i_size)
         2'b00 : fault = 1'b0;
         2'b01 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b111)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b111)
                     fault = 1'b1;
                     else
                     fault = 1'b0;
                 end
         2'b10 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b111 || i_addr_from_core[`BYTE_OFFSET] == 3'b110 || i_addr_from_core[`BYTE_OFFSET] == 3'b101)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b111 || i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b110 || i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b101)
                     fault = 1'b1;
                     else
                     fault = 1'b0;
                 end
         2'b11 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b000)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b000)
                     fault = 1'b0;
                     else
                     fault = 1'b1;

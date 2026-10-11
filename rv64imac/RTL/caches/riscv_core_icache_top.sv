@@ -1,14 +1,17 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:2
-`define BYTE_OFFSET 1:0
+// INDEX/TAG SPLIT -- the selects derive from INDEX_WIDTH and the TAG_WIDTH
+// default follows the split, so an instantiation at any width gets tag bits
+// that still reconstruct the line (see the controller note).
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define ICACHE_INDEX 5 +: INDEX_WIDTH
+`define ICACHE_BLOCK_OFFSET 4:2
+`define ICACHE_BYTE_OFFSET 1:0
 
 module riscv_core_icache_top#(
     parameter BLOCK_OFFSET_WIDTH = 2,
     parameter INDEX_WIDTH        = 7,
-    parameter TAG_WIDTH          = 20,
     parameter CORE_DATA_WIDTH    = 32,
     parameter ADDR_WIDTH         = 64,
+    parameter TAG_WIDTH         = ADDR_WIDTH - 5 - INDEX_WIDTH,
     parameter AXI_DATA_WIDTH     = 256
 ) (
     // Interface with CORE//
@@ -30,7 +33,7 @@ logic                         control_to_mem_wr_en;
 logic                         control_to_mem_block_replace;
 logic                         control_to_mem_offset;
 //      BLOCK INSTANTIATION   //
-riscv_core_icache_controller #(.TAG_WIDTH(TAG_WIDTH)) icache_controller (
+riscv_core_icache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_controller (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_addr_from_core (i_addr_from_core),
@@ -42,7 +45,7 @@ riscv_core_icache_controller #(.TAG_WIDTH(TAG_WIDTH)) icache_controller (
     .o_mem_req(o_mem_req),
     .i_mem_done(i_mem_done),
     .o_offset(control_to_mem_offset));
-riscv_core_icache_memory #(.TAG_WIDTH(TAG_WIDTH)) icache_memory (
+riscv_core_icache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_memory (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_addr_from_core (i_addr_from_core),

@@ -1,7 +1,12 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:2
-`define BYTE_OFFSET 1:0
+// INDEX/TAG SPLIT -- both selects derive from INDEX_WIDTH, never from literals.
+// A literal addr[11:5] set select over an INDEX_WIDTH-wide data array aliases
+// 2**(7-INDEX_WIDTH) tag entries onto one data line, so a fill can leave a
+// foreign tag VALID over that line and a later HIT serves the wrong line.
+//   index = addr[5 +: INDEX_WIDTH]   tag = addr[ADDR_WIDTH-1 : 5+INDEX_WIDTH]
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define ICACHE_INDEX 5 +: INDEX_WIDTH
+`define ICACHE_BLOCK_OFFSET 4:2
+`define ICACHE_BYTE_OFFSET 1:0
 `define OFFSET 5
 
 module riscv_core_icache_controller #(
@@ -39,8 +44,17 @@ module riscv_core_icache_controller #(
 );
 //             LOCAL PARAMETERS              //
 localparam CACHE_DEPTH = 2**INDEX_WIDTH ;
+
+// Tag storage width follows the index split (not the TAG_WIDTH parameter), so
+// a stale TAG_WIDTH cannot silently truncate the tag compare; it is kept for
+// interface compatibility and checked below in simulation.
+localparam TAG_W = ADDR_WIDTH - 5 - INDEX_WIDTH ;
+`ifndef SYNTHESIS
+initial if (TAG_WIDTH != TAG_W)
+    $error("icache TAG_WIDTH=%0d but the index leaves %0d tag bits", TAG_WIDTH, TAG_W);
+`endif
 //      INTERNAL REGISTERS AND MEMORIES      //
-logic [(TAG_WIDTH-1):0] TAG_MEM  [0:CACHE_DEPTH-1];
+logic [(TAG_W-1):0] TAG_MEM  [0:CACHE_DEPTH-1];
 logic                      VALID_MEM [0:CACHE_DEPTH-1];
 enum logic [1:0] {
     IDLE           = 2'b00,
@@ -116,8 +130,8 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // core request is serviced.
         if (STATE == IDLE && pending_inv) begin
             pending_inv <= 1'b0;
-            if (TAG_MEM[pending_inv_addr[`INDEX]] == pending_inv_addr[`TAG])
-                VALID_MEM[pending_inv_addr[`INDEX]] <= 1'b0;
+            if (TAG_MEM[pending_inv_addr[`ICACHE_INDEX]] == pending_inv_addr[`TAG])
+                VALID_MEM[pending_inv_addr[`ICACHE_INDEX]] <= 1'b0;
         end
         STATE <= NEXT ;
         // post_fill: high during the first IDLE cycle after a fill write.
@@ -152,7 +166,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // reset-sensitive block demotes every memory written from it to
         // registers in synthesis, killing DPR16X4 inference.)
         if (update_en) begin
-            VALID_MEM     [  fill_addr[`INDEX]   ] <= 1'b1;
+            VALID_MEM     [  fill_addr[`ICACHE_INDEX]   ] <= 1'b1;
         end
     end
 end
@@ -164,17 +178,17 @@ end
 // DPR16X4 instead of ~6.6K FFs.
 always_ff @( posedge i_clk ) begin : TAG_UPDATE_BLOCK
     if (update_en) begin
-        TAG_MEM [ fill_addr[`INDEX] ] <= fill_addr[`TAG];
+        TAG_MEM [ fill_addr[`ICACHE_INDEX] ] <= fill_addr[`TAG];
     end
 end
 //            TAG COMPARISON BLOCK IF THE SAME BLOCK             //
-assign tag_hit_1 = ((TAG_MEM[i_addr_from_core[`INDEX]] == i_addr_from_core[`TAG]) &&  VALID_MEM[i_addr_from_core[`INDEX]]); 
+assign tag_hit_1 = ((TAG_MEM[i_addr_from_core[`ICACHE_INDEX]] == i_addr_from_core[`TAG]) &&  VALID_MEM[i_addr_from_core[`ICACHE_INDEX]]); 
 //            DETECT IF IT'S NEEDED TO TAKE TWO BYTES FROM THE NEXT BLOCK   //
-assign over_f = ((i_addr_from_core[`BLOCK_OFFSET]==3'b111) && (i_addr_from_core[`BYTE_OFFSET]==2'b10));
+assign over_f = ((i_addr_from_core[`ICACHE_BLOCK_OFFSET]==3'b111) && (i_addr_from_core[`ICACHE_BYTE_OFFSET]==2'b10));
 //            ADD 2 TO GET THE NEW INDEX AND NEW TAG IN CASE OF OVER_F  //
 assign i_addr_from_core_next_block = i_addr_from_core + 2'b10 ;
 //             TAG COPARISON BLOCK IN CASE OF NEXT BLOCK        //
-assign tag_hit_2 = ((TAG_MEM[i_addr_from_core_next_block[`INDEX]] == i_addr_from_core_next_block[`TAG]) &&  VALID_MEM[i_addr_from_core_next_block[`INDEX]]); 
+assign tag_hit_2 = ((TAG_MEM[i_addr_from_core_next_block[`ICACHE_INDEX]] == i_addr_from_core_next_block[`TAG]) &&  VALID_MEM[i_addr_from_core_next_block[`ICACHE_INDEX]]); 
 //             s1 IS THE CONDITION OF CACHE MISS IN THE SAME BLOCK  //
 assign s1 = !(tag_hit_1);
 //             s2 IS THE CONDITION OF MISS IN THE NEXT BLOCK IN CASE OF OVER_F  //
@@ -235,9 +249,9 @@ case (STATE)
                 o_stall = 1;
                 o_mem_req = 1;
                 if(s1)      //if s1 then get the block from the start   //
-                    o_addr_from_control_to_axi = {i_addr_from_core[`TAG],i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_addr_from_control_to_axi = {i_addr_from_core[`TAG],i_addr_from_core[`ICACHE_INDEX],`OFFSET'b0};
                 else if (s2)    //if s2 then get the next block from the start  //
-                    o_addr_from_control_to_axi = {i_addr_from_core_next_block[`TAG],i_addr_from_core_next_block[`INDEX],`OFFSET'b0};
+                    o_addr_from_control_to_axi = {i_addr_from_core_next_block[`TAG],i_addr_from_core_next_block[`ICACHE_INDEX],`OFFSET'b0};
                 NEXT = MEM_REQ;
             end
         end
@@ -249,7 +263,7 @@ case (STATE)
         o_stall = 1;
         // Use the latched fill address, not the live fetch PC (which may have
         // been redirected by a taken branch while the fill was in flight).
-        o_addr_from_control_to_axi = {fill_addr[`TAG],fill_addr[`INDEX],`OFFSET'b0};
+        o_addr_from_control_to_axi = {fill_addr[`TAG],fill_addr[`ICACHE_INDEX],`OFFSET'b0};
         o_mem_req = 1;
         update_en = 0;
         o_fill_addr = fill_addr;

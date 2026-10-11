@@ -1,7 +1,11 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:2
-`define BYTE_OFFSET 1:0
+// Index select must match the tag array's set select in the controller: the
+// set is addr[5 +: INDEX_WIDTH], never the literal addr[11:5] this file used
+// to carry (2**(7-INDEX_WIDTH) tag entries aliased onto one data line at
+// INDEX_WIDTH < 7).  See the controller for the failure mode.
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define ICACHE_INDEX 5 +: INDEX_WIDTH
+`define ICACHE_BLOCK_OFFSET 4:2
+`define ICACHE_BYTE_OFFSET 1:0
 
 module riscv_core_icache_memory #(
     parameter BLOCK_OFFSET_WIDTH = 3,
@@ -46,9 +50,9 @@ always @( posedge i_clk , negedge i_rst_n ) begin : FLUSH_WRITE_REPLACEMENT_BLOC
         // BLOCK REPLACEMENT // 
         if (i_wr_en && i_block_replace) begin
             if(!i_offset)
-                INSTR_MEM [  i_addr_from_core[`INDEX]        ] <= i_block_from_axi;
+                INSTR_MEM [  i_addr_from_core[`ICACHE_INDEX]        ] <= i_block_from_axi;
             else
-                INSTR_MEM [  i_addr_from_core_2[`INDEX]      ] <= i_block_from_axi;
+                INSTR_MEM [  i_addr_from_core_2[`ICACHE_INDEX]      ] <= i_block_from_axi;
         end
     end    
 end
@@ -57,10 +61,10 @@ always_comb begin : READ_MEMORY_BLOCK
     o_data_to_core = 'b0;
     if (i_rd_en) begin
         // READ WORD
-        o_data_to_core =   {INSTR_MEM [ i_addr_from_core_3[`INDEX] ][ i_addr_from_core_3[`BLOCK_OFFSET] ][ i_addr_from_core_3[`BYTE_OFFSET]] ,
-                            INSTR_MEM [ i_addr_from_core_2[`INDEX] ][ i_addr_from_core_2[`BLOCK_OFFSET] ][ i_addr_from_core_2[`BYTE_OFFSET]] , 
-                            INSTR_MEM [ i_addr_from_core_1[`INDEX] ][ i_addr_from_core_1[`BLOCK_OFFSET] ][ i_addr_from_core_1[`BYTE_OFFSET]] ,
-                            INSTR_MEM [ i_addr_from_core  [`INDEX] ][ i_addr_from_core  [`BLOCK_OFFSET] ][ i_addr_from_core  [`BYTE_OFFSET]]};
+        o_data_to_core =   {INSTR_MEM [ i_addr_from_core_3[`ICACHE_INDEX] ][ i_addr_from_core_3[`ICACHE_BLOCK_OFFSET] ][ i_addr_from_core_3[`ICACHE_BYTE_OFFSET]] ,
+                            INSTR_MEM [ i_addr_from_core_2[`ICACHE_INDEX] ][ i_addr_from_core_2[`ICACHE_BLOCK_OFFSET] ][ i_addr_from_core_2[`ICACHE_BYTE_OFFSET]] , 
+                            INSTR_MEM [ i_addr_from_core_1[`ICACHE_INDEX] ][ i_addr_from_core_1[`ICACHE_BLOCK_OFFSET] ][ i_addr_from_core_1[`ICACHE_BYTE_OFFSET]] ,
+                            INSTR_MEM [ i_addr_from_core  [`ICACHE_INDEX] ][ i_addr_from_core  [`ICACHE_BLOCK_OFFSET] ][ i_addr_from_core  [`ICACHE_BYTE_OFFSET]]};
     end
 end
 endmodule

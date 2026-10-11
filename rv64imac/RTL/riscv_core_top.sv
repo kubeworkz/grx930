@@ -370,7 +370,7 @@ riscv_core_icache_top
 #(
     .BLOCK_OFFSET_WIDTH (3)
     ,.INDEX_WIDTH (ICACHE_INDEX_WIDTH)
-    ,.TAG_WIDTH  (52)
+    ,.TAG_WIDTH  (64 - 5 - ICACHE_INDEX_WIDTH)   // tag bits the index leaves
     ,.CORE_DATA_WIDTH (32)
     ,.ADDR_WIDTH       (64)
     ,.AXI_DATA_WIDTH  (256)/////change to 256 after axi4
@@ -1594,7 +1594,7 @@ u_riscv_core_pipe_csr_wen_ex_mem
 riscv_core_dcache_top#(
     .BLOCK_OFFSET(2)
     ,.INDEX_WIDTH(DCACHE_INDEX_WIDTH)
-    ,.TAG_WIDTH(52)
+    ,.TAG_WIDTH(64 - 5 - DCACHE_INDEX_WIDTH)     // tag bits the index leaves
     ,.CORE_DATA_WIDTH(64)
     ,.ADDR_WIDTH(64)
     ,.AXI_DATA_WIDTH(256)
