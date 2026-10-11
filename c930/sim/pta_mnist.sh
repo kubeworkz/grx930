@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -77,10 +77,16 @@
 # from level a comb's lines are (default 0.2), and REFROWS_ROWS the source's
 # noise in each lit row, as TOGETHER:LINE, the first of them the chip as it is
 # held (default "0.01:0.05 0.01:0.02 0.01:0.01 0.01:0 0:0.05 0:0 0.02:0.05").
+# `refcomb` is the twelfth: REFCOMB_TILE and REFCOMB_BUSES set its tile and its
+# buses (default 128x64 and 2), REFCOMB_DRAWS the draws it runs (default
+# "0 1 2 3 4"), REFCOMB_LEVEL how far from level a comb's lines are (default
+# 0.2), and REFCOMB_PARTS what each row told apart takes of what the
+# correction leaves, as LIST or LIST:LAYER, the first of them none (default
+# "none read,round,rail read round:1 round:2 rail:1 rail:2").
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,79p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,85p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -3992,6 +3998,356 @@ if [ "$what" = refrows ]; then
         for k in before reference; do refrows_lines $k "$base"; done
         echo
     done
+fi
+
+# `refcomb`: what a corrected comb leaves, told apart.  On a workload that
+# lights most of its rows, about half of what a source adds at the end of a
+# cycle is not noise: a comb 20% off with no noise at all, read and corrected
+# on the weights at 8 bits, still adds it.  Three things could: what the
+# reading missed, what writing a weight at 8 bits dropped, and what a weight
+# at the rail could not be raised by.  `eval --levelpart` leaves the tile the
+# network as it was and adds to its sums, after the converter, the parts
+# asked for of what the rewritten weights would be off by, in every layer or
+# in one, so that a run with a part is the run with no source but for that
+# part.  This runs a six-minute cycle with its trim at 8 bits on five draws,
+# which are `refrows`'s: with no source; with a still comb 20% off, read and
+# corrected on the weights at 8 bits on the tile, as `refrows` ran it; with
+# the reading taken off the model's own line; and told apart, once for each
+# of the parts asked for.  A row is read over the cycle with no source of its
+# draw.  Both kinds of network, row for row.
+if [ "$what" = refcomb ]; then
+    tile=${REFCOMB_TILE:-128x64}
+    buses=${REFCOMB_BUSES:-2}
+    draws=${REFCOMB_DRAWS:-0 1 2 3 4}
+    level=${REFCOMB_LEVEL:-0.2}
+    parts=${REFCOMB_PARTS:-none read,round,rail read round:1 round:2 rail:1 rail:2}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    d="--impair $all,drift $r --drift tflt"
+    fix="--levelprobe 16 --levelfix weights8"
+    # refcomb_name PART: the row told apart that takes it, by name; and
+    # refcomb_opts PART: what it is asked
+    refcomb_name() { case "$1" in *:*) echo "cycle, apart, ${1%:*}, layer ${1#*:}" ;; *) echo "cycle, apart, $1" ;; esac; }
+    refcomb_opts() { case "$1" in *:*) echo "--levelpart ${1%:*} --levellayer ${1#*:}" ;; *) echo "--levelpart $1" ;; esac; }
+    # row|options.  Every row's name ends in its draw.
+    c="--hours 0.1 --calibrate 16 --post-hours 0.1"
+    q="--src 0 --srcline 0 --buses $buses --srcflat $level"
+    for dd in $draws; do
+        echo "cycle, no source, draw $dd|$d $c --trimstep 1"
+        echo "cycle, on the tile, draw $dd|$d $c $q $fix --trimstep 1"
+        echo "cycle, on the model, draw $dd|$d $c $q --levelprobe 16 --trimstep 1"
+        for x in $parts; do
+            echo "$(refcomb_name "$x"), draw $dd|$d $c $q $fix --trimstep 1 $(refcomb_opts "$x")"
+        done
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ --probe 1/" > "$work/out/refcomb_settings.txt"
+    # refcomb_one NET ROW ARGS...: one test-set pass, its line to
+    # out/refcomb.d/NET_ROW.txt
+    refcomb_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/refcomb.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/refcomb.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f refcomb_one
+    # refcomb_row NAME: a row's name as a file's
+    refcomb_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # refcomb_net SEED KIND: the network's file, trained before or the reference
+    refcomb_net() { if [ "$2" = before ]; then echo "d8_b6_s$1.net"; else ref_net "$1"; fi; }
+    for s in 1 2 3 4 5; do echo 8 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo 8 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'train_one "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'train_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            for sd in 1 2 3 4 5; do echo "$(refcomb_net $sd $k) $(refcomb_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/refcomb_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'refcomb_one "$@"' _
+
+    # refcomb_file SEED KIND NAME: the file refcomb_one wrote for that run
+    refcomb_file() { echo "$work/out/refcomb.d/$(basename "$(refcomb_net "$1" "$2")" .net)_$(refcomb_row "$3").txt"; }
+    # Every network has to be the kind its column says, and every run the row
+    # its name says.  A network: as in `refsource`, by its training's own line.
+    # A run: the network it ran is the one that training wrote; its six rows
+    # are version 2's, written out again here; its seed is its draw's; and it
+    # is a six-minute cycle with its trim at 8 bits: aged six minutes,
+    # calibrated with its trims written, and aged six minutes again, asked a
+    # step of one and printing it.  Its name says whether a source is lit,
+    # where its reading was applied, and for a row told apart the parts and
+    # the layer, which have to be what it was asked and what its line
+    # printed, and one of those the mode was asked for.  A lit row has a still
+    # source with its lines as far from level as the mode was asked, and was
+    # read with sixteen shots a row, and found what the row on the tile of
+    # its draw found; the cycle with no source is not lit and was not read.
+    # The row on the tile was corrected on the weights at 8 bits and ran the
+    # tile at 8-bit weights.  A row told apart was asked that correction and
+    # ran the tile at its 6: what its reading would leave and the share the
+    # rail held are the row on the tile's of its draw, and its count of the
+    # rail a layer comes to that share.  The row on the model was asked no
+    # correction.  And a row told apart with no part got right what the cycle
+    # with no source of its draw did, with as many saturations.
+    refcomb_ok=yes
+    refcomb_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(refcomb_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 2 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || refcomb_ok=NO
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            cat "$log" "$(refcomb_file $sd $k "cycle, on the tile, draw $dd")" \
+                "$(refcomb_file $sd $k "cycle, no source, draw $dd")" "$(refcomb_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v nb="$buses" -v sd="$sd" -v lv="$level" -v parts="$parts" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                function ends(text, tail) { return length(text) >= length(tail) && substr(text, length(text) - length(tail) + 1) == tail }
+                function less(text, tail) { return substr(text, 1, length(text) - length(tail)) }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        sane = asked("abits") == 6 && asked("adcbits") == 8 && asked("thermal8") == 0.25 &&
+                               asked("photons8") == 30 && asked("prog") == 1 && asked("xtalk") == 0.02 &&
+                               ("quant" in on) && ("thermal" in on) && ("shot" in on) && ("prog" in on) && ("xtalk" in on)
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        dark = (base == "cycle, no source") ? 1 : 0
+                        ontile = (base == "cycle, on the tile") ? 1 : 0
+                        onmodel = (base == "cycle, on the model") ? 1 : 0
+                        apart = (base ~ /^cycle, apart, [a-z,]+(, layer [0-9]+)?$/) ? 1 : 0
+                        list = ""; layer = 0; known = 0
+                        if (apart) { np = split(base, part, ", "); list = part[3]; layer = (np == 4) ? substr(part[4], 7) + 0 : 0
+                                     nr = split(parts, pw, " ")
+                                     for (i = 1; i <= nr; ++i) { nx = split(pw[i], xy, ":")
+                                                                 if (xy[1] == list && nx == np - 2 && ((nx == 2) ? xy[2] + 0 : 0) == layer) known = 1 } }
+                        lit = (ontile || onmodel || apart) ? 1 : 0
+                        fixed = (ontile || apart) ? 1 : 0
+                        flat = lit ? lv + 0 : 0
+                        sane = sane && drawn && (dark + ontile + onmodel + apart == 1) && apart == known && lv + 0 > 0.05 && m == 6 &&
+                               ("drift" in on) && has("drift") && !has("seed") && want["drift"] == "tflt" &&
+                               has("hours") && asked("hours") == 0.1 && has("calibrate") && asked("calibrate") == 16 &&
+                               has("post-hours") && asked("post-hours") == 0.1 && !has("trimmax") && !has("wbits") &&
+                               has("trimstep") && asked("trimstep") == 1 &&
+                               has("src") == lit && asked("src") == 0 && has("srcline") == lit && asked("srcline") == 0 &&
+                               has("srcflat") == lit && asked("srcflat") == flat && has("buses") == lit && asked("buses") == nb * lit &&
+                               !has("srcsign") && has("levelprobe") == lit && asked("levelprobe") == 16 * lit &&
+                               has("levelfix") == fixed && (!fixed || want["levelfix"] == "weights8") && !has("levelref") &&
+                               has("levelpart") == apart && (!apart || want["levelpart"] == list) &&
+                               has("levellayer") == (layer > 0) && asked("levellayer") == layer }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { found = v["level_found"]; left = v["level_left"]; clip = v["level_clip"]
+                          theirs = v["seed"] == sd + 10 * draw && v["net_seed"] == sd && v["wbits"] == 8 && v["levelfix"] == "weights8" }
+                NR == 3 { right = v["correct"]; sats = v["sats"]
+                          theirs = theirs && v["seed"] == sd + 10 * draw && v["net_seed"] == sd && v["wbits"] == 6 && !("src" in v) }
+                NR == 4 { ok = sane && theirs && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw && v["net_wbits"] == 6 &&
+                               v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 && v["adcbits"] == 8 &&
+                               v["wbits"] == (ontile ? 8 : 6) &&
+                               near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                               near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0 &&
+                               v["drift"] == "tflt" && v["hours"] == 0.1 && v["steps"] > 0 &&
+                               v["cal"] == 16 && v["post_hours"] == 0.1 && near(v["trimstep"], 1, 1e-12) &&
+                               v["trimmax"] == 128 && !("hidshift" in v) && !("thermalline" in v)
+                          if (lit) ok = ok && v["src"] + 0 == 0 && v["srcline"] + 0 == 0 && v["srcflat"] + 0 == flat &&
+                                        v["srcsign"] == "pair" && v["buses"] == nb && v["levelprobe"] == 16 &&
+                                        ("level_left" in v) && near(v["level_found"] / flat, 1, 0.4) && v["level_found"] == found
+                          else ok = ok && !("src" in v) && !("levelprobe" in v) && !("level_found" in v) && !("level_left" in v)
+                          if (fixed) ok = ok && v["levelfix"] == "weights8" && v["levelref"] == "none" && v["level_gain"] == 1 &&
+                                          ("level_clip" in v) && v["level_left"] == left && v["level_clip"] == clip
+                          else ok = ok && !("levelfix" in v) && !("levelref" in v) && !("level_gain" in v) && !("level_clip" in v)
+                          if (apart) { nm = split(v["level_moved"], mv, ","); nh = split(v["level_held"], hd, ",")
+                                       ok = ok && ("levelpart" in v) && ("levellayer" in v) && v["levelpart"] == list && v["levellayer"] == layer && nm == 2 && nh == 2 &&
+                                            mv[1] > 0 && mv[2] > 0 && hd[1] + 0 <= mv[1] + 0 && hd[2] + 0 <= mv[2] + 0 &&
+                                            near((hd[1] + hd[2]) / (mv[1] + mv[2]), v["level_clip"], 5.1e-6) }
+                          else ok = ok && !("levelpart" in v) && !("levellayer" in v) && !("level_moved" in v) && !("level_held" in v)
+                          if (apart && list == "none") ok = ok && v["correct"] == right && v["sats"] == sats }
+                END { exit !(NR == 4 && ok) }' || refcomb_ok=NO
+            refcomb_runs=$((refcomb_runs + 1))
+        done < "$work/out/refcomb_settings.txt"
+    done; done
+    echo "== refcomb: $refcomb_runs runs, each of them the network and the row its place says: $refcomb_ok"
+    [ "$refcomb_ok" = yes ] || exit 1
+
+    # refcomb_partner NAME: the row a row is read over, which meets its
+    # noise: the cycle with no source of its draw.  The cycle with no source
+    # of a draw is read over the first draw's
+    refcomb_partner() {
+        local base=${1%, draw *} dd=${1##*, draw }
+        case "$base" in
+        "cycle, no source") echo "cycle, no source, draw ${draws%% *}" ;;
+        *) echo "cycle, no source, draw $dd" ;;
+        esac
+    }
+    # refcomb_stat KIND NAME: how often the five networks are right in a row,
+    # mean and standard error, and what the row adds over its partner, network
+    # by network
+    refcomb_stat() {
+        local sd partner
+        partner=$(refcomb_partner "$2")
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(refcomb_file $sd "$1" "$partner")"
+            sed 's/^/B /' "$(refcomb_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = a - x; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # refcomb_pair KIND BASE OTHER: a row over all its draws, against another
+    # row of the same draws: how often right in the other, less in the row,
+    # network by network.  The mean; its standard error, from the five
+    # networks, each averaged over its draws; and the standard deviation from
+    # draw to draw of the five networks' mean
+    refcomb_pair() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do
+                sed "s/^/A $sd $dd /" "$(refcomb_file $sd "$1" "$3, draw $dd")"
+                sed "s/^/B $sd $dd /" "$(refcomb_file $sd "$1" "$2, draw $dd")"
+            done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "A") { a = x; next }
+              g = a - x
+              gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+            END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                  for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                  printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+    }
+    # refcomb_over KIND BASE: a row over all its draws.  How often right: the
+    # mean, its standard error from the five networks each averaged over its
+    # draws, and the draws' standard deviation; and what it adds over the row
+    # it is read over, the same three
+    refcomb_over() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do sed "s/^/$sd $dd /" "$(refcomb_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 3; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0; rn[$1] += x; cn[$1]++; rd[$2] += x; cd[$2]++ }
+            END { for (k in cn) { x = rn[k] / cn[k]; rs += x; rss += x * x; nn++ }
+                  for (k in cd) { x = rd[k] / cd[k]; ds += x; dss += x * x; nd++ }
+                  printf " %8.3f +-%5.3f %6.3f", rs / nn, dev(rs, rss, nn) / sqrt(nn), dev(ds, dss, nd) }'
+        # the row it is read over is its partner on its own draw, but for the
+        # cycle with no source, whose partner is one row for all of them
+        if [ "$2" = "cycle, no source" ]; then
+            local first=${draws%% *} sd2 dd2
+            for sd2 in 1 2 3 4 5; do
+                for dd2 in $draws; do
+                    sed "s/^/A $sd2 $dd2 /" "$(refcomb_file $sd2 "$1" "cycle, no source, draw $first")"
+                    sed "s/^/B $sd2 $dd2 /" "$(refcomb_file $sd2 "$1" "cycle, no source, draw $dd2")"
+                done
+            done | awk '
+                function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+                { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  x = v["acc"] + 0
+                  if ($1 == "A") { a = x; next }
+                  g = a - x; gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+                END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                      for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                      printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+        else
+            local p
+            p=$(refcomb_partner "$2, draw 0")
+            refcomb_pair "$1" "$2" "${p%, draw *}"
+        fi
+    }
+    # refcomb_lines KIND BASE: a row that was read, over its runs: what the
+    # probe found on the lines and what its reading would leave, percent rms
+    refcomb_lines() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(refcomb_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              fs += v["level_found"]; ls += v["level_left"]; runs++ }
+            END { printf " %7.2f %6.2f", 100 * fs / runs, 100 * ls / runs }'
+    }
+    # refcomb_rail KIND BASE: a row told apart, over its runs: of a layer's
+    # weights that are not zero, how many the rail held back and the share
+    # that is, percent: the first layer, and then the last
+    refcomb_rail() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(refcomb_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              split(v["level_moved"], mv, ","); split(v["level_held"], hd, ",")
+              h1 += hd[1]; s1 += hd[1] / mv[1]; h2 += hd[2]; s2 += hd[2] / mv[2]; runs++ }
+            END { printf " %7.1f %6.3f %7.1f %6.3f", h1 / runs, 100 * s1 / runs, h2 / runs, 100 * s2 / runs }'
+    }
+    echo "== refcomb: the $tile tile on $buses buses at v2, five networks, mean and standard error.  How"
+    echo "== often right, percent, and what a row adds over the row it is read over, network by"
+    echo "== network: the cycle with no source of its draw, and for that row the first draw's"
+    printf '%-92s %14s %14s %14s %14s' "" "before right" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-92s' "$name"
+        for k in before reference; do refcomb_stat $k "$name"; done
+        echo
+    done < "$work/out/refcomb_settings.txt"
+    echo "== refcomb: a row over its draws.  How often right, and what it adds over the row it is"
+    echo "== read over: the mean, its standard error from five networks each averaged over its"
+    echo "== draws, and the standard deviation from draw to draw of the five networks' mean"
+    printf '%-84s %25s %24s %25s %24s' "" "before right" "and adds" "reference right" "and adds"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/refcomb_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do refcomb_over $k "$base"; done
+        echo
+    done
+    echo "== refcomb: one row over another on the same draws: how often right in the second, less"
+    echo "== in the first, network by network over the draws, with its standard error and its"
+    echo "== standard deviation from draw to draw.  The two of a pair meet the same noise"
+    printf '%-92s %24s %24s' "" "before" "reference"
+    echo
+    {
+        for x in $parts; do
+            echo "on the tile, over ${x/:/, layer } told apart|cycle, on the tile|$(refcomb_name "$x")"
+        done
+        for x in $parts; do
+            echo "on the model, over ${x/:/, layer } told apart|cycle, on the model|$(refcomb_name "$x")"
+        done
+    } | while IFS='|' read -r label one other; do
+        printf '%-92s' "$label"
+        for k in before reference; do refcomb_pair $k "$one" "$other"; done
+        echo
+    done
+    echo "== refcomb: the rows that are read: what the probe found on the lines and what its"
+    echo "== reading would leave, percent rms: a mean over the runs"
+    printf '%-84s %14s %14s' "" "before" "reference"
+    echo
+    for base in "cycle, on the tile" "cycle, on the model"; do
+        printf '%-84s' "$base"
+        for k in before reference; do refcomb_lines $k "$base"; done
+        echo
+    done
+    echo "== refcomb: the rail, a layer.  Of a layer's weights that are not zero, how many the rail"
+    echo "== held back and the share that is, percent, in the first layer and in the last: a mean"
+    echo "== over the runs.  Every row told apart counts the same, and this is the first"
+    printf '%-84s %29s %29s' "" "before" "reference"
+    echo
+    base=$(refcomb_name "${parts%% *}")
+    printf '%-84s' "$base"
+    for k in before reference; do refcomb_rail $k "$base"; done
+    echo
 fi
 
 exit $((gate_status | ablate_status))
