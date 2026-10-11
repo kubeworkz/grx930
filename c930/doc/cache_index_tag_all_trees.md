@@ -8,7 +8,9 @@ the four cache trees under `rv64imac/`** so no instantiation at any width can
 serve a wrong line. **Gates:**
 `tb/run_cache_index_alias.sh <tree>` and `tb/run_tag_width_guard.sh <tree>` (the
 present-generation tests), `tb/run_cache_index_alias_legacy.sh <tree> <case>`
-(the older generations).
+(the older generations), and `tb/run_fpga_cache_lockstep.sh` — which keeps the
+seven cache sources the FPGA flow shares with `rv64imac/RTL` from drifting on
+the split (surface equality, a buggy-literal scan, canonical anchors).
 
 ## What changed, per copy
 
