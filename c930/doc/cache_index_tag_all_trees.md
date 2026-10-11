@@ -8,9 +8,14 @@ the four cache trees under `rv64imac/`** so no instantiation at any width can
 serve a wrong line. **Gates:**
 `tb/run_cache_index_alias.sh <tree>` and `tb/run_tag_width_guard.sh <tree>` (the
 present-generation tests), `tb/run_cache_index_alias_legacy.sh <tree> <case>`
-(the older generations), and `tb/run_fpga_cache_lockstep.sh` — which keeps the
-seven cache sources the FPGA flow shares with `rv64imac/RTL` from drifting on
-the split (surface equality, a buggy-literal scan, canonical anchors).
+(the older generations), and `tb/run_cache_split_lockstep.sh [ROOT]` — the
+text-level lockstep that holds all 27 cache sources and all 4 core tops across
+the five trees below to one split surface: surface equality against
+`rv64imac/RTL` of the declarations *and* of every `.INDEX_WIDTH(...)` /
+`.TAG_WIDTH(...)` override, a buggy-literal scan, the canonical anchors (so a
+joint revert is caught too), and one derived `.INDEX_WIDTH`/`.TAG_WIDTH` pair
+per cache-top instantiation. It supersedes `tb/run_fpga_cache_lockstep.sh`,
+which covered only the FPGA pair.
 
 ## What changed, per copy
 
@@ -36,11 +41,13 @@ For dcache and icache, in `controller`, `memory` and `top`:
   their controller and memory (the older copies previously left both at the
   default 7 while believing they were running at another width).
 * the core tops that instantiate the caches pass a derived tag width:
-  `rv64imac/RTL/riscv_core_top.sv` and `FPGA/src/riscv_core_top.sv` use
-  `64 - 5 - <W>`; the Branch_Prediction variant's stale `.TAG_WIDTH(20)` became
-  `64 - 5 - 7`.
+  `rv64imac/RTL/riscv_core_top.sv` and its tapeout copy use
+  `64 - 5 - <ICACHE|DCACHE>_INDEX_WIDTH`; `FPGA/src/riscv_core_top.sv` writes
+  `64 - 5 - 7`, and the Branch_Prediction variant's stale `.TAG_WIDTH(20)`
+  became `64 - 5 - 7` too.
 
-Files (21 cache sources + 3 core tops):
+Files (27 cache sources + 4 core tops), which is the inventory
+`tb/run_cache_split_lockstep.sh` walks:
 
 | tree | copies |
 |---|---|
@@ -48,6 +55,13 @@ Files (21 cache sources + 3 core tops):
 | `rv64imac/RTL/caches` | dcache + icache, controller/memory/top |
 | `rv64imac/RTL/caches/atomic_dcaches` | dcache, controller/memory/top |
 | `rv64imac/FPGA/src` | dcache + icache, controller/memory/top |
+| `c930/asic_gf180mcu/openlane2_rtl/src` (the tapeout tree, fixed first) | dcache + icache, controller/memory/top |
+
+plus the four core tops: `rv64imac/RTL/riscv_core_top.sv` and
+`c930/asic_gf180mcu/openlane2_rtl/src/riscv_core_top.sv` (named
+`ICACHE_INDEX_WIDTH`/`DCACHE_INDEX_WIDTH` = 7), and the FPGA and
+Branch_Prediction variants (literal `64 - 5 - 7`; the Branch_Prediction top
+instantiates the dcache only).
 
 The one-shot transform (idempotency refused on purpose, `--check` mode
 available) is kept at `Claude outputs/cache_index_tag_param_fix.py`.
@@ -90,18 +104,42 @@ available) is kept at `Claude outputs/cache_index_tag_param_fix.py`.
   Branch_Prediction variant's error signature is unchanged pre/post edit (its
   pre-existing missing `riscv_core_imem` blocks full elaboration — not touched
   here).
-* **Static invariant** over all 21 cache files (comments stripped): no literal
-  `63:12`, `[11:5]`, `[11 -:`, no bare `INDEX`/`INDEXI`/`TAGI`/
-  `BLOCK_OFFSET`/`BYTE_OFFSET`/`OFFSETI` macro uses remain, and every file
-  carries the derived definition (plus `TAG_W` and the `$error` guard in every
-  controller, and the derived `TAG_WIDTH` + `.INDEX_WIDTH(INDEX_WIDTH)` in
-  every top).
+* **Static invariant** — what was a one-off sweep over the 21 files of the
+  four `rv64imac/` trees is now the standing gate
+  `tb/run_cache_split_lockstep.sh` over all 27 copies plus the 4 core tops: no
+  literal `63:12` / `[11:5]` / `[11 -:`, and every file carries the derived
+  definition (plus `TAG_W` and the `$error` guard in every controller, the
+  derived `TAG_WIDTH` default in every top, the two
+  `.INDEX_WIDTH(INDEX_WIDTH)`/`.TAG_WIDTH(TAG_WIDTH)` pairs each cache top uses
+  to pass the split into its controller and memory, and a derived
+  `.INDEX_WIDTH`/`.TAG_WIDTH` pair per instantiation in the core tops).
 
 ## Notes / remaining limitations
 
-* The control copies under `c930/build/prefix_cache_sim/` are throwaway
-  (regenerate with `git show HEAD:...`); `FPGA/src` is untracked in git, so it
-  has no pre-fix copy to diff against.
+* `tb/run_cache_split_lockstep.sh` is text-level: it locks the split surface and
+  the tops' derived overrides, not whole files (these trees are deliberate
+  forks), and it needs no simulator. Everything it enforces except the tapeout
+  tree is tracked in git — the four `rv64imac` trees and the RTL, FPGA and
+  Branch_Prediction core tops must be present, and a copy missing counts as a
+  failure; only the tapeout tree (untracked, like the rest of
+  `c930/asic_gf180mcu/`) reports `SKIP` when absent. Evidence: `OVERALL: PASS`,
+  exit 0 on the working trees, and
+  19 scratch-copy controls with each exit status checked: an untouched baseline
+  (`PASS`, exit 0); a one-sided define revert in the `caches` tree and in the
+  FPGA tree; a use-site `[11:5]`; a stale `.TAG_WIDTH(20)` in the
+  Branch_Prediction top; a stale `.TAG_WIDTH(52)` override and a deleted
+  override in a cache top; a deleted override in the RTL top; an instantiation
+  left without a pair; a changed `TAG_WIDTH` value; a changed `INDEX_WIDTH`
+  default; a changed named `ICACHE_INDEX_WIDTH` default in the RTL top; a
+  deleted `$error` guard; drift inside the tapeout tree (exit 1 when it is
+  present); a missing tapeout tree (`SKIP`, still exit 0); a missing FPGA tree
+  and a missing `caches` tree (exit 1); and —
+  the case the surface leg cannot see — the **joint revert of all 27 copies**,
+  which the anchors catch (exit 1, zero surface diffs). Re-worded comments and
+  CRLF do not trip it (exit 0).
+* The control copies under `c930/build/prefix_cache_sim/` are throwaway, and
+  the pre-fix content of every enforced copy is recoverable with
+  `git show <rev>:<path>`.
 * No netlist impact: the tapeout tree was already fixed; this only keeps the
   reference trees from reintroducing the defect. `make sim`, `make
   dcache_mmio_hold` and the OL2 source tree are unaffected by this change.
