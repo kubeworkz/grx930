@@ -130,6 +130,16 @@ adds 0.08 ± 0.04 of the 0.15. Of the noise, a line's own is the part that
 shows: at 2% for its 5% it buys the reference networks 0.02, 0.06 and 0.06
 of a point, none of them clear, and at 1% 0.04, 0.08 and 0.05, all of them
 clear.
+**And the twelfth, the same day** (§5, at its end): what a corrected comb
+leaves is told apart. `eval --levelpart` leaves the tile the network as it
+was and adds to its sums, after the converter, the parts asked for of what
+the rewritten weights would be off by: what the reading missed, what writing
+a weight at 8 bits dropped, and what a weight at the rail could not be
+raised by. On the inverted set it is the rail in the first layer: 0.07 ±
+0.02 of a point for the reference networks, on every network and on every
+draw, from 31 of that layer's 65,000 weights. The read and the round leave
+nothing there. All three at once leave 0.04 ± 0.03, half of the 0.08 ± 0.04
+the comb has when it is corrected on the tile, and neither is clear.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -1132,6 +1142,8 @@ again from the operands it sent, as one photodiode would have it.
 each line's level before the first image and takes it off: §5, at its end.
 And `--levelfix` and `--levelref`, which say where: off the model's own line,
 or on the weights or the inputs as a host would scale them.*
+*And since 2026-10-10 `--levelpart` and `--levellayer`, which tell apart what
+a correction on the weights leaves: §5, at its end.*
 
 **It is not in the contract.** The term is added on the host's side of the
 line, to the sums the tile returns: `a × (w + offset) × error`, summed over a
@@ -3913,9 +3925,10 @@ in the first, network by network.
 | A cycle as it is now run, its trim at 8 bits, over a cycle with its trim at 8 bits | **+0.070 ± 0.022** | **+0.039 ± 0.011** | **+0.156 ± 0.042** | +0.055 ± 0.040 | **+0.332 ± 0.072** | **+0.154 ± 0.048** |
 
 What the probe found on the lines and what its reading would leave, rms, and
-the share of the first layer's weights the correction left at the rail. The
-first two are the tile's and the seed's, and the same for both kinds of
-network and all three data sets.
+the share of ~~the first layer's weights~~ *the network's weights that are
+not zero, in both layers: corrected 2026-10-10* the correction left at the
+rail. The first two are the tile's and the seed's, and the same for both
+kinds of network and all three data sets.
 
 | | Found on the lines, rms | Left by the reading | Held at the rail, trained before: MNIST | Fashion-MNIST | Inverted | Reference: MNIST | Fashion-MNIST | Inverted |
 |---|---|---|---|---|---|---|---|---|
@@ -4137,7 +4150,9 @@ probes-only rows are the same lines.
 | and a six-minute one | +0.002 ± 0.009 | **+0.010 ± 0.004** | −0.005 ± 0.012 | −0.028 ± 0.010 | +0.025 ± 0.045 | +0.029 ± 0.027 |
 
 What the probe found on the lines and what its reading would leave, rms, and
-the share of the first layer's weights the correction left at the rail.
+the share of ~~the first layer's weights~~ *the network's weights that are
+not zero, in both layers: corrected 2026-10-10* the correction left at the
+rail.
 
 | | Found on the lines, rms | Left by the reading | Held at the rail, trained before: MNIST | Fashion-MNIST | Inverted | Reference: MNIST | Fashion-MNIST | Inverted |
 |---|---|---|---|---|---|---|---|---|
@@ -4363,8 +4378,9 @@ the chip.
 | Together 2%, a line 5% | −0.022 ± 0.012 | −0.006 ± 0.007 | −0.012 ± 0.012 | +0.024 ± 0.015 | **−0.094 ± 0.018** | −0.052 ± 0.025 |
 
 What the probe found on the lines and what its reading would leave, rms,
-beside what the count says it should leave; and the share of the first
-layer's weights the correction left at the rail.
+beside what the count says it should leave; and the share of ~~the first
+layer's weights~~ *the network's weights that are not zero, in both layers:
+corrected 2026-10-10* the correction left at the rail.
 
 | | Found on the lines, rms | Left by the reading | Counted | Held at the rail, the reference networks: MNIST | Fashion-MNIST | Inverted |
 |---|---|---|---|---|---|---|
@@ -4446,12 +4462,303 @@ is not noise.
    third.
 
 **What this is not.** A comb: no row here is a source that exists. Why the
-corrected comb costs what it does on the inverted set: the rail, the
-rounding to 8 bits and the read are not told apart here, and 0.08 ± 0.04 is
-not itself clear. Noise that goes with a line's own power: here it is a
-share of a line's nominal light. A level other than 20%, or an interval
-other than six minutes. A calibration that sees a source's noise. Five
-draws, of the same five networks. Version 1, or another tile.
+corrected comb costs what it does on the inverted set: ~~the rail, the
+rounding to 8 bits and the read are not told apart here,~~ *told apart in
+the section after this one, the same day: of the three it is the rail;* and
+0.08 ± 0.04 is not itself clear. Noise that goes with a line's own power:
+here it is a share of a line's nominal light. A level other than 20%, or an
+interval other than six minutes. A calibration that sees a source's noise.
+Five draws, of the same five networks. Version 1, or another tile.
+
+### What a corrected comb leaves, told apart
+
+*Added 2026-10-10.* `sim/pta_mnist.sh DIR WORK refcomb`, and `pta_mnist eval
+--levelpart none|LIST --levellayer N`. Reported, not gated.
+
+**Why.** The section before found a comb 20% off with no noise at all, read
+and corrected on the weights at 8 bits, adding 0.08 ± 0.04 of a point for the
+reference networks on the inverted set: about half of what the chip's source
+adds there, not itself clear, and with nothing to say what in the correction
+leaves it. grxcp asked which it is: the rail, the rounding to 8 bits, or the
+read.
+
+**The three parts.** A weight the network was trained for, q, on a line at
+1 + e that was read as 1 + r, is written as c = rail(round(u)) with u = q /
+(1 + r), and through its line it comes to (1 + e) c. That is off q by three
+things, which add to it:
+
+| Part | What it is | |
+|---|---|---|
+| `read` | (1 + e) u − q | What the reading missed |
+| `round` | (1 + e) (round(u) − u) | What writing the weight at 8 bits dropped |
+| `rail` | (1 + e) (c − round(u)) | What a weight at the rail was not raised by |
+
+**The option.** `--levelpart LIST`, with `--levelfix weights8` held at the
+rail and a source with no noise, works the three out for every weight and
+rewrites nothing. The tile keeps the network as it was, at its own 6 bits,
+and a layer's sums take the parts listed in place of the light's share:
+after the converter, as the light's share is. `--levellayer N` puts them in
+layer N alone, from 1, and nothing in the others. `--levelpart none` is no
+part. So a run with a part is the run with no source, shot for shot, but for
+that part: no weight on the tile moved, and no draw met another weight. With
+all three in every layer it is `weights8`'s correction as a detector would
+see it, which is not as this model's tile does: that converts the sums of
+the weights as rewritten, and has the light's share added after. A run
+prints `levelpart` and `levellayer`, and `level_moved` and `level_held`: a
+layer's weights that are not zero, and those of them the rail held back,
+counted as `level_clip` counts them whatever part was asked for. It is
+refused with noise on the source, through an offset, scaled to the dimmest
+line, or without `weights8`.
+
+Like the probe and the corrections it is on the host's side of the line:
+§4, PTM-C and the RTL are untouched, and a line printed without the option is
+what it was. The self-test's 36 lines are as they were, with one more.
+
+The self-test puts a network whose first layer has every weight there is on
+the working tile, under a still source with its lines 8% off, unquantised
+and at 6 bits. The three parts add to the weight as `weights8` rewrites it
+through its line, weight for weight. 2,447 of 78,161 weights are held at the
+rail, all in the first layer, as `level_apply()` counts them. A rounding is
+0.498 of a unit at most and a read 0.0019 of its weight, and the rail takes
+only from a weight it held. A layer alone leaves the other nothing. No part
+gives the sums of a run with no source. With every part a run's sums are the
+tile's and the parts' share exactly, and the rewritten weights' own first
+sums. And noise, an offset, a reading not kept, a part or a layer there is
+none of, and a line at 3% are refused. 46 errors planted in that code one at a
+time each fail it. That was before the sweep.
+
+**What it runs.** The twelfth mode on the reference networks. Version 2 on
+the 128 × 64 tile on two buses, ten rows on each of five draws, which are
+`refrows`'s. Every row is a six-minute cycle with `--trimstep 1`:
+
+| Row | What it is |
+|---|---|
+| no source | The cycle and nothing else |
+| on the tile | A still comb 20% off, read with sixteen shots a row and corrected on the weights at 8 bits: `refrows`'s row with no noise |
+| on the model | The same comb, with the reading taken off the model's own line |
+| apart, none | Told apart, with no part |
+| apart, read,round,rail | All three, in both layers |
+| apart, read | The read, in both layers |
+| apart, round, layer 1; and layer 2 | The round, a layer at a time |
+| apart, rail, layer 1; and layer 2 | The rail, a layer at a time |
+
+A row is read over the cycle with no source of its draw. The networks
+trained before run beside the reference row for row. That is 500 evaluations
+a data set, and 2.9 hours for the three side by side on four jobs each, on a
+machine that was doing other work.
+
+The mode checks every network and every run against its place, as the eleven
+before it do: a run's name says its draw, whether a source is lit, where its
+reading was applied, and for a row told apart the parts and the layer, which
+have to be what it was asked and what its line printed, and one of those the
+mode was asked for. A row told apart has to have run the tile at its 6 bits,
+and what its reading would leave and the share the rail held have to be the
+row on the tile's of its draw, with its count of the rail a layer coming to
+that share. And told apart with no part, a run has to have got right what
+the cycle with no source of its draw did, with as many saturations.
+
+230 errors planted one at a time each fail: 136 in a training's line or a
+run's, after the fact; 51 in the script, 5 of which ask for a run the
+harness refuses; and 43 in the tables' own code, which the check does not see
+and which each move the tables. One more change to the tables' code cannot
+move them: it prints the read for one kind of network twice, and what the
+probe finds and leaves is the same for both, a comb being its seed's and its
+draw's. As for the modes before, a doctored line is put to the mode's check
+of the network it belongs to, and a changed script is handed a run it asks
+for that was already made.
+
+One line of the check was added after the sweep: a row told apart has to
+print its part and its layer, where a line that printed no layer had passed
+for one in every layer. The check and the tables were then run again from
+the script as it now is, on the lines the sweep wrote and with nothing run
+again. The check says yes on all three data sets, and the tables are the
+sweep's byte for byte.
+
+Of the lines, 100 on each data set are byte for byte what `refrows` wrote for
+the same runs: its cycle with no source and its cycle with no noise, on
+these five draws.
+
+**What came of it.** What a row leaves over the cycle with no source of its
+draw: the mean of five draws, with its standard error from the five
+networks, each averaged over its draws. In bold, what five networks put
+outside chance at one in twenty.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| The comb corrected on the tile | +0.044 ± 0.022 | +0.008 ± 0.017 | **+0.092 ± 0.032** | +0.001 ± 0.043 | +0.124 ± 0.049 | +0.081 ± 0.044 |
+| The reading taken off the model's own line | +0.005 ± 0.005 | +0.004 ± 0.003 | +0.014 ± 0.008 | +0.003 ± 0.003 | +0.005 ± 0.006 | −0.004 ± 0.004 |
+| Told apart: no part | +0.000 ± 0.000 | +0.000 ± 0.000 | +0.000 ± 0.000 | +0.000 ± 0.000 | +0.000 ± 0.000 | +0.000 ± 0.000 |
+| Told apart: all three | +0.030 ± 0.011 | +0.015 ± 0.014 | +0.029 ± 0.023 | +0.013 ± 0.018 | +0.072 ± 0.053 | +0.043 ± 0.028 |
+| The read | +0.004 ± 0.004 | +0.000 ± 0.003 | +0.016 ± 0.006 | +0.002 ± 0.004 | +0.004 ± 0.006 | −0.003 ± 0.004 |
+| The round, first layer | +0.008 ± 0.009 | **−0.019 ± 0.005** | +0.016 ± 0.012 | **+0.031 ± 0.010** | +0.024 ± 0.032 | −0.003 ± 0.009 |
+| The round, last layer | +0.010 ± 0.005 | −0.003 ± 0.002 | +0.012 ± 0.019 | −0.028 ± 0.013 | +0.004 ± 0.018 | −0.002 ± 0.021 |
+| The rail, first layer | +0.006 ± 0.004 | +0.010 ± 0.005 | −0.002 ± 0.003 | +0.012 ± 0.026 | +0.020 ± 0.027 | **+0.069 ± 0.018** |
+| The rail, last layer | +0.014 ± 0.010 | +0.014 ± 0.009 | +0.000 ± 0.004 | +0.012 ± 0.007 | +0.027 ± 0.021 | −0.005 ± 0.004 |
+
+How often right, percent.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| A cycle with no source | 97.277 ± 0.109 | 97.595 ± 0.056 | 86.934 ± 0.188 | 87.313 ± 0.173 | 92.317 ± 0.680 | 94.718 ± 0.371 |
+| The comb corrected on the tile | 97.233 ± 0.107 | 97.586 ± 0.062 | 86.842 ± 0.188 | 87.312 ± 0.140 | 92.193 ± 0.699 | 94.637 ± 0.363 |
+| The reading taken off the model's own line | 97.272 ± 0.113 | 97.591 ± 0.058 | 86.920 ± 0.183 | 87.310 ± 0.176 | 92.312 ± 0.685 | 94.722 ± 0.372 |
+| Told apart: no part | 97.277 ± 0.109 | 97.595 ± 0.056 | 86.934 ± 0.188 | 87.313 ± 0.173 | 92.317 ± 0.680 | 94.718 ± 0.371 |
+| Told apart: all three | 97.248 ± 0.106 | 97.580 ± 0.066 | 86.904 ± 0.190 | 87.300 ± 0.170 | 92.244 ± 0.705 | 94.675 ± 0.364 |
+| The read | 97.274 ± 0.112 | 97.594 ± 0.058 | 86.918 ± 0.184 | 87.311 ± 0.175 | 92.313 ± 0.686 | 94.721 ± 0.372 |
+| The round, first layer | 97.269 ± 0.112 | 97.614 ± 0.060 | 86.918 ± 0.192 | 87.282 ± 0.178 | 92.293 ± 0.709 | 94.721 ± 0.373 |
+| The round, last layer | 97.268 ± 0.112 | 97.598 ± 0.055 | 86.922 ± 0.191 | 87.341 ± 0.167 | 92.312 ± 0.682 | 94.720 ± 0.354 |
+| The rail, first layer | 97.271 ± 0.108 | 97.585 ± 0.056 | 86.935 ± 0.190 | 87.301 ± 0.166 | 92.297 ± 0.674 | 94.649 ± 0.375 |
+| The rail, last layer | 97.263 ± 0.103 | 97.580 ± 0.063 | 86.933 ± 0.186 | 87.302 ± 0.169 | 92.290 ± 0.675 | 94.723 ± 0.369 |
+
+One row over another on the same draws: how often right in the second, less
+in the first.
+
+| | MNIST: trained before | Reference | Fashion-MNIST: trained before | Reference | Inverted: trained before | Reference |
+|---|---|---|---|---|---|---|
+| On the tile, over told apart: no part | +0.044 ± 0.022 | +0.008 ± 0.017 | **+0.092 ± 0.032** | +0.001 ± 0.043 | +0.124 ± 0.049 | +0.081 ± 0.044 |
+| On the tile, over told apart: all three | +0.014 ± 0.015 | −0.007 ± 0.010 | +0.062 ± 0.041 | −0.012 ± 0.041 | +0.052 ± 0.025 | +0.038 ± 0.022 |
+| On the tile, over the read | +0.040 ± 0.023 | +0.008 ± 0.018 | +0.076 ± 0.034 | −0.002 ± 0.045 | +0.120 ± 0.046 | +0.084 ± 0.047 |
+| On the tile, over the round, first layer | +0.036 ± 0.025 | +0.027 ± 0.018 | **+0.076 ± 0.026** | −0.030 ± 0.044 | +0.100 ± 0.052 | +0.084 ± 0.039 |
+| On the tile, over the round, last layer | +0.034 ± 0.021 | +0.012 ± 0.018 | +0.080 ± 0.037 | +0.028 ± 0.039 | **+0.120 ± 0.041** | +0.083 ± 0.047 |
+| On the tile, over the rail, first layer | +0.038 ± 0.021 | −0.002 ± 0.018 | +0.093 ± 0.034 | −0.011 ± 0.046 | +0.104 ± 0.039 | +0.012 ± 0.030 |
+| On the tile, over the rail, last layer | +0.030 ± 0.017 | −0.006 ± 0.012 | +0.091 ± 0.033 | −0.011 ± 0.038 | +0.097 ± 0.038 | +0.086 ± 0.044 |
+| On the model, over told apart: no part | +0.005 ± 0.005 | +0.004 ± 0.003 | +0.014 ± 0.008 | +0.003 ± 0.003 | +0.005 ± 0.006 | −0.004 ± 0.004 |
+| On the model, over told apart: all three | −0.025 ± 0.011 | −0.012 ± 0.014 | −0.016 ± 0.019 | −0.010 ± 0.019 | −0.067 ± 0.050 | −0.047 ± 0.030 |
+| On the model, over the read | +0.001 ± 0.001 | +0.003 ± 0.001 | −0.002 ± 0.004 | +0.000 ± 0.003 | +0.001 ± 0.001 | −0.001 ± 0.000 |
+| On the model, over the round, first layer | −0.004 ± 0.006 | **+0.022 ± 0.005** | −0.002 ± 0.013 | **−0.028 ± 0.009** | −0.019 ± 0.027 | −0.001 ± 0.010 |
+| On the model, over the round, last layer | −0.005 ± 0.006 | +0.007 ± 0.004 | +0.002 ± 0.017 | +0.030 ± 0.014 | +0.001 ± 0.018 | −0.002 ± 0.021 |
+| On the model, over the rail, first layer | −0.002 ± 0.005 | −0.006 ± 0.007 | +0.015 ± 0.010 | −0.009 ± 0.027 | −0.015 ± 0.027 | **−0.073 ± 0.021** |
+| On the model, over the rail, last layer | −0.010 ± 0.011 | −0.011 ± 0.009 | +0.013 ± 0.007 | −0.009 ± 0.010 | −0.022 ± 0.022 | +0.001 ± 0.007 |
+
+What the rail held back, a mean over the runs. Every row told apart of a
+network and a draw counts the same.
+
+| | First layer: held at the rail | Share of its weights that are not zero | Last layer: held at the rail | Share |
+|---|---|---|---|---|
+| MNIST, the reference networks | 76.5 | 0.107% | 26.7 | 2.746% |
+| MNIST, trained before | 16.7 | 0.024% | 12.9 | 1.338% |
+| Fashion-MNIST, the reference networks | 164.6 | 0.229% | 21.1 | 2.205% |
+| Fashion-MNIST, trained before | 33.3 | 0.048% | 17.0 | 1.772% |
+| MNIST, inverted, the reference networks | 30.7 | 0.047% | 1.7 | 0.178% |
+| MNIST, inverted, trained before | 4.4 | 0.007% | 1.5 | 0.157% |
+
+The probe found the lines 20.13% off, and its reading would leave 0.15% on
+the tile and 0.14% on the model, on every data set and for both kinds of
+network: a comb is its seed's and its draw's.
+
+**Told apart with no part, a run is the cycle with no source.** In every one
+of the 150 runs it gets right the images that cycle does, with as many
+saturations. So a part is read against the same shots on the same weights.
+
+**On the inverted set it is the rail in the first layer.** It leaves the
+reference networks 0.010 ± 0.005, 0.012 ± 0.026 and 0.069 ± 0.018: clear on
+the inverted set, at 3.8 of its errors. Each of the five networks loses to
+it there, 0.114, 0.046, 0.024, 0.110 and 0.050, and so does each of the five
+draws, 0.050, 0.046, 0.094, 0.096 and 0.058. The other four leave −0.003 ±
+0.004, −0.003 ± 0.009, −0.002 ± 0.021 and −0.005 ± 0.004 on that set: the
+read, the round in each layer, and the rail in the last. None is clear, and
+none is as much as a hundredth.
+
+**It is thirty weights of sixty-five thousand.** On the inverted set the
+rail holds back 31 of the first layer's 65,469 weights that are not zero,
+0.05% of them, and 1.7 of the last layer's 940, with five there at the most
+and none at the fewest. On MNIST it holds 76 and 27 and on Fashion-MNIST 165
+and 21, and in both layers it leaves those sets 0.024 ± 0.009 and 0.024 ±
+0.027. A weight held at the rail is short by a fixed amount, and on the
+inverted set its pixel is lit on almost every image: that is reasoned, and
+not run. A layer's own error does not say it. On the inverted set the first
+layer's is 0.5% larger for its rail, and the last layer's 5.5% for the 1.7
+weights held there, which leave nothing.
+
+**The read leaves nothing.** Told apart it leaves 0.000 ± 0.003, 0.002 ±
+0.004 and −0.003 ± 0.004, and the reading taken off the model's own line
+0.004 ± 0.003, 0.003 ± 0.003 and −0.004 ± 0.004. The two are 0.003, 0.000
+and −0.001 apart.
+
+**The round to 8 bits is two or three images either way, and nothing on the
+inverted set.** In the first layer it leaves −0.019 ± 0.005, 0.031 ± 0.010
+and −0.003 ± 0.009: clear on MNIST, where the networks are right more often
+for it, and on Fashion-MNIST, where less. In the last layer −0.003 ± 0.002,
+−0.028 ± 0.013 and −0.002 ± 0.021, clear on none; and in both, which grxcp's
+model adds network by network, −0.022 ± 0.006, 0.004 ± 0.014 and −0.004 ±
+0.023. So of the fifteen figures for a part in a layer on a set, three are
+clear, where one in twenty would be by chance: those two, of opposite signs,
+and the first layer's rail on the inverted set.
+
+**All three at once leave half of what the comb has on the tile, and
+neither is clear.** After the converter all three leave 0.015 ± 0.014, 0.013
+± 0.018 and 0.043 ± 0.028. The comb corrected on the tile, which is
+`refrows`'s row, has 0.008 ± 0.017, 0.001 ± 0.043 and 0.081 ± 0.044, and
+less all three −0.007 ± 0.010, −0.012 ± 0.041 and 0.038 ± 0.022, clear on
+none. What the tile's own way of converting the rewritten weights adds is
+not told from nothing here.
+
+**The five add up, to within 0.02.** Added network by network in grxcp's
+model, the read, the two rounds and the two rails are 0.003 ± 0.011, 0.030 ±
+0.019 and 0.056 ± 0.022, and all three at once less that 0.012 ± 0.007,
+−0.016 ± 0.008 and −0.013 ± 0.009, clear on none. So on the inverted set all
+three at once leave less than the first layer's rail does alone, by 0.026 ±
+0.023, which is not clear.
+
+**On the tile the first layer's own error grows more than the three parts
+make it.** The probe's `e1` is 4.3%, 0.4% and 3.3% larger with the weights
+rewritten on the tile, and 1.3%, −2.1% and 1.2% with all three parts after
+the converter. A part is of a weight through its own line. What a row's
+light meets in its neighbours' rings, which were rewritten too, is not one
+of them: reasoned, and not run. In images it is the paragraph before last's,
+and not clear.
+
+**The networks trained before.** All three parts leave them 0.030 ± 0.011,
+0.029 ± 0.023 and 0.072 ± 0.053: the rail 0.021 ± 0.012, −0.001 ± 0.005 and
+0.047 ± 0.046, the round 0.018 ± 0.008, 0.027 ± 0.022 and 0.028 ± 0.032, and
+the read 0.004 ± 0.004, 0.016 ± 0.006 and 0.004 ± 0.006. None of those is
+clear. Corrected on the tile the comb has 0.044 ± 0.022, 0.092 ± 0.032 and
+0.124 ± 0.049, clear on Fashion-MNIST. The rail holds 17, 33 and 4 of their
+first layer's weights and 13, 17 and 1.5 of their last's.
+
+**What was predicted.** Eight things, written on 2026-10-10 at 22:30 UTC,
+when the option and its self-test existed and no network had been run
+through it. Six were right. The two that were wrong are the two that said
+where the rail would be: the last layer was expected, and it is the first.
+
+1. That told apart with no part, a run gets right what the cycle with no
+   source of its draw does, in every pair. Right, in all 150. The prediction
+   wrote 300, which is a miscount of the same runs.
+2. That the read alone is within 0.01 of nothing on every set, and so is the
+   reading taken off the model's own line, and the two within 0.01 of each
+   other. Right: 0.000, 0.002 and −0.003; 0.004, 0.003 and −0.004; and 0.003,
+   0.000 and −0.001 apart.
+3. That all three parts after the converter leave 0.00 to 0.03, 0.00 to 0.04
+   and 0.04 to 0.12. Right on all three: 0.015, 0.013 and 0.043.
+4. That the comb corrected on the tile, less all three after the converter,
+   is within 0.04 of nothing on every set and clear on none. Right: −0.007,
+   −0.012 and 0.038.
+5. That on the inverted set the rail in the last layer is the largest of the
+   five, 0.03 or more and over half of all three; that the round is 0.02 or
+   less in each layer on every set, and the rail in the first layer too; and
+   that on MNIST and Fashion-MNIST each of the five is 0.02 or less. Wrong
+   in all but the last on MNIST. On the inverted set the largest is the rail
+   in the first layer, 0.069, and the rail in the last is −0.005. The round
+   in the first layer is 0.031 on Fashion-MNIST.
+6. That on the inverted set the last layer has 0.5% to 3.7% of its weights
+   held at the rail, ten times the first layer's share or more. Wrong: 0.18%,
+   which is 3.8 times the first layer's.
+7. That the five add to all three together within 0.02 on every set. Right:
+   0.012, 0.016 and 0.013 off.
+8. That for the networks trained before all three leave 0.00 to 0.06, 0.02
+   to 0.14 and 0.04 to 0.18, and that on the inverted set the rail in the
+   last layer is the largest of the five for them. Right: 0.030, 0.029 and
+   0.072, and the rail in the last layer is the largest there at 0.027 ±
+   0.021, which is not clear.
+
+**What this is not.** A remedy: nothing here raises a weight past its rail,
+and no network here was trained to keep clear of it. A chip: the parts are
+added at the host, after the converter, and are first order as the light's
+share is. A comb with noise: a shot's noise would meet the weights as
+written, and the parts are told apart for a still source only. What the
+tile adds when the weights are rewritten on it. A level other than 20%, or
+an interval other than six minutes. Five draws, of the same five networks.
+Version 1, or another tile.
 
 ---
 
