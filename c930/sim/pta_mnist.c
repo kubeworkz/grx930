@@ -51,7 +51,9 @@
  * has no term for a source at all.  Its error is added here, on the host's
  * side of the line, to the sums the tile returns: first order, and outside
  * the contract.  Design note section 5 has what a source may do before it
- * costs what a row of the budget does.
+ * costs what a row of the budget does.  A comb's lines can be read (eval
+ * --levelprobe), the reading applied where a chip could apply it
+ * (--levelfix), and what that leaves told apart (--levelpart, --levellayer).
  *
  * And the receiver's noise as one laser fixes it (eval --thermalline).  A
  * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
@@ -825,8 +827,16 @@ static gemm_buf *gemm_alloc(void)
  * weights as the host writes them, or on the inputs as it sends them, a row at
  * a time.  level_apply() sets that up, and with none set up tile_batch() is
  * again what it was.
+ *
+ * And what a correction on the weights leaves can be told apart: the tile
+ * keeps the network it was given, and the sums take what the rewritten
+ * weights would have been off by, a part of it at a time.  level_parts() sets
+ * that up.
  */
 enum { FIX_NONE = 0, FIX_WEIGHTS, FIX_WEIGHTS8, FIX_INPUTS };
+
+/* what a correction on the weights leaves, a part at a time: level_parts() */
+enum { PART_READ = 1, PART_ROUND = 2, PART_RAIL = 4, PART_ALL = 7 };
 
 static struct {
     int      on;
@@ -848,6 +858,11 @@ static struct {
     int32_t *as;                /* a layer's inputs as scaled, a batch of them */
     long     scaled, clipped;   /* weights or inputs scaled, of those not zero; and of
                                    those, the ones raised and held back by the rail */
+    /* what a correction on the weights leaves, told apart: level_parts() */
+    int      apart;             /* the tile keeps the network, and the sums take dw */
+    double  *dw[MAX_L];         /* a layer's weights: what is left on each, in its LSB */
+    long     moved[MAX_L];      /* a layer's weights that are not zero */
+    long     held[MAX_L];       /* and of those, the ones raised and held back by the rail */
 } light;
 
 static double gauss01(uint64_t *s);
@@ -861,8 +876,10 @@ static void light_free(void)
     free(light.read);
     free(light.scale);
     free(light.as);
-    for (l = 0; l < MAX_L; ++l)
+    for (l = 0; l < MAX_L; ++l) {
         free(light.wq[l]);
+        free(light.dw[l]);
+    }
     memset(&light, 0, sizeof light);
 }
 
@@ -948,7 +965,8 @@ static void light_add(const host_net *hn, const pta_cfg *c, int l, int M, const 
                 for (k = 0; k < K; ++k) {
                     const int32_t av = a[m * in + k0 + k];
                     const int32_t xa = quant ? contract_quant(av, (int)c->act_bits, D) : av;
-                    light.ae[k] = xa * light.eps[k % light.lines];
+                    /* told apart, a weight's share is worked out already: level_parts() */
+                    light.ae[k] = light.apart ? (double)xa : xa * light.eps[k % light.lines];
                     live |= xa != 0;
                 }
                 if (!live)
@@ -956,8 +974,14 @@ static void light_add(const host_net *hn, const pta_cfg *c, int l, int M, const 
                 for (n = 0; n < N; ++n) {
                     const int32_t *w = light.wq[l] + (size_t)(n0 + n) * in + k0;
                     double d = 0.0;
-                    for (k = 0; k < K; ++k)
-                        d += light.ae[k] * (w[k] + off);
+                    if (light.apart) {
+                        const double *dw = light.dw[l] + (size_t)(n0 + n) * in + k0;
+                        for (k = 0; k < K; ++k)
+                            d += light.ae[k] * dw[k];
+                    } else {
+                        for (k = 0; k < K; ++k)
+                            d += light.ae[k] * (w[k] + off);
+                    }
                     y[m * out + n0 + n] += (int64_t)floor(d + 0.5);
                 }
             }
@@ -1607,6 +1631,113 @@ static const host_net *level_apply(host_net *out, const host_net *hn, pta_cfg *c
     return light_weights(out, cfg) == 0 ? out : NULL;
 }
 
+/*
+ * What a correction on the weights at 8 bits leaves, told apart.  A weight the
+ * network was trained for, q, on a line at 1 + e that was read as 1 + r, is
+ * written as c = rail(round(u)) with u = q / (1 + r), and through its line it
+ * comes to (1 + e) c.  That is off q by three things, which add to it:
+ *
+ *   the read    (1 + e) u - q               what the reading missed
+ *   the round   (1 + e) (round(u) - u)      what writing it at 8 bits dropped
+ *   the rail    (1 + e) (c - round(u))      what a weight at the rail was not
+ *                                           raised by
+ *
+ * level_parts() works them out for every weight and rewrites nothing: the tile
+ * keeps the network as it was, at the tile's own bits.  light_add() then adds
+ * the parts asked for to a layer's sums in place of the light's share, in the
+ * one layer asked for or in every layer, and nothing in the others.  So a run
+ * with no part is the run with no source, shot for shot, and a run with a
+ * part differs from it by that part and by nothing else: no weight on the
+ * tile moved, so no draw met another weight.  It is after the converter, as
+ * the light's share is.  With all three in every layer it is FIX_WEIGHTS8's
+ * correction as a detector would see it, which is not as this model's tile
+ * does: that converts the sums of the weights as rewritten and has the
+ * light's share added after.
+ *
+ * For a still source only: a shot's noise would meet the weights as written.
+ * `layer` is a layer from 0, or -1 for every layer.  The rail is counted as
+ * level_apply() counts it, a layer at a time, whatever was asked for.  Returns
+ * 0, or -1 if it could not: no reading kept, a light through an offset, noise
+ * on the source, a part or a layer there is none of, a line read under
+ * LEVEL_FLOOR of its level, or no memory.
+ */
+static int level_parts(const host_net *hn, const pta_cfg *cfg, int parts, int layer)
+{
+    const int D = hn->din, H = hn->hidden;
+    int i, l, n, j;
+
+    if (!light.on || !light.keep || light.offset || light.all != 0.0 || light.line != 0.0 ||
+        parts < 0 || (parts & ~PART_ALL) || layer < -1 || layer > H)
+        return -1;
+    for (i = 0; i < light.lines; ++i)
+        if (1.0 + light.read[i] < LEVEL_FLOOR)
+            return -1;
+    for (i = 0; i < light.lines; ++i)
+        light.scale[i] = 1.0 / (1.0 + light.read[i]);
+    light.gain   = 1.0;
+    light.scaled = light.clipped = 0;
+    for (l = 0; l <= H; ++l) {
+        const int in = layer_in(l), outs = layer_out(H, l);
+        const int bits = (cfg[l].impair & PTA_QUANT) ? (int)cfg[l].w_bits : 0;
+        const int here = layer < 0 || layer == l;
+        if (!light.dw[l])
+            light.dw[l] = (double *)malloc((size_t)outs * in * sizeof(double));
+        if (!light.dw[l])
+            return -1;
+        light.moved[l] = light.held[l] = 0;
+        for (n = 0; n < outs; ++n)
+            for (j = 0; j < in; ++j) {
+                const int line = (j % tile_rows) % light.lines;
+                const double q = (double)contract_quant(hn->w[l][n * in + j], bits, D);
+                const double u = q * light.scale[line];
+                const double v = floor(u + 0.5);
+                const double c = (double)in_range(v, D);
+                const double lit = 1.0 + light.level[line];
+                double d = 0.0;
+                if (q != 0.0) {
+                    ++light.moved[l];
+                    light.held[l] += fabs(v) > fabs(q) && past_rail(v, 0, D);
+                }
+                if (here && (parts & PART_READ))
+                    d += lit * u - q;
+                if (here && (parts & PART_ROUND))
+                    d += lit * (v - u);
+                if (here && (parts & PART_RAIL))
+                    d += lit * (c - v);
+                light.dw[l][n * in + j] = d;
+            }
+        light.scaled  += light.moved[l];
+        light.clipped += light.held[l];
+    }
+    light.apart = 1;
+    return 0;
+}
+
+/* --levelpart's list: the parts it names, as PART_* together, and 0 for
+ * "none"; or -1 if it is not one: a name there is none of, a part named
+ * twice, or nothing. */
+static int part_list(const char *s)
+{
+    static const char *const name[3] = {"read", "round", "rail"};
+    int parts = 0, i;
+
+    if (strcmp(s, "none") == 0)
+        return 0;
+    for (;;) {
+        const char *e = strchr(s, ',');
+        const size_t n = e ? (size_t)(e - s) : strlen(s);
+        for (i = 0; i < 3; ++i)
+            if (strlen(name[i]) == n && strncmp(s, name[i], n) == 0)
+                break;
+        if (i == 3 || (parts & (1 << i)))
+            return -1;
+        parts |= 1 << i;
+        if (!e)
+            return parts;
+        s = e + 1;
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 
 /* The smallest shift s for which round(v / 2^s) <= lim. */
@@ -2023,7 +2154,8 @@ static int cmd_eval(int argc, char **argv)
         "--drift", "--hours", "--calibrate", "--trimstep", "--trimmax", "--post-hours",
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
-        "--w1gain", "--levelprobe", "--levelfix", "--levelref", NULL};
+        "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
+        NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2051,6 +2183,9 @@ static int cmd_eval(int argc, char **argv)
                   : strcmp(levelfix, "weights8") == 0 ? FIX_WEIGHTS8
                   : strcmp(levelfix, "inputs") == 0 ? FIX_INPUTS : FIX_NONE;
     const int to_dimmest = strcmp(levelref, "dimmest") == 0;
+    const char *levelpart = opt(argc, argv, "--levelpart", NULL);
+    const int parts = levelpart ? part_list(levelpart) : -1;
+    const int levellayer = atoi(opt(argc, argv, "--levellayer", "0"));
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
@@ -2118,6 +2253,14 @@ static int cmd_eval(int argc, char **argv)
                         "none or dimmest, and anything but ideal and none needs --levelprobe\n");
         return 2;
     }
+    if ((levelpart && (parts < 0 || fix != FIX_WEIGHTS8 || to_dimmest || src_all != 0.0 ||
+                       src_line != 0.0)) ||
+        levellayer < 0 || (!levelpart && levellayer != 0)) {
+        fprintf(stderr, "pta_mnist: --levelpart is none or a list of read, round and rail, and needs "
+                        "--levelfix weights8 held at the rail and a source with no noise; "
+                        "--levellayer is a layer from 1, or 0 for every layer, and needs --levelpart\n");
+        return 2;
+    }
     /* The probe GEMM reads a cell through a weight of zero, where a pair sees
      * no light at all and an offset sees the offset's: not modelled. */
     if (lit && calibrate > 0 && strcmp(src_sign, "offset") == 0) {
@@ -2128,6 +2271,10 @@ static int cmd_eval(int argc, char **argv)
     if (!g || !bw || !a1 || load_net(path, net) != 0 || load_mnist(data, &tr, &te) != 0)
         return 2;
     H = net->hidden;
+    if (levellayer > H + 1) {
+        fprintf(stderr, "pta_mnist: --levellayer is a layer of the network, from 1\n");
+        return 2;
+    }
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
@@ -2258,8 +2405,15 @@ static int cmd_eval(int argc, char **argv)
         return 2;
     }
     /* And applied where a chip could, if it is not to come off the model's own line. */
-    if (fix != FIX_NONE && (ht = level_apply(&hf_s, hn, cfg, fix, to_dimmest)) == NULL) {
+    if (fix != FIX_NONE && !levelpart &&
+        (ht = level_apply(&hf_s, hn, cfg, fix, to_dimmest)) == NULL) {
         fprintf(stderr, "pta_mnist: --levelfix could not be applied: a line was read under a "
+                        "twentieth of its level\n");
+        return 2;
+    }
+    /* Or told apart: the tile keeps the network, and its sums take what was asked for. */
+    if (levelpart && level_parts(hn, cfg, parts, levellayer - 1) != 0) {
+        fprintf(stderr, "pta_mnist: --levelpart could not be applied: a line was read under a "
                         "twentieth of its level\n");
         return 2;
     }
@@ -2322,6 +2476,16 @@ static int cmd_eval(int argc, char **argv)
     if (fix != FIX_NONE)
         printf(" levelfix=%s levelref=%s level_gain=%.4f level_clip=%.5f", levelfix, levelref,
                light.gain, light.scaled ? (double)light.clipped / light.scaled : 0.0);
+    /* And what of that was told apart, and where: with a layer's weights that are
+     * not zero, and those of them the rail held back. */
+    if (levelpart) {
+        printf(" levelpart=%s levellayer=%d level_moved=", levelpart, levellayer);
+        for (l = 0; l <= H; ++l)
+            printf("%s%ld", l ? "," : "", light.moved[l]);
+        printf(" level_held=");
+        for (l = 0; l <= H; ++l)
+            printf("%s%ld", l ? "," : "", light.held[l]);
+    }
     /* The noise as a laser fixes it, and what that is in each layer's own LSB:
      * `thermal` earlier in the line is the first layer's. */
     if (thermalline) {
@@ -3280,6 +3444,272 @@ static int cmd_selftest(void)
         pta_device_free(&dev);
         gemm_free(g);
     }
+    /* 8d. what a correction on the weights leaves, told apart.  The tile and
+     *     the still source of 8c, and a network whose first layer reaches the
+     *     rail and whose second does not.  The read, the round and the rail
+     *     add to what the weights as FIX_WEIGHTS8 rewrites them are off by
+     *     through their lines, weight for weight, and the rail is counted as
+     *     level_apply() counts it.  A weight's rounding is half a unit at
+     *     most, its rail is nothing where it was not held and takes from it
+     *     where it was, and its read is the reading's own error.  In one layer
+     *     the other is left nothing.  A run with no part is the run with no
+     *     source, sum for sum; a run with every part is the tile's sums and
+     *     the parts' share, sum for sum, and within a unit a tile of the
+     *     rewritten weights' own.  And it is refused with noise on the source,
+     *     through an offset, with no reading kept, for a part or a layer there
+     *     is none of, and for a line at 3%. */
+    {
+        static const int one[3] = {PART_READ, PART_ROUND, PART_RAIL};
+        const int D = 8, H = 1, M = 16, NB = 2;
+        const double sigma = 0.08;
+        const pta_tile tile = {128, 64, 8, ACC_W};
+        const size_t all_in = (size_t)MAX_M * N_IN * sizeof(int32_t);
+        host_net hn, hf;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw), *b0 = (batch_ws *)malloc(sizeof *b0);
+        batch_ws *bf = (batch_ws *)malloc(sizeof *bf);
+        int32_t *a1 = (int32_t *)malloc(all_in);
+        double *whole[MAX_L] = {NULL}, *part[3][MAX_L] = {{NULL}};
+        pta_cfg cfg[MAX_L], run[MAX_L];
+        pta_device dev;
+        gemm_buf *g;
+        uint64_t r8 = 0x8D8D8Dull;              /* its own, so that 9's draws stay */
+        double found = 0.0, left = 0.0, round_most = 0.0, read_most = 0.0, off_most = 0.0;
+        long held = 0, moved = 0;
+        int ran = 1, adds = 1, counts = 1, bounds = 1, alone = 1, dark = 1, sums = 1, refused = 1;
+        int lists = 1, ok, quant, p, i, l, m, n, k, k0;
+
+        tile_rows = tile.rows;
+        tile_cols = tile.cols;
+        gemm_k    = tile.rows * ((N_IN + tile.rows - 1) / tile.rows);
+        gemm_n    = tile.cols * ((N_HID + tile.cols - 1) / tile.cols);
+        g = gemm_alloc();
+        ran &= g != NULL && bw != NULL && b0 != NULL && bf != NULL && a1 != NULL &&
+               host_alloc(&hn, D, H) == 0;
+        ran &= pta_device_init(&dev, &tile) == 0;
+        pta_model_reset(&dev, 0);
+        /* a first layer of every weight there is, and a second that a line at
+         * six tenths of its level would not take to the rail */
+        for (l = 0; ran && l <= H; ++l) {
+            for (i = 0; i < layer_size(H, l); ++i)
+                hn.w[l][i] = l == 0 ? (int32_t)(splitmix64(&r8) % 256u) - 128
+                                    : (int32_t)(splitmix64(&r8) % 129u) - 64;
+            whole[l] = (double *)malloc((size_t)layer_size(H, l) * sizeof(double));
+            ran &= whole[l] != NULL;
+            for (p = 0; p < 3; ++p) {
+                part[p][l] = (double *)malloc((size_t)layer_size(H, l) * sizeof(double));
+                ran &= part[p][l] != NULL;
+            }
+        }
+        hn.sh[0] = D + 3;
+        for (l = 0; ran && l <= H; ++l)
+            for (i = 0; i < layer_out(H, l); ++i)
+                hn.b[l][i] = (int64_t)(i * 37) - 900;
+        if (a1)
+            memset(a1, 0, all_in);
+        for (m = 0; ran && m < M; ++m)
+            for (i = 0; i < N_IN; ++i)
+                a1[m * N_IN + i] = (int32_t)(splitmix64(&r8) % 97u);
+        for (quant = 0; ran && quant < 2; ++quant) {
+            const int bits = quant ? 6 : 0;
+            long rail_cells = 0;
+            memset(cfg, 0, sizeof cfg);
+            for (l = 0; quant && l <= H; ++l) {
+                cfg[l].impair   = PTA_QUANT;
+                cfg[l].act_bits = 6;
+                cfg[l].w_bits   = 6;
+            }
+            /* with no source at all */
+            light_free();
+            ran &= light_run(&hn, cfg, &tile, M, 0, a1, b0) == 0;
+            /* the weights as rewritten, and their sums through the tile */
+            memcpy(run, cfg, sizeof run);
+            ran &= ran && light_setup(&hn, run, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+            if (!ran)
+                break;
+            light.keep = 1;
+            ran &= level_probe(&dev, &run[0], &tile, 7, 1, g, &found, &left) == 0;
+            if (!ran || level_apply(&hf, &hn, run, FIX_WEIGHTS8, 0) != &hf) {
+                ran = 0;
+                break;
+            }
+            held  = light.clipped;
+            moved = light.scaled;
+            ran &= light_run(&hf, run, &tile, M, 0, a1, bf) == 0;
+            /* told apart on the same reading: every part of it */
+            ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+            if (ran) {
+                light.keep = 1;
+                ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            }
+            ran &= ran && level_parts(&hn, cfg, PART_ALL, -1) == 0;
+            if (!ran) {
+                host_free(&hf);
+                break;
+            }
+            counts &= light.apart && light.gain == 1.0 && held > 0 && light.clipped == held &&
+                      light.scaled == moved && light.held[0] == held && light.held[1] == 0 &&
+                      light.moved[1] > 0 && light.moved[0] + light.moved[1] == moved;
+            for (l = 0; l <= H; ++l) {
+                const int in = layer_in(l);
+                for (i = 0; i < layer_size(H, l); ++i) {
+                    const int line = ((i % in) % tile_rows) % light.lines;
+                    const double q = (double)contract_quant(hn.w[l][i], bits, D);
+                    whole[l][i] = light.dw[l][i];
+                    adds &= fabs(whole[l][i] - ((1.0 + light.level[line]) * hf.w[l][i] - q)) < 1e-9;
+                }
+            }
+            /* a run with every part: the tile's sums and the parts' share, a
+             * tile's rows at a time as light_add() rounds it */
+            ran &= light_run(&hn, cfg, &tile, M, 0, a1, bw) == 0;
+            for (l = 0; ran && l <= H; ++l) {
+                const int in = layer_in(l), out = layer_out(H, l);
+                const int32_t *src = l == 0 ? a1 : bw->a[l];
+                for (m = 0; m < M; ++m)
+                    for (n = 0; n < out; ++n) {
+                        int64_t want = 0;
+                        for (k0 = 0; k0 < in; k0 += tile_rows) {
+                            double d = 0.0;
+                            for (k = k0; k < in && k < k0 + tile_rows; ++k) {
+                                const int32_t av = src[m * in + k];
+                                const int32_t xa = quant ? contract_quant(av, 6, D) : av;
+                                want += (int64_t)xa * contract_quant(hn.w[l][n * in + k], bits, D);
+                                d += (double)xa * whole[l][n * in + k];
+                            }
+                            want += (int64_t)floor(d + 0.5);
+                        }
+                        sums &= bw->y[l][m * out + n] == want;
+                    }
+            }
+            /* and the rewritten weights' own first sums, to a unit a tile */
+            for (i = 0; ran && i < M * N_HID; ++i) {
+                const double d = fabs((double)(bw->y[0][i] - bf->y[0][i]));
+                if (d > off_most)
+                    off_most = d;
+            }
+            /* each part on its own: they add, and each is what it is called */
+            for (p = 0; ran && p < 3; ++p) {
+                ran &= level_parts(&hn, cfg, one[p], -1) == 0;
+                for (l = 0; ran && l <= H; ++l)
+                    memcpy(part[p][l], light.dw[l], (size_t)layer_size(H, l) * sizeof(double));
+                counts &= light.clipped == held && light.held[0] == held && light.held[1] == 0;
+            }
+            for (l = 0; ran && l <= H; ++l) {
+                const int in = layer_in(l);
+                for (i = 0; i < layer_size(H, l); ++i) {
+                    const int line = ((i % in) % tile_rows) % light.lines;
+                    const double lit = 1.0 + light.level[line];
+                    const double q = (double)contract_quant(hn.w[l][i], bits, D);
+                    const double v = floor(q * light.scale[line] + 0.5);
+                    const double rd = part[0][l][i], ro = part[1][l][i], ra = part[2][l][i];
+                    adds &= fabs(rd + ro + ra - whole[l][i]) < 1e-9;
+                    bounds &= fabs(rd - q * (lit / (1.0 + light.read[line]) - 1.0)) < 1e-9;
+                    bounds &= fabs(ro) <= 0.5 * lit + 1e-9;
+                    bounds &= (ra != 0.0) == ((double)hf.w[l][i] != v) && ra * q <= 0.0;
+                    rail_cells += ra != 0.0;
+                    if (fabs(ro) / lit > round_most)
+                        round_most = fabs(ro) / lit;
+                    if (q != 0.0 && fabs(rd / q) > read_most)
+                        read_most = fabs(rd / q);
+                }
+            }
+            counts &= rail_cells == held;
+            /* a layer alone leaves the other nothing */
+            for (p = 0; ran && p <= H; ++p) {
+                ran &= level_parts(&hn, cfg, PART_ALL, p) == 0;
+                for (l = 0; ran && l <= H; ++l)
+                    for (i = 0; i < layer_size(H, l); ++i)
+                        alone &= light.dw[l][i] == (l == p ? whole[l][i] : 0.0);
+            }
+            /* the last layer's rail alone is nothing, since nothing was held there */
+            ran &= ran && level_parts(&hn, cfg, PART_RAIL, H) == 0;
+            for (l = 0; ran && l <= H; ++l)
+                for (i = 0; i < layer_size(H, l); ++i)
+                    alone &= light.dw[l][i] == 0.0;
+            /* and no part is no source */
+            ran &= ran && level_parts(&hn, cfg, 0, -1) == 0;
+            ran &= ran && light_run(&hn, cfg, &tile, M, 0, a1, bw) == 0;
+            for (l = 0; ran && l <= H; ++l)
+                for (i = 0; i < M * layer_out(H, l); ++i)
+                    dark &= bw->y[l][i] == b0->y[l][i];
+            host_free(&hf);
+        }
+        /* refused: noise on the source, of either kind; a light through an
+         * offset; a reading taken off and not kept; a part or a layer there is
+         * none of; and a line at 3% of its level */
+        memset(cfg, 0, sizeof cfg);
+        for (p = 0; ran && p < 2; ++p) {
+            ran &= light_setup(&hn, cfg, 11, p ? 0.0 : 0.01, p ? 0.01 : 0.0, sigma, NB, 0) == 0;
+            if (ran) {
+                light.keep = 1;
+                ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+                refused &= level_parts(&hn, cfg, PART_ALL, -1) != 0 && !light.apart;
+            }
+        }
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 1) == 0;
+        if (ran) {
+            light.keep = 1;
+            refused &= level_parts(&hn, cfg, PART_ALL, -1) != 0 && !light.apart;
+        }
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+        ran &= ran && level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+        refused &= ran && level_parts(&hn, cfg, PART_ALL, -1) != 0 && !light.apart;
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+        if (ran) {
+            light.keep = 1;
+            ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            refused &= level_parts(&hn, cfg, PART_ALL + 1, -1) != 0 &&
+                       level_parts(&hn, cfg, -1, -1) != 0 &&
+                       level_parts(&hn, cfg, PART_ALL, H + 1) != 0 &&
+                       level_parts(&hn, cfg, PART_ALL, -2) != 0 && !light.apart;
+        }
+        ran &= ran && light_setup(&hn, cfg, 11, 0.0, 0.0, sigma, NB, 0) == 0;
+        if (ran) {
+            light.level[5] = -0.97;
+            light.keep = 1;
+            ran &= level_probe(&dev, &cfg[0], &tile, 7, 1, g, &found, &left) == 0;
+            refused &= level_parts(&hn, cfg, PART_ALL, -1) != 0 && !light.apart;
+        }
+        /* and --levelpart's list */
+        lists &= part_list("none") == 0 && part_list("read") == PART_READ &&
+                 part_list("round") == PART_ROUND && part_list("rail") == PART_RAIL &&
+                 part_list("read,round,rail") == PART_ALL &&
+                 part_list("rail,read") == (PART_RAIL | PART_READ) &&
+                 part_list("") == -1 && part_list("read,") == -1 && part_list(",read") == -1 &&
+                 part_list("read,read") == -1 && part_list("all") == -1 &&
+                 part_list("none,rail") == -1 && part_list("rai") == -1 &&
+                 part_list("rails") == -1 && part_list("read round") == -1;
+        ok = ran && adds && counts && bounds && alone && dark && sums && refused && lists &&
+             off_most <= 7.0 && round_most > 0.45 && round_most <= 0.5 + 1e-9 &&
+             read_most > 0.0005 && read_most < 0.003;
+        printf("selftest: what a correction on the weights leaves, told apart: the read, the round "
+               "and the rail add to the rewritten weight through its line: %s; %ld of %ld weights "
+               "held at the rail, all in the first layer, as level_apply() counts them: %s; a "
+               "rounding is %.3f of a unit at most, a read %.4f of its weight, and the rail takes "
+               "only from a weight it held: %s; a layer alone leaves the other nothing: %s; no part "
+               "is no source: %s; with every part a run's sums are the tile's and the parts' share: "
+               "%s, and within %.0f of the rewritten weights' own; noise, an offset, a reading not "
+               "kept, a part or a layer there is none of, and a line at 3%%: %s; the lists: %s: %s\n",
+               adds ? "they do" : "THEY DO NOT", held, moved, counts ? "the same" : "DIFFERENT",
+               round_most, read_most, bounds ? "so" : "NOT SO", alone ? "nothing" : "SOMETHING",
+               dark ? "the same sums" : "OTHER SUMS", sums ? "exactly" : "NOT SO", off_most,
+               refused ? "refused" : "TAKEN", lists ? "read" : "MISREAD",
+               ok ? "as it should be" : "WRONG");
+        if (!ok)
+            errors += fail("what a correction on the weights leaves does not come apart");
+        light_free();
+        host_free(&hn);
+        for (l = 0; l <= H; ++l) {
+            free(whole[l]);
+            for (p = 0; p < 3; ++p)
+                free(part[p][l]);
+        }
+        free(bw);
+        free(b0);
+        free(bf);
+        free(a1);
+        pta_device_free(&dev);
+        gemm_free(g);
+    }
     /* 9. the light.  Its share is the exact product of the operands with each
      *    line's error, so where the tile's own sums are exact it can be read
      *    back: one fraction for a whole shot when the lines move together, one
@@ -3783,6 +4213,11 @@ static void help(void)
            "                  weights as written, at the tile's bits or at 8, or on the inputs\n"
            "  --levelref none|dimmest   a dim line's row held at the rail (none), or every row\n"
            "                  scaled down to the dimmest line's and the sums divided back (none)\n"
+           "  --levelpart none|LIST   what --levelfix weights8 leaves, told apart: the tile keeps\n"
+           "                  the network as it was, and the sums take the parts listed of what\n"
+           "                  the rewritten weights would be off by: read, round, rail.  For a\n"
+           "                  source with no noise, held at the rail\n"
+           "  --levellayer N  in layer N alone, from 1; or in every layer (0)\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
