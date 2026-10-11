@@ -34,10 +34,26 @@ c930/soc_bench_*.log
 c930/toolchain/*
 !c930/toolchain/README.md
 
-# rv64imac upstream clone: only the RTL (with C930 fixes) and README are vendored
+# rv64imac upstream clone: the RTL (with C930 fixes), the FPGA flow's cache
+# sources, and the README are vendored
 rv64imac/*
 !rv64imac/RTL/
 !rv64imac/README.md
+
+# The FPGA flow builds from its own copies. Keep the seven cache sources that
+# carry the index/tag split tracked alongside the RTL; the rest of the FPGA tree
+# (bitstream, constraints, programs, Vivado output) stays a local workspace.
+!rv64imac/FPGA/
+rv64imac/FPGA/*
+!rv64imac/FPGA/src/
+rv64imac/FPGA/src/*
+!rv64imac/FPGA/src/riscv_core_dcache_controller.sv
+!rv64imac/FPGA/src/riscv_core_dcache_memory.sv
+!rv64imac/FPGA/src/riscv_core_dcache_top.sv
+!rv64imac/FPGA/src/riscv_core_icache_controller.sv
+!rv64imac/FPGA/src/riscv_core_icache_memory.sv
+!rv64imac/FPGA/src/riscv_core_icache_top.sv
+!rv64imac/FPGA/src/riscv_core_top.sv
 
 # Personal FlexLM license files (never commit these)
 *.lic
