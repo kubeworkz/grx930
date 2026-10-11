@@ -1,7 +1,12 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:3
-`define BYTE_OFFSET 2:0
+// INDEX/TAG SPLIT -- both selects derive from INDEX_WIDTH, never from literals.
+// A literal addr[11:5] set select over an INDEX_WIDTH-wide data array aliases
+// 2**(7-INDEX_WIDTH) tag entries onto one data line, so a fill can leave a
+// foreign tag VALID over that line and a later HIT serves the wrong line.
+//   index = addr[5 +: INDEX_WIDTH]   tag = addr[ADDR_WIDTH-1 : 5+INDEX_WIDTH]
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define DCACHE_INDEX 5 +: INDEX_WIDTH
+`define DCACHE_BLOCK_OFFSET 4:3
+`define DCACHE_BYTE_OFFSET 2:0
 `define OFFSET 5
 
 
@@ -84,13 +89,22 @@ module riscv_core_dcache_controller #(
 
 localparam CACHE_DEPTH = 2**INDEX_WIDTH ;
 
+// Tag storage width follows the index split (not the TAG_WIDTH parameter), so
+// a stale TAG_WIDTH cannot silently truncate the tag compare; it is kept for
+// interface compatibility and checked below in simulation.
+localparam TAG_W = ADDR_WIDTH - 5 - INDEX_WIDTH ;
+`ifndef SYNTHESIS
+initial if (TAG_WIDTH != TAG_W)
+    $error("dcache TAG_WIDTH=%0d but the index leaves %0d tag bits", TAG_WIDTH, TAG_W);
+`endif
+
 
 ///////////////////////////////////////////////
 //      INTERNAL REGISTERS AND MEMORIES      //
 ///////////////////////////////////////////////
 
 
-logic [  TAG_WIDTH-1 : 0  ] TAG_MEM  [0: CACHE_DEPTH-1];
+logic [  TAG_W-1 : 0  ] TAG_MEM  [0: CACHE_DEPTH-1];
 logic                      VALID_MEM [0: CACHE_DEPTH-1];
 
 logic                      VALID_RES , NEXT_VALID_RES;
@@ -240,15 +254,15 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_U
         // reset-sensitive block demotes every memory written from it to
         // registers in synthesis, killing DPR16X4 inference.)
         if (update_en) begin
-           VALID_MEM     [  i_addr_from_core[`INDEX]   ] <= 1'b1; 
+           VALID_MEM     [  i_addr_from_core[`DCACHE_INDEX]   ] <= 1'b1; 
         end
         // Apply a pending coherence invalidation in IDLE, tag-checked, before
         // the next core request is serviced.  Placed after the update_en
         // write so a same-cycle valid-set loses to the invalidation.
         if (STATE == IDLE && pending_inv) begin
             pending_inv <= 1'b0;
-            if (TAG_MEM[pending_inv_addr[`INDEX]] == pending_inv_addr[`TAG])
-                VALID_MEM[pending_inv_addr[`INDEX]] <= 1'b0;
+            if (TAG_MEM[pending_inv_addr[`DCACHE_INDEX]] == pending_inv_addr[`TAG])
+                VALID_MEM[pending_inv_addr[`DCACHE_INDEX]] <= 1'b0;
         end
     end
 end
@@ -260,7 +274,7 @@ end
 // to DPR16X4 instead of ~6.6K FFs.
 always_ff @( posedge i_clk ) begin : TAG_UPDATE_BLOCK
     if (update_en) begin
-        TAG_MEM [ i_addr_from_core[`INDEX] ] <= i_addr_from_core[`TAG];
+        TAG_MEM [ i_addr_from_core[`DCACHE_INDEX] ] <= i_addr_from_core[`TAG];
     end
 end
 
@@ -272,7 +286,7 @@ end
 // when the read is inside an 'assign' statement. Using always_comb ensures the
 // block re-evaluates when VALID_MEM or TAG_MEM elements change.
 always_comb begin : TAG_HIT_BLOCK
-    tag_hit = (TAG_MEM[i_addr_from_core[`INDEX]] == i_addr_from_core[`TAG]) && VALID_MEM[i_addr_from_core[`INDEX]];
+    tag_hit = (TAG_MEM[i_addr_from_core[`DCACHE_INDEX]] == i_addr_from_core[`TAG]) && VALID_MEM[i_addr_from_core[`DCACHE_INDEX]];
 end 
 
 // MMIO (uncached peripheral) region detection
@@ -295,7 +309,7 @@ o_rd_en = 0;
 o_wr_en = 0;
 o_block_replace = 0;
 o_stall = 0;
-o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
 o_mem_read_req = 0;
 update_en = 0;
 o_amo_wr = 0;
@@ -333,7 +347,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -375,7 +389,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end    
             end
@@ -402,7 +416,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end    
             end
@@ -426,7 +440,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end 
             end
@@ -453,7 +467,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end 
             end
@@ -476,7 +490,7 @@ case (STATE)
 
                     o_stall = 1;
                     o_mem_read_req = 1;
-                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+                    o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
                     NEXT = MEM_REQ;
                 end
             end
@@ -493,7 +507,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -512,7 +526,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 1;
         update_en = 0;
         o_amo_wr = 0;
@@ -534,7 +548,7 @@ case (STATE)
         o_wr_en = 1;
         o_block_replace = 1;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 1;
         o_amo_wr = 0;
@@ -553,7 +567,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -599,7 +613,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -617,7 +631,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -645,7 +659,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -683,7 +697,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;                     // release the pipe so the store retires
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -734,7 +748,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;                     // release the pipe so the load retires
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -787,7 +801,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 1;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -812,7 +826,7 @@ case (STATE)
         o_wr_en = 0;
         o_block_replace = 0;
         o_stall = 0;
-        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`INDEX],`OFFSET'b0};
+        o_mem_read_address = {i_addr_from_core[`TAG] , i_addr_from_core[`DCACHE_INDEX],`OFFSET'b0};
         o_mem_read_req = 0;
         update_en = 0;
         o_amo_wr = 0;
@@ -839,19 +853,19 @@ always_comb begin : FAULT_DETECTION
     case (i_size)
         2'b00 : fault = 1'b0;
         2'b01 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b111)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b111)
                     fault = 1'b1;
                     else
                     fault = 1'b0;
                 end
         2'b10 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b111 || i_addr_from_core[`BYTE_OFFSET] == 3'b110 || i_addr_from_core[`BYTE_OFFSET] == 3'b101)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b111 || i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b110 || i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b101)
                     fault = 1'b1;
                     else
                     fault = 1'b0;
                 end
         2'b11 : begin
-                    if(i_addr_from_core[`BYTE_OFFSET] == 3'b000)
+                    if(i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b000)
                     fault = 1'b0;
                     else
                     fault = 1'b1;
@@ -860,7 +874,7 @@ always_comb begin : FAULT_DETECTION
     endcase
 
     if (i_amo || i_lr || i_sc) begin
-        if ((i_addr_from_core[`BYTE_OFFSET] == 3'b000 && i_size == 2'b11 ) || (i_addr_from_core[`BYTE_OFFSET] == 3'b000 && i_size == 2'b10 )  || (i_addr_from_core[`BYTE_OFFSET] == 3'b100 && i_size == 2'b10 ) )
+        if ((i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b000 && i_size == 2'b11 ) || (i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b000 && i_size == 2'b10 )  || (i_addr_from_core[`DCACHE_BYTE_OFFSET] == 3'b100 && i_size == 2'b10 ) )
         fault = 1'b0;
         else
         fault = 1'b1;
@@ -881,10 +895,10 @@ assign o_amo_fault   = fault & i_amo;
 always_comb begin : mem_write_strobe_decoder
     o_mem_write_strobe = 8'b0;
     case (i_size)
-        2'b00: o_mem_write_strobe = (8'b0000_0001) << i_addr_from_core[`BYTE_OFFSET];
-        2'b01: o_mem_write_strobe = (8'b0000_0011) << i_addr_from_core[`BYTE_OFFSET];
-        2'b10: o_mem_write_strobe = (8'b0000_1111) << i_addr_from_core[`BYTE_OFFSET];
-        2'b11: o_mem_write_strobe = (8'b1111_1111) << i_addr_from_core[`BYTE_OFFSET];
+        2'b00: o_mem_write_strobe = (8'b0000_0001) << i_addr_from_core[`DCACHE_BYTE_OFFSET];
+        2'b01: o_mem_write_strobe = (8'b0000_0011) << i_addr_from_core[`DCACHE_BYTE_OFFSET];
+        2'b10: o_mem_write_strobe = (8'b0000_1111) << i_addr_from_core[`DCACHE_BYTE_OFFSET];
+        2'b11: o_mem_write_strobe = (8'b1111_1111) << i_addr_from_core[`DCACHE_BYTE_OFFSET];
         default: o_mem_write_strobe = 8'b0;
     endcase
 end

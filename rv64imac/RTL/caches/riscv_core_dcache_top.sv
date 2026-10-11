@@ -1,15 +1,18 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:3
-`define BYTE_OFFSET 2:0
+// INDEX/TAG SPLIT -- the selects derive from INDEX_WIDTH and the TAG_WIDTH
+// default follows the split, so an instantiation at any width gets tag bits
+// that still reconstruct the line (see the controller note).
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define DCACHE_INDEX 5 +: INDEX_WIDTH
+`define DCACHE_BLOCK_OFFSET 4:3
+`define DCACHE_BYTE_OFFSET 2:0
 
 
 module riscv_core_dcache_top#(
     parameter BLOCK_OFFSET      = 2,
     parameter INDEX_WIDTH       = 7,
-    parameter TAG_WIDTH         = 20,
     parameter CORE_DATA_WIDTH   = 64,
     parameter ADDR_WIDTH        = 64,
+    parameter TAG_WIDTH         = ADDR_WIDTH - 5 - INDEX_WIDTH,
     parameter AXI_DATA_WIDTH    = 256
 ) (
 
@@ -66,7 +69,7 @@ logic                         control_to_mem_block_replace;
 //      BLOCK INSTANTIATION   //
 ////////////////////////////////
 
-riscv_core_dcache_controller #(.TAG_WIDTH(TAG_WIDTH)) dcache_controller (
+riscv_core_dcache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) dcache_controller (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_data_from_core (i_data_from_core),
@@ -90,7 +93,7 @@ riscv_core_dcache_controller #(.TAG_WIDTH(TAG_WIDTH)) dcache_controller (
     .i_size(i_size));
     
     
-riscv_core_dcache_memory #(.TAG_WIDTH(TAG_WIDTH)) dcache_memory (
+riscv_core_dcache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) dcache_memory (
     .i_clk(i_clk),
     .i_rst_n(i_rst_n),
     .i_data_from_core (i_data_from_core),

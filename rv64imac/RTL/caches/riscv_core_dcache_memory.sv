@@ -1,7 +1,11 @@
-`define TAG 63:12
-`define INDEX 11:5
-`define BLOCK_OFFSET 4:3
-`define BYTE_OFFSET 2:0
+// Index select must match the tag array's set select in the controller: the
+// set is addr[5 +: INDEX_WIDTH], never the literal addr[11:5] this file used
+// to carry (2**(7-INDEX_WIDTH) tag entries aliased onto one data line at
+// INDEX_WIDTH < 7).  See the controller for the failure mode.
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define DCACHE_INDEX 5 +: INDEX_WIDTH
+`define DCACHE_BLOCK_OFFSET 4:3
+`define DCACHE_BYTE_OFFSET 2:0
 
 
 module riscv_core_dcache_memory #(
@@ -74,7 +78,7 @@ else begin
 
     if (i_wr_en && i_block_replace)
     begin
-        DATA_MEM [  i_addr_from_core[`INDEX]      ] <= i_block_from_axi;
+        DATA_MEM [  i_addr_from_core[`DCACHE_INDEX]      ] <= i_block_from_axi;
     end
 
     // WRITE ON MEMORY // 
@@ -84,20 +88,20 @@ else begin
     begin
         unique case (i_size)
         // WRITE BYTE
-         2'b00   : DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] ] <= i_data_from_core[7:0];  
+         2'b00   : DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] ] <= i_data_from_core[7:0];  
 
          // WRITE HALFWORD
-         2'b01   : {DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 1] ,
-                    DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET]    ]  } <= i_data_from_core[15:0];
+         2'b01   : {DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 1] ,
+                    DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET]    ]  } <= i_data_from_core[15:0];
 
          // WRITE WORD
-         2'b10   :{DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 3 ],
-                   DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 2 ], 
-                   DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 1 ],
-                   DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET]     ]  } <= i_data_from_core[31:0];
+         2'b10   :{DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 3 ],
+                   DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 2 ], 
+                   DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 1 ],
+                   DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET]     ]  } <= i_data_from_core[31:0];
 
          // WRITE DOUBLEWORD
-         2'b11   : DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ] <= i_data_from_core;
+         2'b11   : DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ] <= i_data_from_core;
 
 
         endcase
@@ -118,20 +122,20 @@ if (i_rd_en) begin
 
     unique case (i_size)
         // READ BYTE
-         2'b00   : o_data_to_core = DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] ];  
+         2'b00   : o_data_to_core = DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] ];  
 
          // READ HALFWORD
-         2'b01   : o_data_to_core = {DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 1 ] ,
-                    DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET]    ] };
+         2'b01   : o_data_to_core = {DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 1 ] ,
+                    DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET]    ] };
 
          // READ WORD
-         2'b10   : o_data_to_core = {DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 3 ] ,
-                                     DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 2 ] , 
-                                     DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET] + 1 ] ,
-                                     DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ][ i_addr_from_core[`BYTE_OFFSET]     ]   };
+         2'b10   : o_data_to_core = {DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 3 ] ,
+                                     DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 2 ] , 
+                                     DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET] + 1 ] ,
+                                     DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ][ i_addr_from_core[`DCACHE_BYTE_OFFSET]     ]   };
 
          // READ DOUBLEWORD
-         2'b11   : o_data_to_core =  DATA_MEM [ i_addr_from_core[`INDEX] ][ i_addr_from_core[`BLOCK_OFFSET] ];
+         2'b11   : o_data_to_core =  DATA_MEM [ i_addr_from_core[`DCACHE_INDEX] ][ i_addr_from_core[`DCACHE_BLOCK_OFFSET] ];
 
 
         endcase
