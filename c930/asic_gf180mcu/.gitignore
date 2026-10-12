@@ -1,0 +1,41 @@
+# GF180MCU tapeout tree -- what is generated, what is vendored, what is source.
+#
+# Everything below is re-creatable: PDK copies come back from download_pdk.py /
+# volare / ciel, flow runs and build products from the OpenLane 2 flow, and the
+# reference repos from their upstreams. The tracked material is the RTL, the
+# flow configuration, the pad-ring spec, the scripts and the docs.
+
+# PDK copies and checkouts (hundreds of MB, deep trees)
+gf180mcu_pdk/
+gf180mcu_pdk_full/
+gf180mcu_pdk_dl/
+gf180mcu_ol2/
+gf180mcu_fd_sc_mcu7t5v0/
+pdk/
+libs.tech/
+
+# Build artifacts (regenerable); the flow chain scripts in build/ are source
+build/*
+!build/*.sh
+openlane2_rtl/runs/
+openlane2_design/runs/
+
+# Layout and netlist products
+*.gds
+*.gds.gz
+*.oas
+*.def
+*.odb
+*.spef
+*.sdf
+*.vvp
+*.blif
+*.stream
+
+# Logs (the per-run logs live inside runs/ anyway)
+*.log
+
+# Vendored upstream reference material (re-clone with git)
+tools/gf180mcu-precheck/
+tools/gf180mcu-project-template/
+tools/gf180mcu-example-layouts/

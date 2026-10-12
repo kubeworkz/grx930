@@ -1,0 +1,85 @@
+# synth_gf180mcu.ys — Yosys synthesis for GRX930 test chip → GF180MCU
+#
+# Usage:
+#   cd c930/asic_gf180mcu
+#   yosys -s synth_gf180mcu.ys 2>&1 | tee build/synth.log
+
+# ============================================================
+# 1. Read RTL
+# ============================================================
+read_verilog -sv grx930_test_chip.sv
+
+# RISC-V CPU core (RV64IMAC, single core)
+read_verilog -sv ../../rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div_ctrl.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_non_restoring.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux4x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux_2to1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_64bit_adder.sv
+
+# Caches (reduced: tiny 2KB I/D caches)
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_ldextend.sv
+
+# UART (16550-compatible)
+read_verilog -sv ../../c930/rtl/c930_uart.sv
+
+# Boot ROM wrapper (defines BOOT_HEX_FILE)
+read_verilog -sv bootrom_wrapper.sv
+
+# ============================================================
+# 2. Pre-synthesis elaboration
+# ============================================================
+hierarchy -top grx930_test_chip -check
+
+# ============================================================
+# 3. Synthesis (generic)
+# ============================================================
+synth -top grx930_test_chip -flatten
+
+# ============================================================
+# 4. Technology mapping (GF180MCU 7-track 5V, typical corner)
+# ============================================================
+abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+# ============================================================
+# 5. Clean up
+# ============================================================
+clean
+stat
+
+# ============================================================
+# 6. Output
+# ============================================================
+write_verilog -noattr build/grx930_test_chip_synth.v
+write_blif build/grx930_test_chip_synth.blif
+write_json build/grx930_test_chip_synth.json
+
+log "SYNTHESIS_COMPLETE"

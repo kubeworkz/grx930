@@ -1,0 +1,81 @@
+# synth_gf180mcu_v2.ys — Fixed synthesis: full behavioral-to-structural conversion
+
+# 1. Read RTL
+read_verilog -sv grx930_test_chip.sv
+
+# RISC-V CPU core
+read_verilog -sv ../../rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div_ctrl.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_non_restoring.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux4x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux_2to1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_64bit_adder.sv
+
+# Caches
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_ldextend.sv
+
+# UART
+read_verilog -sv ../../c930/rtl/c930_uart.sv
+
+# Boot ROM
+read_verilog -sv bootrom_wrapper.sv
+
+# 2. Hierarchy check
+hierarchy -top grx930_test_chip -check
+
+# 3. Proc — convert always blocks to mux/ff
+proc
+
+# 4. Flatten memory arrays to FFs (no SRAM macro mapping since we don't have macro models)
+flatten_memory
+
+# 5. Optimize
+opt_clean -purge
+opt
+
+# 6. Full synthesis (includes flatten, techmap, abc)
+synth -top grx930_test_chip
+
+# 7. Technology mapping to GF180MCU
+abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+# 8. Clean
+clean
+opt_clean -purge
+
+# 9. Stats
+stat
+
+# 10. Output
+write_verilog -noattr build/grx930_test_chip_synth_v2.v
+write_json build/grx930_test_chip_synth_v2.json
+
+log "SYNTHESIS_V2_COMPLETE"

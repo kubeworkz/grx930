@@ -1,0 +1,64 @@
+# synth_gf180mcu_v3.ys — Guaranteed pure gate-level output
+
+# 1. Read RTL
+read_verilog -sv grx930_test_chip.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div_ctrl.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_in.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_div_out.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_non_restoring.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux4x1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_mux_2to1.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_64bit_adder.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_top.sv
+read_verilog -sv ../../rv64imac/RTL/riscv_core_ldextend.sv
+read_verilog -sv ../../c930/rtl/c930_uart.sv
+read_verilog -sv bootrom_wrapper.sv
+
+# 2. Hierarchy
+hierarchy -top grx930_test_chip -check
+
+# 3. Synthesize to generic gates
+synth -top grx930_test_chip
+
+# 4. Technology mapping to GF180MCU
+abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+# 5. Final cleanup
+opt_clean -purge
+flatten
+clean
+
+# 6. Stats
+stat
+
+# 7. Output - use -noattr -noexpr for pure structural Verilog
+write_verilog -noattr -noexpr build/grx930_test_chip_synth_v3.v
+write_json build/grx930_test_chip_synth_v3.json
+
+log "SYNTHESIS_V3_COMPLETE"

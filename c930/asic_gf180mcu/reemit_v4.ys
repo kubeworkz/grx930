@@ -1,0 +1,22 @@
+# reemit_v4.ys — Map ALL cells to GF180MCU using custom techmap
+read_json build/grx930_test_chip_synth.json
+
+# Map MUX cells to GF180MCU mux2_1 using custom techmap
+techmap mux_techmap.v
+
+# Map remaining combinational cells to GF180MCU
+abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+# Map sequential cells to GF180MCU FFs
+dfflibmap -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+# Clean up
+opt_clean -purge
+clean
+
+stat
+
+write_verilog -noattr -noexpr build/grx930_test_chip_synth_v4.v
+write_json build/grx930_test_chip_synth_v4.json
+
+log "REEMIT_V4_COMPLETE"
