@@ -1,0 +1,203 @@
+# grx930_overrides.yaml -- wafer.space 1x1 template, configured for the grx930 core.
+#
+# Passed *last* on the flow command line, after the template's own config files:
+#
+#   openlane --pdk gf180mcuD --manual-pdk \
+#       librelane/slots/slot_1x1.yaml librelane/macros/macros_5v.yaml \
+#       librelane/config.yaml librelane/grx930_overrides.yaml
+#
+# so later keys win. The template's values for everything not listed here
+# (pad ring, PDN, SDC, clock port/net, antenna repair, IGNORE_DISCONNECTED_
+# MODULES for the ws_ip cells) are used unchanged -- that is deliberate: the
+# pre-check compares this part against the same template every other 1x1
+# submission uses.
+meta:
+  version: 3
+  flow: Chip
+
+DESIGN_NAME: chip_top
+
+# The template's src/chip_core.sv (a counter demo) is replaced by the adapter;
+# the core RTL is the tapeout tree (openlane2_rtl/src) minus the two unused ROM
+# modules (c930_bootrom.sv / bootrom_wrapper.sv -- their $readmemh would
+# elaborate against a file this flow does not have).
+#
+# This file is the *design's* config, so `dir::` resolves against this
+# directory; the assembler (run_ws_flow.sh) copies the tree so that
+# ../src and ../asic_core hold what this expects, and rewrites these two paths
+# if it stages them anywhere else.
+VERILOG_FILES:
+- dir::../src/chip_top.sv
+- dir::../src/chip_core.sv
+- dir::../asic_core/*.sv
+
+# Same synthesis strategy as the OL2 core runs (their config.json used "AREA 3"),
+# so the netlist this flow produces can be compared cell type by cell type with
+# openlane2_rtl/runs/slotcore_v1/06-yosys-synthesis/grx930_test_chip.nl.v instead of
+# being a different optimisation altogether.
+SYNTH_STRATEGY: AREA 3
+
+# 25 MHz. The adapter's CLK_FREQ (and therefore the ROM firmware's UART
+# divisor) is tied to this: change one and the banner baud changes silently.
+CLOCK_PERIOD: 40
+
+# Placement density. Measured from the OL2 run: 370,059 instances, 6.66 mm2 of
+# cell area in a 12.93 mm2 core = 51.6 %. The template's 35 % default is below
+# what the design needs, and a placer target under the real density is what
+# pushed GPL into 91-94 % local hot spots on the fat layout.
+PL_TARGET_DENSITY_PCT: 55
+PL_MAX_DISPLACEMENT_X: 1500
+PL_MAX_DISPLACEMENT_Y: 500
+
+# Power distribution. The template's pdn_cfg.tcl ends by sourcing its SRAM stripe
+# grid (pdn_5v_sram.tcl, or pdn_3v3_sram.tcl when SRAM_DEFINE says so), and that
+# grid stripes around i_chip_core.sram_0 / sram_1 -- the two foundry SRAM macros
+# the template's demo chip_core.sv instantiates. grx930's chip_core has no SRAM
+# macro (its memory is behavioural RTL, inferred by synthesis), so this run uses
+# pdn_cfg_grx930.tcl: the template's file with that one block removed and
+# everything else byte for byte. Same mismatch class as the macro declaration
+# that stopped run ws_v1 at step 11 (OpenROAD.CheckMacroInstances).
+PDN_CFG: dir::pdn/pdn_cfg_grx930.tcl
+
+# Global-route capacity reservation.
+#
+# Why this is a decision and not a default: the OL2 config had it at 0.0 (a hack
+# to get GRT's own congestion report under a threshold), the guides it produced
+# were packed to the theoretical limit, and DRT could not realise them -- it
+# diverged after 17 iterations at ~1 conflict per net pair (222 k unique net
+# pairs, half at cell-pin geometry). Stock is 0.3, i.e. GRT plans with 70 % of
+# each edge's capacity, leaving DRT the headroom for vias, jogs and pin escape.
+#
+# Evidence (fast DRT, 2 iterations, Metal1-Metal5, same six detailed_route
+# arguments in every row; captured by build/arm_verdict_capture.sh into
+# drt_fast/verdict/arm_compare.md):
+#
+#   arm                              iter0      iter1     iter2     DRT-0199   GRT wire   after diodes
+#   fat core,   GRT 0.0 (baseline)   1,081,775  405,529   387,049   -          24.22 M um 24.29 M um  <- diverged
+#   slot core,  GRT 0.0 (arm 1)      1,096,857  435,492   418,613   418,633    24.30 M um 24.44 M um
+#   slot core,  GRT 0.3 (arm 2)        659,733  207,748   191,575   191,578    28.73 M um 29.58 M um
+#
+# The two slot rows are a matched pair: same design dir, same PDK, same core
+# geometry, same DRT arguments, and each input ODB is the endpoint of the same
+# flow with only GRT_ADJUSTMENT changed (arm 1's input is the 0.0 GRT step's
+# output, 203,851,717 B; arm 2's the 0.3 step's, 219,661,871 B).
+#
+# CORRECTION. An earlier version of this table gave arm 1's wirelength as
+# 19.63 M um and claimed the slot core "carries 19 % LESS wire". That was the
+# floorplan experiment's *prediction* (sqrt(0.648) x 24,215,167 ~ 19.4 M um)
+# written down as if measured. The measurement is 24,301,804 um -- +0.4 % versus
+# the fat baseline, i.e. the core shrink did NOT reduce wirelength. It makes
+# sense against the density map: the cells were already packed in a hot middle
+# band over a sparse skirt, and removing the skirt pulls cells together rather
+# than shortening the long nets. Measure, do not scale.
+#
+# Arm 1 alone: 1,096,857 -> 435,492 -> 418,613 against the fat baseline's
+# 1,081,775 -> 405,529 -> 387,049, i.e. +1.4 % / +7.4 % / +8.2 % worse at every
+# stage. The 12.93 mm2 core is the shuttle-mandated layout, not a PPA win: it
+# trades nothing in wire and loses a little on violations.
+#
+# VERDICT (arm 2 COMPLETE, 11:11 UTC): 0.3 wins the primary criterion, 2.19x --
+# 191,578 final violations against 418,633, in 1:20:31 versus 3:06:08 of DRT and
+# at 7,024 MB versus 6,418 MB peak. Arm 2's plateau is still falling (-7.8 % per
+# iteration) where arm 1's has nearly stopped (-3.9 %), and arm 1 cannot close
+# the gap: at its own rate it would need ~20 more iterations (~18 h) even if the
+# rate held, and DRT's rate decelerates. So the value below is no longer
+# provisional.
+#
+# The rule that was pre-registered here said: "if arm 2's GRT log shows overflow
+# ('extra iterations to remove overflow'), 0.3 is unaffordable and the lever
+# moves to placement." That clause turned out to be broken as a test -- it fires
+# on BOTH arms, because the 0.0 arm logs the same line and then clears its own
+# overflow (0 on every layer, 12.18 % usage). The discriminating line is
+# `WARNING GRT-0115 Global routing finished with overflow`, which appears ONLY
+# at 0.3: 15,155 unresolved across M1-M5. Read strictly, the guard therefore
+# says "unaffordable" -- yet DRT says 0.3 is twice as routable.
+#
+# Both readings are kept on the record and 0.3 is kept because the guard scored
+# the mechanism, not the outcome. The reservation is what *produces* that
+# overflow: GRT is told each edge has ~34 % less capacity, so it goes over its
+# own budget by construction and pushes demand up to M3/M4 (usage 12.3 -> 24.9 %
+# and 6.9 -> 19.9 % of true capacity). With GRT_ALLOW_CONGESTION that is
+# informational, not an error. The question the guard meant to ask -- does
+# reserving capacity pay out at DRT? -- has a measured answer, and it is yes.
+#
+# Cost that this experiment does NOT address: wirelength +18.2 %
+# (24.30 -> 28.73 M um), +21.0 % after diode insertion. Both figures are GRT
+# estimates against GRT estimates, so the delta is sound but the level is
+# optimistic -- on this design GRT over-estimates routed wire by ~25 % (v8: GRT
+# 24.3 M vs 19.4 M measured from the ODB). Neither arm reaches a routed result,
+# so the true routed-wire penalty is unmeasured. Treat 0.3 as a starting point:
+# the knee is somewhere in 0.1-0.3, and a 0.1/0.2 arm is the next measurement,
+# not more DRT iterations.
+#
+# Nor is 0.3 net-faster end to end: the flow tail that feeds DRT gets 23x slower.
+# Per-step runtime.txt on the same run tag, 0.0 (steps 38-41) vs 0.3 (42-45):
+#
+#   globalrouting                     3:14  ->  1:17:46    24.0x
+#   repairantennas (diode insertion)  8:45  ->  4:24:27    30.2x
+#   tail total                       14:34  ->  5:45:27    23.7x
+#
+# The DRT saving (3:06:08 -> 1:20:31) is therefore partly given back and the
+# segment costs +3:45 net. GRT spends 78 min instead of 3 iterating on a graph
+# it has been told is over budget, and antenna repair spends 4.4 h instead of
+# 9 min fixing what those guides left -- the pre-DRT ODB is 7.7 % larger
+# (203,851,717 -> 219,661,871 B), i.e. more diodes. This bounds the verdict
+# rather than reversing it: 418,633 violations is not a viable endpoint at any
+# speed, and 0.3 is the only arm trending toward zero. But it does make the
+# 0.1/0.2 arm the higher-value next run -- a smaller reservation that keeps most
+# of the violation win should also keep the tail cheap.
+#
+# SUPERSEDED by that run (2026-10-12 19:18 UTC). The 0.1 and 0.2 arms are in;
+# full verdict in Claude outputs/grt_adjustment_sweep.md, raw table in
+# drt_fast/verdict/grt_sweep.md. Same instrument per arm: resume the same run tag
+# from OpenROAD.GlobalRouting to OpenROAD.RepairAntennas with only
+# GRT_ADJUSTMENT changed, then fast DRT (2 iterations, Metal1-Metal5).
+#
+#   adj   iter2 / DRT-0199   GRT wire (um)  flow tail   DRT wall   net vs 0.0   overflow
+#   0.0        418,633        24,301,804     14:34      3:09:36        --            0
+#   0.1        344,494        24,897,381     18:21      1:47:04    -1:18:45          0
+#   0.2        254,201        25,323,984     22:27      1:32:23    -1:29:20          0
+#   0.3        191,578        28,725,060   5:45:27      1:23:33    +3:44:50     15,155
+#
+# THE KNEE IS 0.2, NOT 0.3. The violation win is not flattening anywhere in
+# 0.0-0.2: its marginal yield PEAKS at the 0.1->0.2 step (-90,283, the largest in
+# the sweep, versus -74,139 before it and -62,626 after) and that ordering holds
+# at the initial route, iteration 1 and iteration 2 alike, so it does not depend
+# on the 2-iteration cutoff. On cost, 0.2 is the cheapest point measured, not a
+# compromise: wire paid per violation removed is 8.0 / 6.2 / 19.5 um cumulatively
+# and 8.0 / 4.7 / 54.3 um marginally, i.e. the 0.2->0.3 increment costs 11.5x the
+# previous increment and 0.3 pays 3.4 M um of extra wire -- the same violation
+# mass (62,626) that 0.1->0.2 removed for 8x less. The flow tail grows near-
+# linearly to 0.2 (+3:47, then +4:04, ~+2 min per +0.1) and then multiplies by
+# 17.3x at 0.3. Net of the DRT it buys back, 0.1 and 0.2 are both FASTER end to
+# end than 0.0 (-1:18:45 and -1:29:20) and 0.3 is the only arm that is slower
+# (+3:44:50). An independent instrument agrees: `GRT-0115 finished with overflow`
+# is absent at 0.0/0.1/0.2 and present only at 0.3 (15,155 units) -- the first
+# reservation that over-commits GRT's own reduced budget. So 0.2 takes 72.4 % of
+# the total violation win for 23 % of 0.3's wire premium, at the best efficiency,
+# the lowest total time and no over-commitment.
+#
+# This CHANGES the rule that was pre-registered above ("whichever arm reaches the
+# lower iteration-2 plateau sets GRT_ADJUSTMENT"). That rule scores violation
+# count and ignores cost, so it selects 0.3 by construction; the sweep was run
+# because it cannot answer the question that matters. Cost is now measured.
+#
+# THE FALSIFIER, recorded rather than buried. One measurement still favours 0.3:
+# its per-iteration gain is -7.8 % where 0.0/0.1/0.2 have settled into -3.9 %,
+# -3.7 % and -4.3 %. At equal iteration count 0.3 is further from its own
+# asymptote, so its violation advantage could widen with more iterations, and a
+# 2-iteration DRT cannot settle an asymptote. If a full-length DRT run shows 0.2's
+# plateau stalling far above 0.3's, the value below goes back to 0.3. The decisive
+# next measurement is 0.2 vs 0.3 at full iteration count on the same layout pair
+# -- not more sweep points, and not more fast arms.
+GRT_ADJUSTMENT: 0.2
+GRT_ALLOW_CONGESTION: true
+
+# Measured on OL2: Metal2 as the bottom layer produced 13-20 M initial-route
+# violations and died; Metal1 produced 1.08 M and got to 237 k. Keep Metal1.
+RT_MIN_LAYER: Metal1
+
+# The template already sets DRT_ANTENNA_REPAIR_ITERS 10 / MARGIN 10; repeated
+# here so the intent survives someone editing the template.
+DRT_ANTENNA_REPAIR_ITERS: 10
+DRT_ANTENNA_REPAIR_MARGIN: 10
