@@ -20,7 +20,7 @@ IMG=ghcr.io/efabless/openlane2:2.3.10
 LOG=$D/core_chain.log
 say() { echo "[$(date -u)] $*" | tee -a $LOG; }
 ps_running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null; }
-free_gb() { df -BG --output=avail /home | tail -1 | tr -dc '0-9'; }
+. "$B/gate.sh"   # free_gb + the disk/memory gate, defined once for every chain
 
 probe() {
   docker run --rm --user 0:0 -v /home/ubuntu/grx930_ol2:/work -e FAST_ODB="$1" \
@@ -29,8 +29,12 @@ probe() {
 }
 
 say "CORE_CHAIN_START"
-say "DISK_GB_FREE $(free_gb)"
-if [ "$(free_gb)" -lt 6 ]; then say "ABORT_DISK_LOW"; exit 1; fi
+
+# Disk + memory gate, both defined in gate.sh (sourced above). The DRT arm this
+# chain ends with peaks at 6.4-7.0 GB (measured across the sweep arms), and the
+# historical failure was a 7-hour run that died at "OOM at 60 % iter 0, swap
+# exhausted". Refuse to start rather than discover it hours in.
+gate 8000 core_chain || { say "ABORT_$GATE_REASON"; exit 1; }
 
 # ---- arm CORE: flow to the antennas checkpoint ------------------------------
 docker rm -f ol2_core >/dev/null 2>&1
@@ -66,6 +70,10 @@ say "CORE_UTIL_METRIC $GREP_U"
 
 if echo "$P" | grep -qaE "CORE_UM 304[0-9]"; then
   say "CORE_GATE_PASS (core 3048x4238)"
+  # Re-check memory here, not just at the top: the flow arm above just ran for
+  # over an hour, and this is the arm that actually needs 6-7 GB. MIN_GB 0 --
+  # this arm's disk figure is reported, never a refusal, as before.
+  gate 8000 core_chain_drt 0 || { say "ABORT_$GATE_REASON (DRT arm)"; exit 1; }
   docker rm -f drt_core >/dev/null 2>&1
   # -e must come BEFORE the image name: docker treats everything after the
   # image as the container command, so place-after-image made /bin/sh try to

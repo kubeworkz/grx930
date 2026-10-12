@@ -23,7 +23,7 @@ IMG=ghcr.io/efabless/openlane2:2.3.10
 LOG=$D/both_chain.log
 say() { echo "[$(date -u)] $*" | tee -a $LOG; }
 ps_running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null; }
-free_gb() { df -BG --output=avail /home | tail -1 | tr -dc '0-9'; }
+. "$B/gate.sh"   # free_gb + the disk/memory gate, defined once for every chain
 
 probe() {
   docker run --rm --user 0:0 -v /home/ubuntu/grx930_ol2:/work -e FAST_ODB="$1" \
@@ -53,6 +53,12 @@ wait_flow() { # $1 container name
 }
 
 say "BOTH_CHAIN_START"
+
+# Gate, shared with the other chains (gate.sh): every container this chain starts
+# is a flow leg or a fast DRT, and the DRT legs peak at 6.4-7.0 GB (measured).
+# MIN_GB 0 -- this chain waits for the disk compressor and only *reports* the
+# disk below, so it has never refused on disk and does not start now.
+gate 8000 both_chain 0 || { say "ABORT_$GATE_REASON"; exit 1; }
 
 # ---- newor2 (26Q3 A/B): keep the initial route, then free the box -----------
 # The initial-route curve is the decisive part of that A/B (it already shows
