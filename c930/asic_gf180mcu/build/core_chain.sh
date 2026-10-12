@@ -45,7 +45,13 @@ tail -3 $B/core_flow.log | tee -a $LOG
 
 RUN=$RUNS/slotcore_v1
 if [ ! -d "$RUN" ]; then RUN=$(ls -1dt $RUNS/*/ 2>/dev/null | head -1); fi
-F=$(ls -t $RUN/*-openroad-repairantennas/*.odb 2>/dev/null | head -1)
+# The antennas ODB sits one level deeper than the step dir
+# (41-openroad-repairantennas/1-diodeinsertion/*.odb); the previous
+# $RUN/*-openroad-repairantennas/*.odb glob missed it and the chain reported
+# CORE_NO_CKPT after a run that had in fact completed. Take the newest
+# recursively so a re-run that appends higher ordinals still resolves.
+F=$(find "$RUN" -path '*openroad-repairantennas*' -name '*.odb' \
+      -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
 say "CORE_CKPT $F"
 if [ -z "$F" ]; then say "CORE_NO_CKPT (flow produced no antennas ODB)"; df -h /home | tail -1 | tee -a $LOG; say "CORE_CHAIN_COMPLETE"; exit 0; fi
 
@@ -61,10 +67,13 @@ say "CORE_UTIL_METRIC $GREP_U"
 if echo "$P" | grep -qaE "CORE_UM 304[0-9]"; then
   say "CORE_GATE_PASS (core 3048x4238)"
   docker rm -f drt_core >/dev/null 2>&1
+  # -e must come BEFORE the image name: docker treats everything after the
+  # image as the container command, so place-after-image made /bin/sh try to
+  # run "FAST_TAG=core" as a file (env never reached run_drt.sh).
   docker run -d --name drt_core --user 0:0 -v /home/ubuntu/grx930_ol2:/work \
-    --entrypoint /bin/sh $IMG \
     -e FAST_TAG=core -e FAST_ODB=/work/drt_fast/ckpt/pre_drt_slotcore.odb -e FAST_END_ITER=2 \
     -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 -e FAST_THREADS=8 \
+    --entrypoint /bin/sh $IMG \
     -c "exec bash /work/drt_fast/run_drt.sh" >/dev/null
   say "DRT_CORE_LAUNCHED"
   while [ "$(ps_running drt_core)" = "true" ]; do sleep 60; done

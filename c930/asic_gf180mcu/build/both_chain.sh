@@ -33,10 +33,12 @@ probe() {
 
 run_drt() { # $1 tag  $2 ckpt(in-container)  $3 logfile
   docker rm -f drt_$1 >/dev/null 2>&1
+  # -e before the image, or the flags become the container's command instead
+  # of environment (see the same repair in core_chain.sh).
   docker run -d --name drt_$1 --user 0:0 -v /home/ubuntu/grx930_ol2:/work \
-    --entrypoint /bin/sh $IMG \
     -e FAST_TAG=$1 -e FAST_ODB=$2 -e FAST_END_ITER=2 \
     -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 -e FAST_THREADS=8 \
+    --entrypoint /bin/sh $IMG \
     -c "exec bash /work/drt_fast/run_drt.sh" >/dev/null
   while [ "$(ps_running drt_$1)" = "true" ]; do sleep 60; done
   docker logs drt_$1 > $D/logs/$3 2>&1
@@ -82,7 +84,10 @@ tail -4 $B/core_flow.log | tee -a $LOG
 
 RUN=$RUNS/slotcore_v1
 if [ ! -d "$RUN" ]; then RUN=$(ls -1dt $RUNS/*/ 2>/dev/null | head -1); fi
-F=$(ls -t $RUN/*-openroad-repairantennas/*.odb 2>/dev/null | head -1)
+# The antennas ODB sits one level deeper than the step dir
+# (1-diodeinsertion/); see the same repair in core_chain.sh.
+F=$(find "$RUN" -path '*openroad-repairantennas*' -name '*.odb' \
+      -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
 say "CORE_CKPT $F"
 if [ -n "$F" ]; then
   cp -f "$F" $D/ckpt/pre_drt_slotcore.odb
@@ -109,7 +114,9 @@ say "ARM_GRT03_LAUNCHED (resume v8 from GlobalRouting, GRT_ADJUSTMENT=0.3, stop 
 wait_flow ol2_grt03b
 tail -4 $B/grt03b_flow.log | tee -a $LOG
 
-F2=$(ls -t $V8/*-openroad-repairantennas/*.odb 2>/dev/null | head -1)
+# The antennas ODB sits one level deeper than the step dir (see core_chain.sh).
+F2=$(find "$V8" -path '*openroad-repairantennas*' -name '*.odb' \
+       -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
 say "GRT03_CKPT $F2"
 if [ -n "$F2" ]; then
   cp -f "$F2" $D/ckpt/pre_drt_grt03.odb
