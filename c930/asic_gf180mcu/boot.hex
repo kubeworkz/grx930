@@ -1,0 +1,5 @@
+// Minimal boot ROM: NOP loop (CPU will loop here)
+00000013  // NOP (addi x0, x0, 0)
+00000013  // NOP
+00000013  // NOP
+00000013  // NOP

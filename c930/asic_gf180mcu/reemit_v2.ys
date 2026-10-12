@@ -1,0 +1,12 @@
+# reemit_v2.ys — Fix FF mapping: dfflibmap then re-emit
+read_json build/grx930_test_chip_synth.json
+
+# Map sequential cells to GF180MCU FFs
+dfflibmap -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+
+stat
+
+write_verilog -noattr -noexpr build/grx930_test_chip_synth_v2.v
+write_json build/grx930_test_chip_synth_v2.json
+
+log "REEMIT_V2_COMPLETE"

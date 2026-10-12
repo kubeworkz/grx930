@@ -1,0 +1,5 @@
+# reemit.ys — Read the clean JSON netlist and write pure structural Verilog
+read_json build/grx930_test_chip_synth.json
+stat
+write_verilog -noattr -noexpr build/grx930_test_chip_synth_clean.v
+log "REEMIT_COMPLETE"

@@ -46,3 +46,8 @@ rv64imac/*
 # Vivado journal/log at repo root
 vivado.jou
 vivado.log
+
+# The test-chip boot image is the checked-in firmware build the tapeout boot
+# testbench preloads (../tb/tb_grx930_test_chip.sv); rebuilding needs the
+# RISC-V toolchain, so this one hex is kept in the tree.
+!c930/sw/test_chip_boot.hex

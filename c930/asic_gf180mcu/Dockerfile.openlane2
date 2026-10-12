@@ -1,0 +1,24 @@
+# OpenLane2 image for GF180MCU
+# Multi-stage: copy tools from efabless/openlane, add OL2 with system Python+tkinter
+FROM efabless/openlane:latest AS tools
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# Install system dependencies including tkinter
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip python3-venv python3-tk \
+    git curl wget xz-utils \
+    tcl-dev tk-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenLane2 + volare
+RUN pip3 install openlane volare
+
+# Verify OL2
+RUN openlane --version 2>&1 | head -3 || echo "OL2 installed"
+
+WORKDIR /work

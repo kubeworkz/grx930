@@ -1,0 +1,72 @@
+// Derived from INDEX_WIDTH, matching the controller and memory (see the note
+// in riscv_core_icache_controller.sv): the literals addr[11:5] / addr[63:12]
+// are only correct at INDEX_WIDTH = 7 and alias at every other width.
+`define TAG ADDR_WIDTH-1 : 5+INDEX_WIDTH
+`define ICACHE_INDEX 5 +: INDEX_WIDTH
+`define ICACHE_BLOCK_OFFSET 4:2
+`define ICACHE_BYTE_OFFSET 1:0
+
+module riscv_core_icache_top#(
+    parameter BLOCK_OFFSET_WIDTH = 2,
+    parameter INDEX_WIDTH        = 7,
+    // Default FOLLOWS the split (32-byte lines => 5 low offset bits), so the
+    // common case cannot pass a stale width down to the controller; the
+    // controller still $error's in simulation on an explicitly wrong value.
+    parameter TAG_WIDTH          = ADDR_WIDTH - 5 - INDEX_WIDTH,
+    parameter CORE_DATA_WIDTH    = 32,
+    parameter ADDR_WIDTH         = 64,
+    parameter AXI_DATA_WIDTH     = 256
+) (
+    // Interface with CORE//
+    input logic                         i_clk,
+    input logic                         i_rst_n,
+    input logic [ADDR_WIDTH-1      : 0] i_addr_from_core ,
+    output logic                        o_stall,
+    output logic [ CORE_DATA_WIDTH-1  :  0  ]  o_data_to_core,
+
+    // Interface with AXI Module //
+    output logic [ADDR_WIDTH-1     : 0] o_addr_from_control_to_axi,
+    output logic                        o_mem_req,
+    input  logic                        i_mem_done,
+    input  logic [AXI_DATA_WIDTH-1 : 0] i_block_from_axi,
+
+    // Coherence invalidation (from the shared L2)
+    input  logic                        i_inv_valid,
+    input  logic [ADDR_WIDTH-1     : 0] i_inv_addr,
+    output logic                        o_inv_ack
+);
+//      INTERNAL REGISTERS    //
+logic                         control_to_mem_rd_en;
+logic                         control_to_mem_wr_en;
+logic                         control_to_mem_block_replace;
+logic                         control_to_mem_offset;
+logic [ADDR_WIDTH-1      : 0] control_to_mem_fill_addr;
+//      BLOCK INSTANTIATION   //
+riscv_core_icache_controller #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_controller (
+    .i_clk(i_clk),
+    .i_rst_n(i_rst_n),
+    .i_addr_from_core (i_addr_from_core),
+    .o_stall(o_stall),
+    .o_rd_en(control_to_mem_rd_en),
+    .o_wr_en(control_to_mem_wr_en),
+    .o_block_replace(control_to_mem_block_replace),
+    .o_addr_from_control_to_axi(o_addr_from_control_to_axi),
+    .o_mem_req(o_mem_req),
+    .i_mem_done(i_mem_done),
+    .o_offset(control_to_mem_offset),
+    .o_fill_addr(control_to_mem_fill_addr),
+    .i_inv_valid(i_inv_valid),
+    .i_inv_addr(i_inv_addr),
+    .o_inv_ack(o_inv_ack));
+riscv_core_icache_memory #(.INDEX_WIDTH(INDEX_WIDTH), .TAG_WIDTH(TAG_WIDTH)) icache_memory (
+    .i_clk(i_clk),
+    .i_rst_n(i_rst_n),
+    .i_addr_from_core (i_addr_from_core),
+    .o_data_to_core(o_data_to_core),
+    .i_block_from_axi(i_block_from_axi),
+    .i_rd_en(control_to_mem_rd_en),
+    .i_wr_en(control_to_mem_wr_en),
+    .i_block_replace(control_to_mem_block_replace),
+    .i_offset(control_to_mem_offset),
+    .i_fill_addr(control_to_mem_fill_addr));
+endmodule

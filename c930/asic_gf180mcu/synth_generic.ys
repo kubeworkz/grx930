@@ -1,0 +1,75 @@
+# synth_generic.ys — Generic synthesis for GRX930 test chip (no PDK needed)
+# Produces gate count and area estimates for GF180MCU sizing
+
+# ============================================================
+# Configuration
+# ============================================================
+read_verilog -sv c930/asic_gf180mcu/grx930_test_chip.sv
+
+# RISC-V CPU core (RV64IMAC)
+read_verilog -sv rv64imac/RTL/riscv_core_top.sv
+read_verilog -sv rv64imac/RTL/riscv_core_alu.sv
+read_verilog -sv rv64imac/RTL/riscv_core_alu_decoder.sv
+read_verilog -sv rv64imac/RTL/riscv_core_amo_alu.sv
+read_verilog -sv rv64imac/RTL/riscv_core_booth.sv
+read_verilog -sv rv64imac/RTL/riscv_core_branch_unit.sv
+read_verilog -sv rv64imac/RTL/riscv_core_compressed_decoder.sv
+read_verilog -sv rv64imac/RTL/riscv_core_csr_control_signals.sv
+read_verilog -sv rv64imac/RTL/riscv_core_csr_unit.sv
+read_verilog -sv rv64imac/RTL/riscv_core_hazard_unit.sv
+read_verilog -sv rv64imac/RTL/riscv_core_immextend.sv
+read_verilog -sv rv64imac/RTL/riscv_core_ldextend.sv
+read_verilog -sv rv64imac/RTL/riscv_core_main_decoder.sv
+read_verilog -sv rv64imac/RTL/riscv_core_main_decoder_top.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mul_div.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mul_div_ctrl.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mul_in.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mul_out.sv
+read_verilog -sv rv64imac/RTL/riscv_core_div_in.sv
+read_verilog -sv rv64imac/RTL/riscv_core_div_out.sv
+read_verilog -sv rv64imac/RTL/riscv_core_non_restoring.sv
+read_verilog -sv rv64imac/RTL/riscv_core_pcsrc.sv
+read_verilog -sv rv64imac/RTL/riscv_core_pipe.sv
+read_verilog -sv rv64imac/RTL/riscv_core_rf.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mux2x1.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mux3x1.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mux4x1.sv
+read_verilog -sv rv64imac/RTL/riscv_core_mux_2to1.sv
+read_verilog -sv rv64imac/RTL/riscv_core_64bit_adder.sv
+
+# Caches (tiny 2KB)
+read_verilog -sv rv64imac/RTL/riscv_core_icache_controller.sv
+read_verilog -sv rv64imac/RTL/riscv_core_icache_memory.sv
+read_verilog -sv rv64imac/RTL/riscv_core_icache_top.sv
+read_verilog -sv rv64imac/RTL/riscv_core_dcache_controller.sv
+read_verilog -sv rv64imac/RTL/riscv_core_dcache_memory.sv
+read_verilog -sv rv64imac/RTL/riscv_core_dcache_top.sv
+
+# UART (16550)
+read_verilog -sv c930/rtl/c930_uart.sv
+
+# Boot ROM (with dummy hex file for synthesis)
+read_verilog -sv c930/asic_gf180mcu/bootrom_wrapper.sv
+
+# ============================================================
+# Elaboration
+# ============================================================
+hierarchy -top grx930_test_chip -check
+
+# ============================================================
+# Generic synthesis (no technology mapping)
+# ============================================================
+synth -top grx930_test_chip
+
+# ============================================================
+# Statistics
+# ============================================================
+stat
+
+# ============================================================
+# Output
+# ============================================================
+write_verilog -noattr build/grx930_test_chip_generic.v
+write_json build/grx930_test_chip_generic.json
+
+puts "GENERIC_SYNTHESIS_COMPLETE"
