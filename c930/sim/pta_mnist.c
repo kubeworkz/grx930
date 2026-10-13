@@ -62,6 +62,10 @@
  * engine would, and the rest on the tile.  --gate has the probe measure the
  * last layer against that reference as well.  The network's shape is the
  * build's (-DN_SIDE, -DN_HID, -DN_OUT), and D3's unless a build says another.
+ * --gatefit F sets the last layer's converter range from that reference on
+ * the images that are run, where every other run has it from training images
+ * by a rule written for the class: the smallest step at which the largest the
+ * reference is, is within the share F of the converter's full scale.
  *
  * And the receiver's noise as one laser fixes it (eval --thermalline).  A
  * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
@@ -1996,6 +2000,60 @@ static void adc_setup(const host_net *hn, const mlp *net, const dataset *tr, int
     free(ws);
 }
 
+/*
+ * A range fitted to the gate (eval --gatefit).  adc_setup() sets a converter's
+ * range on training images, to pass all but one sum in ten thousand.  That is
+ * a rule for the class, which a clipped sum seldom moves.  A board that holds
+ * the last layer's raw outputs to a reference defines its full scale from
+ * that reference.
+ *
+ * declared_peak() is the largest a tile's sum of the last layer's declared
+ * reference is over M images, for a network whose other layers all run on the
+ * host, so that the reference is known before any shot is taken.  q is the
+ * weights at the network's own width, from quant_weights(), and bits the
+ * activation bits the tile declares.  It launches nothing.  Returns the peak,
+ * or -1.
+ *
+ * fit_shift() is the smallest shift at which a value is within a share of a
+ * converter's full scale, or -1 if the share leaves the converter no code.
+ * With the whole of it no sum of the reference is past the range: what the
+ * converter then clips is noise, and a clipped sum is nearer its reference
+ * than the sum it was.
+ */
+static int64_t declared_peak(const host_net *hn, const pta_cfg *cfg, gemm_buf *g,
+                             int32_t *const *q, int bits, int M, const int32_t *a0, batch_ws *bw)
+{
+    const int H = hn->hidden, was = host_layers;
+    uint32_t gemm = 0;
+    int64_t peak = 0;
+    long r;
+    int m, o, k, k0;
+    host_layers = H + 1;                /* every layer, the last too: no shot is taken */
+    r = tile_batch(hn, cfg, NULL, NULL, 0, &gemm, g, M, a0, bw);
+    host_layers = was;
+    if (r != 0 || gemm != 0)
+        return -1;
+    for (m = 0; m < M; ++m)
+        for (o = 0; o < N_OUT; ++o)
+            for (k0 = 0; k0 < N_HID; k0 += tile_rows) {
+                int64_t fmt = 0;
+                for (k = k0; k < k0 + tile_rows && k < N_HID; ++k)
+                    fmt += (int64_t)contract_quant(bw->a[H][m * N_HID + k], bits, hn->din) *
+                           q[H][o * N_HID + k];
+                if (fmt < 0)
+                    fmt = -fmt;
+                if (fmt > peak)
+                    peak = fmt;
+            }
+    return peak;
+}
+
+static int fit_shift(int64_t peak, int adc_bits, double share)
+{
+    const int64_t lim = (int64_t)floor(share * (double)(((int64_t)1 << (adc_bits - 1)) - 1));
+    return (lim < 1 || peak < 0) ? -1 : shift_needed(peak, lim);
+}
+
 /* ------------------------------------------------------------------------- */
 
 /* pta_material_scorecard.py's upper reading of a quadrature-biased modulator's
@@ -2275,7 +2333,7 @@ static int cmd_eval(int argc, char **argv)
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
         "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
-        "--host", "--gate", NULL};
+        "--host", "--gate", "--gatefit", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2308,6 +2366,10 @@ static int cmd_eval(int argc, char **argv)
     const int levellayer = atoi(opt(argc, argv, "--levellayer", "0"));
     const int host = atoi(opt(argc, argv, "--host", "0"));
     const int gate = atoi(opt(argc, argv, "--gate", "0"));
+    const char *gatefit = opt(argc, argv, "--gatefit", NULL);
+    const double fit_share = gatefit ? atof(gatefit) : 0.0;
+    int64_t fit_peak = 0;
+    int fit_was = 0;
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
@@ -2407,6 +2469,15 @@ static int cmd_eval(int argc, char **argv)
         return 2;
     }
     host_layers = host;
+    /* A range is fitted to a reference that is known before any shot: every
+     * layer but the last on the host. */
+    if (gatefit && (!gate || host != H || fit_share <= 0.0 || fit_share > 1.0 ||
+                    atoi(opt(argc, argv, "--adcbits", "0")) < 2)) {
+        fprintf(stderr, "pta_mnist: --gatefit is the share of the last converter's full scale its "
+                        "declared reference may take, over 0 and up to 1, and needs --gate, "
+                        "--adcbits and --host %d\n", H);
+        return 2;
+    }
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
@@ -2451,6 +2522,34 @@ static int cmd_eval(int argc, char **argv)
         adc_setup(hn, net, &tr, (int)cfg[0].adc_bits, S);
     for (l = 1; l <= H; ++l)
         cfg[l] = cfg[0];
+    /* The last layer's range, fitted to its declared reference on the images
+     * that are run: a board's golden manifest. */
+    if (gatefit) {
+        const int bits = (cfg[H].impair & PTA_QUANT) ? (int)cfg[H].act_bits : 0;
+        int32_t *fq[MAX_L] = {NULL};
+        for (l = 0; l <= H; ++l)
+            if (!(fq[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t))))
+                return 2;
+        quant_weights(hn, net->wbits, fq);
+        for (base = 0; base < images; base += MAX_M) {
+            const int M = (images - base < MAX_M) ? images - base : MAX_M;
+            int64_t p;
+            for (m = 0; m < M; ++m)
+                for (k = 0; k < N_IN; ++k)
+                    a1[m * N_IN + k] = pixel_operand(te.x[(size_t)(base + m) * N_IN + k], net->din);
+            if ((p = declared_peak(hn, cfg, g, fq, bits, M, a1, bw)) < 0)
+                return 2;
+            if (p > fit_peak)
+                fit_peak = p;
+        }
+        for (l = 0; l <= H; ++l)
+            free(fq[l]);
+        fit_was = S[H];
+        if ((S[H] = fit_shift(fit_peak, (int)cfg[0].adc_bits, fit_share)) < 0) {
+            fprintf(stderr, "pta_mnist: --gatefit leaves the converter no code\n");
+            return 2;
+        }
+    }
     for (l = 0; l <= H; ++l)
         cfg[l].adc_shift = (uint32_t)S[l];
 
@@ -2470,6 +2569,9 @@ static int cmd_eval(int argc, char **argv)
         }
         if (cfg[0].adc_bits != 0)
             adc_setup(hn, net, &tr, 8, S8);
+        /* A fitted converter's noise is in its own LSB: the 8-bit one's of the same range. */
+        if (gatefit && (S8[H] = fit_shift(fit_peak, 8, fit_share)) < 0)
+            return 2;
         for (l = 0; l <= H; ++l) {
             const double lsb = ldexp(1.0, S[l] - S8[l]);     /* this ADC's LSB, in 8-bit LSB */
             if (thermal8 && q88("--thermal8", atof(thermal8) / lsb, 65535, &cfg[l].sigma_th) != 0)
@@ -2579,6 +2681,12 @@ static int cmd_eval(int argc, char **argv)
         }
     }
 
+    /* The range was fitted to the reference the probe then measured, where the
+     * last layer is one tile's sum and the two are the same thing. */
+    if (gatefit && N_HID <= tile_rows && pr.gpeak != (double)fit_peak) {
+        fprintf(stderr, "pta_mnist: --gatefit fitted the range to a reference the probe did not measure\n");
+        return 2;
+    }
     join_ints(s_txt, sizeof s_txt, S, H + 1);
     join_ints(sh_txt, sizeof sh_txt, hn->sh, H);
     printf("din=%d net_wbits=%d net_seed=%d from=%d epochs=%d digital=%.2f impair=0x%02x wbits=%u abits=%u "
@@ -2671,6 +2779,10 @@ static int cmd_eval(int argc, char **argv)
                    "gate8_rmsfs=%.5f gate8_maxfs=%.5f gate8_peak=%.0f gate_ref=%.2f gate_agree=%.2f",
                    pr.gate_bits, pv.gate_rms, pv.gate_rmsfs, pv.gate_maxfs, pv.gate_peak, pv.gate8_rmsfs,
                    pv.gate8_maxfs, pv.gate8_peak, pv.gate_ref, pv.gate_agree);
+        /* And the range, when it was fitted: the share asked, and the shift the
+         * training images' rule had given the last layer. */
+        if (gatefit)
+            printf(" gate_fit=%g gate_was=%d", fit_share, fit_was);
         probe_free(&pr);
         for (l = 0; l <= H; ++l)
             free(pq[l]);
@@ -3366,6 +3478,126 @@ static int cmd_selftest(void)
                "%s\n", IMGS, ok ? "as it should be" : "WRONG", refused ? "refused" : "TAKEN");
         if (!ok || !refused)
             errors += fail("pool does not pool an idx file's images");
+    }
+
+    /* 5e. a range fitted to the gate.  A three-layer network of made-up
+     *     weights on the 128 x 64 tile, which takes its last layer whole, with
+     *     the first two layers on the host.  The largest its declared
+     *     reference is, is the probe's, all at once or a batch at a time, and
+     *     nothing is launched to find it.  The fitted shift is the smallest
+     *     at which that largest is within full scale, and at half of full
+     *     scale within half.  With the format alone and the fitted range no
+     *     sum is past the converter and none is off its reference by more
+     *     than half a step; two steps under it some are, and by more than a
+     *     step.  And a share that leaves the converter no code is refused. */
+    {
+        const int D = 8, H = 2, M = 37, AB = 5, WB = 6, BITS = 8;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        const int64_t top = ((int64_t)1 << (BITS - 1)) - 1;
+        const pta_tile tile = {128, 64, D, ACC_W};
+        host_net hn;
+        gemm_buf *g;
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
+        uint8_t labels[MAX_M];
+        uint64_t r5 = 0x5E5E5Eull;
+        pta_cfg cfg[MAX_L];
+        int64_t peak, first, rest;
+        long sats_fit = -1, sats_under = -1;
+        double worst_fit = -1.0, worst_under = -1.0, probed = -1.0;
+        int i, l, s_fit, s_half, pass, found, fitted, format, refused;
+        pta_device dev;
+        tile_rows = tile.rows;
+        tile_cols = tile.cols;
+        gemm_k = tile_rows * ((N_IN + tile_rows - 1) / tile_rows);
+        gemm_n = tile_cols * ((N_HID + tile_cols - 1) / tile_cols);
+        g = gemm_alloc();
+        pta_device_init(&dev, &tile);
+        host_alloc(&hn, D, H);
+        memset(labels, 0, sizeof labels);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&r5) % (uint64_t)span);
+        }
+        for (l = 0; l < H; ++l) {
+            for (i = 0; i < N_HID; ++i)
+                hn.b[l][i] = (int64_t)(splitmix64(&r5) % (1ull << (2 * D + 6))) - (1ll << (2 * D + 5));
+            hn.sh[l] = D + 3 - l;
+        }
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&r5) % (uint64_t)(1 << (D - 1)));
+        memset(cfg, 0, sizeof cfg);
+        cfg[0].impair   = PTA_QUANT;
+        cfg[0].w_bits   = WB;
+        cfg[0].act_bits = AB;
+        cfg[0].adc_bits = BITS;
+        for (l = 1; l <= H; ++l)
+            cfg[l] = cfg[0];
+        quant_weights(&hn, WB, q);
+        host_layers = H;
+        peak  = declared_peak(&hn, cfg, g, q, AB, M, a1, bw);
+        first = declared_peak(&hn, cfg, g, q, AB, 20, a1, bw);
+        rest  = declared_peak(&hn, cfg, g, q, AB, M - 20, a1 + 20 * N_IN, bw);
+        found = host_layers == H && peak > 0 && first > 0 && rest > 0 && first <= peak && rest <= peak &&
+                (first == peak || rest == peak);
+        s_fit  = fit_shift(peak, BITS, 1.0);
+        s_half = fit_shift(peak, BITS, 0.5);
+        fitted = s_fit >= 2 && round_shift(peak, s_fit) <= top && round_shift(peak, s_fit - 1) > top &&
+                 s_half > s_fit && round_shift(peak, s_half) <= top / 2 &&
+                 round_shift(peak, s_half - 1) > top / 2 && fit_shift(0, BITS, 1.0) == 0;
+        /* the format alone: at the fitted range, and two steps under it */
+        for (pass = 0; fitted && pass < 2; ++pass) {
+            uint32_t gemm = 0;
+            probe p;
+            long r;
+            for (l = 0; l <= H; ++l)
+                cfg[l].adc_shift = (uint32_t)(s_fit - 2 * pass);
+            if (probe_init(&p, M, H) != 0)
+                break;
+            p.gate      = 1;
+            p.gate_bits = AB;
+            host_layers = H;
+            r = tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw);
+            probe_batch(&p, &hn, q, M, a1, bw, labels);
+            if (pass == 0) {
+                sats_fit  = r;
+                worst_fit = p.gworst;
+                probed    = p.gpeak;
+            } else {
+                sats_under  = r;
+                worst_under = p.gworst;
+            }
+            probe_free(&p);
+        }
+        host_layers = 0;
+        format = fitted && sats_fit == 0 && probed == (double)peak && worst_fit <= ldexp(1.0, s_fit - 1) &&
+                 sats_under > 0 && worst_under > ldexp(1.0, s_fit - 2);
+        refused = fit_shift(peak, BITS, 0.001) < 0 && fit_shift(peak, 1, 1.0) < 0 && fit_shift(-1, BITS, 1.0) < 0;
+        printf("selftest: a range fitted to the gate: the largest the declared reference is over %d "
+               "images, all at once or a batch at a time, with nothing launched: %s; the fitted shift, "
+               "%d, is the smallest at which it is within full scale, and %d within half of it: %s; with "
+               "the format alone no sum is past the fitted range, the probe's largest reference is the "
+               "one it was fitted to, and none is off it by more than half a step, where two steps "
+               "under it %ld sums are past the range and one is off by %.1f of that step: %s; a share "
+               "that leaves no code, a converter of one bit and a peak under zero: %s\n",
+               M, found ? "found" : "NOT FOUND", s_fit, s_half, fitted ? "so" : "NOT SO", sats_under,
+               s_fit >= 2 ? worst_under / ldexp(1.0, s_fit - 2) : 0.0, format ? "so" : "NOT SO",
+               refused ? "refused" : "TAKEN");
+        if (!found || !fitted || !format || !refused)
+            errors += fail("a range fitted to the gate is not the smallest that holds its reference");
+        pta_device_free(&dev);
+        host_free(&hn);
+        for (l = 0; l <= H; ++l)
+            free(q[l]);
+        gemm_free(g);
+        free(bw);
+        free(a1);
+        tile_rows = ROWS;
+        tile_cols = COLS;
+        gemm_k = MAX_K;
+        gemm_n = MAX_N;
     }
 
     /* The tests from here on are written to D3's shape: its layers' sizes, its
@@ -4732,6 +4964,9 @@ static void help(void)
            "                  format, as rms over the reference's rms, over its largest value, and\n"
            "                  the largest error over that value; and against the operands as given.\n"
            "                  And how often that reference is right, and the tile gives its class\n"
+           "  --gatefit F     with --gate and every layer but the last on the host: the last converter's\n"
+           "                  range from that reference on the images run, the smallest step at which\n"
+           "                  the largest it is, is within F of full scale (1 fits it; 0.5 leaves a bit)\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"

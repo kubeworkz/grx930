@@ -155,6 +155,20 @@ outputs is 7.2 to 8.4% of that largest, and is within the demonstration's 2.0%
 in no run. For the reference networks it gives its declared reference's class
 on 99.49, 96.85 and 99.10% of the first thousand images: at the demonstration's
 99.5% on MNIST, where 13 runs of 25 pass, and under it on the other two.
+**And the fourteenth, the same day** (§5, at its end): the same layer with a
+range that clips nothing. `eval --gatefit F` sets the last layer's converter
+range from its declared reference on the images that are run, where every other
+run has it from training images, by a rule written for the class. Fitted, no
+sum is past the range in any run, with the noise or without it. The format
+alone is then within half a step of its reference everywhere, and within the
+demonstration's 2.0% in every run. As budgeted the largest error is the noise's
+alone: 7.2 to 8.4% of the largest the reference is, and 9.7% at the most where
+it was 24.1%. It is still within 2.0% in no run. Fitting moves five networks of
+thirty by a bit, and costs each a fifth more rms error. A bit of range to spare
+costs every network a quarter more again, and the reference networks 0.10, 0.94
+and 0.17 of a point. And the same tile then reads better as a share of its
+converter's full scale: 20, 45 and 150 runs of 150 within 1.0%, as the range
+grows.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -4984,8 +4998,8 @@ is 2.2 to 24.1% of the largest the reference is, from 3 to 77 sums of 160,000.
 It is what the reference is past the converter's last code by, to the rounding.
 No run has more than 0.18% of its sums past the range. That rule was written
 for the class, which a clipped sum seldom moves. A gate on the largest error
-needs a range that clips nothing, and a step that is larger for it. That was
-not run.
+needs a range that clips nothing, and a step that is larger for it. ~~That was
+not run.~~ *Run the same day: the section after this one.*
 
 **The class, as the gate has it.** How often the class the tile gives is the
 class its declared reference gives, percent, a mean over a row's runs; and in
@@ -5121,6 +5135,296 @@ it, and are not in these figures. Int8 weights. A range set for the gate: the
 converter's is the one this harness has always set, for the class. A ruling on
 what full scale is: that is grxgpu's, and three readings of it are priced. Five
 draws, of the same five networks. Version 1, or another tile.
+
+### The first board's last layer, with a range that clips nothing
+
+*Added 2026-10-13.* `SHAPE=chain sim/pta_mnist.sh DIR WORK chainfit`, and
+`pta_mnist eval --gatefit F`. Reported, not gated.
+
+**Why.** The section before found the largest error of the first board's last
+layer decided, in five networks of thirty, by the converter's range and not by
+noise. This harness sets a range on a thousand training images, to pass all but
+one sum in ten thousand: a rule for the class, which a clipped sum seldom
+moves. The charter's demonstration holds the layer's raw outputs to a
+reference, and says to "define full scale from the frozen golden manifest".
+That was not run. This is it.
+
+**The option.** `--gatefit F`, with `--gate`, `--adcbits` and every layer but
+the last on the host. With those layers on the host the last layer's declared
+reference is known before a shot is taken. The host works it out over the
+images that are to be run, takes the largest a tile's sum of it is, and gives
+the last converter the smallest shift at which that largest is within the share
+F of its full scale: of 127 codes for an 8-bit converter with F of 1, which
+fits it, and of 63 with F of 0.5, which leaves a bit to spare. A run prints
+`gate_fit`, the share, and `gate_was`, the shift training's rule had given; `S`
+and `S8` have the fitted one. After the run it holds the probe's largest
+reference to the one it fitted to, where the last layer is one tile's sum and
+the two are the same thing, and stops if they differ.
+
+**What a range costs, as it is modelled.** A noise figure in LSB names its
+converter. grxcp's version 2 has the receiver's noise at 0.25 of an LSB of an
+8-bit converter and the light at 30 photons an LSB. A converter's range is
+hardware, and a sum is brought inside it by turning the light or the gain down.
+So the fitted converter's noise is in its own LSB: `S8`, which names the LSB
+the noise is in, is fitted with `S`. With a step twice as large the rounding
+and the receiver's noise are twice as large in a sum's own units and the shot
+noise root two times; the programming error and the crosstalk, which go with
+the sum, are what they were. A converter with a bit more, at the step it had,
+is the other way to buy range, and is not this.
+
+Like the probe it is on the host's side of the line: §4, PTM-C and the RTL are
+untouched, and a line printed without it is what it was. The self-test's 40
+lines are as they were, with one more, and a build of the chain's shape prints
+26 lines. It refuses a share of nothing, a share over all of full scale and one
+that leaves the converter no code, and refuses to run without the gate's
+figures, without a converter, or with any layer but the last on the tile: 7
+refusals, each tried. And with the script and the binary as they now are,
+`refcomb`'s and `chain`'s checks and tables alone, on the lines their own
+sweeps wrote for MNIST, say yes and print what those sweeps printed.
+
+The self-test puts a three-layer network of made-up weights on the 128 × 64
+tile, which takes its last layer whole, with the first two layers on the host.
+The largest its declared reference is over 37 images is found all at once or a
+batch at a time, with nothing launched, and is the probe's. The fitted shift,
+11, is the smallest at which it is within full scale, and 12 within half of it.
+With the format alone no sum is past the fitted range and none is off its
+reference by more than half a step; two steps under it 151 sums are, and one by
+141 of that step. 17 errors planted in that code one at a time were each built
+at both shapes, and each fails the self-test at both.
+
+The option's code inside `cmd_eval` is reached by no self-test, so it is tested
+through the mode. 11 errors planted in it one at a time were each built into
+the harness and the mode run with it, as written, on 400 images and on 100.
+Each fails: 8 at the mode's check, and 3 where the run stops itself because the
+probe's reference is not the one the range was fitted to.
+
+**What it runs.** The fourteenth mode, in `chain`'s work directories and on its
+networks, tile and draws. Twelve rows on each of five draws:
+
+| Row | What it is |
+|---|---|
+| format only; as budgeted | `chain`'s two rows, with the range training's rule gives: its own runs |
+| each of them, fitted | With `--gatefit 1`: the smallest step at which the largest the declared reference is, is within the converter's 127 codes |
+| each of them, a bit spare | With `--gatefit 0.5`: within half of them, which is one bit of headroom over fitted |
+| each of those six, a thousand | The same on the test set's first thousand images, each fitted to those thousand |
+
+A fitted row is read over its own row with training's range, and a row with a
+bit spare over the fitted one, draw for draw. That is 600 evaluations a data
+set. The rows with training's range are `chain`'s own runs, and where a
+directory has what `chain` wrote the mode holds each to that line, byte for
+byte: 200 a data set, all the same.
+
+It was run twice, on 2026-10-13. The first run, at 13:39 UTC and 7.9 minutes
+for the three data sets side by side, wrote its 1,800 lines and stopped at the
+mode's own check, which was wrong: it held the format alone, fitted, to getting
+right what the format alone gets right with training's range, where a fitted
+step that moved rounds differently. The check was put right, to hold a format
+row to its own row's first draw, and the mode run again at 13:55 UTC, 18.4
+minutes on a machine that was doing other work. Every line of the first run is
+the second's, byte for byte.
+
+The mode checks every network and every run against its place, as `chain` does
+its own. A run's name says its draw, whether it is the format alone or the tile
+as budgeted, whether its range is training's, fitted or with a bit spare, and
+whether it is of a thousand images or of all, which have to be what it was
+asked and what its line printed. A run with training's range says nothing of a
+fit. A fitted run says the share it was asked and the shift training's rule had
+given, which has to be the one the format alone of the first draw has. Its last
+shift has to be the smallest at which the largest its declared reference is, is
+within that share of 127 codes, worked out again from the line, and has to be
+its 8-bit shift too. That largest has to be the one the row with training's
+range has, since a range does not move a reference. The format alone, fitted or
+with a bit spare, may have no sum past its range. A fitted run whose shift is
+the one it had has to be the run with training's range of its draw, figure for
+figure. And a run with a bit spare has to have a larger shift than the fitted
+run of its draw.
+
+149 errors planted one at a time each fail: 72 in a training's line or a run's
+line, against the check with nothing run again, one of them a row with
+training's range that is not the line `chain` wrote; 30 in the script, each run
+in a directory of its own on 400 images and on 100; and 47 in the tables' own
+code, which the check does not see and which each have to move a table.
+
+**Fitted, no sum is past the range, with the noise or without it.** Not one, in
+any of the 600 fitted runs, where 70 of the same 600 with training's range had
+one:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Networks of five whose step is larger, fitted | 0 | 1 | 0 | 2 | 2 | 0 |
+| on the first thousand images | 0 | 0 | 0 | 1 | 1 | 0 |
+| Training's range, as budgeted: the most sums past it in a run, of 160,000 | 0 | 27 | 0 | 161 | 52 | 0 |
+| Fitted | 0 | 0 | 0 | 0 | 0 | 0 |
+| A bit spare | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Fitting moves the step of 5 networks of 30 on 10,000 images and of 2 on the
+first thousand, by one bit each, and makes none smaller. They are the networks
+whose reference reached past training's range. The others' fitted runs are the
+runs they were. With a bit spare every network has one bit more than fitted.
+That the noise pushes no sum past a fitted range was not expected: the largest
+sums are few, and 0.97 of full scale at the most.
+
+**The format alone then meets the 2.0% in every run.** Its largest error is
+0.40 to 0.77% of the largest the reference is, where it was as much as 24.05%:
+half a step of a converter at the most. All 300 runs are within 2.0%, where 270
+were.
+
+**As budgeted the largest error is then the noise's alone, and is still not
+within 2.0%.** Percent of the largest the reference is, on 10,000 images unless
+it says:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Training's range: a mean over the runs | 8.44 | 8.02 | 7.20 | 11.53 | 8.60 | 7.44 |
+| the most in any run | 9.70 | 8.97 | 8.19 | 24.05 | 11.78 | 8.59 |
+| Fitted: a mean over the runs | 8.44 | 7.95 | 7.20 | 7.92 | 8.33 | 7.44 |
+| the most in any run | 9.70 | 8.97 | 8.19 | 8.95 | 9.64 | 8.59 |
+| A bit spare: a mean over the runs | 11.16 | 10.23 | 9.33 | 10.55 | 11.02 | 9.63 |
+| the most in any run | 13.38 | 12.70 | 10.57 | 11.84 | 13.89 | 11.40 |
+| Fitted, the first thousand images: a mean | 8.42 | 7.69 | 7.18 | 7.60 | 7.93 | 7.16 |
+| the most | 9.72 | 9.97 | 8.42 | 9.40 | 10.16 | 8.59 |
+| The format alone, fitted: the most in any run | 0.67 | 0.71 | 0.48 | 0.70 | 0.76 | 0.51 |
+
+Fitted, its mean over a set's runs is 7.2 to 8.4%, where it was 7.2 to 11.5%,
+and the most in any run 9.7%, where it was 24.1%. In the run's own rms errors
+it is 4.9 to 5.8, where it was 5.0 to 9.5: within an rms of where the largest
+of 160,000 figures with Gaussian noise on them sits, on every set. No run of
+the 300 as budgeted is within 2.0%, and the least is 6.1%.
+
+**What it costs is a fifth more error, for the networks it moves.** A row's rms
+error against its declared format, as budgeted on 10,000 images:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Training's range: rms, % of the reference's rms | 4.81 | 4.46 | 4.54 | 4.67 | 4.28 | 4.18 |
+| Fitted | 4.81 | 4.64 | 4.54 | 5.05 | 4.61 | 4.18 |
+| A bit spare | 6.05 | 5.75 | 5.75 | 6.75 | 6.05 | 5.23 |
+| Training's range: in steps of its own converter | 1.45 | 1.83 | 1.44 | 1.43 | 1.55 | 1.60 |
+| Fitted | 1.45 | 1.67 | 1.44 | 1.15 | 1.24 | 1.60 |
+| A bit spare | 0.91 | 1.03 | 0.91 | 0.77 | 0.82 | 1.00 |
+| Training's range: % of its converter's full scale | 1.14 | 1.44 | 1.13 | 1.13 | 1.22 | 1.26 |
+| Fitted | 1.14 | 1.32 | 1.13 | 0.91 | 0.98 | 1.26 |
+| A bit spare | 0.72 | 0.81 | 0.72 | 0.61 | 0.64 | 0.79 |
+
+A network whose step grew by a bit has 1.20 to 1.24 times the rms error it had,
+in the sum's own units: its error against one reference with the larger step,
+over its error with the smaller, draw for draw. So a set's rms goes from 4.46
+to 4.64% of the reference's rms for MNIST's reference networks, of which one
+moves; from 4.67 to 5.05% for Fashion-MNIST's, two; and from 4.28 to 4.61% for
+the inverted set's networks trained before, two. The other three sets of five
+are what they were.
+
+**A bit spare costs a quarter more again, and every network pays it.** With one
+more bit of range than fits, a network has 1.21 to 1.38 times its fitted rms
+error, 1.28 in the mean of the thirty. The rms is then 5.2 to 6.8% of the
+reference's rms, and the largest error 9.3 to 11.2% of the largest the
+reference is.
+
+**And as a share of full scale it reads better.** The same error is 1.43 to
+1.83 steps of the converter with training's range, 1.15 to 1.67 fitted and 0.77
+to 1.03 with a bit spare, each in the steps of the converter the row has. Of
+the 150 runs as budgeted, 20, 45 and 150 are within 1.0% of the converter's
+full scale, and 0, 0 and 0 within 1.0% of the reference's rms. A bound that is
+a share of full scale, or a number of steps, is met by declaring a larger full
+scale, while the tile gets worse.
+
+**The class.** How often the class the tile gives is the class its declared
+reference gives, percent, and in brackets the runs of 25 at 99.5% or more; on
+10,000 images unless it says:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Training's range, as budgeted | 99.40 (2) | 99.59 (23) | 95.92 (0) | 96.78 (0) | 98.86 (0) | 99.23 (0) |
+| Fitted | 99.40 (2) | 99.55 (20) | 95.92 (0) | 96.20 (0) | 98.66 (0) | 99.23 (0) |
+| A bit spare | 98.94 (0) | 99.26 (1) | 93.18 (0) | 93.20 (0) | 97.73 (0) | 98.83 (0) |
+| Training's range, the first thousand images | 99.25 (6) | 99.49 (13) | 96.01 (0) | 96.85 (0) | 98.80 (2) | 99.10 (1) |
+| Fitted | 99.25 (6) | 99.49 (13) | 96.01 (0) | 96.60 (0) | 98.65 (2) | 99.10 (1) |
+| A bit spare | 98.73 (0) | 99.22 (3) | 93.27 (0) | 94.11 (0) | 97.69 (0) | 98.57 (0) |
+| Training's range, the format alone | 99.74 (25) | 99.85 (25) | 98.16 (0) | 98.49 (0) | 99.54 (15) | 99.73 (25) |
+| Fitted | 99.74 (25) | 99.81 (25) | 98.16 (0) | 97.97 (0) | 99.36 (5) | 99.73 (25) |
+| A bit spare | 99.38 (5) | 99.59 (20) | 95.70 (0) | 95.31 (0) | 98.54 (0) | 99.43 (10) |
+
+As budgeted and fitted the reference networks give that class on 99.55, 96.20
+and 99.23% of 10,000 images, where they gave it on 99.59, 96.78 and 99.23%. On
+the first thousand it is 99.49, 96.60 and 99.10%, with 13, 0 and 1 runs of 25
+at 99.5%: on MNIST and on the inverted set no reference network moves there,
+and those are the runs they were. With a bit spare it is 99.26, 93.20 and
+98.83% of 10,000, and 3, 0 and 0 runs on the first thousand. The format alone
+with a bit spare is at 99.59, 95.31 and 99.43%: a converter that rounds twice
+as coarsely moves the class by itself.
+
+**In points of accuracy.** What a row adds over the row it is read over, in
+points lost, with what five networks put outside chance at one in twenty in
+bold:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| With training's range, as budgeted, % | 96.79 | 96.97 | 82.85 | 83.47 | 93.82 | 95.19 |
+| Fitted adds | 0.00 ± 0.00 | 0.02 ± 0.02 | 0.00 ± 0.00 | 0.12 ± 0.07 | 0.08 ± 0.06 | 0.00 ± 0.00 |
+| A bit spare adds, over fitted | **0.18 ± 0.05** | 0.10 ± 0.04 | **0.75 ± 0.13** | **0.94 ± 0.12** | **0.44 ± 0.11** | **0.17 ± 0.02** |
+| The format alone: fitted adds | 0.00 ± 0.00 | 0.01 ± 0.01 | 0.00 ± 0.00 | 0.01 ± 0.02 | 0.06 ± 0.04 | 0.00 ± 0.00 |
+| a bit spare adds, over fitted | 0.11 ± 0.05 | 0.05 ± 0.02 | 0.46 ± 0.20 | **0.57 ± 0.18** | 0.21 ± 0.14 | 0.02 ± 0.05 |
+
+Fitting loses the reference networks 0.02 ± 0.02, 0.12 ± 0.07 and 0.00 ± 0.00,
+clear on none. A bit spare loses them 0.10 ± 0.04, 0.94 ± 0.12 and 0.17 ± 0.02
+more: clear on Fashion-MNIST and on the inverted set.
+
+**What was predicted.** Nine things, written on 2026-10-13 at 13:38 UTC, when
+the option, the mode and their self-tests existed and the option had run no
+network. All are for the reference networks. Four were right as written.
+
+1. That fitted, the step grows for 5 networks of 30 on 10,000 images and for 2
+   on the first thousand, by a bit each, and shrinks for none; and that with a
+   bit spare every step is one bit more than fitted. Right.
+
+2. That the format alone, fitted, has a largest error of 0.4 to 0.85% in every
+   one of its 150 runs, all within 2.0% where 125 were, and 90 to 100 runs
+   within 1.0% of the reference's rms where 120 were. Right: 0.40 to 0.76%, and
+   95 runs.
+
+3. That a step a bit larger costs 1.3 to 1.5 times in rms, so that fitted the
+   rms is 4.6 to 5.0, 5.1 to 5.6 and 4.18% of the reference's rms, and with a
+   bit spare 6.3 to 7.1, 7.0 to 8.0 and 5.6 to 6.2%. Wrong: it costs 1.20 to
+   1.24 times, and the rms is 4.64, 5.05 and 4.18 fitted and 5.75, 6.75 and
+   5.23 with a bit spare. The shot noise was taken for more of the error than
+   it is.
+
+4. That the runs of 150 within 1.0% of the converter's full scale are 20 with
+   training's range, 38 to 46 fitted and 135 to 150 with a bit spare, and that
+   none is within 1.0% of the reference's rms. Right: 20, 45 and 150, and none.
+
+5. That as budgeted and fitted the largest error is 7.3 to 9.0% of the largest
+   the reference is on every set and kind, under 12.5% in every run, and within
+   2.0% in none. Wrong, by one set's mean: Fashion-MNIST's networks trained
+   before are at 7.20%, which no fit moved and `chain` had already printed. The
+   most in any run is 9.70%, and none is within 2.0%.
+
+6. That as budgeted and fitted 5 to 40 runs of 150 still have a sum past the
+   range, for the noise, and with a bit spare none. Wrong: fitted, none has
+   one.
+
+7. That fitted, the class is the declared reference's on 99.52 to 99.59, 96.1
+   to 96.6 and 99.23% of 10,000 images, and on the first thousand on 99.49%
+   with 13 runs at 99.5%, 96.5 to 96.85%, and 99.10% with 1. Right: 99.55,
+   96.20 and 99.23, and 99.49, 96.60 and 99.10.
+
+8. That with a bit spare the class is the declared reference's on 99.33 to
+   99.46, 94.6 to 95.5 and 98.82 to 98.97% of 10,000 images, with 3 to 9 runs
+   of 25 at 99.5% on MNIST's first thousand. Wrong: 99.26, 93.20 and 98.83.
+   Fashion-MNIST is a point and a half under what was written.
+
+9. That fitting adds 0.00 to 0.03, 0.02 to 0.15 and nothing in points of
+   accuracy, clear on none, and a bit spare 0.00 to 0.06, 0.08 to 0.30 and 0.00
+   to 0.08 more, clear on Fashion-MNIST alone. Right of fitting. Wrong of a bit
+   spare: 0.10, 0.94 and 0.17, three times what was written on Fashion-MNIST,
+   and clear on the inverted set too.
+
+**What this is not.** Everything the section before says of itself: a stand-in
+classifier, in a model, with the chain's other engines taken as exact and no
+source lit. A range a board could set without its golden manifest: this one is
+fitted to the very images it is then run on. A converter with more bits. A
+remedy for the largest error, which is the noise's and is where it was. Five
+draws, of the same five networks.
 
 ---
 
