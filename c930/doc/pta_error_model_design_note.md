@@ -140,6 +140,21 @@ raised by. On the inverted set it is the rail in the first layer: 0.07 ±
 draw, from 31 of that layer's 65,000 weights. The read and the round leave
 nothing there. All three at once leave 0.04 ± 0.03, half of the 0.08 ± 0.04
 the comb has when it is corrected on the tile, and neither is clear.
+**And the thirteenth, 2026-10-13** (§5, at its end): the last layer of the
+first board's classifier. grxcp's B18 made the first development board the
+GRXGPU charter's, whose first demonstration runs a 64-64-64-16 classifier with
+its last layer on the PTA. It holds that layer to a raw error against a
+reference in its declared format, and the chain to that reference's class.
+`eval --host N` runs a network's first layers on the host, exactly, and `--gate
+1` measures the last against that reference. The network's shape is a build's.
+A stand-in for the classifier, ours and not grxgpu's, was trained on the three
+data sets pooled to 8 × 8. As budgeted the tile is off its declared format by
+1.43 to 1.83 steps of its converter, rms: 4.2 to 4.8% of the reference's rms
+and 1.3 to 1.7% of the largest the reference is. Its largest error of 16,000
+outputs is 7.2 to 8.4% of that largest, and is within the demonstration's 2.0%
+in no run. For the reference networks it gives its declared reference's class
+on 99.49, 96.85 and 99.10% of the first thousand images: at the demonstration's
+99.5% on MNIST, where 13 runs of 25 pass, and under it on the other two.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -4759,6 +4774,353 @@ written, and the parts are told apart for a still source only. What the
 tile adds when the weights are rewritten on it. A level other than 20%, or
 an interval other than six minutes. Five draws, of the same five networks.
 Version 1, or another tile.
+
+### The first board's last layer
+
+*Added 2026-10-13.* `SHAPE=chain sim/pta_mnist.sh DIR WORK chain`, and
+`pta_mnist eval --host N --gate 1` and `pta_mnist pool`. Reported, not gated.
+
+**Why.** grxcp's B18 made the first development board the GRXGPU charter's
+modular carrier. Its first demonstration runs one classifier, 64-64-64-16, on
+three engines: the first layer on this core's NPU, the second on the G100, and
+the third, 64 inputs to 16 outputs, on the PTA, with the CPU converting between
+them. Its Gate F holds the PTA's raw outputs to "normalized RMS error ≤ 1.0%
+and maximum absolute error ≤ 2.0% of the reference full-scale output" against
+"its declared-format reference", and the final class to that reference's on
+99.5% of 1,000 vectors. Nothing said what the tile does on those terms. Every
+figure this note had was of D3, 784-100-10 with both layers on the tile, in
+points of accuracy lost. And the demonstration does not say what its rms is
+divided by.
+
+**A stand-in.** Nobody has that classifier yet. What is run here has its shape
+and is ours, not grxgpu's: trained by this harness on the three data sets it
+already uses, each image pooled from 28 × 28 to 8 × 8, which is 64 inputs. It
+has 16 outputs, of which ten are ever a label. Its weights are 6 bits on an
+8-bit operand grid, as every network here has them, where the demonstration's
+are int8. Every figure below moves with the network, as the three data sets
+show.
+
+**The shape is a build's.** `-DN_SIDE`, `-DN_HID` and `-DN_OUT` set the images'
+side, the hidden layers' width and the outputs. D3's are the default, and
+everything this note quotes before this section was run on it. A network's file
+is as long as its shape makes it, and a build of another shape refuses it for
+its length. `SHAPE=chain` has the script build with 8, 64 and 16 and gives a
+new work directory its images pooled: `pta_mnist pool IN OUT` cuts the middle
+24 × 24 of each image into 64 blocks of nine and takes each block's mean, to
+the nearest. Such a directory is marked, runs `chain` and nothing else, and
+`chain` runs in no other.
+
+**The options.** `--host N` runs a network's first N layers on the host and the
+rest on the tile. A host layer's sums are the exact product of its operands as
+they are and its weights as its own quantiser has them, with no shot, no
+converter and no GEMM launched: what a digital engine gives. It is refused with
+a light source, `--thermalline`, `--hidshift` or `--w1gain`, which are written
+for a network that is all on the tile. `--gate 1`, with `--probe`, measures the
+last layer against a second reference, in its declared format: the exact
+product of the activations at the tile's own bits and the weights as the
+network has them. A run prints `gate_bits`; `gate_rms`, its rms error over that
+reference's rms; `gate_rmsfs`, the same over the largest that reference is,
+`gate_peak`; `gate_maxfs`, its largest error over that largest; `gate8_rmsfs`,
+`gate8_maxfs` and `gate8_peak`, the last three against the operands as they
+were given, where the probe's `e3` is already the rms over the rms; `gate_ref`,
+how often the declared reference is right; and `gate_agree`, how often the
+class the tile gives is the class that reference gives, where `agree` is
+against the host's.
+
+Like the probe they are on the host's side of the line: §4, PTM-C and the RTL
+are untouched, and a line printed without them is what it was. The self-test's
+37 lines are as they were, with three more. A build of another shape runs the
+tests that are of any shape and says in a line that it has not run the rest,
+which are written to D3's layers, its file's length and tiles chosen for it: 25
+lines in all. And with the script and the binary as they now are, `refcomb`'s
+check and its tables alone, on the lines its own sweep wrote for MNIST, say yes
+and print the 97 lines that sweep printed.
+
+The self-test runs a three-layer network of made-up weights with none, the
+first and the first two of its layers on the host, with the quantisers and
+without, 37 images each: every sum is the network's as it was asked for, only
+the tile's layers are launched, and a programming error reaches its own layer
+and no layer the host runs. For the gate's figures: with nothing impaired there
+is no error against either reference; with the quantisers on and no converter
+the tile is its declared format exactly and is off the operands as given; and
+with a programming error as well the figures are the ones worked out there from
+the sums, 0.0125 of the declared reference's rms, 0.0060 and at the most 0.0114
+of its largest. For the class, the network's outputs are levelled so that an
+error moves it: with activations of 2 bits the tile gives its declared
+reference's class on all 37 images where that reference and the host part on
+all 37, and with a programming error of 32 LSB the tile and its reference part
+on 27. And `pool`: two made-up images to 8 × 8, to 14 × 14 and to 28 × 28, with
+the margin not counted, and sides and files it cannot pool refused.
+
+65 errors planted in that code one at a time were each built at both shapes. 63
+fail the self-test where they have to: 61 at both shapes, and the two that are
+of one shape, at theirs. The other two each fail at one shape and pass at the
+other. The largest error taken with its sign passes at the chain's shape, where
+that error is above zero and the same either way. And the declared reference
+counted right where the tile is right passes at D3's, where no image of the 37
+tells the two apart.
+
+**What it runs.** The thirteenth mode, on a network of its own shape. Five
+seeds, and two kinds as before: 6-bit weights from that seed's 8-bit network as
+the plan's were trained, and the reference recipe, eight epochs with noise of
+10% on all three layers' sums. Version 2 on the 128 × 64 tile, with `--host 2
+--probe 1 --gate 1`: the first two layers on the host and the last on the tile,
+which is one launch of sixteen sums an image. Six rows on each of five draws:
+
+| Row | What it is |
+|---|---|
+| format only | The tile's declared format and nothing else: `--impair quant --abits 6 --adcbits 8` |
+| as budgeted | Version 2, every row of its budget on |
+| cycle | That, aged six minutes, calibrated with sixteen probes and its trims written, and aged six minutes again, with `--trimstep 1` |
+| each of them, a thousand | The same on the test set's first thousand images, `--images 1000` |
+
+No source is lit: the harness lights whole networks, and a layer the host runs
+has no light. The tile as budgeted is read over the format alone of its draw,
+and a cycle over the tile as budgeted. That is 300 evaluations a data set. The
+three ran side by side on four jobs each in 4.4 minutes, on 2026-10-13 at 02:55
+UTC. It was the second run: the first, on 2026-10-11 at 17:07 UTC, was before
+`gate_ref` and `gate_agree` existed, and all 900 of its lines are the second's
+but for those two fields.
+
+The mode checks every network and every run against its place, as the twelve
+before it do. A network has two hidden layers, 6-bit weights and its seed, and
+came from that seed's 8-bit one; a reference was trained for eight epochs with
+the noise it was asked on all three layers. A run's name says its draw, whether
+it is the format alone, the tile as budgeted or a cycle, and whether it is of a
+thousand images or of all, which have to be what it was asked and what its line
+printed. Every run has its first two layers on the host and the last on the
+tile: the first two layers' own error is nothing and the last's is something,
+its sums are sixteen an image, and no more than one in a hundred of them is
+past the converter's range. It has the gate's figures, with no rms over a
+largest value past the largest error over it, and a declared reference that is
+right as often as in the format alone of the first draw, since no draw moves
+it. The format alone has the quantisers and nothing else, and on every draw
+gets right what it gets right on the first.
+
+206 errors planted one at a time each fail: 98 in a training's line or a run's
+line, against the check with nothing run again; 45 in the script, each run in a
+directory of its own on 400 images and on 100; and 63 in the tables' own code,
+which the check does not see and which each have to move a table.
+
+**In steps of the converter the tile is a step and a half off its declared
+format.** A row's rms error against its declared format, a mean over its 25
+runs, on 10,000 images unless it says:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone: rms, % of the reference's rms | 0.96 | 0.71 | 0.91 | 1.04 | 0.85 | 0.76 |
+| As budgeted | 4.81 | 4.46 | 4.54 | 4.67 | 4.28 | 4.18 |
+| A cycle | 4.84 | 4.50 | 4.55 | 4.69 | 4.33 | 4.23 |
+| As budgeted: % of the largest the reference is | 1.67 | 1.57 | 1.28 | 1.27 | 1.47 | 1.48 |
+| As budgeted: in steps of the converter | 1.45 | 1.83 | 1.44 | 1.43 | 1.55 | 1.60 |
+| As budgeted: % of the converter's full scale | 1.14 | 1.44 | 1.13 | 1.13 | 1.22 | 1.26 |
+| As budgeted, the first thousand images: % of the reference's rms | 4.87 | 4.52 | 4.54 | 4.67 | 4.34 | 4.24 |
+| % of the largest the reference is | 1.79 | 1.72 | 1.42 | 1.42 | 1.59 | 1.54 |
+| % of the converter's full scale | 1.11 | 1.40 | 1.13 | 1.12 | 1.19 | 1.22 |
+
+As budgeted that is 1.43 to 1.83 steps, and 1.43 to 1.84 at the end of a cycle,
+which is never under the tile as budgeted and never more than 0.02 of a step
+over it. The format alone is 0.289 to 0.307 of a step, which is a converter's
+rounding, 0.289, and more only where a sum is past the range. The steps are
+grxcp's arithmetic on these lines (`docs/designs/pta_board_chain.py`):
+`gate_rmsfs` times `gate_peak`, over two to the last layer's shift.
+
+**What that is in percent is what it is divided by.** 4.2 to 4.8% of the
+reference's rms, 1.3 to 1.7% of the largest the reference is, 1.1 to 1.4% of
+the converter's full scale of 127 steps, and 0.56 to 0.72% of its whole span.
+The demonstration's 1.0% is under three of those and over the fourth. Of the
+150 runs as budgeted, 0, 0, 20 and 150 are within 1.0%; of the 150 on the first
+thousand images, 0, 0, 25 and 150. The 20 are four networks whose converter has
+the larger step, which the same error is fewer steps of.
+
+**The largest error is within 2.0% on none of them.** Against the declared
+format, percent of the largest the reference is:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone: a mean over the runs | 0.58 | 2.14 | 0.45 | 7.22 | 3.16 | 0.47 |
+| the most in any run | 0.67 | 8.88 | 0.48 | 24.05 | 11.78 | 0.51 |
+| As budgeted: a mean | 8.44 | 8.02 | 7.20 | 11.53 | 8.60 | 7.44 |
+| the most | 9.70 | 8.97 | 8.19 | 24.05 | 11.78 | 8.59 |
+| in the row's own rms errors | 5.1 | 5.1 | 5.6 | 9.5 | 5.9 | 5.0 |
+| As budgeted, the first thousand images: a mean | 8.42 | 7.69 | 7.18 | 7.53 | 7.47 | 7.16 |
+| the most | 9.72 | 9.97 | 8.42 | 9.40 | 9.98 | 8.59 |
+| in the row's own rms errors | 4.7 | 4.5 | 5.1 | 5.3 | 4.7 | 4.6 |
+| % of the converter's full scale, a mean | 5.22 | 6.24 | 5.72 | 5.96 | 5.51 | 5.67 |
+
+As budgeted its mean is 7.2 to 11.5% on 10,000 images and 7.2 to 8.4% on the
+first thousand; 5.2 to 6.2% of the converter's full scale there, and 2.6 to
+3.1% of its span. No run of the 300 is within 2.0% on any of the three, and the
+least any run has is 6.1% of the largest the reference is.
+
+**Because a largest error is a tail.** On the first thousand images it is 4.5
+to 5.3 of the row's own rms errors. The largest of 16,000 figures with Gaussian
+noise on them sits about 4.4 rms out, and of 160,000 about 4.9. A bound on the
+largest at twice the bound on the rms is one a digital engine meets and noise
+does not. It binds first, by 2.2 times, and it moves with how many outputs are
+looked at.
+
+**The format alone meets both where no sum is past the converter's range.** Its
+rms is 0.71 to 1.04% of the reference's rms, 120 runs of 150 within 1.0%, and
+0.25 to 0.33% of the largest the reference is, all 150. In the 125 runs with no
+sum past the range its largest error is 0.40 to 0.67%.
+
+**And the range decides the rest.** The harness sets a converter's range on a
+thousand training images, to pass all but one sum in ten thousand:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Networks of five whose reference reaches past full scale | 0 | 1 | 0 | 2 | 2 | 0 |
+| The farthest any reaches, of full scale | 0.80 | 1.11 | 0.97 | 1.33 | 1.14 | 0.94 |
+| The format alone: the most sums past the range in a run, of 160,000 | 0 | 14 | 0 | 77 | 26 | 0 |
+| its largest error with none past it, % | 0.67 | 0.49 | 0.48 | 0.58 | 0.60 | 0.51 |
+| and with some | none | 8.88 | none | 24.05 | 11.78 | none |
+| As budgeted: the most sums past it in a run | 0 | 27 | 0 | 161 | 52 | 0 |
+
+5 of the 30 networks have a declared reference that reaches past the
+converter's full scale on the test set, to 1.03 to 1.33 of it, and 2 on its
+first thousand images. With the format alone and no noise their largest error
+is 2.2 to 24.1% of the largest the reference is, from 3 to 77 sums of 160,000.
+It is what the reference is past the converter's last code by, to the rounding.
+No run has more than 0.18% of its sums past the range. That rule was written
+for the class, which a clipped sum seldom moves. A gate on the largest error
+needs a range that clips nothing, and a step that is larger for it. That was
+not run.
+
+**The class, as the gate has it.** How often the class the tile gives is the
+class its declared reference gives, percent, a mean over a row's runs; and in
+brackets the runs of 25 at 99.5% or more:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 99.74 (25) | 99.85 (25) | 98.16 (0) | 98.49 (0) | 99.54 (15) | 99.73 (25) |
+| As budgeted | 99.40 (2) | 99.59 (23) | 95.92 (0) | 96.78 (0) | 98.86 (0) | 99.23 (0) |
+| A cycle | 99.36 (4) | 99.57 (24) | 95.92 (0) | 96.75 (0) | 98.86 (0) | 99.21 (0) |
+| The format alone, the first thousand images | 99.74 (25) | 99.76 (25) | 97.96 (0) | 98.58 (0) | 99.56 (10) | 99.64 (20) |
+| As budgeted, the first thousand | 99.25 (6) | 99.49 (13) | 96.01 (0) | 96.85 (0) | 98.80 (2) | 99.10 (1) |
+| A cycle, the first thousand | 99.31 (5) | 99.47 (14) | 95.72 (0) | 96.76 (0) | 98.79 (0) | 99.12 (5) |
+
+On the first thousand images the reference networks are at 99.49, 96.85 and
+99.10% as budgeted, and 13, 0 and 1 runs of 25 pass. So on MNIST they are at
+the gate, and it is a draw which side of it a run falls. The networks trained
+before are under it there, and on the other two sets every mean is under it, by
+0.3 to 3.6 points.
+
+**A converter's rounding already moves the class.** The format alone is off its
+declared reference by the rounding of an 8-bit converter and by the sums past
+its range, and nothing else. For the reference networks it gives that
+reference's class on 99.85, 98.49 and 99.73% of 10,000 images. Of the images
+the tile and its declared reference part on as budgeted, 0.41, 3.22 and 0.77%,
+that is 36, 47 and 35%.
+
+**Against the host it is less, and most of that is the format.** The host has
+the activations at 8 bits, where the tile's declared format has 6:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 99.60 (25) | 99.57 (25) | 96.80 (0) | 97.73 (0) | 99.01 (0) | 99.30 (0) |
+| As budgeted | 99.30 (0) | 99.43 (5) | 95.14 (0) | 96.37 (0) | 98.53 (0) | 98.97 (0) |
+| A cycle | 99.27 (0) | 99.41 (3) | 95.06 (0) | 96.34 (0) | 98.53 (0) | 98.96 (0) |
+| The format alone, the first thousand images | 99.56 (20) | 99.42 (15) | 96.76 (0) | 97.84 (0) | 98.64 (0) | 99.08 (5) |
+| As budgeted, the first thousand | 99.20 (5) | 99.34 (9) | 95.23 (0) | 96.46 (0) | 98.31 (0) | 98.79 (1) |
+| A cycle, the first thousand | 99.20 (5) | 99.29 (6) | 95.02 (0) | 96.40 (0) | 98.30 (0) | 98.71 (0) |
+
+Of the images the reference networks' tile and host part on as budgeted, 0.57,
+3.63 and 1.03% of 10,000, the format alone has 75, 62 and 68%. The tile gives
+its declared reference's class more often than its host's in every row.
+
+**How often right.** The host, the declared reference and the format alone on
+the tile, percent; and what a row adds over the row it is read over, in points
+lost, with what five networks put outside chance at one in twenty in bold:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| On the host, % | 96.92 | 97.09 | 83.35 | 83.82 | 94.04 | 95.39 |
+| The declared reference, % | 96.87 | 97.01 | 83.17 | 83.76 | 93.91 | 95.31 |
+| The format alone, % | 96.85 | 97.00 | 83.18 | 83.64 | 93.82 | 95.21 |
+| As budgeted adds | 0.07 ± 0.03 | 0.03 ± 0.02 | **0.33 ± 0.04** | **0.17 ± 0.04** | 0.00 ± 0.05 | 0.02 ± 0.03 |
+| A cycle adds | 0.02 ± 0.01 | 0.01 ± 0.02 | 0.01 ± 0.04 | 0.02 ± 0.06 | 0.03 ± 0.01 | 0.01 ± 0.02 |
+
+As budgeted the tile loses 0.03 ± 0.02, 0.17 ± 0.04 and 0.02 ± 0.03 for the
+reference networks over the format alone: clear on Fashion-MNIST for both
+kinds, and nowhere else. The end of a cycle adds 0.01 ± 0.02, 0.02 ± 0.06 and
+0.01 ± 0.02, clear on none. Against their host the reference networks lose
+0.12, 0.35 and 0.19.
+
+**The reference networks.** They give their declared reference's class more
+often than the networks trained before give theirs, by 0.18, 0.86 and 0.38 of a
+point as budgeted, on the same error: 4.2 to 4.7% of the reference's rms where
+the others have 4.3 to 4.8%. It is the margin that training with noise buys,
+and not a quieter tile.
+
+**What was predicted.** Nine things, written on 2026-10-11 at 17:06 UTC, when
+the options, the mode and their self-tests existed and no network of this shape
+had been trained or run. And three more on 2026-10-13 at 02:54 UTC, after the
+first run was read and before the class against the declared reference was
+counted in any. All are for the reference networks. Four of the twelve were
+right as written. Of the eight that were not, seven were right in part, as each
+says.
+
+1. That the rms over the reference's rms is 3.5 to 7% as budgeted, and no run
+   is within 1.0%. Right: 4.46, 4.67 and 4.18, and none of 75.
+
+2. That over the largest the reference is it is 0.5 to 2.0%, with the 1.0% line
+   among a set's runs. Wrong: the size is right, 1.57, 1.27 and 1.48, and no
+   run is within 1.0%.
+
+3. That the largest error is 2.5 to 8% of the largest the reference is on
+   10,000 images, and 2 to 6% on the first thousand, with no run of all within
+   2.0% and at most five of a thousand. Wrong on its size: 8.02, 11.53 and
+   7.44, and 7.69, 7.53 and 7.16 on the first thousand. No run is within 2.0%.
+
+4. That against the operands as given the rms is 6 to 9% of the rms, a third or
+   more of it the format's. Right: 7.24, 7.28 and 6.49, and the format alone is
+   half of it.
+
+5. That the class is the host's on 99.0 to 99.7, 96.5 to 98.5 and 98.5 to 99.6%
+   of 10,000 images, and that on the first thousand 5 to 20 runs of 25 are at
+   99.5% on MNIST, none on Fashion-MNIST and 1 to 15 on the inverted set.
+   Wrong, by Fashion-MNIST's mean: 99.43, 96.37 and 98.97, and 9, 0 and 1 runs.
+
+6. That the format alone agrees with the host on 99.5 to 99.95% on MNIST and
+   98.5 to 99.6% on Fashion-MNIST, and is a third or more of what the tile
+   disagrees on. Wrong, by Fashion-MNIST's again: 99.57 and 97.73. The share is
+   two thirds.
+
+7. That the tile loses 0.00 to 0.15, 0.10 to 0.50 and 0.00 to 0.25 of a point
+   to its host, and a cycle adds 0.05, 0.10 and 0.15 at the most, clear on
+   none. Right: 0.12, 0.35 and 0.19, and 0.01, 0.02 and 0.01.
+
+8. That the reference networks agree with their host at least as often as those
+   trained before agree with theirs, on two sets or on all. Right, on all
+   three.
+
+9. That the largest the declared reference is, is 0.6 to 1.05 of the
+   converter's full scale. Wrong: three of the fifteen reach past that, to
+   1.33. It is the one that mattered: the largest errors come from there.
+
+10. That the tile gives its declared reference's class on 99.45 to 99.70, 97.0
+    to 97.9 and 99.0 to 99.4% of 10,000 images, and that on the first thousand
+    8 to 20 runs of 25 are at 99.5% on MNIST, none on Fashion-MNIST and 0 to 6
+    on the inverted set. Wrong, by Fashion-MNIST's mean, a fifth of a point
+    under: 99.59, 96.78 and 99.23, and 13, 0 and 1 runs.
+
+11. That the format alone gives its declared reference's class on 99.85 to
+    99.97, 99.1 to 99.7 and 99.7 to 99.92%. Wrong, by Fashion-MNIST's: 99.85,
+    98.49 and 99.73. A converter's rounding parts more of that set's images
+    from their class than its error's size said.
+
+12. That the declared reference is right within 0.05 of a point as often as the
+    format alone is on the tile. Wrong on two sets: 0.02, 0.11 and 0.10 of a
+    point apart.
+
+**What this is not.** grxgpu's classifier, its data or its thresholds. A chip.
+The chain: the NPU and the G100 are taken as exact, and the CPU's conversions
+as this harness's own rescale. A lit tile: grxcp's source rows add to all of
+it, and are not in these figures. Int8 weights. A range set for the gate: the
+converter's is the one this harness has always set, for the class. A ruling on
+what full scale is: that is grxgpu's, and three readings of it are priced. Five
+draws, of the same five networks. Version 1, or another tile.
 
 ---
 

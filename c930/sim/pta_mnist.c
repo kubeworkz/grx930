@@ -55,6 +55,14 @@
  * --levelprobe), the reading applied where a chip could apply it
  * (--levelfix), and what that leaves told apart (--levelpart, --levellayer).
  *
+ * And a network that is not all on the tile (eval --host, --gate).  grxgpu's
+ * first board runs one classifier's layers on three engines, the last of them
+ * the PTA, and holds each engine to a reference in its own declared format.
+ * --host N runs a network's first N layers on the host, exactly, as a digital
+ * engine would, and the rest on the tile.  --gate has the probe measure the
+ * last layer against that reference as well.  The network's shape is the
+ * build's (-DN_SIDE, -DN_HID, -DN_OUT), and D3's unless a build says another.
+ *
  * And the receiver's noise as one laser fixes it (eval --thermalline).  A
  * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
  * layer at a time and each at that layer's own shift, which is as if every
@@ -86,9 +94,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define N_IN        784
+/* The network's shape.  D3's is the default, and everything grxcp's plan quotes
+ * was run on it.  A build may set another with -DN_SIDE, -DN_HID and -DN_OUT:
+ * images N_SIDE square, hidden layers N_HID wide, N_OUT outputs.  A network's
+ * file is as long as its shape makes it, and a build of another shape refuses
+ * it for its length. */
+#ifndef N_SIDE
+#define N_SIDE      28
+#endif
+#ifndef N_HID
 #define N_HID       100
+#endif
+#ifndef N_OUT
 #define N_OUT       10
+#endif
+#define N_IN        (N_SIDE * N_SIDE)
 #define N_ALL       60000
 #define N_TRAIN     54000       /* validation_split = 0.1 holds out the last 6,000 */
 #define N_TEST      10000
@@ -118,6 +138,10 @@
  * from its own seed.
  */
 static int tile_rows = ROWS, tile_cols = COLS, gemm_k = MAX_K, gemm_n = MAX_N;
+
+/* A network's first layers that the host runs and no tile does: eval --host.
+ * Nothing unless it is set. */
+static int host_layers = 0;
 
 /*
  * How a network is put on the tile, where the host has a choice:
@@ -378,7 +402,7 @@ static int load_set(const char *dir, const char *images, const char *labels, int
     bl = read_file(path, &ll);
     if (!bi || !bl || li != 16 + (long)count * N_IN || ll != 8 + (long)count ||
         be32(bi) != 2051 || be32(bl) != 2049 || be32(bi + 4) != (uint32_t)count ||
-        be32(bl + 4) != (uint32_t)count || be32(bi + 8) != 28 || be32(bi + 12) != 28) {
+        be32(bl + 4) != (uint32_t)count || be32(bi + 8) != N_SIDE || be32(bi + 12) != N_SIDE) {
         fprintf(stderr, "pta_mnist: %s/%s and %s missing or not MNIST's\n", dir, images, labels);
         free(bi);
         free(bl);
@@ -401,12 +425,42 @@ static int load_set(const char *dir, const char *images, const char *labels, int
 static long invert_idx(uint8_t *b, long len)
 {
     long i;
-    if (!b || len < 16 || be32(b) != 2051 || be32(b + 8) != 28 || be32(b + 12) != 28 ||
+    if (!b || len < 16 || be32(b) != 2051 || be32(b + 8) != N_SIDE || be32(b + 12) != N_SIDE ||
         len != 16 + (long)be32(b + 4) * N_IN)
         return -1;
     for (i = 16; i < len; ++i)
         b[i] = (uint8_t)(255 - b[i]);
     return len - 16;
+}
+
+/* An idx file of 28 x 28 images, in memory, pooled to side x side: the middle
+ * of each image cut into side x side equal blocks, and each block's mean to
+ * the nearest.  The same workload at a smaller size.  out has room for the
+ * file as it was.  Returns the bytes of the pooled file, or -1: b is not
+ * 28 x 28 images, or blocks of a whole number of pixels do not sit in the
+ * middle of 28 for that side. */
+static long pool_idx(const uint8_t *b, long len, int side, uint8_t *out)
+{
+    const int f = (side > 0 && side <= 28) ? 28 / side : 0, edge = 28 - f * side;
+    long count, n;
+    int r, c, dr, dc;
+    if (!b || len < 16 || f < 1 || (edge & 1) || be32(b) != 2051 || be32(b + 8) != 28 ||
+        be32(b + 12) != 28 || len != 16 + (long)be32(b + 4) * 784)
+        return -1;
+    count = (long)be32(b + 4);
+    memcpy(out, b, 8);
+    memset(out + 8, 0, 8);
+    out[11] = out[15] = (uint8_t)side;
+    for (n = 0; n < count; ++n)
+        for (r = 0; r < side; ++r)
+            for (c = 0; c < side; ++c) {
+                int s = 0;
+                for (dr = 0; dr < f; ++dr)
+                    for (dc = 0; dc < f; ++dc)
+                        s += b[16 + n * 784 + (edge / 2 + f * r + dr) * 28 + edge / 2 + f * c + dc];
+                out[16 + n * side * side + r * side + c] = (uint8_t)((2 * s + f * f) / (2 * f * f));
+            }
+    return 16 + count * side * side;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1041,6 +1095,9 @@ static const int32_t *level_inputs(const host_net *hn, const pta_cfg *c, int M, 
  * correction for its lines is applied on the inputs, a layer's operands are
  * scaled before they are sent, and what the scaling takes off its sums is
  * divided out of them: bw->a[l] stays what the host worked out, unscaled.
+ * The first host_layers layers are not the tile's.  The host runs them: each
+ * is the exact product of its operands as they are and its weights as its own
+ * quantiser has them, with no shot, no converter and no GEMM launched.
  */
 static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile,
                        pta_device *dev, uint32_t seed, uint32_t *gemm, gemm_buf *g, int M,
@@ -1059,24 +1116,36 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
         if (light.on && light.fix == FIX_INPUTS)
             src = level_inputs(hn, &cfg[l], M, in, src);
         memset(y, 0, (size_t)M * out * sizeof *y);
-        for (n0 = 0; n0 < out; n0 += gemm_n) {
-            const int N = (out - n0 < gemm_n) ? out - n0 : gemm_n;
-            for (k0 = 0; k0 < in; k0 += gemm_k) {
-                const int K = (in - k0 < gemm_k) ? in - k0 : gemm_k;
-                for (m = 0; m < M; ++m)
+        if (l < host_layers) {
+            const int quant = (cfg[l].impair & PTA_QUANT) != 0;
+            for (n = 0; n < out; ++n)
+                for (k = 0; k < in; ++k) {
+                    const int32_t wv = hn->w[l][n * in + k];
+                    const int64_t w = quant ? contract_quant(wv, (int)cfg[l].w_bits, hn->din) : wv;
+                    if (w != 0)
+                        for (m = 0; m < M; ++m)
+                            y[m * out + n] += (int64_t)src[m * in + k] * w;
+                }
+        } else {
+            for (n0 = 0; n0 < out; n0 += gemm_n) {
+                const int N = (out - n0 < gemm_n) ? out - n0 : gemm_n;
+                for (k0 = 0; k0 < in; k0 += gemm_k) {
+                    const int K = (in - k0 < gemm_k) ? in - k0 : gemm_k;
+                    for (m = 0; m < M; ++m)
+                        for (k = 0; k < K; ++k)
+                            g->A[m * K + k] = src[m * in + k0 + k];
                     for (k = 0; k < K; ++k)
-                        g->A[m * K + k] = src[m * in + k0 + k];
-                for (k = 0; k < K; ++k)
-                    for (n = 0; n < N; ++n)
-                        g->B[k * N + n] = hn->w[l][(n0 + n) * in + k0 + k];
-                c      = cfg[l];
-                c.seed = gemm_seed(seed, (*gemm)++);
-                if ((r = pta_gemm(&c, tile, dev, l & 1, M, N, K, g->A, g->B, g->C)) < 0)
-                    return -1;
-                sats += r;
-                for (m = 0; m < M; ++m)
-                    for (n = 0; n < N; ++n)
-                        y[m * out + n0 + n] += g->C[m * N + n];
+                        for (n = 0; n < N; ++n)
+                            g->B[k * N + n] = hn->w[l][(n0 + n) * in + k0 + k];
+                    c      = cfg[l];
+                    c.seed = gemm_seed(seed, (*gemm)++);
+                    if ((r = pta_gemm(&c, tile, dev, l & 1, M, N, K, g->A, g->B, g->C)) < 0)
+                        return -1;
+                    sats += r;
+                    for (m = 0; m < M; ++m)
+                        for (n = 0; n < N; ++n)
+                            y[m * out + n0 + n] += g->C[m * N + n];
+                }
             }
         }
         if (light.on)
@@ -1145,6 +1214,14 @@ typedef struct {
     double *logit;              /* reference outputs with their biases, images x N_OUT */
     double *margin;             /* reference top-1 less top-2, per image */
     int     images, ref_right, agree;
+    /* the last layer against a reference in its engine's own declared format,
+     * which is what a board holds an engine to: eval --gate */
+    int     gate;               /* whether to */
+    int     gate_bits;          /* the activation bits that engine declares; 0 is the operand's */
+    double  ge, gr;             /* sums of squares: its error against that reference, and the reference */
+    double  gpeak, gworst;      /* the largest that reference is, and the largest the error */
+    double  hpeak, hworst;      /* the same two against the operands as they were given */
+    int     gright, gagree;     /* images that reference has right, and images the tile gives its class */
 } probe;
 
 static int probe_init(probe *p, int images, int hidden)
@@ -1173,7 +1250,8 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
     for (m = 0; m < M; ++m) {
         double err[N_OUT], *lg = p->logit + (size_t)p->images * N_OUT, em = 0.0, gm = 0.0;
         const int64_t *y2 = bw->y[H] + m * N_OUT;
-        int best = 0, second = -1, tile_best = 0;
+        int best = 0, second = -1, tile_best = 0, fmt_best = 0;
+        int64_t fmt_top = 0;
         direct_image(hn, q, 0, a0 + m * N_IN, &ws);
         for (l = 0; l < H; ++l)
             for (n = 0; n < N_HID; ++n) {
@@ -1198,6 +1276,29 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
             for (k = 0; k < N_HID; ++k)
                 loc += (int64_t)bw->a[H][m * N_HID + k] * q[H][o * N_HID + k];
             dl     = (double)(y2[o] - loc);
+            if (p->gate) {
+                int64_t fmt = 0;
+                double df;
+                for (k = 0; k < N_HID; ++k)
+                    fmt += (int64_t)contract_quant(bw->a[H][m * N_HID + k], p->gate_bits, hn->din) *
+                           q[H][o * N_HID + k];
+                df = (double)(y2[o] - fmt);
+                p->ge += df * df;
+                p->gr += (double)fmt * (double)fmt;
+                if (fabs((double)fmt) > p->gpeak)
+                    p->gpeak = fabs((double)fmt);
+                if (fabs(df) > p->gworst)
+                    p->gworst = fabs(df);
+                if (fabs((double)loc) > p->hpeak)
+                    p->hpeak = fabs((double)loc);
+                if (fabs(dl) > p->hworst)
+                    p->hworst = fabs(dl);
+                /* its class: the largest with its bias, and the first of them if two are */
+                if (o == 0 || fmt + hn->b[H][o] > fmt_top) {
+                    fmt_top  = fmt + hn->b[H][o];
+                    fmt_best = o;
+                }
+            }
             dp     = (double)(loc - ws.y[H][o]);
             err[o] = (double)(y2[o] - ws.y[H][o]);
             p->e[H]  += dl * dl;
@@ -1232,6 +1333,10 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
         p->margin[p->images] = lg[best] - lg[second];
         p->ref_right += best == labels[m];
         p->agree     += best == tile_best;
+        if (p->gate) {
+            p->gright += fmt_best == labels[m];
+            p->gagree += fmt_best == tile_best;
+        }
         ++p->images;
     }
 }
@@ -1277,6 +1382,12 @@ static int cmp_double(const void *a, const void *b)
 typedef struct {
     double ref, agree, e[MAX_L], t[MAX_L], eprop, elog, sigma, margin, pred_iid, pred_cov;
     double gain, eres, pred_res;
+    /* the gate's: the last layer's rms error over its declared reference's rms;
+     * over the largest that reference is; the largest error over the same; and
+     * that largest.  And the last three against the operands as they were given */
+    double gate_rms, gate_rmsfs, gate_maxfs, gate_peak, gate8_rmsfs, gate8_maxfs, gate8_peak;
+    /* and how often that reference is right, and how often the tile gives its class, percent */
+    double gate_ref, gate_agree;
 } probe_result;
 
 /* Closes the probe: the ratios, and the three predictions drawn PROBE_DRAWS
@@ -1300,6 +1411,15 @@ static void probe_finish(probe *p, const uint8_t *labels, uint32_t seed, probe_r
     r->eprop  = p->rt[H] > 0 ? sqrt(p->ep / p->rt[H]) : 0.0;
     r->elog   = p->rt[H] > 0 ? sqrt(p->t[H] / p->rt[H]) : 0.0;
     r->sigma  = sqrt(p->t[H] / (n * N_OUT));
+    r->gate_rms    = p->gr > 0 ? sqrt(p->ge / p->gr) : 0.0;
+    r->gate_rmsfs  = p->gpeak > 0 ? sqrt(p->ge / (n * N_OUT)) / p->gpeak : 0.0;
+    r->gate_maxfs  = p->gpeak > 0 ? p->gworst / p->gpeak : 0.0;
+    r->gate_peak   = p->gpeak;
+    r->gate8_rmsfs = p->hpeak > 0 ? sqrt(p->e[H] / (n * N_OUT)) / p->hpeak : 0.0;
+    r->gate8_maxfs = p->hpeak > 0 ? p->hworst / p->hpeak : 0.0;
+    r->gate8_peak  = p->hpeak;
+    r->gate_ref    = 100.0 * p->gright / n;
+    r->gate_agree  = 100.0 * p->gagree / n;
     for (o = 0; o < N_OUT; ++o)
         mean[o] = p->mean[o] / n;
     for (o = 0; o < N_OUT; ++o)
@@ -2155,7 +2275,7 @@ static int cmd_eval(int argc, char **argv)
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
         "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
-        NULL};
+        "--host", "--gate", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2186,6 +2306,8 @@ static int cmd_eval(int argc, char **argv)
     const char *levelpart = opt(argc, argv, "--levelpart", NULL);
     const int parts = levelpart ? part_list(levelpart) : -1;
     const int levellayer = atoi(opt(argc, argv, "--levellayer", "0"));
+    const int host = atoi(opt(argc, argv, "--host", "0"));
+    const int gate = atoi(opt(argc, argv, "--gate", "0"));
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
     probe pr;
     int32_t *pq[MAX_L] = {NULL};
@@ -2275,6 +2397,16 @@ static int cmd_eval(int argc, char **argv)
         fprintf(stderr, "pta_mnist: --levellayer is a layer of the network, from 1\n");
         return 2;
     }
+    /* The light, the level probe and the two ways of putting a network on the
+     * tile are written for a network that is all on it. */
+    if (host < 0 || host > H || (host && (lit || thermalline || hidshift || w1gain)) ||
+        (gate && !probing)) {
+        fprintf(stderr, "pta_mnist: --host is how many of the network's first layers the host runs, "
+                        "0 to %d, and is not modelled with a light source, --thermalline, --hidshift "
+                        "or --w1gain; --gate needs --probe\n", H);
+        return 2;
+    }
+    host_layers = host;
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
@@ -2372,6 +2504,8 @@ static int cmd_eval(int argc, char **argv)
         if (probe_init(&pr, images, H) != 0)
             return 2;
         quant_weights(hn, net->wbits, pq);
+        pr.gate      = gate;
+        pr.gate_bits = (cfg[H].impair & PTA_QUANT) ? (int)cfg[H].act_bits : 0;
     }
 
     tile.rows  = tile_rows;
@@ -2417,7 +2551,7 @@ static int cmd_eval(int argc, char **argv)
                         "twentieth of its level\n");
         return 2;
     }
-    for (l = 0; l <= H; ++l)
+    for (l = host; l <= H; ++l)
         per_image += (long)layer_out(H, l) * ((layer_in(l) + tile_rows - 1) / tile_rows);
     for (base = 0; base < images; base += MAX_M) {
         const int M = (images - base < MAX_M) ? images - base : MAX_M;
@@ -2463,6 +2597,9 @@ static int cmd_eval(int argc, char **argv)
      * the line it was before the tile could be anything else. */
     if (tile_rows != ROWS || tile_cols != COLS || gemm_k != MAX_K || gemm_n != MAX_N)
         printf(" tile=%dx%d gemm=%dx%d", tile_rows, tile_cols, gemm_k, gemm_n);
+    /* And the layers the host ran, when it ran any. */
+    if (host)
+        printf(" host=%d", host);
     /* And the light only when there is some. */
     if (lit)
         printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
@@ -2526,6 +2663,14 @@ static int cmd_eval(int argc, char **argv)
         if (H > 1)
             for (l = 0; l <= H; ++l)
                 printf(" t%d=%.5f", l + 1, pv.t[l]);
+        /* And the gate's figures, when they were asked for: the last layer against
+         * its declared format, and its largest values against the operands as given;
+         * and how often that reference is right, and the tile gives its class. */
+        if (gate)
+            printf(" gate_bits=%d gate_rms=%.5f gate_rmsfs=%.5f gate_maxfs=%.5f gate_peak=%.0f "
+                   "gate8_rmsfs=%.5f gate8_maxfs=%.5f gate8_peak=%.0f gate_ref=%.2f gate_agree=%.2f",
+                   pr.gate_bits, pv.gate_rms, pv.gate_rmsfs, pv.gate_maxfs, pv.gate_peak, pv.gate8_rmsfs,
+                   pv.gate8_maxfs, pv.gate8_peak, pv.gate_ref, pv.gate_agree);
         probe_free(&pr);
         for (l = 0; l <= H; ++l)
             free(pq[l]);
@@ -2871,6 +3016,366 @@ static int cmd_selftest(void)
                draws, s1, s2, worst);
         if (fabs(s1) > 0.01 || fabs(s2 - 1.0) > 0.02 || worst > 1e-9)
             errors += fail("the probe's Gaussian or its Cholesky factor is wrong");
+    }
+
+    /* 5b. layers the host runs.  A network's first layers on the host and the
+     *     rest on the tile: a host layer's sums are the exact product of its
+     *     operands as they were given and its weights as its quantiser has
+     *     them, a tile layer's are what they always were, and only the tile's
+     *     layers are launched.  And an impairment does not reach a layer the
+     *     host runs. */
+    {
+        const int D = 8, H = 2, M = 37;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        const int64_t amax = ((int64_t)1 << (D - 1)) - 1;
+        const pta_tile tile = {ROWS, COLS, D, ACC_W};
+        host_net hn;
+        gemm_buf *g = gemm_alloc();
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        image_ws *ws = (image_ws *)malloc(sizeof *ws);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
+        uint64_t r5 = 0x5B5B5Bull;              /* its own, so that the draws after it stay */
+        pta_cfg cfg[MAX_L];
+        uint32_t gemm;
+        int host, pass, i, m, n, k, l, bad = 0, launched = 1, reached = 0, spared = 1;
+        pta_device dev;
+        pta_device_init(&dev, &tile);
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&r5) % (uint64_t)span);
+        }
+        for (l = 0; l < H; ++l) {
+            for (i = 0; i < N_HID; ++i)
+                hn.b[l][i] = (int64_t)(splitmix64(&r5) % (1ull << (2 * D + 6))) - (1ll << (2 * D + 5));
+            hn.sh[l] = D + 3 - l;
+        }
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&r5) % (uint64_t)(1 << (D - 1)));
+        for (host = 0; host <= H; ++host)
+            for (pass = 0; pass < 2; ++pass) {
+                uint32_t want = 0;
+                gemm = 0;
+                memset(cfg, 0, sizeof cfg);
+                if (pass == 1) {
+                    cfg[0].impair   = PTA_QUANT;
+                    cfg[0].w_bits   = 3;
+                    cfg[0].act_bits = (uint32_t)D - 3;
+                }
+                for (l = 1; l <= H; ++l)
+                    cfg[l] = cfg[0];
+                host_layers = host;
+                if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
+                    ++bad;
+                quant_weights(&hn, (int)cfg[0].w_bits, q);
+                for (m = 0; m < M; ++m)
+                    /* the network as it was asked for: a host layer takes its operands as they are */
+                    for (l = 0; l <= H; ++l) {
+                        const int in = layer_in(l), out = layer_out(H, l);
+                        const int ab = l < host ? 0 : (int)cfg[0].act_bits;
+                        const int32_t *src = l == 0 ? a1 + m * N_IN : ws->a[l];
+                        for (n = 0; n < out; ++n) {
+                            int64_t s = 0, v;
+                            for (k = 0; k < in; ++k)
+                                s += (int64_t)contract_quant(src[k], ab, D) * q[l][n * in + k];
+                            ws->y[l][n] = s;
+                            if (l < H) {
+                                v = s + hn.b[l][n];
+                                v = round_shift(v > 0 ? v : 0, hn.sh[l]);
+                                ws->a[l + 1][n] = (int32_t)(v > amax ? amax : v);
+                            }
+                        }
+                        bad += memcmp(ws->y[l], bw->y[l] + m * out, (size_t)out * sizeof(int64_t)) != 0;
+                    }
+                for (l = host; l <= H; ++l)
+                    want += (uint32_t)(((layer_out(H, l) + gemm_n - 1) / gemm_n) *
+                                       ((layer_in(l) + gemm_k - 1) / gemm_k));
+                launched &= gemm == want;
+            }
+        /* a programming error of an LSB, with every layer but the last on the host */
+        memset(cfg, 0, sizeof cfg);
+        cfg[0].impair   = PTA_PROG_ERR;
+        cfg[0].sigma_pr = 256;
+        for (l = 1; l <= H; ++l)
+            cfg[l] = cfg[0];
+        host_layers = H;
+        gemm        = 0;
+        if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
+            ++bad;
+        quant_weights(&hn, 0, q);
+        for (m = 0; m < M; ++m) {
+            direct_image(&hn, q, 0, a1 + m * N_IN, ws);
+            for (l = 0; l < H; ++l)
+                spared &= memcmp(ws->y[l], bw->y[l] + m * N_HID, N_HID * sizeof(int64_t)) == 0;
+            reached |= memcmp(ws->y[H], bw->y[H] + m * N_OUT, N_OUT * sizeof(int64_t)) != 0;
+        }
+        host_layers = 0;
+        printf("selftest: layers the host runs: none, the first and the first two of three, with the "
+               "quantisers and without, %d images each against the network as it was asked for: %d "
+               "differ; only the tile's layers are launched: %s; a programming error on the tile reaches "
+               "its own layer and no layer the host runs: %s\n", M, bad, launched ? "so" : "NOT SO",
+               (reached && spared) ? "so" : "NOT SO");
+        if (bad || !launched || !reached || !spared)
+            errors += fail("a layer the host runs is not the exact product it should be");
+        pta_device_free(&dev);
+        host_free(&hn);
+        for (l = 0; l <= H; ++l)
+            free(q[l]);
+        gemm_free(g);
+        free(bw);
+        free(ws);
+        free(a1);
+    }
+
+    /* 5c. the gate's figures: the last layer against a reference in its
+     *     engine's own declared format.  With nothing impaired there is no
+     *     error and the two references are one.  With the quantisers on and
+     *     no converter the tile is its declared format exactly, and is off
+     *     the operands as they were given.  With a programming error on as
+     *     well, the figures are the ones worked out here from the sums.  And
+     *     the class: the tile's against its declared reference's, which with
+     *     the quantisers on is every image, where the host's is not once the
+     *     activations are coarse enough to part the two. */
+    {
+        const int D = 8, H = 2, M = 37, AB = 5, WB = 6, COARSE = 2;
+        const int32_t lo = -(1 << (D - 1)), span = 1 << D;
+        const pta_tile tile = {ROWS, COLS, D, ACC_W};
+        host_net hn;
+        gemm_buf *g = gemm_alloc();
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t)), *q[MAX_L];
+        uint8_t labels[MAX_M];
+        uint64_t r5 = 0x5C5C5Cull;
+        double shown[4] = {0.0, 0.0, 0.0, 0.0};
+        int kind, i, m, o, k, l, ran = 1, clean = 1, exact = 1, same = 1, classes = 1, parted = 0, split = 0;
+        pta_device dev;
+        pta_device_init(&dev, &tile);
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            q[l] = (int32_t *)malloc((size_t)P * sizeof(int32_t));
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = lo + (int32_t)(splitmix64(&r5) % (uint64_t)span);
+        }
+        for (l = 0; l < H; ++l) {
+            for (i = 0; i < N_HID; ++i)
+                hn.b[l][i] = (int64_t)(splitmix64(&r5) % (1ull << (2 * D + 6))) - (1ll << (2 * D + 5));
+            hn.sh[l] = D + 3 - l;
+        }
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&r5) % (uint64_t)(1 << (D - 1)));
+        /* an output bias that levels the outputs: each output's sum, a mean over the images, is
+         * taken off it.  A class is then what an image's own sums make it, and is close run, so that
+         * an error moves it; and labels of every class */
+        {
+            image_ws *ws = (image_ws *)malloc(sizeof *ws);
+            int64_t mean[N_OUT] = {0};
+            ran &= ws != NULL;
+            quant_weights(&hn, 0, q);
+            for (m = 0; ran && m < M; ++m) {
+                direct_image(&hn, q, 0, a1 + m * N_IN, ws);
+                for (o = 0; o < N_OUT; ++o)
+                    mean[o] += ws->y[H][o];
+            }
+            for (o = 0; o < N_OUT; ++o)
+                hn.b[H][o] = -(mean[o] / M);
+            free(ws);
+        }
+        for (m = 0; m < M; ++m)
+            labels[m] = (uint8_t)(splitmix64(&r5) % N_OUT);
+        /* kinds: nothing impaired; the quantisers; a programming error of an LSB as well; the
+         * quantisers with activations of 2 bits, which part the declared reference from the host;
+         * and a programming error of 32 LSB, which parts the tile from its declared reference */
+        for (kind = 0; ran && kind < 5; ++kind) {
+            const int bits = kind == 0 ? 0 : (kind == 3 ? COARSE : AB);
+            const int noisy = kind == 2 || kind == 4;
+            const double count = (double)M * N_OUT;
+            double ge = 0.0, gr = 0.0, gpeak = 0.0, gworst = 0.0, he = 0.0, hpeak = 0.0, hworst = 0.0;
+            int gright = 0, gagree = 0, hagree = 0;
+            pta_cfg cfg[MAX_L];
+            uint32_t gemm = 0;
+            probe p;
+            probe_result pv;
+            memset(cfg, 0, sizeof cfg);
+            if (kind) {
+                cfg[0].impair   = PTA_QUANT | (noisy ? PTA_PROG_ERR : 0);
+                cfg[0].w_bits   = WB;
+                cfg[0].act_bits = (uint32_t)bits;
+                cfg[0].sigma_pr = kind == 4 ? 256 * 32 : 256;
+            }
+            for (l = 1; l <= H; ++l)
+                cfg[l] = cfg[0];
+            host_layers = H;
+            ran &= probe_init(&p, M, H) == 0;
+            p.gate      = 1;
+            p.gate_bits = bits;
+            ran &= ran && tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) >= 0;
+            if (!ran)
+                break;
+            quant_weights(&hn, kind ? WB : 0, q);
+            probe_batch(&p, &hn, q, M, a1, bw, labels);
+            for (m = 0; m < M; ++m) {
+                int64_t ft[N_OUT], lt[N_OUT], yt[N_OUT];
+                int fb = 0, lb = 0, yb = 0;
+                for (o = 0; o < N_OUT; ++o) {
+                    const double y = (double)bw->y[H][m * N_OUT + o];
+                    int64_t loc = 0, fmt = 0;
+                    for (k = 0; k < N_HID; ++k) {
+                        const int32_t av = bw->a[H][m * N_HID + k];
+                        loc += (int64_t)av * q[H][o * N_HID + k];
+                        fmt += (int64_t)contract_quant(av, bits, D) * q[H][o * N_HID + k];
+                    }
+                    ge += (y - (double)fmt) * (y - (double)fmt);
+                    gr += (double)fmt * (double)fmt;
+                    he += (y - (double)loc) * (y - (double)loc);
+                    if (fabs((double)fmt) > gpeak)      gpeak = fabs((double)fmt);
+                    if (fabs(y - (double)fmt) > gworst) gworst = fabs(y - (double)fmt);
+                    if (fabs((double)loc) > hpeak)      hpeak = fabs((double)loc);
+                    if (fabs(y - (double)loc) > hworst) hworst = fabs(y - (double)loc);
+                    ft[o] = fmt + hn.b[H][o];
+                    lt[o] = loc + hn.b[H][o];
+                    yt[o] = bw->y[H][m * N_OUT + o] + hn.b[H][o];
+                }
+                for (o = 1; o < N_OUT; ++o) {
+                    if (ft[o] > ft[fb]) fb = o;
+                    if (lt[o] > lt[lb]) lb = o;
+                    if (yt[o] > yt[yb]) yb = o;
+                }
+                gright += fb == labels[m];
+                gagree += fb == yb;
+                hagree += lb == yb;
+                if (kind == 3)
+                    split += fb != lb;
+            }
+            probe_finish(&p, labels, 7, &pv);
+            /* the class: counted as it is here, the declared reference's and the host's apart */
+            classes &= p.gright == gright && p.gagree == gagree && p.agree == hagree &&
+                       fabs(pv.gate_ref - 100.0 * gright / M) < 1e-12 &&
+                       fabs(pv.gate_agree - 100.0 * gagree / M) < 1e-12;
+            if (!noisy)
+                classes &= gagree == M;             /* the tile is its declared format, and gives its class */
+            if (kind == 0)
+                classes &= hagree == M && pv.gate_ref == pv.ref;
+            if (kind == 3)
+                classes &= hagree == M - split;     /* and not the host's, where those two part */
+            if (kind == 4)
+                parted = M - gagree;
+            same &= p.ge == ge && p.gr == gr && p.gpeak == gpeak && p.gworst == gworst &&
+                    p.hpeak == hpeak && p.hworst == hworst && gpeak > 0.0 && hpeak > 0.0;
+            same &= fabs(pv.gate_rms - sqrt(ge / gr)) < 1e-12 && pv.gate_peak == gpeak &&
+                    fabs(pv.gate_rmsfs - sqrt(ge / count) / gpeak) < 1e-12 &&
+                    fabs(pv.gate_maxfs - gworst / gpeak) < 1e-12 && pv.gate8_peak == hpeak &&
+                    fabs(pv.gate8_rmsfs - sqrt(he / count) / hpeak) < 1e-12 &&
+                    fabs(pv.gate8_maxfs - hworst / hpeak) < 1e-12 &&
+                    pv.gate_rmsfs <= pv.gate_maxfs && pv.gate8_rmsfs <= pv.gate8_maxfs;
+            if (kind == 0)
+                clean &= ge == 0.0 && he == 0.0 && gpeak == hpeak && pv.e[H] == 0.0;
+            if (kind == 1 || kind == 3)
+                exact &= ge == 0.0 && gworst == 0.0 && he > 0.0 && hworst > 0.0 && pv.e[H] > 0.0;
+            if (noisy)
+                exact &= ge > 0.0 && gworst > 0.0;
+            if (kind == 2) {
+                shown[0] = pv.gate_rms;
+                shown[1] = pv.gate_rmsfs;
+                shown[2] = pv.gate_maxfs;
+                shown[3] = pv.e[H];
+            }
+            probe_free(&p);
+        }
+        host_layers = 0;
+        printf("selftest: the gate's figures: nothing impaired is no error against either reference: %s; "
+               "with the quantisers on the tile is its declared format exactly and is off the operands "
+               "as given, and a programming error shows against both: %s; the figures are the ones "
+               "worked out from the sums: %s (with that error, %.4f of the declared reference's rms, "
+               "%.4f and at the most %.4f of its largest, and %.4f of the operands' as given); the class "
+               "the tile gives against the class its declared reference gives, and that reference "
+               "against the labels, counted as they are here: %s (with activations of 2 bits and no error "
+               "the tile gives its declared reference's class on all %d images, where that reference and "
+               "the host part on %d; with a programming error of 32 LSB the tile and its reference part "
+               "on %d)\n",
+               clean ? "so" : "NOT SO", exact ? "so" : "NOT SO", same ? "they are" : "THEY ARE NOT",
+               shown[0], shown[1], shown[2], shown[3], classes ? "they are" : "THEY ARE NOT", M, split,
+               parted);
+        if (!ran || !clean || !exact || !same || !classes || split == 0 || parted == 0)
+            errors += fail("the gate's figures are not the last layer against its declared format");
+        pta_device_free(&dev);
+        host_free(&hn);
+        for (l = 0; l <= H; ++l)
+            free(q[l]);
+        gemm_free(g);
+        free(bw);
+        free(a1);
+    }
+
+    /* 5d. pool.  Two made-up images of 28 x 28: pooled to 8 x 8, each pixel
+     *     is the mean of its block of nine in the middle 24 x 24, to the
+     *     nearest, and the margin does not count; to 14 x 14 it is a mean of
+     *     four; to 28 x 28 it is the file it was.  A side whose blocks do not
+     *     sit in the middle, a file that is not 28 x 28 images and a file a
+     *     byte short are refused. */
+    {
+        enum { IMGS = 2, PIX = 28 * 28 };
+        uint8_t src[16 + IMGS * PIX], out[16 + IMGS * PIX], bad_in[16 + IMGS * PIX];
+        uint64_t r5 = 0x5D5D5Dull;
+        long got8, got14, got28;
+        int i, n, r, c, dr, dc, ok = 1, refused;
+        memset(src, 0, 16);
+        src[2] = 8; src[3] = 3; src[7] = IMGS; src[11] = 28; src[15] = 28;
+        for (i = 0; i < IMGS * PIX; ++i)
+            src[16 + i] = (uint8_t)(splitmix64(&r5) & 0xFF);
+        got8 = pool_idx(src, (long)sizeof src, 8, out);
+        ok &= got8 == 16 + IMGS * 64 && be32(out) == 2051 && be32(out + 4) == IMGS &&
+              be32(out + 8) == 8 && be32(out + 12) == 8;
+        for (n = 0; ok && n < IMGS; ++n)
+            for (r = 0; r < 8; ++r)
+                for (c = 0; c < 8; ++c) {
+                    int s = 0;
+                    for (dr = 0; dr < 3; ++dr)
+                        for (dc = 0; dc < 3; ++dc)
+                            s += src[16 + n * PIX + (2 + 3 * r + dr) * 28 + 2 + 3 * c + dc];
+                    ok &= out[16 + n * 64 + r * 8 + c] == (uint8_t)((2 * s + 9) / 18);
+                }
+        /* the margin does not count: light it, and the pooled file is the same */
+        memcpy(bad_in, src, sizeof src);
+        for (n = 0; n < IMGS; ++n)
+            for (r = 0; r < 28; ++r)
+                for (c = 0; c < 28; ++c)
+                    if (r < 2 || r >= 26 || c < 2 || c >= 26)
+                        bad_in[16 + n * PIX + r * 28 + c] ^= 0xFF;
+        {
+            uint8_t again[16 + IMGS * 64];
+            ok &= pool_idx(bad_in, (long)sizeof bad_in, 8, again) == got8 &&
+                  memcmp(again, out, (size_t)got8) == 0;
+        }
+        got14 = pool_idx(src, (long)sizeof src, 14, out);
+        ok &= got14 == 16 + IMGS * 196 && be32(out + 8) == 14 &&
+              out[16] == (uint8_t)((2 * (src[16] + src[17] + src[16 + 28] + src[16 + 29]) + 4) / 8);
+        got28 = pool_idx(src, (long)sizeof src, 28, out);
+        ok &= got28 == (long)sizeof src && memcmp(out, src, sizeof src) == 0;
+        refused = pool_idx(src, (long)sizeof src, 9, out) < 0 && pool_idx(src, (long)sizeof src, 5, out) < 0 &&
+                  pool_idx(src, (long)sizeof src, 0, out) < 0 && pool_idx(src, (long)sizeof src, 29, out) < 0 &&
+                  pool_idx(src, (long)sizeof src - 1, 8, out) < 0;
+        memcpy(bad_in, src, sizeof src);
+        bad_in[15] = 27;                            /* 28 x 27: not ours */
+        refused &= pool_idx(bad_in, (long)sizeof bad_in, 8, out) < 0;
+        printf("selftest: pool: %d images of 28 x 28 to 8 x 8, each pixel the mean of its nine in the "
+               "middle 24 x 24 and the margin not counted, to 14 x 14 a mean of four, and to 28 x 28 "
+               "the file it was: %s; sides of 9, 5, 0 and 29, 28 x 27 images and a file a byte short: "
+               "%s\n", IMGS, ok ? "as it should be" : "WRONG", refused ? "refused" : "TAKEN");
+        if (!ok || !refused)
+            errors += fail("pool does not pool an idx file's images");
+    }
+
+    /* The tests from here on are written to D3's shape: its layers' sizes, its
+     * file's length, tiles and thresholds chosen for it.  A build of another
+     * shape is the same source, and runs the tests above, which are of any. */
+    if (N_SIDE != 28 || N_HID != 100 || N_OUT != 10) {
+        printf("selftest: built for images %d x %d, layers %d wide and %d outputs: the tests that are "
+               "of D3's shape are not run on this build\n", N_SIDE, N_SIDE, N_HID, N_OUT);
+        printf("selftest %s\n", errors ? "FAILED" : "passed");
+        return errors ? 1 : 0;
     }
 
     /* 6. a network of one hidden layer is laid out as this harness always
@@ -4175,9 +4680,12 @@ static int cmd_selftest(void)
 static void help(void)
 {
     printf("pta_mnist selftest\n"
-           "pta_mnist invert IN OUT   an idx file of 28 x 28 images, every pixel taken from 255\n"
+           "pta_mnist invert IN OUT   an idx file of this build's images, every pixel taken from 255\n"
+           "pta_mnist pool IN OUT     an idx file of 28 x 28 images, pooled to this build's size: the\n"
+           "                          middle cut into equal blocks, and each block's mean\n"
            "pta_mnist train --data DIR --din 8|16 --wbits B --seed S --out NET [--from NET] [--verbose 1]\n"
-           "  --hidden H      hidden layers, each 100 wide (1, which is D3; up to 8)\n"
+           "  --hidden H      hidden layers, each as wide as the build has them, 100 unless it says\n"
+           "                  another (1, which is D3; up to 8)\n"
            "  --sumnoise F    train with Gaussian noise on every layer's sums, F of their rms (0)\n"
            "  --epochs N      run N epochs, in place of stopping when held-out accuracy stops rising\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
@@ -4199,8 +4707,8 @@ static void help(void)
            "  --maxk K --maxn N   the most a GEMM takes, in whole tiles (256, 8 on the 8 x 8\n"
            "                  tile; a whole layer on any other, which is one command)\n"
            "  --probe 1       add each layer's error against the network's own sums, the run's\n"
-           "                  noise in 8-bit LSB, and the accuracy that error alone predicts\n"
-           "  --src X         the light source: every line's power together, rms fraction a shot\n"
+           "                  noise in 8-bit LSB, and the accuracy that error alone predicts\n");
+    printf("  --src X         the light source: every line's power together, rms fraction a shot\n"
            "  --srcline X     each line's on its own, rms fraction a shot\n"
            "  --srcflat X     each line's level, rms fraction, fixed for the run\n"
            "  --buses B       the tile's rows as B runs that share their lines (1)\n"
@@ -4218,6 +4726,12 @@ static void help(void)
            "                  the rewritten weights would be off by: read, round, rail.  For a\n"
            "                  source with no noise, held at the rail\n"
            "  --levellayer N  in layer N alone, from 1; or in every layer (0)\n"
+           "  --host N        the network's first N layers run on the host, exactly, and the rest on\n"
+           "                  the tile.  Not modelled with a light source (0)\n"
+           "  --gate 1        with --probe: the last layer against a reference in its own declared\n"
+           "                  format, as rms over the reference's rms, over its largest value, and\n"
+           "                  the largest error over that value; and against the operands as given.\n"
+           "                  And how often that reference is right, and the tile gives its class\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
@@ -4241,7 +4755,8 @@ int main(int argc, char **argv)
         uint8_t *b = read_file(argv[2], &len);
         FILE *f;
         if ((n = invert_idx(b, len)) < 0) {
-            fprintf(stderr, "pta_mnist: %s missing or not an idx file of 28 x 28 images\n", argv[2]);
+            fprintf(stderr, "pta_mnist: %s missing or not an idx file of %d x %d images\n", argv[2],
+                    N_SIDE, N_SIDE);
             free(b);
             return 1;
         }
@@ -4253,6 +4768,29 @@ int main(int argc, char **argv)
         }
         free(b);
         printf("invert: %ld pixels\n", n);
+        return 0;
+    }
+    if (argc == 4 && strcmp(argv[1], "pool") == 0) {
+        long len = 0, n = -1;
+        uint8_t *b = read_file(argv[2], &len), *out = b ? (uint8_t *)malloc((size_t)len + 1) : NULL;
+        FILE *f;
+        if (!out || (n = pool_idx(b, len, N_SIDE, out)) < 0) {
+            fprintf(stderr, "pta_mnist: %s missing, not an idx file of 28 x 28 images, or 28 does not "
+                            "pool to %d\n", argv[2], N_SIDE);
+            free(b);
+            free(out);
+            return 1;
+        }
+        f = fopen(argv[3], "wb");
+        if (!f || fwrite(out, 1, (size_t)n, f) != (size_t)n || fclose(f) != 0) {
+            fprintf(stderr, "pta_mnist: cannot write %s\n", argv[3]);
+            free(b);
+            free(out);
+            return 1;
+        }
+        free(b);
+        free(out);
+        printf("pool: %ld images to %d x %d\n", (n - 16) / (N_SIDE * N_SIDE), N_SIDE, N_SIDE);
         return 0;
     }
     help();
