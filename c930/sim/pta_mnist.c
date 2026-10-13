@@ -70,6 +70,10 @@
  * bit more is twice the range at the same LSB, and the noise, which is in
  * that LSB, is what it was.  With --gatefit it is B bits over the fitted
  * range, which is the same range in finer steps.
+ * A light (--src, --srcline, --srcflat) is the tile's: with layers on the
+ * host it lights the rest, and what a host does for its lines, read with
+ * --levelprobe and applied with --levelfix, it does to the tile's layers'
+ * weights or inputs and to no others.
  *
  * And the receiver's noise as one laser fixes it (eval --thermalline).  A
  * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
@@ -1105,7 +1109,9 @@ static const int32_t *level_inputs(const host_net *hn, const pta_cfg *c, int M, 
  * divided out of them: bw->a[l] stays what the host worked out, unscaled.
  * The first host_layers layers are not the tile's.  The host runs them: each
  * is the exact product of its operands as they are and its weights as its own
- * quantiser has them, with no shot, no converter and no GEMM launched.
+ * quantiser has them, with no shot, no converter and no GEMM launched.  And
+ * no light: a source's share is in the tile's layers' sums alone, and a
+ * correction for its lines scales those layers' inputs and sums alone.
  */
 static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *tile,
                        pta_device *dev, uint32_t seed, uint32_t *gemm, gemm_buf *g, int M,
@@ -1121,7 +1127,7 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
         const int in = layer_in(l), out = layer_out(H, l);
         const int32_t *src = l == 0 ? a0 : bw->a[l];
         int64_t *y = bw->y[l];
-        if (light.on && light.fix == FIX_INPUTS)
+        if (light.on && light.fix == FIX_INPUTS && l >= host_layers)
             src = level_inputs(hn, &cfg[l], M, in, src);
         memset(y, 0, (size_t)M * out * sizeof *y);
         if (l < host_layers) {
@@ -1156,9 +1162,9 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
                 }
             }
         }
-        if (light.on)
+        if (light.on && l >= host_layers)
             light_add(hn, &cfg[l], l, M, src, y);
-        if (light.on && light.fix != FIX_NONE && light.gain != 1.0)
+        if (light.on && l >= host_layers && light.fix != FIX_NONE && light.gain != 1.0)
             for (m = 0; m < M * out; ++m)
                 y[m] = (int64_t)floor((double)y[m] / light.gain + 0.5);
         if (l < H)
@@ -1698,6 +1704,9 @@ static int level_probe(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile
  * tile_batch() divides out again.  That costs light: the converter sees less
  * of everything.
  *
+ * A layer the host runs is not lit, and is left as it is: its weights are the
+ * network's and its w_bits the run's.
+ *
  * out receives the rewritten network when the weights are, and cfg its w_bits
  * for FIX_WEIGHTS8.  Returns the network to give the tile, which is hn itself
  * when the inputs are scaled; or NULL if it could not: no reading kept, a
@@ -1744,6 +1753,10 @@ static const host_net *level_apply(host_net *out, const host_net *hn, pta_cfg *c
                 const int32_t w = hn->w[l][n * in + j];
                 const int32_t from = fix == FIX_WEIGHTS8 ? contract_quant(w, bits, D) : w;
                 const double v = floor(from * light.scale[(j % tile_rows) % light.lines] + 0.5);
+                if (l < host_layers) {
+                    out->w[l][n * in + j] = w;
+                    continue;
+                }
                 if (from != 0) {
                     ++light.scaled;
                     light.clipped += fabs(v) > fabs((double)from) &&
@@ -1754,7 +1767,7 @@ static const host_net *level_apply(host_net *out, const host_net *hn, pta_cfg *c
         }
     }
     if (fix == FIX_WEIGHTS8)
-        for (l = 0; l <= H; ++l)
+        for (l = host_layers; l <= H; ++l)
             cfg[l].w_bits = (uint32_t)D;
     return light_weights(out, cfg) == 0 ? out : NULL;
 }
@@ -2465,13 +2478,14 @@ static int cmd_eval(int argc, char **argv)
         fprintf(stderr, "pta_mnist: --levellayer is a layer of the network, from 1\n");
         return 2;
     }
-    /* The light, the level probe and the two ways of putting a network on the
-     * tile are written for a network that is all on it. */
-    if (host < 0 || host > H || (host && (lit || thermalline || hidshift || w1gain)) ||
+    /* A line's noise as a laser fixes it, a correction told apart and the two
+     * ways of putting a network on the tile are written for a network that is
+     * all on it.  A light is the tile's layers' alone, whichever they are. */
+    if (host < 0 || host > H || (host && (thermalline || hidshift || w1gain || levelpart)) ||
         (gate && !probing)) {
         fprintf(stderr, "pta_mnist: --host is how many of the network's first layers the host runs, "
-                        "0 to %d, and is not modelled with a light source, --thermalline, --hidshift "
-                        "or --w1gain; --gate needs --probe\n", H);
+                        "0 to %d, and is not modelled with --thermalline, --hidshift, --w1gain or "
+                        "--levelpart; --gate needs --probe\n", H);
         return 2;
     }
     host_layers = host;
@@ -2711,7 +2725,7 @@ static int cmd_eval(int argc, char **argv)
            "adcbits=%u S=%s sh=%s thermal=%g photons=%g prog=%g xtalk=%g drift=%s hours=%g "
            "steps=%llu sigma_d=%u d_max=%u cal=%d trimstep=%g trimmax=%g post_hours=%g "
            "seed=%u images=%d correct=%d acc=%.2f sats=%ld elements=%ld",
-           net->din, net->wbits, net->seed, net->from_bits, net->epochs, net->test_acc, cfg[0].impair, cfg[0].w_bits,
+           net->din, net->wbits, net->seed, net->from_bits, net->epochs, net->test_acc, cfg[0].impair, cfg[H].w_bits,
            cfg[0].act_bits, cfg[0].adc_bits, s_txt, sh_txt, cfg[0].sigma_th / 256.0, photons,
            cfg[0].sigma_pr / 256.0, cfg[0].xtalk / 256.0, drift, hours, (unsigned long long)steps,
            cfg[0].drift_sigma, cfg[0].drift_max, calibrate, cfg[0].trim_step / 256.0,
@@ -2894,6 +2908,29 @@ static void level_error(const host_net *hn, const pta_cfg *cfg, int M, const int
             }
         e[l] = sy > 0.0 ? sqrt(se / sy) : 0.0;
     }
+}
+
+/* Whether a batch's sums in the layers the host runs are the ones kept: H
+ * layers of M x N_HID, one after another. */
+static int host_sums_same(const batch_ws *bw, const int64_t *kept, int H, int M)
+{
+    int l, same = 1;
+
+    for (l = 0; l < H; ++l)
+        same &= memcmp(kept + (size_t)l * M * N_HID, bw->y[l],
+                       (size_t)M * N_HID * sizeof(int64_t)) == 0;
+    return same;
+}
+
+/* How far a batch's last sums are from the ones kept: the sum of squares. */
+static double sums_off(const int64_t *y, const int64_t *kept, int count)
+{
+    double off = 0.0;
+    int i;
+
+    for (i = 0; i < count; ++i)
+        off += ((double)y[i] - (double)kept[i]) * ((double)y[i] - (double)kept[i]);
+    return off;
 }
 
 static int cmd_selftest(void)
@@ -3703,6 +3740,113 @@ static int cmd_selftest(void)
                    wider ? "so" : "NOT SO");
             if (!wider)
                 errors += fail("a converter with a bit more is not twice the range at the same step");
+            free(kept);
+        }
+        /* 5g. a light on a tile that has the last layer alone.  The same
+         *     network and the format alone, at the fitted step, with the
+         *     first two layers on the host.  Lit, the layers the host runs
+         *     are the sums they were: a source lights the tile.  With lines
+         *     that are not level and no noise, each of the last layer's sums
+         *     gains its rows' lines' levels times what each row carries,
+         *     worked out here from the lines.  With noise on the source the
+         *     host's layers are still what they were, and the last layer's
+         *     sums move.  And a correction for the lines, on the weights at
+         *     8 bits, on them with every row brought down to the dimmest
+         *     line's, or on the inputs, touches nothing of the host's: its
+         *     layers' weights and widths and sums are what they were, the
+         *     last layer's weights are written at the operand's width, and
+         *     its corrected sums are nearer the unlit ones than the
+         *     uncorrected were. */
+        {
+            enum { WAYS = 3 };
+            static const int how[WAYS] = {FIX_WEIGHTS8, FIX_WEIGHTS8, FIX_INPUTS};
+            static const int dimmest[WAYS] = {0, 1, 0};
+            const int outs = M * N_OUT, hid = M * N_HID;
+            int64_t *kept = (int64_t *)malloc(((size_t)H * hid + outs) * sizeof(int64_t));
+            int64_t *dark = kept ? kept + (size_t)H * hid : NULL;
+            double found = 0.0, left = 0.0, off_lit = 0.0, nearer[WAYS] = {0.0, 0.0, 0.0};
+            int spared = 1, gained = 1, moved = 0, noisy = 0, mended = 1, way, m, o, k;
+            uint32_t gemm = 0;
+
+            for (l = 0; l <= H; ++l) {
+                cfg[l].adc_bits  = BITS;
+                cfg[l].adc_shift = (uint32_t)s_fit;
+            }
+            host_layers = H;
+            if (!fitted || !kept || tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0)
+                spared = 0;
+            for (l = 0; spared && l < H; ++l)
+                memcpy(kept + (size_t)l * hid, bw->y[l], (size_t)hid * sizeof(int64_t));
+            if (spared)
+                memcpy(dark, bw->y[H], (size_t)outs * sizeof(int64_t));
+            /* lines that are not level, and no noise */
+            if (spared && light_setup(&hn, cfg, 7, 0.0, 0.0, 0.2, 2, 0) == 0 &&
+                tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) >= 0) {
+                spared &= host_sums_same(bw, kept, H, M);
+                for (m = 0; m < M; ++m)
+                    for (o = 0; o < N_OUT; ++o) {
+                        double d = 0.0;
+                        for (k = 0; k < N_HID; ++k)
+                            d += (contract_quant(bw->a[H][m * N_HID + k], AB, D) *
+                                  light.level[(k % tile_rows) % light.lines]) *
+                                 (light.wq[H][o * N_HID + k] + 0.0);
+                        gained &= bw->y[H][m * N_OUT + o] == dark[m * N_OUT + o] + (int64_t)floor(d + 0.5);
+                        moved |= bw->y[H][m * N_OUT + o] != dark[m * N_OUT + o];
+                    }
+                off_lit = sums_off(bw->y[H], dark, outs);
+            } else {
+                spared = 0;
+            }
+            /* noise on the source, the lines together and each on its own */
+            if (spared && light_setup(&hn, cfg, 7, 0.01, 0.05, 0.0, 2, 0) == 0 &&
+                tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) >= 0) {
+                spared &= host_sums_same(bw, kept, H, M);
+                noisy = memcmp(bw->y[H], dark, (size_t)outs * sizeof(int64_t)) != 0;
+            } else {
+                spared = 0;
+            }
+            /* and the lines read and corrected, three ways */
+            for (way = 0; spared && way < WAYS; ++way) {
+                host_net hf;
+                const host_net *ht = NULL;
+                memset(&hf, 0, sizeof hf);
+                if (light_setup(&hn, cfg, 7, 0.0, 0.0, 0.2, 2, 0) != 0) {
+                    mended = 0;
+                    break;
+                }
+                light.keep = 1;
+                if (level_probe(&dev, &cfg[0], &tile, 7, 16, g, &found, &left) == 0)
+                    ht = level_apply(&hf, &hn, cfg, how[way], dimmest[way]);
+                if (!ht || tile_batch(ht, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0) {
+                    mended = 0;
+                } else {
+                    const double off = sums_off(bw->y[H], dark, outs);
+                    spared &= host_sums_same(bw, kept, H, M);
+                    nearer[way] = off > 0.0 ? sqrt(off_lit / off) : 0.0;
+                    mended &= nearer[way] > 1.0 && (dimmest[way] ? light.gain < 1.0 : light.gain == 1.0);
+                    for (l = 0; l < H; ++l)
+                        mended &= cfg[l].w_bits == (uint32_t)WB &&
+                                  memcmp(ht->w[l], hn.w[l], (size_t)layer_size(H, l) * sizeof(int32_t)) == 0;
+                    mended &= cfg[H].w_bits == (uint32_t)(how[way] == FIX_WEIGHTS8 ? D : WB);
+                }
+                if (ht && ht != &hn)
+                    host_free(&hf);
+                for (l = 0; l <= H; ++l)
+                    cfg[l].w_bits = WB;
+            }
+            light_free();
+            host_layers = 0;
+            printf("selftest: a light on a tile that has the last layer alone: lit, the layers the "
+                   "host runs are the sums they were: %s; with lines %.3f rms off and no noise each of "
+                   "the last layer's %d sums gains its rows' lines' levels times what each row carries: "
+                   "%s; with noise on the source they move: %s; and the lines read and corrected on the "
+                   "weights at 8 bits, on them to the dimmest line and on the inputs leave the host's "
+                   "weights and widths alone and the last layer's sums %.1f, %.1f and %.1f times "
+                   "nearer the unlit ones: %s\n",
+                   spared ? "so" : "NOT SO", found, outs, gained && moved ? "so" : "NOT SO",
+                   noisy ? "so" : "NOT SO", nearer[0], nearer[1], nearer[2], mended ? "so" : "NOT SO");
+            if (!spared || !gained || !moved || !noisy || !mended)
+                errors += fail("a light on a tile with layers on the host is not the tile's layers' alone");
             free(kept);
         }
         pta_device_free(&dev);
@@ -5077,7 +5221,8 @@ static void help(void)
            "                  source with no noise, held at the rail\n"
            "  --levellayer N  in layer N alone, from 1; or in every layer (0)\n"
            "  --host N        the network's first N layers run on the host, exactly, and the rest on\n"
-           "                  the tile.  Not modelled with a light source (0)\n"
+           "                  the tile.  A light, and a correction for its lines, are the tile's\n"
+           "                  layers' alone (0)\n"
            "  --gate 1        with --probe: the last layer against a reference in its own declared\n"
            "                  format, as rms over the reference's rms, over its largest value, and\n"
            "                  the largest error over that value; and against the operands as given.\n"

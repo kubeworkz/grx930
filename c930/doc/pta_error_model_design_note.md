@@ -183,6 +183,20 @@ is what it was. Spent on finer steps over the fitted range instead, the bit
 halves the rounding and leaves the noise: 0.97 to 0.99 times the error of eight
 bits fitted. grxcp prices the bit: 4.2 to 10.8 mW a converter where eight is
 4.2 to 5.3.
+**And the sixteenth, the same day** (§5, at its end): the same layer with a
+light source switched on. The harness would not light a tile that had only some
+of a network's layers; it now does, and a source lights the tile's layers
+alone. With the source as grxcp holds it, 1% rms a shot for the lines together,
+5% for a line on its own and lines 20% off that are read and corrected on the
+weights, the reference networks' last layer is 5.18, 5.34 and 5.27% of the
+reference's rms off its declared format, where with no source it was 4.46, 4.67
+and 4.18%: a seventh more, in the mean of thirty networks. Its largest error
+grows by more, and the class is the declared reference's on 99.44, 96.45 and
+98.89% where it was on 99.59, 96.78 and 99.23%. The dear row is the lines'
+level. Left alone it adds 5.7 to 7.7% in squares. Read, it still adds as much
+as a line's own noise, because the rail holds back 1 to 11% of the weights a
+dim line needs raised. And what that leaves is not noise: the source by itself
+is further off than what it adds to the tile.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -4842,8 +4856,10 @@ the nearest. Such a directory is marked, runs `chain` and nothing else, and
 rest on the tile. A host layer's sums are the exact product of its operands as
 they are and its weights as its own quantiser has them, with no shot, no
 converter and no GEMM launched: what a digital engine gives. It is refused with
-a light source, `--thermalline`, `--hidshift` or `--w1gain`, which are written
-for a network that is all on the tile. `--gate 1`, with `--probe`, measures the
+~~a light source,~~ `--thermalline`, `--hidshift` or `--w1gain`, which are
+written for a network that is all on the tile. *A light source is taken since
+the same day: this section's last part, "with a light source switched on".*
+`--gate 1`, with `--probe`, measures the
 last layer against a second reference, in its declared format: the exact
 product of the activations at the tile's own bits and the weights as the
 network has them. A run prints `gate_bits`; `gate_rms`, its rms error over that
@@ -5145,7 +5161,8 @@ says.
 **What this is not.** grxgpu's classifier, its data or its thresholds. A chip.
 The chain: the NPU and the G100 are taken as exact, and the CPU's conversions
 as this harness's own rescale. A lit tile: grxcp's source rows add to all of
-it, and are not in these figures. Int8 weights. A range set for the gate: the
+it, and are not in these figures. *They are run the same day: "with a light
+source switched on", below.* Int8 weights. A range set for the gate: the
 converter's is the one this harness has always set, for the class. A ruling on
 what full scale is: that is grxgpu's, and three readings of it are priced. Five
 draws, of the same five networks. Version 1, or another tile.
@@ -5793,6 +5810,370 @@ is. A receiver: the bit is modelled as a converter's, and the front end that
 has to stay linear to twice the photocurrent is not modelled and not priced. A
 remedy for the largest error, which is the noise's and is where it was. Five
 draws, of the same five networks.
+
+### The first board's last layer, with a light source switched on
+
+*Added 2026-10-13.* `SHAPE=chain sim/pta_mnist.sh DIR WORK chainlit`, and
+`pta_mnist eval --host` with a source. Reported, not gated.
+
+**Why.** Three sections have run the first board's last layer on the tile, and
+every run had the tile's own noise and no source. Each said so: the harness lit
+whole networks, and refused a light where the host had layers. The largest
+error of that layer is the noise's, and it is what keeps the tile outside the
+demonstration's 2.0%. A source adds to it, and by how much was not known.
+
+**The change.** `eval --host N` now takes a light. A source's share is added to
+the sums of the layers the tile runs and to no other. What a host does for its
+lines is the tile's too: a reading put on the weights rewrites the tile's
+layers' weights and leaves the host's as they are, at the width they had; a
+reading put on the inputs scales the tile's layers' inputs alone; and where
+every row is scaled to the dimmest line, what that takes off is divided back
+out of the tile's sums alone. `--thermalline`, `--hidshift`, `--w1gain` and
+`--levelpart` are still refused where the host has layers. A line's `wbits` is
+now the last layer's weights' width, which in every run before this was every
+layer's. A line printed without `--host` and a source together is what it was.
+
+**How the light is modelled**, which is this harness's way and is first order.
+A shot's sum gains, for each row, its product times its line's error, and that
+share is added after the converter: it is neither rounded nor held at the
+range. A correction on the weights rewrites them before the tile, so the
+converter sees the sums of the rewritten weights and the light's share then
+brings them back. A chip's converter sees the two together. So where a row's
+weights were raised for a dim line, this model's converter sees a sum larger
+than a chip's would, and can hold it at the range where a chip would not.
+
+The self-test's 42 lines are as they were, with one more, and a build of the
+chain's shape prints 28. The new block uses the made-up network of the two
+before it, with its first two layers on the host. Lit, the host's layers' sums
+are the ones they were. With lines that are not level and no noise, each of the
+last layer's sums gains its rows' lines' levels times what each row carries,
+worked out there from the lines. With noise on the source the last layer's sums
+move and the host's do not. And with the lines read and corrected three ways,
+on the weights at 8 bits, on them with every row scaled to the dimmest line,
+and on the inputs, the host's weights, widths and sums are what they were, the
+last layer's weights are 8 bits wide where they are rewritten, and its sums are
+nearer the unlit ones than the uncorrected were.
+
+15 errors were planted one at a time in that code and built at both shapes,
+before the mode was written or anything swept: the light on every layer, on the
+host's alone, on all but the tile's first; a correction's gain, its scaled
+inputs and its rewritten weights reaching the host's layers, or missing the
+tile's; a width set for the wrong layers; and the light's share through the
+wrong weights, the wrong activations, the wrong line, or rounded down. Each
+fails the self-test at both shapes.
+
+What the change did inside `cmd_eval` is reached by no self-test, so it is
+tested through the mode. 2 errors planted there, the refusal put back and the
+width taken from the first layer, were each built into the harness and the mode
+run with it, as written, on 400 images and on 100. Each fails. A source over
+two host layers is taken, and each of the 4 options still refused with host
+layers is refused. And with the script and the harness as they now are,
+`refcomb`'s, `chain`'s, `chainfit`'s and `chainbit`'s checks and tables alone,
+on the lines their own sweeps wrote for MNIST, say yes and print what those
+sweeps printed. Ten runs those modes and the ones before them made were also
+run again with it, and each is the line its sweep wrote, byte for byte: eight
+of them lit with every layer on the tile, held and in a cycle, with the lines
+read and put on the weights, on the weights at 8 bits, on the inputs, scaled to
+the dimmest line, and told apart.
+
+**What it runs.** The sixteenth mode, in `chain`'s work directories and on its
+networks, tile and draws, on the 8-bit converter grxcp's B14 keeps. Ten rows on
+each of five draws, and each again on a thousand images:
+
+| Row | What it is |
+|---|---|
+| format only; as budgeted | `chain`'s two rows, with no source and the range training's rule gives: its own runs |
+| as budgeted, fitted | `chainfit`'s row, with no source and `--gatefit 1`: its own runs |
+| as budgeted, lit: shared | With `--src 0.01`: the lines together, 1% rms a shot |
+| as budgeted, lit: a line | With `--srcline 0.05 --buses 2`: a line on its own, 5% rms a shot |
+| as budgeted, lit: level, left | With `--srcflat 0.2 --buses 2`: lines 20% off, rms, and left alone |
+| as budgeted, lit: level | The same with `--levelprobe 16 --levelfix weights8`: read at sixteen shots a row, and put on the weights at 8 bits |
+| as budgeted, lit | All three, read and corrected: the source |
+| as budgeted, lit, fitted | The source, with `--gatefit 1` |
+| format only, lit | The source over the format alone |
+| each of those ten, a thousand | The same on the test set's first thousand images |
+
+The source's rows are grxcp's B16 as it stands: 1%, 5%, and lines 20% off that
+are read at each calibration and corrected on the weights at 8 bits; on two
+buses, which at this tile's 128 rows is 64 lines. A lit row is read over its
+own row with no source, at the same range and of its draw. That is 1,000
+evaluations a data set. The rows with no source are `chain`'s and `chainfit`'s
+own runs, and where a directory has what they wrote the mode holds each to that
+line, byte for byte: 300 a data set, all the same.
+
+It was run once, on 2026-10-13 at 19:57 UTC, and took 14.5 minutes for the
+three data sets side by side. Before it the mode was run on two draws of MNIST,
+to see its check say yes, and the check then gained one condition: that a lit
+run is not its run with no source, figure for figure. The harness did not
+change after its planted errors were run.
+
+The mode checks every network and every run against its place, as `chainbit`
+does its own. A run's name says its draw, whether it is the format alone or the
+tile as budgeted, which of the source's rows are lit, whether its range is
+training's or fitted, and whether it is of a thousand images or of all, which
+have to be what it was asked and what its line printed. A run with no source
+says nothing of one. A lit run says its three rows, each what its name lights
+and nought for the others, its buses, and that a weight is read through a pair.
+Where the lines are read it says the probe's sixteen shots, what the lines
+were, within a half of the 20% they were drawn at, and what the reading leaves,
+under a quarter of that; that the reading went on the weights at 8 bits with
+nothing scaled to the dimmest line; and its weights are 8 bits wide where every
+other run's are 6. Its first two layers, the host's, are not off their operands
+at all. A lit run's range is its row with no source's. Where no weight is
+rewritten it has that run's sums past the range, as many. And it is not that
+run: its error and its class are not that run's, figure for figure.
+
+213 errors were planted one at a time, and all but two fail. 115 in a
+training's line, a run's line or the row a row is held against, against the
+check with nothing run again, two of them a row with no source that is not the
+line `chain` or `chainfit` wrote. 42 in the script, each run in a directory of
+its own on 400 images and on 100. And 56 in the tables' own code, which the
+check does not see and which have to move a table. Two of those cannot, in this
+mode. One counts the runs whose step moved in bits where it should count runs,
+and here every step that moves, moves by one bit. The other takes what a
+reading leaves as a mean over every run and not over the runs that read the
+lines, and in every row all of them do or none does.
+
+**The source costs the last layer a seventh more error.** A row's rms error
+against its declared format, percent of the reference's rms, on 10,000 images:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| No source: the tile as budgeted | 4.81 | 4.46 | 4.54 | 4.67 | 4.28 | 4.18 |
+| The shared row, 1% | 4.92 | 4.57 | 4.65 | 4.78 | 4.40 | 4.30 |
+| A line's own noise, 5% | 5.06 | 4.79 | 4.78 | 4.94 | 4.65 | 4.63 |
+| Lines 20% off, left alone | 7.37 | 7.75 | 7.54 | 8.06 | 8.16 | 8.61 |
+| Lines 20% off, read and corrected | 4.70 | 4.73 | 4.48 | 4.97 | 4.40 | 4.76 |
+| The source, all three | 5.10 | 5.18 | 4.84 | 5.34 | 4.89 | 5.27 |
+| No source, range fitted | 4.81 | 4.64 | 4.54 | 5.05 | 4.61 | 4.18 |
+| The source, range fitted | 5.10 | 5.33 | 4.84 | 5.66 | 5.18 | 5.27 |
+| The format alone, no source | 0.96 | 0.71 | 0.91 | 1.04 | 0.85 | 0.76 |
+| The format alone, with the source | 3.49 | 4.12 | 4.55 | 4.96 | 4.72 | 5.27 |
+
+As budgeted and lit the reference networks are 5.18, 5.34 and 5.27% off, where
+with no source they were 4.46, 4.67 and 4.18%. A network has 0.98 to 1.40 times
+the rms error it had, 1.14 in the mean of the thirty. No run of the 150 is
+within 1.0%, as none was.
+
+**Row by row, in squares.** What a lit row adds to its row with no source: the
+root of its rms squared less the other's, run for run and then a mean. It is
+what the row would add if its error and the tile's were independent.
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The shared row, 1% | 1.00 | 1.00 | 1.01 | 1.00 | 1.00 | 1.00 |
+| A line's own noise, 5% | 1.56 | 1.74 | 1.48 | 1.60 | 1.81 | 1.98 |
+| Lines 20% off, left alone | 5.75 | 6.51 | 6.33 | 6.84 | 7.17 | 7.73 |
+| Lines 20% off, read and corrected | −0.99 | 1.60 | 0.42 | 1.93 | 1.17 | 2.40 |
+| The source, all three | 1.70 | 2.65 | 1.87 | 2.73 | 2.42 | 3.29 |
+| The source, range fitted | 1.70 | 2.66 | 1.87 | 2.71 | 2.41 | 3.29 |
+| The source, on the format alone | 3.43 | 4.13 | 4.68 | 5.10 | 4.76 | 5.36 |
+
+The shared 1% adds 1.00 to 1.01 on every set and kind, which is itself: 1% of
+every sum of a shot. A line's own 5% adds 1.48 to 1.98, since a sum's rows do
+not all err one way. Lines 20% off and left alone add 5.75 to 7.73. The same
+lines read and corrected add 1.60, 1.93 and 2.40 for the reference networks,
+and the source, all three, adds 2.65, 2.73 and 3.29.
+
+**The reading is good, and what it leaves is the rail.**
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| What the lines were, rms | 0.201 | 0.201 | 0.201 | 0.201 | 0.201 | 0.201 |
+| What the reading leaves, no noise on the source | 0.0013 | 0.0013 | 0.0013 | 0.0013 | 0.0013 | 0.0013 |
+| What it leaves with the source's noise | 0.0099 | 0.0099 | 0.0099 | 0.0099 | 0.0099 | 0.0099 |
+| Weights the rail held back, % of those scaled: a mean | 3.6 | 4.5 | 6.3 | 6.8 | 4.5 | 5.3 |
+| the most in any run | 6.4 | 7.4 | 10.4 | 11.3 | 6.0 | 6.8 |
+
+The probe finds the lines 0.16 to 0.23 off, rms, and its reading leaves 0.0011
+to 0.0015 with no noise on the source and 0.008 to 0.011 with it. But a dim
+line's row has to be raised, and a weight at full scale cannot be. Of the
+weights the reading scales, the rail holds back 1.3 to 11.3%, and 5.2% in the
+mean. Nothing in training keeps a weight clear of it.
+
+**It does not add in squares, because not all of it is noise.** The format
+alone with the source is 4.12, 4.96 and 5.27% of the reference's rms off. That
+is the source by itself, and it is more than the 2.65, 2.73 and 3.29 the same
+source adds to the tile as budgeted. On the inverted set the format alone, lit,
+is as far off as the whole tile, lit. And for MNIST's networks trained before,
+the tile with its lines read is nearer its reference than the tile with no
+source: 4.70% against 4.81%. What the rail leaves comes out the same way in
+every shot, and it meets something in the tile that comes out the other way.
+
+What that is was looked for in one network and not in the mode: MNIST's
+reference network of seed 3, its first 2,000 images and one draw, by hand, with
+the tile's impairments one at a time. Percent of the reference's rms. No check
+holds these figures and grxcp's model does not have them.
+
+| The tile's impairments, of one network | No source | The source | It adds, in squares | Lines read alone add |
+|---|---|---|---|---|
+| The format alone | 0.80 | 4.14 | 4.06 | 3.44 |
+| and the receiver's noise | 1.05 | 4.19 | 4.06 | 3.47 |
+| and the shot noise | 2.82 | 5.00 | 4.12 | 3.49 |
+| and the programming error | 1.01 | 4.20 | 4.08 | 3.48 |
+| and the crosstalk | 3.64 | 4.78 | 3.10 | 2.18 |
+| All of them: as budgeted | 4.66 | 5.59 | 3.09 | 2.09 |
+
+The source adds 4.1% under the format alone and under each of three
+impairments, and 3.1% under the crosstalk, alone or with the rest. A
+neighbour's ring passes some of a row's light, which swells a sum whose weights
+run the same way; a weight held at the rail on a dim line shrinks it. That is
+one network. The same look tried the other correction this harness has, every
+row scaled down to the dimmest line, where no weight is raised and the rail
+holds none. Under the format alone it leaves 1.7% where 3.5% was. Under the
+tile as budgeted it leaves the layer 6.2% off where the correction on the
+weights leaves 5.1%: it takes half the light, and the tile's noise is in LSB.
+
+**The largest error grows more than the rms does.** Percent of the largest the
+reference is, on 10,000 images:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| No source: a mean over the runs | 8.44 | 8.02 | 7.20 | 11.53 | 8.60 | 7.44 |
+| the most in any run | 9.70 | 8.97 | 8.19 | 24.05 | 11.78 | 8.59 |
+| the most in a run with no sum past the range | 9.70 | 8.97 | 8.19 | 8.65 | 8.86 | 8.59 |
+| The source: a mean over the runs | 10.44 | 11.91 | 9.40 | 14.91 | 13.07 | 12.76 |
+| the most in any run | 13.25 | 19.57 | 15.06 | 34.03 | 26.15 | 19.48 |
+| the most in a run with no sum past the range | 13.25 | 14.99 | 12.56 | 14.50 | 14.07 | 19.48 |
+| No source, range fitted: a mean over the runs | 8.44 | 7.95 | 7.20 | 7.92 | 8.33 | 7.44 |
+| the most in any run | 9.70 | 8.97 | 8.19 | 8.95 | 9.64 | 8.59 |
+| the most in a run with no sum past the range | 9.70 | 8.97 | 8.19 | 8.95 | 9.64 | 8.59 |
+| The source, range fitted: a mean over the runs | 10.44 | 11.40 | 9.40 | 10.16 | 11.54 | 12.76 |
+| the most in any run | 13.25 | 14.99 | 15.06 | 14.50 | 16.23 | 19.48 |
+| the most in a run with no sum past the range | 13.25 | 14.99 | 12.56 | 14.50 | 16.23 | 19.48 |
+
+With the source its mean over a set's runs is 9.4 to 14.9%, where it was 7.2 to
+11.5%, and the most in any run with no sum past the converter's range is 19.5%,
+where it was 9.7%. A weight the rail held back is off by as much in every shot,
+so the sums it feeds are off by a fixed share and not by a draw. No run of the
+600 with the source is within 2.0%.
+
+**The sums past the range in a row whose lines are read are the model's
+order.**
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| No source: runs of 25 with a sum past the range | 0 | 5 | 0 | 10 | 10 | 0 |
+| Lines left alone: runs of 25 with a sum past the range | 0 | 5 | 0 | 10 | 10 | 0 |
+| Lines read: runs of 25 with a sum past the range | 0 | 8 | 4 | 10 | 10 | 0 |
+| The source: runs of 25 with a sum past the range | 0 | 8 | 4 | 10 | 10 | 0 |
+| No source, range fitted: runs of 25 with a sum past the range | 0 | 0 | 0 | 0 | 0 | 0 |
+| The source, range fitted: runs of 25 with a sum past the range | 0 | 3 | 4 | 0 | 0 | 0 |
+| No source: the most sums past it in a run, of 160,000 | 0 | 27 | 0 | 161 | 52 | 0 |
+| The source: the most sums past it in a run, of 160,000 | 0 | 83 | 2 | 346 | 228 | 0 |
+| The source, range fitted: the most sums past it in a run, of 160,000 | 0 | 2 | 2 | 0 | 0 | 0 |
+
+A lit run with no weight rewritten has its unlit run's sums past the range, as
+many, in all 900 such runs: the light's share is added after the converter.
+With the lines read, 28 of the 150 runs as budgeted have more than their run
+with no source and 4 have fewer, and fitted, 7 runs have some where none had.
+That is the converter seeing the rewritten weights' sums before the light
+brings them back. The largest error in a run with a sum past the range is not a
+source's, and the table before this one gives it apart.
+
+**The class.** How often the class the tile gives is the class its declared
+reference gives, percent, and in brackets the runs of 25 at 99.5% or more; on
+10,000 images unless it says:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| No source | 99.40 (2) | 99.59 (23) | 95.92 (0) | 96.78 (0) | 98.86 (0) | 99.23 (0) |
+| The shared row, 1% | 99.40 (2) | 99.59 (23) | 95.91 (0) | 96.77 (0) | 98.86 (0) | 99.24 (0) |
+| A line's own noise, 5% | 99.33 (0) | 99.52 (16) | 95.85 (0) | 96.69 (0) | 98.69 (0) | 99.11 (0) |
+| Lines 20% off, left alone | 98.67 (0) | 98.91 (0) | 94.24 (0) | 95.36 (0) | 97.08 (0) | 97.99 (0) |
+| Lines 20% off, read and corrected | 99.33 (0) | 99.50 (13) | 95.81 (0) | 96.58 (0) | 98.63 (0) | 99.00 (0) |
+| The source, all three | 99.26 (0) | 99.44 (8) | 95.59 (0) | 96.45 (0) | 98.47 (0) | 98.89 (0) |
+| No source, range fitted | 99.40 (2) | 99.55 (20) | 95.92 (0) | 96.20 (0) | 98.66 (0) | 99.23 (0) |
+| The source, range fitted | 99.26 (0) | 99.41 (8) | 95.59 (0) | 95.90 (0) | 98.29 (0) | 98.89 (0) |
+| The first thousand images: no source | 99.25 (6) | 99.49 (13) | 96.01 (0) | 96.85 (0) | 98.80 (2) | 99.10 (1) |
+| the source | 99.16 (4) | 99.33 (8) | 95.74 (0) | 96.41 (0) | 98.37 (0) | 98.66 (0) |
+| the source, range fitted | 99.16 (4) | 99.33 (8) | 95.74 (0) | 96.17 (0) | 98.26 (0) | 98.66 (0) |
+
+As budgeted and lit the reference networks give that class on 99.44, 96.45 and
+98.89%, where with no source they gave it on 99.59, 96.78 and 99.23%. On the
+first thousand it is 99.33, 96.41 and 98.66%, with 8, 0 and 0 runs of 25 at
+99.5%, where 13, 0 and 1 were. With the lines left alone it is 98.91, 95.36 and
+97.99% of 10,000.
+
+**In points of accuracy.** What a lit row adds over its row with no source, in
+points lost, with what five networks put outside chance at one in twenty in
+bold:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| With no source, as budgeted, % | 96.79 | 96.97 | 82.85 | 83.47 | 93.82 | 95.19 |
+| The shared row adds | 0.00 ± 0.00 | 0.00 ± 0.00 | −0.01 ± 0.00 | 0.00 ± 0.00 | −0.01 ± 0.01 | −0.01 ± 0.01 |
+| A line's own noise adds | 0.01 ± 0.02 | 0.01 ± 0.01 | 0.04 ± 0.04 | 0.03 ± 0.03 | −0.01 ± 0.03 | −0.01 ± 0.01 |
+| Lines left alone add | **0.25 ± 0.06** | **0.23 ± 0.07** | **0.53 ± 0.13** | **0.37 ± 0.12** | **0.94 ± 0.20** | **0.45 ± 0.06** |
+| Lines read add | 0.04 ± 0.02 | 0.02 ± 0.01 | 0.10 ± 0.09 | 0.08 ± 0.05 | 0.11 ± 0.05 | **0.08 ± 0.02** |
+| The source adds | 0.05 ± 0.03 | **0.03 ± 0.01** | 0.15 ± 0.08 | **0.13 ± 0.04** | **0.15 ± 0.03** | **0.11 ± 0.01** |
+
+The source costs the reference networks 0.03 ± 0.01, 0.13 ± 0.04 and 0.11 ±
+0.01, clear on all three. Lines left alone cost every set and kind a quarter of
+a point to nearly one.
+
+**What was predicted.** Eleven things, written on 2026-10-13 at 19:49 UTC, when
+the change, the mode and the self-test existed and no network had been lit with
+layers on the host. All are for the reference networks, on 10,000 images with
+training's range unless said. Two were right as written. Most of the rest put
+the source's cost too high.
+
+1. That the shared row alone adds 1.0% in quadrature, to a tenth, taking the
+   rms to 4.55 to 4.60, 4.75 to 4.80 and 4.27 to 4.32%, and leaves the class
+   where it was to 0.02 of a point. Right: 4.57, 4.78 and 4.30.
+
+2. That a line's own 5% alone takes the rms to 5.0 to 6.5%, which is 2.3 to
+   4.7% in quadrature. Wrong: 4.79, 4.94 and 4.63, which is 1.74, 1.60 and
+   1.98. A sum's rows cancel more than was allowed for.
+
+3. That lines 20% off and left alone take the rms to 10 to 20% and the class to
+   97.5 to 99.2, 91 to 95.5 and 96.5 to 98.8%. Wrong on the rms, 7.75, 8.06 and
+   8.61, for the same reason. The class is 98.91, 95.36 and 97.99%.
+
+4. That read and corrected the lines cost little: an rms within 0.5 of the tile
+   with no source, lines found 0.17 to 0.23 off and left 0.006 to 0.013, and
+   the rail holding back under 1% of the weights it scales. Wrong three ways.
+   The inverted set's rms is 0.58 over. Some runs' lines are 0.156 off, and
+   with no noise on the source the reading leaves 0.0011. And the rail holds
+   back 1.3 to 11.3%.
+
+5. That the source takes the rms to 5.3 to 6.8% on every set, 1.2 to 1.5 times
+   the tile with no source. Wrong, by a little, low: 5.18, 5.34 and 5.27.
+
+6. That its largest error is 9 to 12.5% in a set's mean on every set and kind,
+   17% at the most, and within 2.0% in no run. Wrong: 9.4 to 14.9% in a set's
+   mean, and 34.0% at the most in a run with sums past the range, 19.5% in one
+   with none. None is within 2.0%.
+
+7. That the class with the source is 99.35 to 99.50, 95.0 to 96.0 and 98.75 to
+   99.05%, and on MNIST's first thousand 99.28 to 99.44% with 3 to 10 runs at
+   99.5%. Wrong on Fashion-MNIST, which is better: 99.44, 96.45 and 98.89.
+
+8. That in points of accuracy the source costs 0.00 to 0.08, 0.02 to 0.25 and
+   0.02 to 0.20, clear on none or on one. Wrong on the last clause: 0.03, 0.13
+   and 0.11, and clear on all three.
+
+9. That the format alone with the source is 3.0 to 4.8% of the reference's rms,
+   and its square within a fifth of what the source adds to the tile. Wrong,
+   and it is this section's finding: 4.12, 4.96 and 5.27, against 2.65, 2.73
+   and 3.29 added to the tile.
+
+10. That a lit run with no weight rewritten has its unlit run's sums past the
+    range, as many, and that with the weights rewritten the most in a run is
+    within 15 of what it was. Right of the first. Wrong of the second: 83, 346
+    and 0, where it was 27, 161 and 0. The model's order was not thought
+    through.
+
+11. That fitted, the source adds what it adds with training's range, to a tenth
+    in squares. Right: 2.66, 2.71 and 3.29, against 2.65, 2.73 and 3.29.
+
+**What this is not.** Everything the three sections before say of themselves: a
+stand-in classifier, in a model, with the chain's other engines taken as exact.
+A converter that sees the light: this model's sees the rewritten weights' sums,
+and the light after. A source through an offset. A cycle of calibrations or a
+drifted tile: this is the source over the tile as budgeted, as written. An
+account of what in the tile the rail's share cancels against: one network was
+looked at. A remedy for either. Five draws, of the same five networks.
 
 ---
 
