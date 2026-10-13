@@ -66,6 +66,10 @@
  * the images that are run, where every other run has it from training images
  * by a rule written for the class: the smallest step at which the largest the
  * reference is, is within the share F of the converter's full scale.
+ * --gatebits B gives the last layer's converter B bits at the step it has: a
+ * bit more is twice the range at the same LSB, and the noise, which is in
+ * that LSB, is what it was.  With --gatefit it is B bits over the fitted
+ * range, which is the same range in finer steps.
  *
  * And the receiver's noise as one laser fixes it (eval --thermalline).  A
  * receiver's noise is a current.  --thermal and --thermal8 give it in LSB, a
@@ -2333,7 +2337,7 @@ static int cmd_eval(int argc, char **argv)
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
         "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
-        "--host", "--gate", "--gatefit", NULL};
+        "--host", "--gate", "--gatefit", "--gatebits", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2368,6 +2372,8 @@ static int cmd_eval(int argc, char **argv)
     const int gate = atoi(opt(argc, argv, "--gate", "0"));
     const char *gatefit = opt(argc, argv, "--gatefit", NULL);
     const double fit_share = gatefit ? atof(gatefit) : 0.0;
+    const char *gatebits = opt(argc, argv, "--gatebits", NULL);
+    const int last_bits = gatebits ? atoi(gatebits) : 0;
     int64_t fit_peak = 0;
     int fit_was = 0;
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
@@ -2478,6 +2484,14 @@ static int cmd_eval(int argc, char **argv)
                         "--adcbits and --host %d\n", H);
         return 2;
     }
+    /* A last converter of its own width is no narrower than the others, whose
+     * step it keeps. */
+    if (gatebits && (!gate || atoi(opt(argc, argv, "--adcbits", "0")) < 2 ||
+                     last_bits < atoi(opt(argc, argv, "--adcbits", "0")) || last_bits > 15)) {
+        fprintf(stderr, "pta_mnist: --gatebits is the bits of the last layer's converter, from "
+                        "--adcbits' to 15, and needs --gate and --adcbits\n");
+        return 2;
+    }
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
@@ -2522,6 +2536,10 @@ static int cmd_eval(int argc, char **argv)
         adc_setup(hn, net, &tr, (int)cfg[0].adc_bits, S);
     for (l = 1; l <= H; ++l)
         cfg[l] = cfg[0];
+    /* The last layer's converter, where it has a width of its own: the step is
+     * still the one adc_setup() gave the run's width, unless it is fitted. */
+    if (gatebits)
+        cfg[H].adc_bits = (uint32_t)last_bits;
     /* The last layer's range, fitted to its declared reference on the images
      * that are run: a board's golden manifest. */
     if (gatefit) {
@@ -2545,7 +2563,7 @@ static int cmd_eval(int argc, char **argv)
         for (l = 0; l <= H; ++l)
             free(fq[l]);
         fit_was = S[H];
-        if ((S[H] = fit_shift(fit_peak, (int)cfg[0].adc_bits, fit_share)) < 0) {
+        if ((S[H] = fit_shift(fit_peak, (int)cfg[H].adc_bits, fit_share)) < 0) {
             fprintf(stderr, "pta_mnist: --gatefit leaves the converter no code\n");
             return 2;
         }
@@ -2783,6 +2801,9 @@ static int cmd_eval(int argc, char **argv)
          * training images' rule had given the last layer. */
         if (gatefit)
             printf(" gate_fit=%g gate_was=%d", fit_share, fit_was);
+        /* And the last converter's width, where it has one of its own. */
+        if (gatebits)
+            printf(" gate_adcbits=%d", last_bits);
         probe_free(&pr);
         for (l = 0; l <= H; ++l)
             free(pq[l]);
@@ -3587,6 +3608,103 @@ static int cmd_selftest(void)
                refused ? "refused" : "TAKEN");
         if (!found || !fitted || !format || !refused)
             errors += fail("a range fitted to the gate is not the smallest that holds its reference");
+        /* 5f. a converter with a bit more.  The same network and the format
+         *     alone.  At the fitted step a 9-bit converter gives the sums the
+         *     8-bit one does, every one.  One step under it the 8-bit one has
+         *     sums past its range and the 9-bit one has none, and none off
+         *     its reference by more than half of that step: a bit more at
+         *     the same step is twice the range.  And no more than twice:
+         *     fitted for itself, a 9-bit converter's shift is the smallest
+         *     at which the reference is within 255 codes, which is under the
+         *     8-bit one's, as a reference of 255 fits a step of one and one
+         *     of 256 does not; and a step under that it has sums past its
+         *     range, which are held at 255 of that step, or at 256 under
+         *     nought, and nowhere else.  They are counted one for one: a
+         *     10-bit converter at that step has none, and gives another sum
+         *     for each of them and for no other. */
+        {
+            const int s9 = fit_shift(peak, BITS + 1, 1.0);
+            const int ruled = s9 >= 1 && s9 < s_fit && round_shift(peak, s9) <= 2 * top + 1 &&
+                              round_shift(peak, s9 - 1) > 2 * top + 1 &&
+                              fit_shift(2 * top + 1, BITS + 1, 1.0) == 0 &&
+                              fit_shift(2 * top + 2, BITS + 1, 1.0) == 1 &&
+                              fit_shift(top, BITS, 1.0) == 0 && fit_shift(top + 1, BITS, 1.0) == 1;
+            int64_t *kept = (int64_t *)malloc((size_t)2 * M * N_OUT * sizeof(int64_t));
+            int64_t *held = kept ? kept + M * N_OUT : NULL;
+            int64_t hi = 0, lo = 0;
+            long sats8 = -1, sats9 = -1, sats_same = -1, sats_past = -1, sats_wide = -1, other = 0;
+            double worst9 = -1.0;
+            int same = 0, wider = 0, railed = 0;
+            for (pass = 0; fitted && ruled && kept && pass < 6; ++pass) {
+                /* 8 bits and then 9 at the fitted step; 8 and then 9 a step
+                 * under it; and 9 and then 10 a step under the 9's own */
+                const int bits = (pass == 0 || pass == 2) ? BITS : pass == 5 ? BITS + 2 : BITS + 1;
+                const int at = pass < 2 ? s_fit : pass < 4 ? s_fit - 1 : s9 - 1;
+                uint32_t gemm = 0;
+                probe p;
+                long r;
+                for (l = 0; l <= H; ++l) {
+                    cfg[l].adc_bits  = (uint32_t)bits;
+                    cfg[l].adc_shift = (uint32_t)at;
+                }
+                if (probe_init(&p, M, H) != 0)
+                    break;
+                p.gate      = 1;
+                p.gate_bits = AB;
+                host_layers = H;
+                r = tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw);
+                probe_batch(&p, &hn, q, M, a1, bw, labels);
+                if (pass == 0)
+                    memcpy(kept, bw->y[H], (size_t)M * N_OUT * sizeof(int64_t));
+                if (pass == 1) {
+                    sats_same = r;
+                    same = memcmp(kept, bw->y[H], (size_t)M * N_OUT * sizeof(int64_t)) == 0;
+                }
+                if (pass == 2)
+                    sats8 = r;
+                if (pass == 3) {
+                    sats9  = r;
+                    worst9 = p.gworst;
+                }
+                if (pass == 5) {
+                    sats_wide = r;
+                    for (i = 0; i < M * N_OUT; ++i)
+                        other += held[i] != bw->y[H][i];
+                }
+                if (pass == 4) {
+                    sats_past = r;
+                    memcpy(held, bw->y[H], (size_t)M * N_OUT * sizeof(int64_t));
+                    for (i = 0; i < M * N_OUT; ++i) {
+                        if (bw->y[H][i] > hi)
+                            hi = bw->y[H][i];
+                        if (bw->y[H][i] < lo)
+                            lo = bw->y[H][i];
+                    }
+                }
+                probe_free(&p);
+            }
+            host_layers = 0;
+            if (ruled) {
+                const int64_t up = (2 * top + 1) * ((int64_t)1 << (s9 - 1));
+                const int64_t down = -(2 * top + 2) * ((int64_t)1 << (s9 - 1));
+                railed = hi <= up && lo >= down && (hi == up || lo == down);
+            }
+            wider = fitted && ruled && same && sats_same == 0 && sats8 > 0 && sats9 == 0 &&
+                    worst9 >= 0.0 && worst9 <= ldexp(1.0, s_fit - 2) && sats_past > 0 && railed &&
+                    sats_wide == 0 && other == sats_past;
+            printf("selftest: a converter with a bit more: at the fitted step a 9-bit converter gives "
+                   "the 8-bit one's sums, all %d: %s; a step under it the 8-bit one has %ld sums past "
+                   "its range and the 9-bit one %ld, and none off by more than half of that step; and "
+                   "fitted for itself its shift is %d where the 8-bit one's is %d, the smallest at "
+                   "which the reference is within 255 codes, and a step under that %ld of its sums "
+                   "are past its range and held at its last code, the ones a 10-bit converter "
+                   "gives otherwise: %s\n",
+                   M * N_OUT, same ? "so" : "NOT SO", sats8, sats9, s9, s_fit, sats_past,
+                   wider ? "so" : "NOT SO");
+            if (!wider)
+                errors += fail("a converter with a bit more is not twice the range at the same step");
+            free(kept);
+        }
         pta_device_free(&dev);
         host_free(&hn);
         for (l = 0; l <= H; ++l)
@@ -4967,6 +5085,8 @@ static void help(void)
            "  --gatefit F     with --gate and every layer but the last on the host: the last converter's\n"
            "                  range from that reference on the images run, the smallest step at which\n"
            "                  the largest it is, is within F of full scale (1 fits it; 0.5 leaves a bit)\n"
+           "  --gatebits B    with --gate: the last layer's converter has B bits, at the step the run's\n"
+           "                  converters have: a bit more is twice the range at the same LSB\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"

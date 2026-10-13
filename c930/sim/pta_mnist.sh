@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -87,15 +87,17 @@
 # SHAPE=chain builds the harness for another network and gives a new WORK_DIR
 # that network's images: grxgpu's first-board classifier, 8 x 8 images, two
 # hidden layers 64 wide and 16 outputs, with MNIST_DIR's images pooled to
-# 8 x 8.  Such a directory runs `chain` and `chainfit` and nothing else, and
-# they run in no other.  CHAIN_TILE sets `chain`'s tile (default 128x64) and
-# CHAIN_DRAWS the draws it runs (default "0 1 2 3 4"); CHAINFIT_TILE and
-# CHAINFIT_DRAWS are `chainfit`'s, which is the same network with its last
-# layer's range fitted to the reference a board holds it to.
+# 8 x 8.  Such a directory runs `chain`, `chainfit` and `chainbit` and nothing
+# else, and they run in no other.  CHAIN_TILE sets `chain`'s tile (default
+# 128x64) and CHAIN_DRAWS the draws it runs (default "0 1 2 3 4");
+# CHAINFIT_TILE and CHAINFIT_DRAWS are `chainfit`'s, which is the same network
+# with its last layer's range fitted to the reference a board holds it to;
+# and CHAINBIT_TILE and CHAINBIT_DRAWS are `chainbit`'s, which gives that
+# layer's converter a bit more.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,94p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,96p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -110,10 +112,10 @@ d3) defs= ;;
 chain) defs="-DN_SIDE=8 -DN_HID=64 -DN_OUT=16" ;;
 *) echo "SHAPE is d3 or chain" >&2; exit 2 ;;
 esac
-if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ]; then
-    echo "SHAPE=chain runs chain and chainfit and nothing else" >&2; exit 2
+if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ] && [ "$what" != chainbit ]; then
+    echo "SHAPE=chain runs chain, chainfit and chainbit and nothing else" >&2; exit 2
 fi
-if { [ "$what" = chain ] || [ "$what" = chainfit ]; } && [ "$shape" != chain ]; then
+if { [ "$what" = chain ] || [ "$what" = chainfit ] || [ "$what" = chainbit ]; } && [ "$shape" != chain ]; then
     echo "$what needs SHAPE=chain, and a WORK_DIR of its own" >&2; exit 2
 fi
 
@@ -5255,6 +5257,482 @@ if [ "$what" = chainfit ]; then
     sed 's/, draw [0-9]*|.*//' "$work/out/chainfit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
         printf '%-84s' "$base"
         for k in before reference; do fit_range $k "$base"; done
+        echo
+    done
+fi
+
+# `chainbit`: `chain`'s last layer, with a converter of a bit more.
+# `chainfit` bought a range that clips nothing by fitting an 8-bit converter
+# to the reference, and it cost the networks it moved a fifth more error: the
+# noise is in LSB of the converter, and a wider range was a larger LSB.  The
+# other way to buy range is a bit.  `eval --gatebits 9` gives the last
+# layer's converter 9 bits at the step the 8-bit one has, which is twice the
+# range at the same LSB, with the noise what it was.  And with `--gatefit 1`
+# it is 9 bits over the fitted range, which is the same range in steps half
+# the size: a bit spent on resolution.  The same networks as `chain`, and its
+# format alone and its tile as budgeted, each four ways: 8 bits with the
+# range training's rule gives, which are `chain`'s own runs; 8 bits fitted,
+# which are `chainfit`'s; 9 bits at training's step; and 9 bits fitted.  Five
+# draws, on 10,000 images and on the first thousand.  A row with 9 bits is
+# read over its own row with 8 at the same range, draw for draw.  Both kinds
+# of network, row for row.
+if [ "$what" = chainbit ]; then
+    tile=${CHAINBIT_TILE:-128x64}
+    draws=${CHAINBIT_DRAWS:-0 1 2 3 4}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    r="--abits 6 --adcbits 8 --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    f="--impair quant --abits 6 --adcbits 8"
+    b="--impair $all $r"
+    t="--host 2 --probe 1 --gate 1"
+    # row|options.  Every row's name ends in its draw.  A row is the format
+    # alone or the tile as budgeted; with 8 bits or with 9, each at the range
+    # training's rule gives or fitted; on all the images or on a thousand
+    for dd in $draws; do
+        for n in "" ", a thousand"; do
+            i=
+            [ -z "$n" ] || i=" --images 1000"
+            for x in "|" ", fitted| --gatefit 1" ", nine bits| --gatebits 9" ", nine bits, fitted| --gatebits 9 --gatefit 1"; do
+                echo "format only${x%|*}$n, draw $dd|$f$i${x#*|}"
+                echo "as budgeted${x%|*}$n, draw $dd|$b$i${x#*|}"
+            done
+        done
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ $t/" > "$work/out/chainbit_settings.txt"
+    # bit_train WBITS SEED [FROM]: a DIN_W 8 network of two hidden layers,
+    # unless it is already there, starting from the same seed's at FROM bits
+    bit_train() {
+        local net="$PTA_WORK/nets/h2_d8_b$1_s$2.net" from=()
+        [ $# -lt 3 ] || from=(--from "$PTA_WORK/nets/h2_d8_b$3_s$2.net")
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits "$1" \
+            --seed "$2" --hidden 2 "${from[@]}" --out "$net" > "$net.log"
+    }
+    # bit_ref SEED: that seed's reference network, the header's recipe at
+    # this shape
+    bit_ref() {
+        local net="$PTA_WORK/nets/h2_d8_b6_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 6 \
+            --seed "$1" --hidden 2 --from "$PTA_WORK/nets/h2_d8_b8_s$1.net" \
+            --sumnoise "$PTA_REF_NOISE" --epochs "$PTA_REF_EPOCHS" --out "$net" > "$net.log"
+    }
+    # bit_one NET ROW ARGS...: one test-set pass, its line to
+    # out/chainbit.d/NET_ROW.txt
+    bit_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/chainbit.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/chainbit.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f bit_train bit_ref bit_one
+    # bit_row NAME: a row's name as a file's
+    bit_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # bit_net SEED KIND: the network's file, trained before or the reference
+    bit_net() {
+        if [ "$2" = before ]; then echo "h2_d8_b6_s$1.net"
+        else echo "h2_d8_b6_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"; fi
+    }
+    for s in 1 2 3 4 5; do echo 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'bit_train "$@"' _
+    for s in 1 2 3 4 5; do echo 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'bit_train "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'bit_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            for sd in 1 2 3 4 5; do echo "$(bit_net $sd $k) $(bit_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/chainbit_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'bit_one "$@"' _
+
+    # bit_file SEED KIND NAME: the file bit_one wrote for that run
+    bit_file() { echo "$work/out/chainbit.d/$(basename "$(bit_net "$1" "$2")" .net)_$(bit_row "$3").txt"; }
+    # bit_partner NAME: the row a row is read over, at its own count of
+    # images: for a row with 9 bits its own row with 8, fitted for a fitted
+    # one, and for a fitted row with 8 bits its own row with training's
+    # range, each of its draw.  With 8 bits and training's range the tile as
+    # budgeted is read over the format alone of its draw, and the format
+    # alone over the first draw's, which it is
+    bit_partner() {
+        local base=${1%, draw *} dd=${1##*, draw } n= core
+        [ "${base%, a thousand}" = "$base" ] || n=", a thousand"
+        core=${base%, a thousand}
+        case "$core" in
+        *", nine bits, fitted") echo "${core%, nine bits, fitted}, fitted$n, draw $dd" ;;
+        *", nine bits") echo "${core%, nine bits}$n, draw $dd" ;;
+        *", fitted") echo "${core%, fitted}$n, draw $dd" ;;
+        "format only") echo "format only$n, draw ${draws%% *}" ;;
+        *) echo "format only$n, draw $dd" ;;
+        esac
+    }
+    # The rows with 8 bits are the modes' before this one: `chain`'s with
+    # training's range, and `chainfit`'s fitted.  Where this directory has
+    # what they wrote, each has to be that line, byte for byte.
+    if [ -d "$work/out/chain.d" ] || [ -d "$work/out/chainfit.d" ]; then
+        same=0
+        other=0
+        for k in before reference; do for sd in 1 2 3 4 5; do
+            while IFS='|' read -r name setting; do
+                case "$name" in *"nine bits"*) continue ;; *fitted*) was=chainfit.d ;; *) was=chain.d ;; esac
+                was="$work/out/$was/$(basename "$(bit_file $sd $k "$name")")"
+                [ -s "$was" ] || continue
+                if cmp -s "$was" "$(bit_file $sd $k "$name")"; then same=$((same + 1)); else other=$((other + 1)); fi
+            done < "$work/out/chainbit_settings.txt"
+        done; done
+        echo "== chainbit: against what chain and chainfit wrote for the same runs: $same the same, $other not"
+        [ "$other" = 0 ] || exit 1
+    fi
+    # Every network has to be the kind its column says, and every run the row
+    # its name says, as `chain` holds its own.  A run's name says its draw,
+    # whether it is the format alone or the tile as budgeted, whether its
+    # last converter has 8 bits or 9, whether its range is training's or
+    # fitted, and whether it is of a thousand images or of all, which have to
+    # be what it was asked and what its line printed.  A run with 8 bits
+    # says nothing of its last converter's width, and one with 9 says 9.  A
+    # run that is not fitted says nothing of a fit: its last shift is the
+    # one the format alone of the first draw has, whatever its width, and is
+    # its 8-bit shift too, since its noise is in that LSB.  A fitted run says
+    # the share, 1, and the shift training's rule had given; its last shift
+    # is the smallest at which the largest its declared reference is, is
+    # within its converter's codes, 127 or 255, and its 8-bit shift the
+    # smallest at which it is within 127: with 9 bits the noise is in the LSB
+    # of the 8-bit converter of that range.  That largest is the one the
+    # format alone of the first draw has, since neither a range nor a width
+    # moves a reference.  The format alone, fitted, has no sum past its
+    # range, and at training's step it has none wherever its reference is
+    # within its converter's codes.  A fitted run with 8 bits whose shift is
+    # the one it had is the run with training's range of its draw, figure for
+    # figure.  A run with 9 bits at training's step has no more sums past its
+    # range than the run with 8 of its draw, and where that one had none is
+    # that run figure for figure.  And a fitted run with 9 bits
+    # has a smaller shift than the fitted run with 8 of its draw, whose shift
+    # is its 8-bit one.  The format alone, whatever its row, gets right on
+    # every draw what its own row gets right on the first: with 9 bits that
+    # need not be what it gets right with 8, where the 8 had sums past their
+    # range.  No run is lit.
+    bit_ok=yes
+    bit_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(bit_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2 &&
+                   v["hidden"] == 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 3 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || bit_ok=NO
+        while IFS='|' read -r name setting; do
+            first="format only"
+            [ "${name%, a thousand, draw *}" = "$name" ] || first="format only, a thousand"
+            cat "$log" "$(bit_file $sd $k "$first, draw ${draws%% *}")" \
+                "$(bit_file $sd $k "${name%, draw *}, draw ${draws%% *}")" \
+                "$(bit_file $sd $k "$(bit_partner "$name")")" "$(bit_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v sd="$sd" -v d0="${draws%% *}" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        few = (base ~ /, a thousand$/) ? 1 : 0
+                        core = few ? substr(base, 1, length(base) - 12) : base
+                        kind = 0; share = 0; nine = 0
+                        if (core ~ /, nine bits, fitted$/) { kind = 1; share = 1; nine = 1; core = substr(core, 1, length(core) - 19) }
+                        else if (core ~ /, nine bits$/) { nine = 1; core = substr(core, 1, length(core) - 11) }
+                        else if (core ~ /, fitted$/) { kind = 1; share = 1; core = substr(core, 1, length(core) - 8) }
+                        fmt = (core == "format only") ? 1 : 0
+                        bud = (core == "as budgeted") ? 1 : 0
+                        cyc = (core == "cycle") ? 1 : 0
+                        noisy = (bud || cyc) ? 1 : 0
+                        split(tile, tt, "x"); per = 16 * int((64 + tt[1] - 1) / tt[1])
+                        sane = drawn && (fmt + bud + cyc == 1) && m == (fmt ? 1 : 5 + cyc) && ("quant" in on) &&
+                               asked("abits") == 6 && asked("adcbits") == 8 && has("thermal8") == noisy &&
+                               has("photons8") == noisy && has("prog") == noisy && has("xtalk") == noisy &&
+                               (!noisy || (asked("thermal8") == 0.25 && asked("photons8") == 30 && asked("prog") == 1 &&
+                                           asked("xtalk") == 0.02 && ("thermal" in on) && ("shot" in on) &&
+                                           ("prog" in on) && ("xtalk" in on))) &&
+                               (cyc == (("drift" in on) ? 1 : 0)) && has("drift") == cyc && (!cyc || want["drift"] == "tflt") &&
+                               has("hours") == cyc && asked("hours") == 0.1 * cyc &&
+                               has("calibrate") == cyc && asked("calibrate") == 16 * cyc &&
+                               has("post-hours") == cyc && asked("post-hours") == 0.1 * cyc &&
+                               has("trimstep") == cyc && asked("trimstep") == cyc && !has("trimmax") && !has("wbits") &&
+                               !has("seed") && !has("src") && !has("srcline") && !has("srcflat") && !has("levelprobe") &&
+                               has("host") && asked("host") == 2 && has("probe") && asked("probe") == 1 &&
+                               has("gate") && asked("gate") == 1 && has("images") == few && asked("images") == 1000 * few &&
+                               has("gatefit") == kind && (!kind || asked("gatefit") == share) &&
+                               has("gatebits") == nine && (!nine || asked("gatebits") == 9) }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { right = v["correct"]; gref = v["gate_ref"]; split(v["S"], s0, ","); was = s0[3]; peak0 = v["gate_peak"]
+                          theirs = ("gate_ref" in v) && v["impair"] == "0x01" && v["seed"] == sd + 10 * d0 && v["net_seed"] == sd &&
+                                   v["images"] == (few ? 1000 : 10000) }
+                NR == 3 { own = v["correct"] }
+                NR == 4 { pright = v["correct"]; psats = v["sats"]; split(v["S"], ps, ",")
+                          pfig = v["gate_rms"] " " v["gate_rmsfs"] " " v["gate_maxfs"] " " v["gate_agree"] " " v["agree"] " " v["e3"] }
+                NR == 5 { ns = split(v["S"], sh, ","); n8 = split(v["S8"], s8, ",")
+                          ok = sane && theirs && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw &&
+                               v["net_wbits"] == 6 && v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["hidden"] == 2 && ns == 3 && v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 &&
+                               v["adcbits"] == 8 && v["wbits"] == 6 && v["drift"] == (cyc ? "tflt" : "none") &&
+                               v["hours"] == 0.1 * cyc && (v["steps"] > 0) == cyc && v["cal"] == 16 * cyc &&
+                               v["post_hours"] == 0.1 * cyc && near(v["trimstep"], cyc ? 1 : 0.25, 1e-12) &&
+                               v["trimmax"] == 128 && v["images"] == (few ? 1000 : 10000) && ("host" in v) && v["host"] == 2 &&
+                               !("src" in v) && !("levelprobe" in v) && !("hidshift" in v) && !("thermalline" in v) &&
+                               ("gate_bits" in v) && v["gate_bits"] == 6 && ("gate_rms" in v) && v["gate_rms"] > 0 &&
+                               v["gate_peak"] > 0 && v["gate8_peak"] > 0 && v["gate_rmsfs"] > 0 &&
+                               v["gate_rmsfs"] + 0 <= v["gate_maxfs"] + 0 && v["gate8_rmsfs"] + 0 <= v["gate8_maxfs"] + 0 &&
+                               ("e1" in v) && ("e2" in v) && v["e1"] == 0 && v["e2"] == 0 && v["e3"] > 0 &&
+                               ("agree" in v) && ("ref" in v) && v["agree"] > 50 &&
+                               ("sats" in v) && ("elements" in v) && v["elements"] == per * v["images"] &&
+                               v["sats"] + 0 <= v["elements"] / 100 &&
+                               ("gate_agree" in v) && ("gate_ref" in v) && v["gate_agree"] > 50 &&
+                               v["gate_agree"] + 0 <= 100 && v["gate_ref"] == gref && v["gate_ref"] > 0 &&
+                               v["gate_peak"] == peak0 && sh[1] == s0[1] && sh[2] == s0[2] && n8 == 3 &&
+                               (("gate_adcbits" in v) ? 1 : 0) == nine && (!nine || v["gate_adcbits"] == 9)
+                          fig = v["gate_rms"] " " v["gate_rmsfs"] " " v["gate_maxfs"] " " v["gate_agree"] " " v["agree"] " " v["e3"]
+                          if (kind == 0) { ok = ok && !("gate_fit" in v) && !("gate_was" in v) && sh[3] == was && s8[3] == sh[3]
+                                           if (fmt && int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= (nine ? 255 : 127)) ok = ok && v["sats"] == 0
+                                           if (nine) ok = ok && v["sats"] + 0 <= psats + 0
+                                           if (nine && psats == 0) ok = ok && v["correct"] == pright && v["sats"] == 0 && pfig == fig }
+                          else { lim = nine ? 255 : 127
+                                 ok = ok && ("gate_fit" in v) && v["gate_fit"] == share && ("gate_was" in v) && v["gate_was"] == was &&
+                                      int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= lim &&
+                                      (sh[3] == 0 || int(v["gate_peak"] / 2 ^ (sh[3] - 1) + 0.5) > lim) &&
+                                      int(v["gate_peak"] / 2 ^ s8[3] + 0.5) <= 127 &&
+                                      (s8[3] == 0 || int(v["gate_peak"] / 2 ^ (s8[3] - 1) + 0.5) > 127)
+                                 if (fmt) ok = ok && v["sats"] == 0
+                                 if (!nine) ok = ok && s8[3] == sh[3]
+                                 if (!nine && sh[3] == was) ok = ok && v["correct"] == pright && v["sats"] == psats && pfig == fig
+                                 if (nine) ok = ok && sh[3] < ps[3] && s8[3] == ps[3] }
+                          if (noisy) ok = ok && near(v["thermal8"], 0.25, 1e-6) && near(v["photons8"] / 30, 1, 0.03) &&
+                                          near(v["prog"], 1, 1e-9) && near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0
+                          else ok = ok && v["thermal8"] == 0 && v["photons8"] == 0 && v["prog"] == 0 && v["xtalk"] == 0 &&
+                                    v["correct"] == own && (kind > 0 || nine || own == right) }
+                END { exit !(NR == 5 && ok) }' || bit_ok=NO
+            bit_runs=$((bit_runs + 1))
+        done < "$work/out/chainbit_settings.txt"
+    done; done
+    echo "== chainbit: $bit_runs runs, each of them the network and the row its place says: $bit_ok"
+    [ "$bit_ok" = yes ] || exit 1
+
+    # bit_stat KIND NAME: how often the five networks are right in a row,
+    # mean and standard error, and what the row adds over its partner, network
+    # by network
+    bit_stat() {
+        local sd partner
+        partner=$(bit_partner "$2")
+        for sd in 1 2 3 4 5; do
+            sed 's/^/A /' "$(bit_file $sd "$1" "$partner")"
+            sed 's/^/B /' "$(bit_file $sd "$1" "$2")"
+        done | awk '
+            function se(s, ss, n,    m, var) { m = s / n; var = ss / n - m * m; if (var < 0) var = 0
+                                               return (n > 1) ? sqrt(var / (n - 1)) : 0 }
+            { delete v; for (i = 2; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"]
+              if ($1 == "A") { a = x; next }
+              n++; s += x; ss += x * x; g = a - x; gs += g; gss += g * g }
+            END { printf " %7.2f +-%4.2f %7.2f +-%4.2f", s / n, se(s, ss, n), gs / n, se(gs, gss, n) }'
+    }
+    # bit_pair KIND BASE OTHER: a row over all its draws, against another
+    # row of the same draws: how often right in the other, less in the row,
+    # network by network.  The mean; its standard error, from the five
+    # networks, each averaged over its draws; and the standard deviation from
+    # draw to draw of the five networks' mean
+    bit_pair() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do
+                sed "s/^/A $sd $dd /" "$(bit_file $sd "$1" "$3, draw $dd")"
+                sed "s/^/B $sd $dd /" "$(bit_file $sd "$1" "$2, draw $dd")"
+            done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0
+              if ($1 == "A") { a = x; next }
+              g = a - x
+              gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+            END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                  for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                  printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+    }
+    # bit_over KIND BASE: a row over all its draws.  How often right: the
+    # mean, its standard error from the five networks each averaged over its
+    # draws, and the draws' standard deviation; and what it adds over the row
+    # it is read over, the same three
+    bit_over() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do sed "s/^/$sd $dd /" "$(bit_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 3; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["acc"] + 0; rn[$1] += x; cn[$1]++; rd[$2] += x; cd[$2]++ }
+            END { for (k in cn) { x = rn[k] / cn[k]; rs += x; rss += x * x; nn++ }
+                  for (k in cd) { x = rd[k] / cd[k]; ds += x; dss += x * x; nd++ }
+                  printf " %8.3f +-%5.3f %6.3f", rs / nn, dev(rs, rss, nn) / sqrt(nn), dev(ds, dss, nd) }'
+        # the row it is read over is its partner on its own draw, but for a
+        # format-only row, whose partner is one row for all of them
+        if [ "$2" = "format only" ] || [ "$2" = "format only, a thousand" ]; then
+            local first=${draws%% *} sd2 dd2
+            for sd2 in 1 2 3 4 5; do
+                for dd2 in $draws; do
+                    sed "s/^/A $sd2 $dd2 /" "$(bit_file $sd2 "$1" "$2, draw $first")"
+                    sed "s/^/B $sd2 $dd2 /" "$(bit_file $sd2 "$1" "$2, draw $dd2")"
+                done
+            done | awk '
+                function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+                { delete v; for (i = 4; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                  x = v["acc"] + 0
+                  if ($1 == "A") { a = x; next }
+                  g = a - x; gn[$2] += g; cn[$2]++; gd[$3] += g; cd[$3]++ }
+                END { for (k in cn) { g = gn[k] / cn[k]; gs += g; gss += g * g; nn++ }
+                      for (k in cd) { g = gd[k] / cd[k]; hs += g; hss += g * g; nd++ }
+                      printf " %7.3f +-%5.3f %6.3f", gs / nn, dev(gs, gss, nn) / sqrt(nn), dev(hs, hss, nd) }'
+        else
+            local p
+            p=$(bit_partner "$2, draw 0")
+            bit_pair "$1" "$2" "${p%, draw *}"
+        fi
+    }
+    # bit_agree KIND BASE FIELD: a row over its draws: how often the class
+    # the tile gives is the class the host gives (agree) or the class its
+    # declared reference gives (gate_agree), percent: the mean, its standard
+    # error from the five networks each averaged over its draws, and the
+    # draws' standard deviation; the least of any run; and of the runs, how
+    # many agree on 99.5% or more
+    bit_agree() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do sed "s/^/$sd $dd /" "$(bit_file $sd "$1" "$2, draw $dd")"; done
+        done | awk -v fld="$3" '
+            function dev(s, ss, n,    m, var) { if (n < 2) return 0; m = s / n; var = (ss - n * m * m) / (n - 1); return (var > 0) ? sqrt(var) : 0 }
+            { delete v; for (i = 3; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v[fld] + 0; rn[$1] += x; cn[$1]++; rd[$2] += x; cd[$2]++
+              if (runs == 0 || x < least) least = x
+              runs++; pass += (x >= 99.5) }
+            END { for (k in cn) { x = rn[k] / cn[k]; rs += x; rss += x * x; nn++ }
+                  for (k in cd) { x = rd[k] / cd[k]; ds += x; dss += x * x; nd++ }
+                  printf " %8.3f +-%5.3f %6.3f %7.2f %3d of %2d", rs / nn, dev(rs, rss, nn) / sqrt(nn), dev(ds, dss, nd), least, pass, runs }'
+    }
+    # bit_declared KIND BASE: how often the declared reference is right in
+    # a row, percent, a mean over its runs: what its own format leaves the
+    # network, before any tile
+    bit_declared() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(bit_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              s += v["gate_ref"]; runs++ }
+            END { printf " %7.3f", s / runs }'
+    }
+    # bit_gate KIND BASE RMS RMSFS MAXFS: a row over its runs, against one
+    # reference: the last layer's rms error over the reference's rms, over
+    # the largest the reference is, and its largest error over that, percent:
+    # a mean, and for the third the most of any run; and of the runs, how
+    # many are within 1.0% on the first, 1.0% on the second and 2.0% on the
+    # third
+    bit_gate() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(bit_file $sd "$1" "$2, draw $dd")"; done
+        done | awk -v a="$3" -v b="$4" -v c="$5" '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = 100 * v[a]; y = 100 * v[b]; z = 100 * v[c]
+              xs += x; ys += y; zs += z; if (z > most) most = z
+              px += (x <= 1.0); py += (y <= 1.0); pz += (z <= 2.0); runs++ }
+            END { printf " %7.3f %6.3f %6.3f %6.3f %3d %2d %2d", xs / runs, ys / runs, zs / runs, most, px, py, pz }'
+    }
+    # bit_range KIND BASE: a row over its runs, and the converter's range,
+    # which the harness sets on a thousand training images to pass all but one
+    # sum in ten thousand: the runs with a sum past it, the most sums past it
+    # in a run, and of how many; and the most the largest error against the
+    # declared format is, percent of the largest the reference is, in the runs
+    # with none past it and in the runs with some.  Nothing where there is no
+    # such run.  And the runs whose step is not the one training's rule
+    # gave, and by how many bits it is larger at the most, and smaller
+    bit_range() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(bit_file $sd "$1" "$2, draw $dd")"; done
+        done | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              z = 100 * v["gate_maxfs"]; s = v["sats"] + 0; runs++; of = v["elements"] + 0
+              if (s > 0) { past++; if (s > most) most = s; if (z > clipped) clipped = z }
+              else if (z > whole) whole = z
+              if ("gate_was" in v) { split(v["S"], sh, ","); more = sh[3] - v["gate_was"]
+                                     if (more != 0) moved++; if (more > bits) bits = more; if (-more > less) less = -more } }
+            END { printf " %5d of %2d %5d of %6d %7.3f %7.3f %3d %2d %2d", past, runs, most, of, whole, clipped, moved, bits, less }'
+    }
+    echo "== chainbit: the $tile tile at v2, the last layer of three on it, five networks, mean and"
+    echo "== standard error.  How often right, percent, and what a row adds over the row it is"
+    echo "== read over, network by network: for a row with nine bits its own row with eight, at"
+    echo "== the same range, and for a fitted row with eight its own row with training's range"
+    printf '%-92s %14s %14s %14s %14s' "" "before right" "and adds" "reference" "and adds"
+    echo
+    while IFS='|' read -r name setting; do
+        printf '%-92s' "$name"
+        for k in before reference; do bit_stat $k "$name"; done
+        echo
+    done < "$work/out/chainbit_settings.txt"
+    echo "== chainbit: a row over its draws.  How often right, and what it adds over the row it is"
+    echo "== read over: the mean, its standard error from five networks each averaged over its"
+    echo "== draws, and the standard deviation from draw to draw of the five networks' mean"
+    printf '%-84s %25s %24s %25s %24s' "" "before right" "and adds" "reference right" "and adds"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chainbit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do bit_over $k "$base"; done
+        echo
+    done
+    echo "== chainbit: the class the tile gives against the class the host gives, percent, a row over"
+    echo "== its draws: the mean, its standard error from five networks, the draws' standard"
+    echo "== deviation, the least of any run, and the runs that agree on 99.5% or more"
+    printf '%-84s %40s %40s' "" "before" "reference"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chainbit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do bit_agree $k "$base" agree; done
+        echo
+    done
+    echo "== chainbit: the class the tile gives against the class its declared reference gives,"
+    echo "== percent, a row over its draws: the same five; and how often that reference is"
+    echo "== right, a mean over the runs"
+    printf '%-84s %48s %48s' "" "before" "reference"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chainbit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do bit_agree $k "$base" gate_agree; bit_declared $k "$base"; done
+        echo
+    done
+    for ref in "its declared format|gate_rms gate_rmsfs gate_maxfs" "its operands as they were given|e3 gate8_rmsfs gate8_maxfs"; do
+        echo "== chainbit: the last layer's error against ${ref%|*}, percent, a row over its"
+        echo "== runs: its rms over the reference's rms, over the largest the reference is, and its"
+        echo "== largest over that, a mean; the most the third is in any run; and the runs within"
+        echo "== 1.0% on the first, 1.0% on the second and 2.0% on the third"
+        printf '%-84s %40s %40s' "" "before" "reference"
+        echo
+        sed 's/, draw [0-9]*|.*//' "$work/out/chainbit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+            printf '%-84s' "$base"
+            for k in before reference; do bit_gate $k "$base" ${ref#*|}; done
+            echo
+        done
+    done
+    echo "== chainbit: the converter's range, a row over its runs: the runs with a sum past it, the"
+    echo "== most sums past it in a run, and of how many; and the most the largest error against"
+    echo "== the declared format is, percent of the largest the reference is, in the runs with"
+    echo "== none past it and in the runs with some; and the runs whose step is not the one"
+    echo "== training's rule gave, and by how many bits it is larger at the most, and smaller"
+    printf '%-84s %40s %40s' "" "before" "reference"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chainbit_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do bit_range $k "$base"; done
         echo
     done
 fi
