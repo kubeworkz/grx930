@@ -197,6 +197,22 @@ level. Left alone it adds 5.7 to 7.7% in squares. Read, it still adds as much
 as a line's own noise, because the rail holds back 1 to 11% of the weights a
 dim line needs raised. And what that leaves is not noise: the source by itself
 is further off than what it adds to the tile.
+**And the seventeenth, the same day** (§5, at its end): that layer's budget a
+row at a time. Four sections had moved its error by a quarter at the most and
+none had said what it is made of. With no source, of version 2's four rows the
+crosstalk alone adds 3.45, 3.26 and 3.01% of the reference's rms to the format,
+in squares, and the shot noise 2.56, 2.99 and 2.61; the receiver's noise and
+the programming error add 0.61, 0.89 and 0.66 and 0.61, 0.49 and 0.67. The two
+large rows are 89 to 93% of the tile's squared error, and the rows add in
+squares. But the class is the shot noise's: left out of the tile it gives the
+declared reference's class on 0.15, 1.02 and 0.29 of a point more images, where
+the crosstalk left out gives 0.01, 0.03 and 0.05. Most of the crosstalk is a
+gain on every output, +0.0220 to +0.0281, which a class does not see. A source
+read and corrected on the weights takes gain off, and that is what the section
+before found and could not name: on two of the three sets the lit tile is
+nearer its reference with the crosstalk than without. And against the
+demonstration's 1.0% the format alone, an 8-bit converter with no row of the
+budget, is already 0.71, 1.04 and 0.76% of the reference's rms off.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -6018,7 +6034,9 @@ The source adds 4.1% under the format alone and under each of three
 impairments, and 3.1% under the crosstalk, alone or with the rest. A
 neighbour's ring passes some of a row's light, which swells a sum whose weights
 run the same way; a weight held at the rail on a dim line shrinks it. That is
-one network. The same look tried the other correction this harness has, every
+one network. *All thirty were run the same day, with the probe's gain to say
+which way each comes out: "its budget a row at a time", below.* The same look
+tried the other correction this harness has, every
 row scaled down to the dimmest line, where no weight is raised and the rail
 holds none. Under the format alone it leaves 1.7% where 3.5% was. Under the
 tile as budgeted it leaves the layer 6.2% off where the correction on the
@@ -6173,7 +6191,381 @@ A converter that sees the light: this model's sees the rewritten weights' sums,
 and the light after. A source through an offset. A cycle of calibrations or a
 drifted tile: this is the source over the tile as budgeted, as written. An
 account of what in the tile the rail's share cancels against: one network was
-looked at. A remedy for either. Five draws, of the same five networks.
+looked at. *The section after this one has it for all thirty.* A remedy for
+either. Five draws, of the same five networks.
+
+### The first board's last layer, its budget a row at a time
+
+*Added 2026-10-13.* `SHAPE=chain sim/pta_mnist.sh DIR WORK chainrows`.
+Reported, not gated. The harness is not changed: `pta_mnist.c` and the tile's
+model are the ones the section before ran.
+
+**Why.** Four sections have run the first board's last layer on the tile and
+moved its error by a quarter at the most: with a range fitted, a ninth bit, a
+source. None said what the error is made of. Against its declared format the
+tile is off by its converter's rounding and by four rows of grxcp's version 2:
+the receiver's noise, the shot noise, the programming error and the crosstalk.
+And the section before found that a source adds less to the tile than it is by
+itself, looked at one network by hand, and saw the crosstalk in it. That look
+was one network, 2,000 images and one draw.
+
+**What it runs.** The seventeenth mode, in `chain`'s work directories and on
+its networks, tile and draws, on 10,000 images. Every row is one the harness
+could already run: an impairment is in a run if `--impair` names it, at the
+figure its own option gives.
+
+| Row | What it runs |
+|---|---|
+| format only | `--impair quant`: the tile's format and nothing drawn. `chain`'s row, its own runs |
+| only thermal | and the receiver's noise, `--thermal8 0.25` |
+| only shot | and the shot noise, `--photons8 30` |
+| only prog | and the programming error, `--prog 1` |
+| only xtalk | and the crosstalk, `--xtalk 0.02` |
+| less thermal, less shot, less prog, less xtalk | The tile as budgeted with that one row left out |
+| less shot, xtalk | The tile as budgeted with those two left out: the format, the receiver's noise and the programming error |
+| as budgeted | All four. `chain`'s row, its own runs |
+| each of those eleven, lit | The same with `chainlit`'s source: `--src 0.01 --srcline 0.05 --srcflat 0.2 --buses 2 --levelprobe 16 --levelfix weights8`. The format alone and the tile as budgeted, lit, are `chainlit`'s own runs |
+
+That is twenty-two rows on each of five draws, 1,100 evaluations a data set. A
+row with one row of the budget alone is read over the format alone, a row with
+one left out over the tile as budgeted, and a lit row over its own row with no
+source, each of its draw. Four of the twenty-two are runs `chain` and
+`chainlit` made, and where a directory has what they wrote the mode holds each
+to that line, byte for byte: 200 a data set, all the same.
+
+**The probe's gain.** Each run is made with `--probe 1`, as every run of the
+four sections was, and its line has two figures no table had printed. The probe
+measures a run's error against the host's own network, weights at the network's
+width and activations as the host has them, which is not the declared format.
+Of that error it fits a gain: the slope of the error on the outputs themselves
+over the run, with each image's common shift taken out first. A positive gain
+is a last layer whose every output is that fraction too large. And it gives
+what is left with the shift and the gain out, `eres`, as a fraction of the
+reference's rms. A class does not move with a shift or with a gain. The
+declared format has a gain of its own against the host's network, so a row's
+gain is read against the format alone's.
+
+**How it was run.** The mode's check and ten predictions were written first. It
+was then run on two draws of MNIST, to see the check say yes, and the check
+gained a condition: a row with nothing drawn in it is the same run on every
+draw, figure for figure and not only in what it gets right. It was swept on
+2026-10-13 at 23:22 UTC. Its eight tables did not print the gain, which was
+then looked at by hand in the lines. A ninth table was added to print it, with
+a condition in the check that a run has the probe's figures and that what is
+left is no more than all of its error. The sweep was run again with the script
+as it now is, at 23:56 UTC, and took 20 minutes for the three data sets side by
+side. Every line of the second sweep is the line the first wrote, byte for
+byte, and the figures here are the second's.
+
+The mode checks every network and every run against its place, as `chainlit`
+does its own. A run's name says its draw, which rows of the budget are in it,
+and whether the source is lit, which have to be what it was asked and what its
+line printed: the impairments it names and no other, each at version 2's figure
+and nought for the ones left out. A lit run says the source's three rows, its
+buses and its lines' reading as `chainlit` holds them, and its weights are 8
+bits wide where every other run's are 6. Every run's range and its largest
+reference are the format alone's of the first draw. A run is not the run it is
+read over, figure for figure. The format alone has no sum past its range
+wherever its reference is within its codes. And the two rows with nothing drawn
+in them, the format alone and the crosstalk alone with no source, are on every
+draw the run they are on the first.
+
+203 errors were planted one at a time and every one fails. 103 in a training's
+line, a run's line or the row a row is held against, against the check with
+nothing run again, four of them a row that is not the line `chain` or
+`chainlit` wrote. 44 in the script, each run in a directory of its own on 400
+images. And 56 in the tables' own code, which the check does not see and which
+have to move a table. With the script as it now is, `refcomb`'s, `chain`'s,
+`chainfit`'s, `chainbit`'s and `chainlit`'s checks and tables alone, on the
+lines their own sweeps wrote for MNIST, say yes and print what those sweeps
+printed.
+
+**The crosstalk and the shot noise are nine tenths of it.** A row's rms error
+against its declared format, percent of the reference's rms, with no source:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 0.96 | 0.71 | 0.91 | 1.04 | 0.85 | 0.76 |
+| and the receiver's noise | 1.27 | 0.94 | 1.21 | 1.35 | 1.12 | 1.00 |
+| and the shot noise | 3.08 | 2.66 | 2.99 | 3.15 | 2.82 | 2.72 |
+| and the programming error | 1.12 | 0.94 | 1.02 | 1.15 | 1.08 | 1.01 |
+| and the crosstalk | 3.64 | 3.52 | 3.38 | 3.42 | 3.14 | 3.10 |
+| As budgeted, less the receiver's noise | 4.74 | 4.42 | 4.47 | 4.59 | 4.21 | 4.13 |
+| less the shot noise | 3.78 | 3.63 | 3.51 | 3.57 | 3.30 | 3.24 |
+| less the programming error | 4.77 | 4.42 | 4.51 | 4.65 | 4.23 | 4.13 |
+| less the crosstalk | 3.25 | 2.80 | 3.13 | 3.30 | 2.99 | 2.88 |
+| less the shot noise and the crosstalk | 1.39 | 1.12 | 1.29 | 1.44 | 1.30 | 1.20 |
+| As budgeted: all four | 4.81 | 4.46 | 4.54 | 4.67 | 4.28 | 4.18 |
+
+And what each row of the budget adds to the format alone, squares for squares:
+the root of the mean, over its 25 runs, of its rms squared less the format's of
+the same network and draw. It is what the row would add if its error and the
+format's were independent.
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The crosstalk alone adds | 3.52 | 3.45 | 3.26 | 3.26 | 3.02 | 3.01 |
+| left out of the tile, it takes off | 3.55 | 3.48 | 3.29 | 3.30 | 3.05 | 3.04 |
+| The shot noise alone adds | 2.93 | 2.56 | 2.85 | 2.99 | 2.71 | 2.61 |
+| left out of the tile, it takes off | 2.98 | 2.59 | 2.88 | 3.03 | 2.75 | 2.64 |
+| The receiver's noise alone adds | 0.83 | 0.61 | 0.79 | 0.89 | 0.75 | 0.66 |
+| left out of the tile, it takes off | 0.84 | 0.62 | 0.80 | 0.90 | 0.76 | 0.66 |
+| The programming error alone adds | 0.58 | 0.61 | 0.46 | 0.49 | 0.64 | 0.67 |
+| left out of the tile, it takes off | 0.61 | 0.64 | 0.49 | 0.51 | 0.66 | 0.67 |
+| The format and the four, were they independent | 4.79 | 4.44 | 4.52 | 4.66 | 4.27 | 4.17 |
+| The tile as budgeted | 4.82 | 4.47 | 4.54 | 4.69 | 4.29 | 4.18 |
+
+For the reference networks the crosstalk alone adds 3.45, 3.26 and 3.01, the
+shot noise 2.56, 2.99 and 2.61, the receiver's noise 0.61, 0.89 and 0.66 and
+the programming error 0.61, 0.49 and 0.67, where the format alone is 0.71, 1.04
+and 0.76 off. The crosstalk is the largest of the four on every set and kind
+and the shot noise the second. The two are 89 to 93% of the tile's squared
+error, and the other two 4 to 5%.
+
+**With no source the rows add in squares.** The root of the squares of the
+format and of what the four add is 0.994 to 0.995 of the tile as budgeted's, on
+every set and kind. A row left out of the tile takes off what it adds alone and
+a little more, under 0.05 everywhere. So the budget can be read a row at a
+time, with no source.
+
+**Against the demonstration's 1.0%, the converter's own rounding is at the
+bar.** The demonstration's draft asks for a normalized rms error within 1.0%
+and does not say what it divides by. Both readings, with the runs of 25 that
+are within 1.0% in brackets:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| Over the reference's rms: the format alone | 0.96 (20) | 0.71 (25) | 0.91 (25) | 1.04 (10) | 0.85 (15) | 0.76 (25) |
+| Over the reference's rms: with the receiver's noise | 1.27 (0) | 0.94 (20) | 1.21 (0) | 1.35 (7) | 1.12 (10) | 1.00 (12) |
+| Over the reference's rms: with the programming error | 1.12 (0) | 0.94 (25) | 1.02 (5) | 1.15 (10) | 1.08 (10) | 1.01 (13) |
+| Over the reference's rms: the tile less the shot noise and the crosstalk | 1.39 (0) | 1.12 (0) | 1.29 (0) | 1.44 (0) | 1.30 (0) | 1.20 (0) |
+| Over the reference's rms: the tile as budgeted | 4.81 (0) | 4.46 (0) | 4.54 (0) | 4.67 (0) | 4.28 (0) | 4.18 (0) |
+| Over the largest the reference is: the format alone | 0.33 (25) | 0.25 (25) | 0.26 (25) | 0.28 (25) | 0.29 (25) | 0.27 (25) |
+| Over the largest the reference is: the tile less the shot noise and the crosstalk | 0.48 (25) | 0.39 (25) | 0.37 (25) | 0.39 (25) | 0.45 (25) | 0.43 (25) |
+| Over the largest the reference is: the tile less the crosstalk | 1.13 (5) | 0.98 (15) | 0.88 (25) | 0.90 (15) | 1.03 (10) | 1.02 (10) |
+| Over the largest the reference is: the tile less the shot noise | 1.31 (0) | 1.28 (0) | 0.99 (10) | 0.97 (15) | 1.14 (0) | 1.15 (0) |
+| Over the largest the reference is: the tile as budgeted | 1.67 (0) | 1.57 (0) | 1.28 (0) | 1.27 (0) | 1.47 (0) | 1.48 (0) |
+
+The format alone is 0.71, 1.04 and 0.76% of the reference's rms off, and 120 of
+its 150 runs are within 1.0%. With the shot noise and the crosstalk both out,
+the receiver's noise and the programming error take it to 1.12, 1.44 and 1.20%,
+and no run of the 150 is within. So if `normalized` means over the reference's
+rms, the converter alone uses most of the bound or all of it, and no figure for
+the two large rows passes this layer with the other two as budgeted. Over the
+largest the reference is, the tile as budgeted is 1.57, 1.27 and 1.48% and no
+run is within; less the crosstalk it is 0.98, 0.90 and 1.02%, with 80 of 150
+runs within; and less the shot noise 1.28, 0.97 and 1.15%, with 25.
+
+**The largest error is the shot noise's before it is the crosstalk's.** Percent
+of the largest the reference is, with the runs of 25 within the demonstration's
+2.0% in brackets:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone: a mean over the runs (runs of 25 within 2.0%) | 0.58 (25) | 2.14 (20) | 0.45 (25) | 7.22 (15) | 3.16 (15) | 0.47 (25) |
+| the most in a run with no sum past the range | 0.67 | 0.49 | 0.48 | 0.58 | 0.60 | 0.51 |
+| With the receiver's noise: a mean over the runs (runs of 25 within 2.0%) | 1.46 (25) | 2.69 (20) | 1.13 (25) | 7.75 (15) | 3.70 (15) | 1.18 (25) |
+| the most in a run with no sum past the range | 1.67 | 1.29 | 1.29 | 1.52 | 1.57 | 1.33 |
+| With the programming error: a mean over the runs (runs of 25 within 2.0%) | 1.56 (25) | 3.00 (20) | 1.19 (25) | 7.67 (15) | 3.73 (15) | 1.57 (25) |
+| the most in a run with no sum past the range | 1.90 | 1.84 | 1.32 | 1.50 | 1.72 | 1.98 |
+| With the crosstalk: a mean over the runs (runs of 25 within 2.0%) | 4.05 (0) | 4.87 (0) | 3.63 (0) | 9.02 (0) | 5.16 (0) | 3.46 (0) |
+| the most in a run with no sum past the range | 4.65 | 4.32 | 4.04 | 3.64 | 3.51 | 3.61 |
+| With the shot noise: a mean over the runs (runs of 25 within 2.0%) | 5.51 (0) | 5.57 (0) | 4.53 (0) | 10.00 (0) | 6.62 (0) | 4.94 (0) |
+| the most in a run with no sum past the range | 6.21 | 5.46 | 4.96 | 5.54 | 5.85 | 5.57 |
+| The tile less the shot noise and the crosstalk: a mean over the runs (runs of 25 within 2.0%) | 2.00 (12) | 3.25 (16) | 1.50 (25) | 7.90 (15) | 4.00 (9) | 1.84 (19) |
+| the most in a run with no sum past the range | 2.32 | 2.18 | 1.77 | 1.88 | 2.27 | 2.30 |
+| The tile less the crosstalk: a mean over the runs (runs of 25 within 2.0%) | 5.90 (0) | 5.80 (0) | 4.81 (0) | 10.14 (0) | 6.90 (0) | 5.27 (0) |
+| the most in a run with no sum past the range | 6.84 | 5.67 | 5.45 | 5.85 | 6.68 | 5.89 |
+| The tile less the shot noise: a mean over the runs (runs of 25 within 2.0%) | 4.64 (0) | 5.44 (0) | 4.21 (0) | 9.41 (0) | 5.70 (0) | 4.15 (0) |
+| the most in a run with no sum past the range | 5.20 | 5.20 | 4.63 | 4.57 | 4.39 | 4.47 |
+| The tile as budgeted: a mean over the runs (runs of 25 within 2.0%) | 8.44 (0) | 8.02 (0) | 7.20 (0) | 11.53 (0) | 8.60 (0) | 7.44 (0) |
+| the most in a run with no sum past the range | 9.70 | 8.97 | 8.19 | 8.65 | 8.86 | 8.59 |
+
+In a run with no sum past the converter's range the largest error is at the
+most 0.7% for the format alone, 1.7 with the receiver's noise, 2.0 with the
+programming error, 4.6 with the crosstalk, 6.2 with the shot noise and 9.7 as
+budgeted. With the shot noise and the crosstalk both out it is 2.3%, and 96 of
+the 150 runs are within 2.0%; with either of the two in, none is. A sum past
+the range is its own error whatever the row. Where the format alone has one,
+that sum's error is the largest of its run in every row with no source. And the
+crosstalk makes more of them: 150 in a run at the most, where the format alone
+has 77.
+
+**The class is the shot noise's.** How often the class the tile gives is the
+class its declared reference gives, percent, and in brackets the runs of 25 at
+99.5% or more:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 99.74 (25) | 99.85 (25) | 98.16 (0) | 98.49 (0) | 99.54 (15) | 99.73 (25) |
+| With the crosstalk alone | 99.69 (25) | 99.79 (25) | 97.84 (0) | 98.29 (0) | 99.45 (10) | 99.58 (25) |
+| With the shot noise alone | 99.46 (8) | 99.64 (25) | 96.41 (0) | 97.18 (0) | 98.99 (0) | 99.35 (1) |
+| The tile as budgeted | 99.40 (2) | 99.59 (23) | 95.92 (0) | 96.78 (0) | 98.86 (0) | 99.23 (0) |
+| The tile less the crosstalk | 99.41 (3) | 99.60 (25) | 96.00 (0) | 96.81 (0) | 98.89 (0) | 99.28 (0) |
+| The tile less the shot noise | 99.60 (23) | 99.74 (25) | 97.22 (0) | 97.80 (0) | 99.24 (0) | 99.52 (14) |
+| The tile less both | 99.64 (24) | 99.78 (25) | 97.40 (0) | 97.92 (0) | 99.31 (4) | 99.60 (24) |
+
+Leaving the shot noise out of the tile gives the reference networks that class
+on 0.15 ± 0.02, 1.02 ± 0.08 and 0.29 ± 0.01 of a point more of the images,
+clear on all three sets. Leaving the crosstalk out gives it on 0.01 ± 0.01,
+0.03 ± 0.07 and 0.05 ± 0.02, clear on one. The crosstalk is the largest row of
+the rms and next to nothing to the class.
+
+**Because most of the crosstalk is a gain.** In the tile's model an input's
+light also passes the two neighbouring rows' rings, so a row's weight is its
+own and 5/256 of each neighbour's. Summed over a column, that is the column's
+own weights times the neighbours' activations. Were every activation the same
+it would be the sum itself times twice that fraction: a gain of 0.0391. The
+last layer's inputs are a ReLU's outputs and none is below nought, so they
+share a level. The probe:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone: its gain against the host's network | +0.0189 | +0.0250 | +0.0332 | +0.0266 | +0.0233 | +0.0219 |
+| what is left with the shift and the gain out, % | 1.58 | 2.08 | 2.15 | 1.96 | 2.00 | 2.00 |
+| The crosstalk alone: its gain, less the format's | +0.0281 | +0.0246 | +0.0258 | +0.0244 | +0.0240 | +0.0221 |
+| what it adds to what is left, in squares | 1.53 | 1.82 | 1.27 | 1.38 | 1.48 | 1.59 |
+| what it adds against the declared format | 3.52 | 3.45 | 3.26 | 3.26 | 3.02 | 3.01 |
+| The shot noise alone: its gain, less the format's | −0.0001 | +0.0000 | −0.0001 | −0.0001 | +0.0000 | +0.0000 |
+| what it adds to what is left, in squares | 2.90 | 2.55 | 2.85 | 2.98 | 2.69 | 2.59 |
+| what it adds against the declared format | 2.93 | 2.56 | 2.85 | 2.99 | 2.71 | 2.61 |
+| The tile as budgeted: its gain, less the format's | +0.0281 | +0.0246 | +0.0258 | +0.0244 | +0.0240 | +0.0220 |
+| what is left, % | 3.80 | 3.88 | 3.95 | 3.97 | 3.84 | 3.78 |
+
+Every row with the crosstalk in it and no source has a gain +0.0220 to +0.0281
+above the format alone's, which is 0.56 to 0.72 of twice the fraction. Every
+run of a row without it is within 0.0005 of the format's: no noise is a gain.
+With the shift and the gain out, the crosstalk adds 1.82, 1.38 and 1.59 to what
+is left of the format alone, where against the declared format it adds 3.45,
+3.26 and 3.01. The shot noise adds 2.55, 2.98 and 2.59, which is all of its
+2.56, 2.99 and 2.61.
+
+**A source adds one thing over a row with the crosstalk and another over a row
+without.** What `chainlit`'s source adds to a row, squares for squares, and the
+lit tile with the crosstalk and without:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The source adds: over the format alone | 3.43 | 4.13 | 4.68 | 5.10 | 4.76 | 5.36 |
+| The source adds: over the receiver's noise alone | 3.44 | 4.14 | 4.70 | 5.12 | 4.78 | 5.37 |
+| The source adds: over the shot noise alone | 3.50 | 4.17 | 4.73 | 5.14 | 4.81 | 5.39 |
+| The source adds: over the programming error alone | 3.46 | 4.15 | 4.71 | 5.13 | 4.80 | 5.39 |
+| The source adds: over the tile less the crosstalk | 3.50 | 4.17 | 4.73 | 5.14 | 4.81 | 5.40 |
+| The source adds: over the crosstalk alone | 1.75 | 2.69 | 1.88 | 2.74 | 2.42 | 3.29 |
+| The source adds: over the tile less the shot noise | 1.62 | 2.61 | 1.85 | 2.72 | 2.40 | 3.28 |
+| The source adds: over the tile as budgeted | 1.70 | 2.65 | 1.87 | 2.73 | 2.42 | 3.29 |
+| Lit, rms error, %: the tile as budgeted | 5.10 | 5.18 | 4.84 | 5.34 | 4.89 | 5.27 |
+| the tile less the crosstalk | 4.74 | 4.98 | 5.53 | 5.97 | 5.59 | 6.02 |
+
+Over the format alone the source adds 4.13, 5.10 and 5.36 for the reference
+networks, and over every row with no crosstalk in it the same to 0.08. Over the
+crosstalk alone it adds 2.69, 2.74 and 3.29, and over every row with the
+crosstalk in it the same to 0.13. So on Fashion-MNIST and on the inverted set
+the lit tile is nearer its reference with the crosstalk than without, and on
+MNIST it is not. Of the thirty networks 22 are nearer with it.
+
+**Because the source takes gain off, and the crosstalk puts it on.**
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The source's gain: the format alone lit, less the format alone | −0.0065 | −0.0052 | −0.0232 | −0.0218 | −0.0226 | −0.0230 |
+| runs of 25 where it is below nought | 18 | 16 | 25 | 25 | 25 | 25 |
+| Weights the rail held back, % of those scaled, a mean | 3.6 | 4.5 | 6.3 | 6.8 | 4.6 | 5.4 |
+| The crosstalk's gain, with no source | +0.0281 | +0.0246 | +0.0258 | +0.0244 | +0.0240 | +0.0221 |
+| The two together: the crosstalk alone, lit | +0.0231 | +0.0209 | +0.0032 | +0.0033 | +0.0017 | −0.0007 |
+| The lit tile as budgeted | +0.0220 | +0.0200 | +0.0022 | +0.0023 | +0.0007 | −0.0017 |
+| What is left with the shift and the gain out, %: the lit tile | 4.77 | 5.35 | 4.89 | 5.22 | 4.89 | 5.24 |
+| the lit tile less the crosstalk | 4.36 | 4.77 | 4.63 | 4.88 | 4.68 | 4.96 |
+
+The format alone, lit, has a gain −0.0052, −0.0218 and −0.0230 from the format
+alone's for the reference networks, and −0.074 to +0.007 in a run: below nought
+in 134 of the 150 runs. It goes with the share of the weights the rail held
+back, r = −0.57 over the 150. A weight raised for a dim line and held at the
+rail is a weight too small, and the sums it feeds are too small with it. The
+two gains add: the crosstalk alone, lit, is within 0.0015 of the sum of the two
+on every set and kind. On MNIST the rail takes little off and most of the
+crosstalk's gain is left. On the other two sets the two nearly cancel.
+
+It is two errors of opposite sign, and not a remedy. With the shift and the
+gain out the lit tile is 5.35, 5.22 and 5.24% of the reference's rms off with
+the crosstalk and 4.77, 4.88 and 4.96% without: the worse with it on every set
+and kind. The share of the weights at the rail explains about a third of how
+much gain a run's source takes off, and these runs do not say what the rest
+goes with.
+
+**What these runs do not say.** The gain is the probe's, against the host's
+network. None was fitted against the declared format, which is what the
+demonstration compares. And no row had a gain taken out of its outputs before
+that comparison, so what one constant would buy at the gate is not measured.
+What is left against the host's network says the four rows would add 3.28, 3.47
+and 3.20 where they add 4.41, 4.57 and 4.12: an estimate, from another
+reference. The model's crosstalk is the same fraction of each neighbour in
+every column, and a chip's need not come out as a gain.
+
+**What was predicted.** Ten things, written on 2026-10-13 at 23:11 UTC, when
+the mode and its check existed and no row of it had run. They were informed by
+the one network the section before looked at, and say so. All are for the
+reference networks, a mean over the runs of 10,000 images, percent of the
+reference's rms and in squares unless said. Five were right as written.
+
+1. That the crosstalk alone adds 3.0 to 4.0 over the format on every set, and
+   is the largest of the four on every set and kind. Right: 3.45, 3.26 and
+   3.01.
+
+2. That the shot noise alone adds 2.3 to 3.0 on every set and is the second.
+   Right: 2.56, 2.99 and 2.61.
+
+3. That the receiver's noise alone adds 0.55 to 0.80 and the programming error
+   alone 0.50 to 0.75. Wrong on Fashion-MNIST, both ways: 0.61, 0.89 and 0.66,
+   and 0.61, 0.49 and 0.67.
+
+4. That with no source the root of the squares of the format and of what the
+   four add is within 3% of the tile as budgeted, on every set and kind. Right:
+   within 0.6%.
+
+5. That leaving the crosstalk out takes the tile to 2.2 to 3.3%, leaving the
+   shot noise out to 3.2 to 3.9%, and leaving out the receiver's noise or the
+   programming error moves it by under 0.12. Wrong, by 0.0002: less the
+   crosstalk, Fashion-MNIST is 3.3002. The rest held: 2.80, 3.30 and 2.88, and
+   3.63, 3.57 and 3.24.
+
+6. That with the shot noise and the crosstalk both out it is 1.1 to 1.4%, with
+   no run of the 150 within 1.0% of the reference's rms and every one within
+   1.0% of the largest the reference is. Wrong on Fashion-MNIST: 1.12, 1.44 and
+   1.20. Both counts held.
+
+7. That lit, the source adds over the receiver's noise, the shot noise and the
+   programming error alone what it adds over the format alone, to 0.15; that
+   over the crosstalk alone it adds 0.7 to 1.5 less; and that with the
+   crosstalk left out of the lit tile it adds what it adds over the format
+   alone, to 0.25. Right of the first and the third. Wrong of the second on two
+   sets, where it adds more than 2 less: 2.69, 2.74 and 3.29, against 4.13,
+   5.10 and 5.36. The one network looked at was MNIST's.
+
+8. That with no source, leaving the shot noise out gives the declared
+   reference's class 0.12 to 0.35 of a point more often on MNIST and on the
+   inverted set and 0.6 to 1.6 more on Fashion-MNIST, and leaving the crosstalk
+   out under 0.08 more on MNIST and on the inverted set. Right: 0.15, 1.02 and
+   0.29, and 0.01, 0.03 and 0.05.
+
+9. That the largest error, a mean over a set's runs, is 2.5 to 5.5% of the
+   largest the reference is with the crosstalk alone and 4.5 to 6.8 with the
+   shot noise alone; and that leaving the crosstalk out of the tile takes under
+   1.5 off it, where leaving the shot noise out takes 1.5 to 4. Wrong.
+   Fashion-MNIST has sums past its range, and its means are theirs: 4.87, 9.02
+   and 3.46, and 5.57, 10.00 and 4.94. And leaving the crosstalk out takes
+   2.22, 1.39 and 2.17 off, more than was allowed.
+
+10. That the mode's check says yes, that 200 lines a data set are `chain`'s and
+    `chainlit`'s own, byte for byte, and that the crosstalk alone with no
+    source is one run whatever the draw. Right.
+
+**What this is not.** Everything the four sections before say of themselves: a
+stand-in classifier, in a model, with the chain's other engines taken as exact.
+A device's crosstalk. A gain against the declared format, or a tile with its
+gain calibrated out. A source through an offset, a cycle of calibrations or a
+drifted tile. A remedy for the crosstalk, the shot noise or the rail. Five
+draws, of the same five networks.
 
 ---
 
