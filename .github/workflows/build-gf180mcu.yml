@@ -60,17 +60,23 @@
 #       (on the box, FPGA tree present: all five copies. In a checkout, prefix
 #       CACHE_LOCKSTEP_GITIGNORED_ABSENT=1 to match what CI runs.)
 #
-# WHY THE RUNNER IS PINNED TO 22.04
+# WHY THE RUNNER IS PINNED TO 24.04
 #
-#   For `iverilog`: jammy's package is 11.0-1.1, which is the version every gate
-#   in this file was verified on, so CI runs what was tested. A newer Icarus is
-#   not a drop-in: oss-cad-suite's Icarus 14 rejects the tapeout tree at
+#   Not `ubuntu-latest`: that label begins migrating to 26.04 in October 2026, so
+#   it would change the simulator under this gate without anyone choosing it.
+#   22.04 is the same problem from the other side -- past its deprecation, its
+#   jobs are subject to brownouts, and the first push of this workflow sat queued
+#   on that label for eleven minutes and never started at all. 24.04 is supported,
+#   and the install step prints the `iverilog` it gets, so the version in the log
+#   is the version that ran.
+#
+#   A simulator version is part of a gate. These checks were written and verified
+#   with Icarus Verilog 11.0, and a newer one is not automatically
+#   interchangeable: oss-cad-suite's Icarus 14 refuses the tapeout tree at
 #   elaboration -- `riscv_core_csr_unit.sv:436 error: Unable to bind wire/reg/
-#   memory `intr_trap_pc' in ... trap_setup_proc`, 6 errors, six uses of a
-#   module-level wire declared at line 1095 of the same file. That is a real
-#   portability question about the RTL, and it deserves its own fix rather than
-#   arriving as a red job the first time a runner image moves. When that fix
-#   lands, this pin can go with it.
+#   memory `intr_trap_pc' in ... trap_setup_proc`, 6 errors on a module-level wire
+#   declared at line 1095 of the same file. If a green here ever needs that
+#   fixed, it is the RTL that gets fixed, not the gate.
 #
 # THE ONE SKIPPED LEG, AND WHY IT IS NOT SILENT
 #
@@ -108,9 +114,10 @@ concurrency:
 jobs:
   gates:
     name: Boot ROM, pad map, caches, MMIO hold
-    # 22.04 = iverilog 11.0-1.1, the toolchain the gates are verified on (see the
-    # header). Not ubuntu-latest: that is 24.04 and iverilog 12.0, untested here.
-    runs-on: ubuntu-22.04
+    # Supported label, and not one that is mid-migration: see the header for why
+    # 22.04 (deprecated, brownouts) and ubuntu-latest (moving to 26.04) are both
+    # wrong pins here.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
