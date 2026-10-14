@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# pre-push -- run the chip gates before a push that could break them.
+#
+# WHY THIS EXISTS NOW
+#
+#   CI is the authority on these gates, and on 2026-10-14 it stopped being able
+#   to run them: every job in this repo queues for a hosted runner that never
+#   arrives (see the workflow's header -- a minimal ubuntu-latest job queues too,
+#   so it is not the workflow, and nothing has been allocated since
+#   2026-10-03T23:04Z). Until that is fixed the box is the only place a broken
+#   ROM, pad map, cache split or MMIO hold can be caught before it reaches a flow
+#   run -- so this hook runs the same definition CI runs,
+#   c930/asic_gf180mcu/build/chip_gates.sh, and names no gate command of its own.
+#
+# OPT IN, ONCE PER CLONE
+#
+#   git config --local core.hooksPath .githooks
+#
+#   Hooks are not cloned, which is exactly why the definition they call is a
+#   normal tracked file: this script is the thin part.
+#
+# WHEN IT RUNS
+#
+#   Only for pushes whose commits touch something a gate reads -- c930/,
+#   rv64imac/, .github/workflows/, .githooks/. A docs-only push runs nothing, and
+#   says so rather than pretending to have checked. A push that creates a branch
+#   has no range to diff against, so it runs the gates: unknown is not "nothing
+#   changed".
+#
+# SKIPPING IT
+#
+#   SKIP_CHIP_GATES=1 git push ...   -- for pushing the fix to a broken gate, which
+#                                       is the one honest reason to bypass it
+#   git push --no-verify ...        -- git's own bypass
+#
+#   Neither is a way past CI: it is the same file, and CI still runs it when a
+#   runner exists.
+set -u
+
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
+GATES="$ROOT/c930/asic_gf180mcu/build/chip_gates.sh"
+
+if [ "${SKIP_CHIP_GATES:-0}" = 1 ]; then
+  echo "pre-push: SKIP_CHIP_GATES=1 -- the chip gates did NOT run for this push" >&2
+  exit 0
+fi
+
+if [ ! -f "$GATES" ]; then
+  echo "pre-push: $GATES is missing (older checkout?) -- not gating this push" >&2
+  exit 0
+fi
+
+zero=$(printf '0%.0s' 1 40)          # both shas are 40 zeros for create/delete
+relevant='^(c930/|rv64imac/|\.github/workflows/|\.githooks/)'
+paths=""
+unknown=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  # Deleting a remote branch pushes no content.
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ]; then
+    unknown=1
+    continue
+  fi
+  # A force push or a rewritten range can leave the remote sha unreachable; the
+  # gates are cheap enough that "cannot tell" runs them rather than skipping.
+  if ! d=$(git -C "$ROOT" diff --name-only "$remote_sha..$local_sha" 2>/dev/null); then
+    unknown=1
+    continue
+  fi
+  paths="$paths
+$d"
+done
+
+if [ $unknown -eq 0 ] && ! printf '%s\n' "$paths" | grep -Eq "$relevant"; then
+  echo "pre-push: nothing under c930/, rv64imac/ or .github/ in this push -- chip gates not run"
+  exit 0
+fi
+
+echo "pre-push: running the chip gates (same file CI runs: c930/asic_gf180mcu/build/chip_gates.sh)"
+start=$(date +%s)
+if bash "$GATES"; then
+  echo "pre-push: chip gates PASSED in $(( $(date +%s) - start ))s -- push proceeding"
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+
+pre-push: CHIP GATES FAILED -- the push was stopped before it left this box.
+
+  What failed, and its evidence, is in the report above; each gate's own output is
+  in c930/asic_gf180mcu/build/<gate>.log, and the summary is in
+  c930/asic_gf180mcu/build/chip_gates_summary.md.
+
+  If the gate itself is what is broken and you are pushing its fix:
+    SKIP_CHIP_GATES=1 git push ...      (or: git push --no-verify ...)
+EOF
+exit 1
