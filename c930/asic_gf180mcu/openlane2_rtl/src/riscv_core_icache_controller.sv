@@ -66,7 +66,14 @@ enum logic [1:0] {
     MEM_REQ        = 2'b01,
     UPDATE_CACHE   = 2'b10,
     LOAD_DONE      = 2'b11
-} STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
+// STATE/NEXT carry NO initializer on purpose. The lint step (Verilator, via the
+// wafer.space flow's Checker.LintErrors) rejects any second writer of a
+// comb-written variable -- an `initial` assignment and a declaration
+// initializer both count, because NEXT is assigned in FSM_TRANSITION_BLOCK --
+// and it fails the whole run on an error. Neither is needed: the flow's async
+// reset is asserted while rst_n is low from t=0, so STATE and NEXT are IDLE
+// before the first clock edge in simulation and by construction in silicon.
+} STATE , NEXT ;
 logic                      update_en;
 logic                      tag_hit_1 , tag_hit_2 , over_f , s1 , s2 , miss ;
 logic [ADDR_WIDTH-1      : 0] i_addr_from_core_next_block;
@@ -102,13 +109,14 @@ logic [ADDR_WIDTH-1:0]      pending_inv_addr = 'b0;
 assign o_inv_ack = i_inv_valid && !pending_inv;
 // Initializers keep the combinational FSM/tag logic defined before the first
 // reset edge (Icarus would otherwise cascade X through the cache at t=0).
+// STATE/NEXT are NOT set here: an initializer (procedural or in the declaration)
+// would be a second writer of the comb-assigned NEXT and the flow's lint gate
+// rejects that. The async reset defines them at t=0 (rst_n is low at that point).
 initial begin
     for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
         TAG_MEM[i] = 'b0;
         VALID_MEM[i] = 1'b0;
     end
-    STATE = IDLE;
-    NEXT = IDLE;
 end
 //    ASSIGNING NEXT STATE AND UPDATE BLOCK    //
 always_ff @( posedge i_clk , negedge i_rst_n ) begin : NEXT_STATE_ASSIGN_FLUSH_UPDATE_BLOCK

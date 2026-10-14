@@ -150,7 +150,14 @@ enum logic [3:0] {
     // STATUS/empty value).  MMIO_RD_RETIRE releases the pipe and waits for
     // the load to actually leave MEM before draining.
     MMIO_RD_RETIRE = 4'b1010
-} STATE , NEXT ;   // STATE/NEXT initialized to IDLE in the initial block below
+// STATE/NEXT carry NO initializer on purpose. The lint step (Verilator, via the
+// wafer.space flow's Checker.LintErrors) rejects any second writer of a
+// comb-written variable -- an `initial` assignment and a declaration
+// initializer both count, because NEXT is assigned in the FSM_TRANSITION_BLOCK
+// -- and it fails the whole run on an error. Neither is needed: the flow's
+// async reset is asserted while rst_n is low from t=0, so STATE and NEXT are
+// IDLE before the first clock edge in simulation and by construction in silicon.
+} STATE , NEXT ;
 
   // Address of the MMIO store currently being retired (latched when its write
   // completes), so MMIO_WR_RETIRE can tell whether the MEM stage still holds
@@ -162,6 +169,9 @@ enum logic [3:0] {
   logic [ADDR_WIDTH-1 : 0] mmio_rd_addr_r;
 // Initializers keep the combinational FSM/tag/reservation logic defined before
 // the first reset edge (Icarus would otherwise cascade X through the cache).
+// STATE/NEXT are NOT set here: an initializer (procedural or in the declaration)
+// would be a second writer of the comb-assigned NEXT and the flow's lint gate
+// rejects that. The async reset defines them at t=0 (rst_n is low at that point).
 initial begin
     for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
         TAG_MEM[i] = 'b0;
@@ -170,8 +180,6 @@ initial begin
     VALID_RES = 1'b0;
     RES_SET = 'b0;
     RES_SET_SIZE = 2'b0;
-    STATE = IDLE;
-    NEXT = IDLE;
 end
 
 logic                      update_en;
