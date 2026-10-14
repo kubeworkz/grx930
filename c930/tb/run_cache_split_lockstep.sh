@@ -20,10 +20,15 @@
 #     rv64imac/RTL                                     dcache+icache controller/memory/top   <- reference
 #     rv64imac/RTL/caches                              dcache+icache controller/memory/top
 #     rv64imac/RTL/caches/atomic_dcaches               dcache controller/memory/top
-#     rv64imac/FPGA/src                                dcache+icache controller/memory/top + core top
 #     rv64imac/RTL/riscv_core_top.sv                   core top (named widths)
 #     rv64imac/RTL/Branch_Predicition/TOP WITH BRANCH PREDICTION/riscv_core_top.sv
 #                                                      core top (dcache only)
+#
+#   gitignored (on this box, in no checkout: .gitignore line 38 is `rv64imac/*`.
+#   Absent -> MISSING and a failure, unless the run says it expects a checkout --
+#   CACHE_LOCKSTEP_GITIGNORED_ABSENT=1, which CI sets.  Present -> checked exactly
+#   like a required tree, so the box loses nothing.  See the exemption below.)
+#     rv64imac/FPGA/src                                dcache+icache controller/memory/top + core top
 #
 #   optional (the tapeout tree is untracked in git; absent -> SKIP, not a failure)
 #     c930/asic_gf180mcu/openlane2_rtl/src             dcache+icache controller/memory/top + core top
@@ -63,11 +68,18 @@
 # run_cache_index_alias_legacy.sh (older generations) and run_tag_width_guard.sh.
 #
 # Exit status 0 only when every present copy passes every leg.  A missing
-# required tree or file fails; an absent optional tree is reported as SKIP.
+# required tree or file fails; an absent optional tree, and a gitignored tree
+# under CACHE_LOCKSTEP_GITIGNORED_ABSENT=1, are reported as SKIP and counted in
+# the verdict, so a run that checked four trees cannot read as one that checked
+# five.
 #
 # Usage:
 #   ./run_cache_split_lockstep.sh                 # the repo's trees
 #   ./run_cache_split_lockstep.sh ROOT            # e.g. a drifted scratch copy
+#   CACHE_LOCKSTEP_GITIGNORED_ABSENT=1 ./run_cache_split_lockstep.sh
+#                                                 # in a checkout: report the
+#                                                 # gitignored leg as SKIP rather
+#                                                 # than MISSING
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/../.." && pwd)}
@@ -82,6 +94,67 @@ REQ_TOPS=( "rv64imac/RTL/riscv_core_top.sv"
            "rv64imac/FPGA/src/riscv_core_top.sv" )
 OPT_TOPS=( "c930/asic_gf180mcu/openlane2_rtl/src/riscv_core_top.sv" )
 LIT_RE='\[11[[:space:]]*:[[:space:]]*5\]|\[11[[:space:]]*[-+]|\[63[[:space:]]*:[[:space:]]*12\]|\[63[[:space:]]*[-+]'
+
+# --------------------------------------------------------------------------
+# the gitignored leg: what a checkout is allowed to be missing, and why
+# --------------------------------------------------------------------------
+# rv64imac/FPGA/src is a real tree on this box and in no checkout -- .gitignore
+# line 38 (`rv64imac/*`) keeps it out of git -- so a run against a fresh clone
+# cannot hold it to anything, and CI (which has no FPGA tree) would be red on
+# every push for a tree that cannot be there.  What it must not become is a way
+# to stop checking: the exemption is granted on facts re-established on each run
+# -- the path is not in the index, and git says it is ignored -- never on this
+# list alone.  Track the tree and the exemption cannot apply any more, because
+# git would carry it: absence goes back to being MISSING (required).
+gitignore_verdict() {  # path -> ignored | tracked | not-ignored | no-repo
+  command -v git >/dev/null 2>&1 || { echo no-repo; return; }
+  git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo no-repo; return; }
+  [ -z "$(git -C "$ROOT" ls-files -- "$1" 2>/dev/null)" ] || { echo tracked; return; }
+  git -C "$ROOT" check-ignore -q --no-index -- "$1" 2>/dev/null && { echo ignored; return; }
+  echo not-ignored
+}
+
+in_gitignored() {  # path -> 0 when it is on the list above
+  local p
+  for p in "${GITIGNORED[@]}"; do [ "$p" = "$1" ] && return 0; done
+  return 1
+}
+
+may_be_absent() {  # path -> 0 when this run may accept it as absent
+  [ "${CACHE_LOCKSTEP_GITIGNORED_ABSENT:-0}" = 1 ] || return 1
+  in_gitignored "$1" || return 1
+  [ "$(gitignore_verdict "$1")" = ignored ]
+}
+
+# Why an absent path is still fatal, in the four cases that reach it.  A run that
+# expected a checkout and still failed is the one confusing outcome here, so it
+# says which of them it hit rather than leaving MISSING (required) unexplained.
+why_absent_is_fatal() {  # path
+  case "$(gitignore_verdict "$1")" in
+    tracked)     echo "git carries this path (it is in the index): the exemption cannot apply" ;;
+    no-repo)     echo "there is no git working tree at ROOT, so git cannot confirm it is ignored" ;;
+    not-ignored) echo "git does not ignore this path" ;;
+    *)           echo "CACHE_LOCKSTEP_GITIGNORED_ABSENT is not set to 1" ;;
+  esac
+}
+
+# One spelling of the required-but-absent verdict, so the tree leg and the top
+# leg cannot drift apart on it.
+missing_required() {  # kind path
+  echo "$1 $2: MISSING (required)"
+  if [ "${CACHE_LOCKSTEP_GITIGNORED_ABSENT:-0}" = 1 ] && in_gitignored "$2"; then
+    echo "      (listed as gitignored, but $(why_absent_is_fatal "$2"))"
+  fi
+  fail=1
+}
+
+# The one-liner the SKIP message quotes, so the reader sees which rule applies.
+gitignored_why() {  # path
+  git -C "$ROOT" check-ignore -v --no-index -- "$1" 2>/dev/null | head -1
+}
+
+GITIGNORED=( "rv64imac/FPGA/src" "rv64imac/FPGA/src/riscv_core_top.sv" )
+skipped=()
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/cache_split.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
@@ -168,7 +241,13 @@ echo "REFERENCE $REF_TREE"
 check_cache_tree() {  # tree required(1/0)
   local tree=$1 req=$2 dir="$ROOT/$1"
   if [ ! -d "$dir" ]; then
-    if [ "$req" = 1 ]; then echo "TREE $tree: MISSING (required)"; fail=1
+    if [ "$req" = 1 ]; then
+      if may_be_absent "$tree"; then
+        echo "TREE $tree: SKIP (absent, and git cannot carry it: $(gitignored_why "$tree"))"
+        skipped+=( "$tree" )
+      else
+        missing_required TREE "$tree"
+      fi
     else echo "TREE $tree: SKIP (absent optional untracked tree)"; fi
     return
   fi
@@ -234,7 +313,13 @@ check_cache_tree() {  # tree required(1/0)
 check_top() {  # top_path required(1/0)
   local top=$1 req=$2 f="$ROOT/$1"
   if [ ! -f "$f" ]; then
-    if [ "$req" = 1 ]; then echo "TOP $top: MISSING (required)"; fail=1
+    if [ "$req" = 1 ]; then
+      if may_be_absent "$top"; then
+        echo "TOP $top: SKIP (absent, and git cannot carry it: $(gitignored_why "$top"))"
+        skipped+=( "$top" )
+      else
+        missing_required TOP "$top"
+      fi
     else echo "TOP $top: SKIP (absent optional untracked tree)"; fi
     return
   fi
@@ -320,4 +405,9 @@ for t in "${OPT_TOPS[@]}"; do check_top "$t" 0; done
 
 echo
 if [ $fail -eq 0 ]; then echo "OVERALL: PASS"; else echo "OVERALL: FAIL"; fi
+# A skipped leg is part of the verdict, not a footnote to it: see the header.
+if [ ${#skipped[@]} -gt 0 ]; then
+  echo "SKIPPED ${#skipped[@]} gitignored path(s) this checkout cannot carry: ${skipped[*]}"
+  echo "        checked in full wherever the tree exists (run this on that box)"
+fi
 exit $fail

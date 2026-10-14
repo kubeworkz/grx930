@@ -1,0 +1,253 @@
+# build-gf180mcu.yml — the chip gates that have to pass before a flow run starts.
+#
+# This is not the GDS build. It is the cheap half: the checks that decide
+# whether the RTL about to be handed to the wafer.space flow is the RTL we think
+# it is. Each one answers a question that would otherwise be answered an hour
+# into a LibreLane run on the flow box -- or in silicon, after the shuttle:
+#
+#   boot from ROM         the chip powers up from its own boot ROM at
+#                         0x0001_0000 = CORE_RESET_PC, with no SRAM preload, and
+#                         reaches the firmware's UART banner on the tree the OL2
+#                         flow reads (openlane2_rtl/src). This is the ROM, the
+#                         reset PC and the SRAM/ROM split, together.
+#   ROM disabled control  the same sim with -DROM_DISABLE must FAIL -- otherwise
+#                         the PASS above is not evidence about the ROM at all.
+#   ROM drift             the checked-in ROM is what tools/gen_bootrom.py emits
+#                         from the checked-in firmware hex. A stale ROM is the
+#                         one defect that is invisible in every other gate and
+#                         ships silently: it is the firmware in the silicon.
+#   adapter + pad map     chip_core_grx930.sv elaborates against the template's
+#                         1x1 pad ring and its pad map is live (PAD_MAP.md). A
+#                         pad-count or port-name mistake here is a whole flow
+#                         run on the server -- this catches it in seconds.
+#   cache index/tag       the index/tag split is derived and reaches every cache
+#                         top; the pre-fix literal selects are gone; the
+#                         tag-width guard fires on a hardcoded 52.
+#   cache split lockstep  every hand-maintained copy of the cache sources still
+#                         carries the same derived split, so fixing one tree and
+#                         forking the others cannot pass. The FPGA copy cannot
+#                         be in a checkout; it is a counted SKIP -- see below.
+#   MMIO read hold        an MMIO load's data survives a frozen pipeline
+#                         (doc/dcache_mmio_read_hold.md).
+#
+# No PDK, no container, no PDK_ROOT, no synthesis: seconds of iverilog and make.
+# Every input is tracked in git, so a checkout has the whole thing -- a gate that
+# cannot run from a clone is not a gate and does not live in here.
+#
+# WHY THERE ARE NO PATH FILTERS
+#
+#   The version of this file this replaces ran only when c930/rtl, c930/rv64imac
+#   or c930/asic_gf180mcu changed, and then spent three hours in a Docker image
+#   to build a GDS that is not the submission path any more. A path filter is a
+#   way of not gating: the ROM is generated from c930/sw/test_chip_boot.hex, the
+#   gates live in c930/tb, and the adapter reads the tapeout tree, so a one-line
+#   firmware change that would put stale code in silicon is exactly the change a
+#   filter would skip. The whole job is under a minute, so every push and every
+#   pull request runs it.
+#
+# RUNNING THE SAME GATES LOCALLY (same commands, no runner needed):
+#
+#   cd c930/asic_gf180mcu
+#   make sim SIM_PLUSARGS=+NO_PRELOAD                          # boot from ROM
+#   make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE    # must fail
+#   make check_rom
+#   sh wafer_space_integration/run_adapter_lint.sh
+#   cd ../tb
+#   ./run_cache_index_alias.sh
+#   ./run_tag_width_guard.sh
+#   cd .. && make dcache_mmio_hold
+#   cd ../tb && ./run_cache_split_lockstep.sh
+#       (on the box, FPGA tree present: all five copies. In a checkout, prefix
+#       CACHE_LOCKSTEP_GITIGNORED_ABSENT=1 to match what CI runs.)
+#
+# WHY THE RUNNER IS PINNED TO 22.04
+#
+#   For `iverilog`: jammy's package is 11.0-1.1, which is the version every gate
+#   in this file was verified on, so CI runs what was tested. A newer Icarus is
+#   not a drop-in: oss-cad-suite's Icarus 14 rejects the tapeout tree at
+#   elaboration -- `riscv_core_csr_unit.sv:436 error: Unable to bind wire/reg/
+#   memory `intr_trap_pc' in ... trap_setup_proc`, 6 errors, six uses of a
+#   module-level wire declared at line 1095 of the same file. That is a real
+#   portability question about the RTL, and it deserves its own fix rather than
+#   arriving as a red job the first time a runner image moves. When that fix
+#   lands, this pin can go with it.
+#
+# THE ONE SKIPPED LEG, AND WHY IT IS NOT SILENT
+#
+#   c930/tb/run_cache_split_lockstep.sh locks five copies of the cache sources to
+#   one derived split. Four are tracked and this job checks them in full. The
+#   fifth, rv64imac/FPGA/src, is matched by `.gitignore` line 38 (`rv64imac/*`),
+#   so no checkout has it; the step sets CACHE_LOCKSTEP_GITIGNORED_ABSENT=1 to say
+#   it expects that, and the gate then reports
+#
+#     TREE rv64imac/FPGA/src: SKIP (absent, and git cannot carry it: .gitignore:38:rv64imac/*)
+#     SKIPPED 2 gitignored path(s) this checkout cannot carry: ...
+#
+#   under its OVERALL line, so a run that checked four trees cannot read as one
+#   that checked five. The exemption is never taken from a list: the gate re-asks
+#   git on every run -- not in the index, and matched by .gitignore -- so tracking
+#   the tree makes absence a failure again, a tracked tree that goes missing
+#   still fails, and a copy with no .git of its own still fails with the reason.
+#   Run the gate with the variable unset on the box that holds the FPGA tree and
+#   it checks all five, which is the only place the fifth can be checked.
+
+name: Silicon gates (GF180MCU)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silicon-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Boot ROM, pad map, caches, MMIO hold
+    # 22.04 = iverilog 11.0-1.1, the toolchain the gates are verified on (see the
+    # header). Not ubuntu-latest: that is 24.04 and iverilog 12.0, untested here.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      # ---------------------------------------------------------------- toolchain
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog
+          # The tapeout Makefile's ROM targets call `python`, not `python3`
+          # (rom, check_rom), so guarantee that name resolves.
+          command -v python || sudo apt-get install -y -qq python-is-python3
+          iverilog -V | head -1
+          vvp -V | head -1
+          make --version | head -1
+          python --version
+
+      # ---------------------------------------------------------------- boot ROM
+      # No SRAM preload: this is the power-on path silicon takes. The Makefile's
+      # sim target fails the step if the testbench does not print RESULT: PASS.
+      - name: Boot sim - the chip boots from its own ROM, no preload
+        working-directory: c930/asic_gf180mcu
+        run: |
+          make sim SIM_PLUSARGS=+NO_PRELOAD
+          # Keep this log: the control below overwrites build/sim.log.
+          cp build/sim.log build/sim_boot.log
+
+      # The negative control. It has to run even if the boot sim failed (where
+      # it explains why), and it has to fail for the boot sim's PASS to mean
+      # anything, so the step inverts the exit status on purpose.
+      - name: ROM disabled control - the same sim must fail
+        if: always()
+        working-directory: c930/asic_gf180mcu
+        run: |
+          if make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE; then
+            echo "::error::the boot sim PASSED with -DROM_DISABLE: the boot PASS did not come from the ROM"
+            exit 1
+          fi
+          cp build/sim.log build/sim_rom_disable.log
+          echo "OK: -DROM_DISABLE fails, so the boot PASS above is the ROM's"
+
+      - name: ROM drift - the checked-in ROM matches the firmware hex
+        if: always()
+        working-directory: c930/asic_gf180mcu
+        run: |
+          set -o pipefail
+          mkdir -p build          # tee opens its log before make does anything
+          make check_rom 2>&1 | tee build/check_rom.log
+
+      # ------------------------------------------------------------- pad map
+      - name: Adapter lint - chip_core elaborates and the pad map is live
+        if: always()
+        working-directory: c930/asic_gf180mcu
+        run: |
+          set -o pipefail
+          mkdir -p build
+          sh wafer_space_integration/run_adapter_lint.sh 2>&1 | tee build/adapter_lint.log
+
+      # ------------------------------------------------------------- caches
+      - name: Cache index/tag alias regressions
+        if: always()
+        working-directory: c930/tb
+        run: |
+          set -o pipefail
+          mkdir -p ../asic_gf180mcu/build
+          ./run_cache_index_alias.sh 2>&1 | tee ../asic_gf180mcu/build/cache_index_alias.log
+
+      - name: Cache tag-width guard - the wrong width fires, the derived one does not
+        if: always()
+        working-directory: c930/tb
+        run: |
+          set -o pipefail
+          mkdir -p ../asic_gf180mcu/build
+          ./run_tag_width_guard.sh 2>&1 | tee ../asic_gf180mcu/build/tag_width_guard.log
+
+      - name: Cache split lockstep - every hand-maintained copy holds one split
+        if: always()
+        working-directory: c930/tb
+        # This run is against a checkout, which cannot have rv64imac/FPGA/src
+        # (.gitignore line 38); the gate reports that one leg as a counted SKIP.
+        # Every other tree is required and checked in full -- see the header.
+        env:
+          CACHE_LOCKSTEP_GITIGNORED_ABSENT: "1"
+        run: |
+          set -o pipefail
+          mkdir -p ../asic_gf180mcu/build
+          ./run_cache_split_lockstep.sh 2>&1 | tee ../asic_gf180mcu/build/cache_split_lockstep.log
+
+      # ------------------------------------------------------------- MMIO hold
+      - name: MMIO read hold across a frozen pipeline
+        if: always()
+        working-directory: c930
+        run: |
+          set -o pipefail
+          # Every gate log lands in one directory, which is also the artifact
+          # glob, so the summary and the upload cannot disagree about paths.
+          mkdir -p asic_gf180mcu/build
+          make dcache_mmio_hold 2>&1 | tee asic_gf180mcu/build/dcache_mmio_hold.log
+
+      # ------------------------------------------------------------- evidence
+      # Every step above runs even when an earlier one failed, so this table is
+      # the whole picture in one place rather than the first failure only.
+      - name: Gate summary
+        if: always()
+        run: |
+          L=c930/asic_gf180mcu/build
+          line() {  # file pattern -> last matching line, empty if absent
+            [ -f "$1" ] && grep -ah "$2" "$1" | tail -1 || true
+          }
+          {
+            echo "## Silicon gates"
+            echo
+            echo "| gate | evidence |"
+            echo "|---|---|"
+            echo "| boot from ROM (no preload) | $(line "$L/sim_boot.log" 'RESULT:') |"
+            echo "| ROM disabled control (must fail) | $(line "$L/sim_rom_disable.log" 'RESULT:') |"
+            echo "| ROM in sync with the firmware hex | $(line "$L/check_rom.log" 'ROM in sync') |"
+            echo "| adapter + pad map | $(line "$L/adapter_lint.log" 'RESULT:') |"
+            echo "| cache index/tag alias | $(line "$L/cache_index_alias.log" 'OVERALL:') |"
+            echo "| cache tag-width guard | $(line "$L/tag_width_guard.log" 'OVERALL:') |"
+            echo "| cache split lockstep | $(line "$L/cache_split_lockstep.log" 'OVERALL:') $(line "$L/cache_split_lockstep.log" '^SKIPPED') |"
+            echo "| MMIO read hold | $(line "$L/dcache_mmio_hold.log" '\[PASS\] tb_dcache_mmio_hold') |"
+            echo
+            echo "A gate listed with no evidence line either did not run or wrote no"
+            echo "summary line: read its step log."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: silicon-gate-logs
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/*.log
+            c930/asic_gf180mcu/build/cache_alias_sim/*.log
