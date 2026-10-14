@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|canary|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -88,7 +88,8 @@
 # that network's images: grxgpu's first-board classifier, 8 x 8 images, two
 # hidden layers 64 wide and 16 outputs, with MNIST_DIR's images pooled to
 # 8 x 8.  Such a directory runs `chain`, `chainfit`, `chainbit`, `chainlit`,
-# `chainrows` and `chaingain` and nothing else, and they run in no other.
+# `chainrows`, `chaingain` and `canary` and nothing else, and they run in no
+# other.
 # CHAIN_TILE sets `chain`'s tile (default 128x64) and CHAIN_DRAWS the draws it
 # runs (default "0 1 2 3 4");
 # CHAINFIT_TILE and CHAINFIT_DRAWS are `chainfit`'s, which is the same network
@@ -99,10 +100,14 @@
 # `chainrows`'s, which runs the tile's budget a row at a time; and
 # CHAINGAIN_TILE and CHAINGAIN_DRAWS are `chaingain`'s, which gives that
 # layer's outputs one scale, fixed on images the network was not trained on.
+# `canary` trains the first board's canary as grxcp's B20 fixed it, its first
+# two layers the host's at eight bits and its last trained for the tile, and
+# runs its five networks as `chaingain` runs the reference ones; CANARY_TILE
+# and CANARY_DRAWS are its.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,101p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,106p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -118,11 +123,11 @@ chain) defs="-DN_SIDE=8 -DN_HID=64 -DN_OUT=16" ;;
 *) echo "SHAPE is d3 or chain" >&2; exit 2 ;;
 esac
 if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ] && [ "$what" != chainbit ] &&
-   [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ]; then
-    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows and chaingain and nothing else" >&2; exit 2
+   [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ] && [ "$what" != canary ]; then
+    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows, chaingain and canary and nothing else" >&2; exit 2
 fi
 if { [ "$what" = chain ] || [ "$what" = chainfit ] || [ "$what" = chainbit ] || [ "$what" = chainlit ] ||
-     [ "$what" = chainrows ] || [ "$what" = chaingain ]; } && [ "$shape" != chain ]; then
+     [ "$what" = chainrows ] || [ "$what" = chaingain ] || [ "$what" = canary ]; } && [ "$shape" != chain ]; then
     echo "$what needs SHAPE=chain, and a WORK_DIR of its own" >&2; exit 2
 fi
 
@@ -7218,6 +7223,272 @@ if [ "$what" = chaingain ]; then
         printf '%-84s' "$base"
         for k in before reference; do gain_class $k "$base"; done
         echo
+    done
+fi
+
+# The first board's canary, as grxcp's B20 fixed it on 2026-10-14: MNIST
+# pooled to 8 x 8, its first two layers the host's, at eight bits and trained
+# with no tile noise, and its last trained for the tile at six bits, all three
+# in one network from the same seed's 8-bit one, by the header's recipe for a
+# reference network.  Seed 1's network is the canary, by a rule written before
+# any was trained, and the other four are reported beside it.  Each is run as
+# `chaingain` runs the reference networks: the format alone, the tile as
+# budgeted, with its range fitted, lit, and lit and fitted, on 10,000 images
+# and on the first thousand, the gate's own, with the scale `chaingain` fixes.
+if [ "$what" = canary ]; then
+    tile=${CANARY_TILE:-128x64}
+    draws=${CANARY_DRAWS:-0 1 2 3 4}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    # the tile's format, and the four rows of version 2's budget that add to it
+    q="--abits 6 --adcbits 8"
+    r="$q --thermal8 0.25 --photons8 30 --prog 1 --xtalk 0.02"
+    f="--impair quant $q"
+    b="--impair $all $r"
+    cal=1000
+    t="--host 2 --probe 1 --gate 1 --gatescale $cal"
+    # the source's three rows, as grxcp's B16 has them, on B10's two buses
+    src="--src 0.01 --srcline 0.05 --srcflat 0.2 --buses 2"
+    fix="--levelprobe 16 --levelfix weights8"
+    # the canary, by the rule written before any network was trained
+    canary_seed=1
+    # row|options.  Every row's name ends in its draw
+    for dd in $draws; do
+        for n in "" ", a thousand"; do
+            i=
+            [ -z "$n" ] || i=" --images 1000"
+            echo "format only$n, draw $dd|$f$i"
+            echo "as budgeted$n, draw $dd|$b$i"
+            echo "as budgeted, fitted$n, draw $dd|$b$i --gatefit 1"
+            echo "as budgeted, lit$n, draw $dd|$b$i $src $fix"
+            echo "as budgeted, lit, fitted$n, draw $dd|$b$i $src $fix --gatefit 1"
+        done
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ $t/" > "$work/out/canary_settings.txt"
+    # canary_start SEED: the seed's 8-bit network of two hidden layers, all of
+    # it the tile's, unless it is already there: what the canary starts from
+    canary_start() {
+        local net="$PTA_WORK/nets/h2_d8_b8_s$1.net"
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 8 \
+            --seed "$1" --hidden 2 --out "$net" > "$net.log"
+    }
+    # canary_net SEED: the seed's canary network's file
+    canary_net() { echo "h2_d8_b6_host2_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"; }
+    # canary_make SEED: the seed's canary network, from its 8-bit one: the
+    # first two layers the host's, the last at six bits, noise on its sums
+    canary_make() {
+        local net="$PTA_WORK/nets/$(canary_net "$1")"
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 6 \
+            --host 2 --seed "$1" --hidden 2 --from "$PTA_WORK/nets/h2_d8_b8_s$1.net" \
+            --sumnoise "$PTA_REF_NOISE" --epochs "$PTA_REF_EPOCHS" --out "$net" > "$net.log"
+    }
+    # canary_one NET ROW ARGS...: one test-set pass and its calibration, its
+    # line to out/canary.d/NET_ROW.txt
+    canary_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/canary.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/canary.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f canary_start canary_net canary_make canary_one
+    # canary_row NAME: a row's name as a file's
+    canary_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'canary_start "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'canary_make "$@"' _
+    while IFS='|' read -r name setting; do
+        dd=${name##*, draw }
+        for sd in 1 2 3 4 5; do echo "$(canary_net $sd) $(canary_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+    done < "$work/out/canary_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'canary_one "$@"' _
+
+    # canary_file SEED NAME: the file canary_one wrote for that run
+    canary_file() { echo "$work/out/canary.d/$(basename "$(canary_net "$1")" .net)_$(canary_row "$2").txt"; }
+    # Every network has to be the canary its seed says, and every run the row
+    # its name says, as `chaingain` holds the reference networks' own.  A
+    # network was trained from its seed's 8-bit one for the header's epochs,
+    # its first two layers the host's: none of the noise on their sums and all
+    # of it on the last layer's, at the header's figure, and its weights at six
+    # bits.  A run's name says its draw, whether the tile is as budgeted or its
+    # format alone, whether its range is training's or fitted, whether the
+    # source is lit, and whether it is of a thousand images or of all, which
+    # have to be what it was asked and what its line printed: the network's
+    # first two layers the host's, as it was trained, and run at eight bits,
+    # the impairments it names and no other at version 2's figures, a lit run's
+    # source and its lines' reading as `chainlit` holds them, and a fitted
+    # run's share, 1, and the shift training's rule had given.  Every run's
+    # largest reference is the format alone's of the first draw, of as many
+    # images, and so is the range of a run that is not fitted; the format alone
+    # has no sum past its range wherever its reference is within its codes, and
+    # is on every draw the run it is on the first.  And every run's scale was
+    # fixed on a thousand images from image 54,000 on, and is within a
+    # hundredth of the one the test images would fit themselves.
+    canary_ok=yes
+    canary_runs=0
+    for sd in 1 2 3 4 5; do
+        log="$work/nets/$(canary_net $sd).log"
+        awk -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              n = split(v["got"], g, ",")
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["hidden"] == 2 &&
+                   v["host"] == 2 && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && v["fixed_epochs"] == e &&
+                   v["epochs"] == e && n == 3 && g[1] == 0 && g[2] == 0 && g[3] > 0.95 * f && g[3] < 1.05 * f &&
+                   v["held_out"] > 50 && v["held_out"] <= 100 && v["digital"] > 50 && v["digital"] <= 100
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || canary_ok=NO
+        while IFS='|' read -r name setting; do
+            first="format only"
+            [ "${name%, a thousand, draw *}" = "$name" ] || first="format only, a thousand"
+            cat "$log" "$(canary_file $sd "$first, draw ${draws%% *}")" \
+                "$(canary_file $sd "${name%, draw *}, draw ${draws%% *}")" "$(canary_file $sd "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v sd="$sd" -v d0="${draws%% *}" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                function figs() { return v["gate_rms"] " " v["gate_rmsfs"] " " v["gate_maxfs"] " " v["gate_agree"] " " \
+                                         v["agree"] " " v["e3"] " " v["gate_scale"] " " v["gate_scale_rms"] " " \
+                                         v["gate_scale_rmsfs"] " " v["gate_scale_maxfs"] " " v["gate_scale_agree"] " " \
+                                         v["gate_scale_best"] " " v["gate_scale_best_rms"] }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        few = (base ~ /, a thousand$/) ? 1 : 0
+                        core = few ? substr(base, 1, length(base) - 12) : base
+                        kind = 0; lit = 0
+                        if (core ~ /, lit, fitted$/) { kind = 1; lit = 1; core = substr(core, 1, length(core) - 13) }
+                        else if (core ~ /, lit$/) { lit = 1; core = substr(core, 1, length(core) - 5) }
+                        else if (core ~ /, fitted$/) { kind = 1; core = substr(core, 1, length(core) - 8) }
+                        fmt = (core == "format only") ? 1 : 0
+                        tiled = (core == "as budgeted") ? 1 : 0
+                        known = fmt + tiled == 1 && (tiled || (!lit && !kind))
+                        split(tile, tt, "x"); per = 16 * int((64 + tt[1] - 1) / tt[1])
+                        sane = drawn && known && m == (fmt ? 1 : 5) && ("quant" in on) &&
+                               asked("abits") == 6 && asked("adcbits") == 8 &&
+                               has("thermal8") == tiled && asked("thermal8") == 0.25 * tiled && (("thermal" in on) ? 1 : 0) == tiled &&
+                               has("photons8") == tiled && asked("photons8") == 30 * tiled && (("shot" in on) ? 1 : 0) == tiled &&
+                               has("prog") == tiled && asked("prog") == tiled && (("prog" in on) ? 1 : 0) == tiled &&
+                               has("xtalk") == tiled && asked("xtalk") == 0.02 * tiled && (("xtalk" in on) ? 1 : 0) == tiled &&
+                               !("drift" in on) && !has("drift") && !has("hours") && !has("calibrate") &&
+                               !has("post-hours") && !has("trimstep") && !has("trimmax") && !has("wbits") && !has("seed") &&
+                               has("src") == lit && asked("src") == 0.01 * lit &&
+                               has("srcline") == lit && asked("srcline") == 0.05 * lit &&
+                               has("srcflat") == lit && asked("srcflat") == 0.2 * lit &&
+                               has("buses") == lit && asked("buses") == 2 * lit &&
+                               has("levelprobe") == lit && asked("levelprobe") == 16 * lit &&
+                               has("levelfix") == lit && (!lit || want["levelfix"] == "weights8") &&
+                               !has("srcsign") && !has("levelref") && !has("levelpart") && !has("levellayer") &&
+                               has("host") && asked("host") == 2 && has("probe") && asked("probe") == 1 &&
+                               has("gate") && asked("gate") == 1 && has("images") == few && asked("images") == 1000 * few &&
+                               has("gatefit") == kind && (!kind || asked("gatefit") == 1) && !has("gatebits") &&
+                               has("gatescale") && asked("gatescale") == 1000 }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { right = v["correct"]; gref = v["gate_ref"]; split(v["S"], s0, ","); was = s0[3]; peak0 = v["gate_peak"]
+                          theirs = ("gate_ref" in v) && v["impair"] == "0x01" && v["seed"] == sd + 10 * d0 && v["net_seed"] == sd &&
+                                   v["images"] == (few ? 1000 : 10000) && !("src" in v) && !("gate_fit" in v) && v["net_host"] == 2 }
+                NR == 3 { own = v["correct"]; ofig = figs() }
+                NR == 4 { ns = split(v["S"], sh, ","); n8 = split(v["S8"], s8, ",")
+                          fig = figs()
+                          ok = sane && theirs && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw &&
+                               v["net_wbits"] == 6 && v["net_host"] == 2 && v["host_wbits"] == 8 && v["digital"] == digital &&
+                               v["epochs"] == epochs &&
+                               v["from"] == 8 && v["hidden"] == 2 && ns == 3 && v["impair"] == sprintf("0x%02x", mask) &&
+                               v["abits"] == 6 && v["adcbits"] == 8 && v["wbits"] == (lit ? 8 : 6) && v["drift"] == "none" &&
+                               v["hours"] == 0 && v["steps"] == 0 && v["cal"] == 0 && v["post_hours"] == 0 &&
+                               near(v["trimstep"], 0.25, 1e-12) && v["trimmax"] == 128 && v["images"] == (few ? 1000 : 10000) &&
+                               ("host" in v) && v["host"] == 2 &&
+                               (("src" in v) ? 1 : 0) == lit && (("levelprobe" in v) ? 1 : 0) == lit &&
+                               (("levelfix" in v) ? 1 : 0) == lit && !("levelpart" in v) &&
+                               !("hidshift" in v) && !("thermalline" in v) && !("gate_adcbits" in v) &&
+                               ("gate_bits" in v) && v["gate_bits"] == 6 && ("gate_rms" in v) && v["gate_rms"] > 0 &&
+                               v["gate_peak"] > 0 && v["gate8_peak"] > 0 && v["gate_rmsfs"] > 0 &&
+                               v["gate_rmsfs"] + 0 <= v["gate_maxfs"] + 0 && v["gate8_rmsfs"] + 0 <= v["gate8_maxfs"] + 0 &&
+                               ("e1" in v) && ("e2" in v) && v["e1"] == 0 && v["e2"] == 0 && v["e3"] > 0 &&
+                               ("gain" in v) && ("eres" in v) && ("elog" in v) && v["eres"] > 0 &&
+                               v["eres"] + 0 <= v["elog"] + 0 && v["elog"] == v["e3"] &&
+                               ("agree" in v) && ("ref" in v) && v["agree"] > 50 &&
+                               ("sats" in v) && ("elements" in v) && v["elements"] == per * v["images"] &&
+                               v["sats"] + 0 <= v["elements"] / 100 &&
+                               ("gate_agree" in v) && ("gate_ref" in v) && v["gate_agree"] > 50 &&
+                               v["gate_agree"] + 0 <= 100 && v["gate_ref"] == gref && v["gate_ref"] > 0 &&
+                               v["gate_peak"] == peak0 && sh[1] == s0[1] && sh[2] == s0[2] && n8 == 3 &&
+                               near(v["thermal8"], 0.25 * tiled, 1e-6) &&
+                               (tiled ? near(v["photons8"] / 30, 1, 0.03) : v["photons8"] == 0) &&
+                               near(v["prog"], tiled, 1e-9) &&
+                               (tiled ? (near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0) : v["xtalk"] == 0)
+                          # the scale
+                          ok = ok && ("gate_scale" in v) && v["gate_scale_images"] == 1000 && v["gate_scale_first"] == 54000 &&
+                               v["gate_scale"] > 0.5 && v["gate_scale"] < 1.5 && ("gate_scale_best" in v) &&
+                               near(v["gate_scale"], v["gate_scale_best"], 0.01) && v["gate_scale_rms"] > 0 &&
+                               v["gate_scale_best_rms"] + 0 <= v["gate_rms"] + 0.00001 &&
+                               v["gate_scale_best_rms"] + 0 <= v["gate_scale_rms"] + 0.00001 &&
+                               v["gate_scale_rmsfs"] + 0 <= v["gate_scale_maxfs"] + 0 &&
+                               v["gate_scale_agree"] > 50 && v["gate_scale_agree"] + 0 <= 100
+                          if (lit) ok = ok && v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] == 0.2 &&
+                                         v["buses"] == 2 && v["srcsign"] == "pair" &&
+                                         v["levelprobe"] == 16 && near(v["level_found"], 0.2, 0.1) &&
+                                         v["level_left"] > 0 && v["level_left"] + 0 < v["level_found"] / 4 &&
+                                         v["levelfix"] == "weights8" && v["levelref"] == "none" && v["level_gain"] == 1 &&
+                                         v["level_clip"] >= 0 && v["level_clip"] < 0.5
+                          if (kind == 0) { ok = ok && !("gate_fit" in v) && !("gate_was" in v) && sh[3] == was && s8[3] == sh[3]
+                                           if (fmt && int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= 127) ok = ok && v["sats"] == 0 }
+                          else ok = ok && ("gate_fit" in v) && v["gate_fit"] == 1 && ("gate_was" in v) && v["gate_was"] == was &&
+                                    int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= 127 &&
+                                    (sh[3] == 0 || int(v["gate_peak"] / 2 ^ (sh[3] - 1) + 0.5) > 127) && s8[3] == sh[3]
+                          if (fmt) ok = ok && v["correct"] == own && fig == ofig && own == right }
+                END { exit !(NR == 4 && ok) }' || canary_ok=NO
+            canary_runs=$((canary_runs + 1))
+        done < "$work/out/canary_settings.txt"
+    done
+    echo "== canary: $canary_runs runs, each of them the network and the row its place says: $canary_ok"
+    [ "$canary_ok" = yes ] || exit 1
+
+    echo "== canary: the five networks, the canary seed $canary_seed's: trained from the seed's 8-bit network"
+    echo "== for $PTA_REF_EPOCHS epochs, the first two layers the host's; held-out and test accuracy on the"
+    echo "== host, percent; and the noise put on each layer's sums in the last epoch, of their rms"
+    printf '%-16s %9s %9s %24s\n' "" "held out" "digital" "noise on the sums"
+    for sd in 1 2 3 4 5; do
+        awk -v sd="$sd" -v c="$canary_seed" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              printf "%-16s %9.2f %9.2f %24s\n", "seed " sd (sd == c ? ", canary" : ""), v["held_out"], v["digital"], v["got"] }' \
+            "$work/nets/$(canary_net $sd).log"
+    done
+    # canary_lines SEEDS BASE: a row's lines over its draws, the seeds given a draw
+    canary_lines() {
+        local sd dd
+        for sd in $1; do
+            for dd in $draws; do cat "$(canary_file $sd "$2, draw $dd")"; done
+        done
+    }
+    # canary_fig SEEDS BASE: a row over its runs, means: the tile's accuracy;
+    # how often its class is the declared reference's; the last layer's rms
+    # error over the reference's rms, over the largest the reference is, and
+    # its largest over that; the scale, and the rms error over the
+    # reference's rms with it, all percent but the scale; and the runs at
+    # 99.5% on the class and within 1.0%, 1.0% and 2.0% on the three
+    canary_fig() {
+        canary_lines "$1" "$2" | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              a += v["acc"]; c = v["gate_agree"] + 0; cs += c; pc += (c >= 99.5)
+              x = 100 * v["gate_rms"]; y = 100 * v["gate_rmsfs"]; z = 100 * v["gate_maxfs"]
+              xs += x; ys += y; zs += z; px += (x <= 1.0); py += (y <= 1.0); pz += (z <= 2.0)
+              s += v["gate_scale"]; w += 100 * v["gate_scale_rms"]; runs++ }
+            END { printf " %6.2f %6.2f %6.3f %6.3f %6.3f %7.5f %6.3f %3d %3d %3d %3d", a / runs, cs / runs, xs / runs, ys / runs,
+                         zs / runs, s / runs, w / runs, pc, px, py, pz }'
+    }
+    for who in "the canary, seed $canary_seed, over its draws|$canary_seed" "the five networks over their runs|1 2 3 4 5"; do
+        echo "== canary: ${who%|*}: the tile's accuracy and the class the declared reference's,"
+        echo "== percent; the last layer's error against its declared format, its rms over the reference's"
+        echo "== rms, over the largest the reference is, and its largest over that, percent; the scale, and"
+        echo "== the rms error with it; and the runs at 99.5% on the class and within 1.0%, 1.0% and 2.0%"
+        printf '%-44s %6s %6s %6s %6s %6s %7s %6s %3s %3s %3s %3s\n' "" "acc" "class" "rms" "rmsfs" "max" "scale" "srms" "cl" "rms" "fs" "max"
+        sed 's/, draw [0-9]*|.*//' "$work/out/canary_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+            printf '%-44s' "$base"
+            canary_fig "${who#*|}" "$base"
+            echo
+        done
     done
 fi
 

@@ -227,6 +227,18 @@ rms, about half its squared error, and the crosstalk alone from 3.52, 3.42 and
 would fit themselves, in every run with no source. Lit, it buys 0.34, 0.18 and
 0.13 of a point: the source had already taken gain off. It moves no class, and
 it brings no run within the demonstration's 1.0%.
+**And the nineteenth, the same day** (§5, at its end): the first board's
+canary, trained and run. grxcp's B20 fixed it: MNIST pooled to 8 × 8, its first
+two layers the host's at eight bits and trained with no tile noise, its last
+trained for the tile at six, and seed 1's network the canary, by a rule its
+owner made before any network was trained. `train --host N` now trains such a
+network. Five were trained and each run as the section before ran the reference
+networks. At the gate the canary is the stand-in: as budgeted its five are
+4.47% of the reference's rms off, where the stand-in's are 4.46, and no
+difference of error is clear in any row. The canary itself is 4.61% on the
+gate's thousand as budgeted and 5.09% lit and fitted, and gives its declared
+reference's class on 99.74 and 99.42% of it. What the recipe gives up is a
+tenth of a point of accuracy on 10,000 images.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -6876,6 +6888,193 @@ stand-in classifier, in a model, with the chain's other engines taken as exact.
 A scale written into a chip. A calibration of the gain an output at a time, or
 with an offset. A ruling on the demonstration's reference. Five draws, of the
 same five networks.
+
+### The first board's canary
+
+*Added 2026-10-14.* `train --host 2`, then `SHAPE=chain sim/pta_mnist.sh DIR
+WORK canary`. Reported, not gated. The harness gains `train --host N`; a
+network trained with it says so in its file, and eval holds it to that.
+
+**Why.** grxcp's B20 fixed the first board's canary on 2026-10-14: MNIST pooled
+to 8 × 8; its first two layers the host's, at eight bits and trained with no
+tile noise; its last trained for the tile at six bits; all three trained in one
+run of this harness. Until now every network here had one weight width for all
+its layers, and the reference networks (grxcp's B17) were trained with the
+tile's noise on every layer's sums.
+
+**What the harness does.** `train --host N` trains a network whose first N
+layers are a digital engine's, as `eval --host N` runs them. Their weights are
+rounded at the full D bits in training's forward pass and their sums get no
+`--sumnoise`; the layers after are at `--wbits` with the noise, as before. Such
+a network is written as `PTAMLP4`: the header, the depth, N, then the weights.
+A network with none of the host's is the file it always was. Eval refuses it
+under any `--host` but N, runs its host's layers at D bits, and prints
+`net_host` and `host_wbits`, the width it ran them at. Every other file and
+line is what it was.
+
+The self-test's 44 lines are as they were, with one more, and a build of the
+chain's shape prints 30, one more. The new block writes a network with two of
+the host's to a temporary file and reads it back, writes one with none and
+finds the file it always was, and is refused a file that says none or every
+layer. It holds the host's view of the widths, 8 bits for the host's layers and
+6 for the last. And it trains on made-up images for an epoch: with noise, none
+goes on the host's layers' sums and a tenth of their rms on the last's; with no
+noise at eight bits a network with two of the host's and one with none are the
+same weight for weight, and at six they are not; what training reports is the
+accuracy at each layer's width; and a network of one hidden layer, the host's,
+is read back as written. 18 errors were planted one at a time in the new code
+and built at both shapes. The first time, 15 failed the self-test, 2 did not
+and one was not placed: the host's layers trained at the network's width, and
+the depth not written for a network of one hidden layer. The last three of the
+self-test's checks above were written for them, and all 18 fail it now.
+
+**What it runs.** The nineteenth mode, in `chain`'s work directory for MNIST.
+It trains five networks, seeds 1 to 5, each from its seed's 8-bit network:
+`train --din 8 --wbits 6 --host 2 --hidden 2 --sumnoise 0.1 --epochs 8`, B17's
+recipe with the noise on the last layer alone. Then it runs each as `chaingain`
+runs the reference networks, with `--host 2 --probe 1 --gate 1 --gatescale
+1000`, on five draws: 250 runs.
+
+| Row | What it runs |
+|---|---|
+| format only | `--impair quant`: the tile's format and nothing drawn |
+| as budgeted | All four of version 2's rows |
+| as budgeted, fitted | With the last layer's range fitted, `--gatefit 1` |
+| as budgeted, lit; as budgeted, lit, fitted | With `chainlit`'s source, read and corrected on the weights at 8 bits |
+| each of those five, a thousand | The same on the test set's first thousand images, the gate's own |
+
+**How it was run.** The rule for which network is the canary was ruled before
+any was trained, at 21:39 UTC: seed 1's, with the other four reported beside
+it. Ten predictions were written at 21:50 UTC, before any canary network
+existed. A run on one draw, in a directory of its own, trained the five and its
+check said yes. Writing the planted errors showed that no field said what width
+eval ran the host's layers at, so the line gained `host_wbits` and the check
+holds it to eight. The mode was then swept, its check said yes, and a table's
+column was widened; the sweep was run again with the script as it now is, and
+took 2 minutes. Each of its 250 lines is the first sweep's, byte for byte, and
+the five networks it trained are the first run's, byte for byte: training is
+the same each time.
+
+The mode checks each network and each run against its place, as `chaingain`
+does. A network was trained from its seed's 8-bit one for eight epochs, at six
+bits, its first two layers the host's: none of the noise on their sums and a
+tenth of their rms, to 5%, on the last's. A run says its network's first two
+layers are the host's, that they ran at eight bits, and the rest of what
+`chaingain` holds a run to: its row, draw, images, impairments, source, range
+and scale.
+
+93 errors were planted one at a time, and all but 1 fail. 18 in the new C,
+against the self-test. 29 in a network's training line or a run's line, against
+the check with nothing run again. 22 in the script, each run in a directory of
+its own. 8 in what `cmd_eval` and `cmd_train` do with it, each built into the
+harness and the mode run with it on one draw: the host's layers run at the
+network's width, their width printed as the last layer's, nothing said of the
+network's host's layers, the host's layers not passed to training, one fewer
+passed, and nothing said of them in training's line; and the refusals taken
+away. A canary run with any other `--host`, and training with every layer or a
+layer below nought the host's, are refused. And 16 in the tables' own code. The
+1 that does not is the class's column with the scale for the one without it,
+which print the same wherever the scale moves no class, as in `chaingain`. With
+the script and the harness as they now are, the checks and tables of `refcomb`,
+`chain`, `chainfit`, `chainbit`, `chainlit`, `chainrows` and `chaingain` alone,
+on the lines their own sweeps wrote for MNIST, say yes and print what those
+sweeps printed. Eleven runs those modes made were run again, and each is its
+line. And four networks they trained were trained again, three of the chain's
+shape and a reference network of D3's, and each is its file and its training's
+line, byte for byte.
+
+**The networks.** Held-out and test accuracy on the host, and the noise
+training put on the last layer's sums in its last epoch:
+
+| Seed | Held out, % | Test images on the host, % | Noise on the last layer's sums, of their rms |
+|---|---|---|---|
+| 1 (the canary) | 97.52 | 96.84 | 0.0999 |
+| 2 | 97.30 | 96.76 | 0.1000 |
+| 3 | 97.57 | 97.14 | 0.0999 |
+| 4 | 97.17 | 96.93 | 0.0999 |
+| 5 | 97.28 | 97.16 | 0.1001 |
+
+The five are 96.76 to 97.16% right on the test images on the host, a mean of
+96.97; the stand-in's reference networks of the same seeds, as their training
+logs say, are 96.87 to 97.40, a mean of 97.09.
+
+**At the gate.** The last layer against its declared format, the canary and the
+five beside the stand-in's reference networks of the same seeds, as `chaingain`
+ran them; and the class:
+
+| | rms error, % of the reference's rms: the canary, seed 1 | the five | the stand-in's five | the five less the stand-in's, by seed | Class the declared reference's, %: the canary (draws at 99.5%) | the five (runs at 99.5%) | The scale, the five |
+|---|---|---|---|---|---|---|---|
+| format only | 0.74 | 0.72 | 0.71 | +0.01 ± 0.01 | 99.84 (5 of 5) | 99.86 (25 of 25) | 1.0002 |
+| as budgeted | 4.54 | 4.47 | 4.46 | +0.01 ± 0.02 | 99.60 (5 of 5) | 99.58 (22 of 25) | 0.9692 |
+| as budgeted, fitted | 4.54 | 4.65 | 4.64 | +0.01 ± 0.02 | 99.60 (5 of 5) | 99.52 (17 of 25) | 0.9691 |
+| as budgeted, lit | 5.04 | 5.30 | 5.18 | +0.12 ± 0.05 | 99.40 (0 of 5) | 99.38 (4 of 25) | 0.9859 |
+| as budgeted, lit, fitted | 5.04 | 5.45 | 5.33 | +0.12 ± 0.05 | 99.40 (0 of 5) | 99.35 (3 of 25) | 0.9858 |
+| format only, a thousand | 0.78 | 0.75 | 0.74 | +0.02 ± 0.01 | 99.90 (5 of 5) | 99.86 (25 of 25) | 1.0002 |
+| as budgeted, a thousand | 4.61 | 4.53 | 4.52 | +0.01 ± 0.02 | 99.74 (5 of 5) | 99.56 (18 of 25) | 0.9693 |
+| as budgeted, fitted, a thousand | 4.61 | 4.53 | 4.52 | +0.01 ± 0.02 | 99.74 (5 of 5) | 99.56 (18 of 25) | 0.9693 |
+| as budgeted, lit, a thousand | 5.09 | 5.34 | 5.22 | +0.12 ± 0.05 | 99.42 (2 of 5) | 99.39 (10 of 25) | 0.9861 |
+| as budgeted, lit, fitted, a thousand | 5.09 | 5.34 | 5.22 | +0.12 ± 0.05 | 99.42 (2 of 5) | 99.39 (10 of 25) | 0.9861 |
+
+At the gate the canary is the stand-in. Network for network, the five less the
+stand-in's are +0.007 ± 0.015 of the reference's rms as budgeted on 10,000
+images and +0.117 ± 0.048 lit and fitted on the gate's thousand, and no
+difference of rms, of rms over the largest the reference is, or of the largest
+error is clear in any row. The scale is the stand-in's to 0.0019. The canary,
+seed 1, is 4.61% on the gate's thousand as budgeted and 5.09% lit and fitted,
+where the five are 4.53 and 5.34.
+
+What the recipe gives up is a tenth of a point. On 10,000 images the five are
+right on the tile 0.10 ± 0.03 of a point less often than the stand-in's with
+the format alone and 0.12 ± 0.03 lit and fitted, clear in 4 of the ten rows.
+Lit, their class is the declared reference's 0.05 ± 0.02 of a point less often,
+clear in 2. On the gate's thousand no difference of accuracy or class is clear.
+
+**What these runs do not say.** The canary is trained and run, not frozen: no
+golden tensor exists, and whether FC3's declared reference is the sum before
+the 8-bit converter, as here, or the converter's codes is not settled. Its
+first two layers run on the host, exactly, at eight bits: B20's contract, and
+not a GRX930 NPU's or a G100's output. The canary's own figures are five draws
+of one network.
+
+**What was predicted.** Ten things, written on 2026-10-14 at 21:50 UTC, when
+the harness change, its self-test and the mode existed and no canary network
+had been trained. They were put beside the stand-in's figures on MNIST, and say
+so. 10 were right as written.
+
+1. That every canary network is 96.6 to 97.6% right on the host, and the five's
+   mean within 0.3 of the stand-in's 97.09. Right: 96.76 to 97.16, a mean of
+   96.97.
+
+2. That training puts none of its noise on the first two layers' sums and 0.095
+   to 0.105 of their rms on the last's. Right: 0.0999 to 0.1001.
+
+3. That the format alone, on 10,000 images, is 0.6 to 0.9. Right: 0.72.
+
+4. That as budgeted the five are 4.0 to 5.0 on 10,000 images and the scale 0.96
+   to 0.98. Right: 4.47 and 0.9692.
+
+5. That lit and fitted, on the gate's thousand, the five are 4.8 to 5.8, and
+   the scale lit 0.97 to 1.01. Right: 5.34 and 0.9859.
+
+6. That on the gate's thousand the class is the declared reference's on 99.3 to
+   99.8% as budgeted and 99.1 to 99.7% lit and fitted. Right: 99.56 and 99.39.
+
+7. That no run of the 25 is within 1.0% of the reference's rms in any row with
+   the budget in it, and at least 20 are with the format alone on 10,000
+   images. Right: none, and all 25.
+
+8. That as budgeted on the gate's thousand the largest error is 6 to 9.5% of
+   the largest the reference is, and no run within 2.0%. Right: 7.51, and none.
+
+9. That the canary is within 0.3 of the five's mean as budgeted on 10,000
+   images. Right: 4.54 against 4.47.
+
+10. That the mode's check says yes on its first sweep of five draws. Right.
+
+**What this is not.** Everything the six sections before say of themselves: a
+stand-in task, in a model, with the chain's other engines taken as exact. A
+frozen canary, or its golden tensors. A band for Gate F. Five draws, of five
+networks.
 
 ---
 
