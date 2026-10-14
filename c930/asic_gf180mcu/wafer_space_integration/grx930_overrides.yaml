@@ -46,8 +46,131 @@ CLOCK_PERIOD: 40
 # what the design needs, and a placer target under the real density is what
 # pushed GPL into 91-94 % local hot spots on the fat layout.
 PL_TARGET_DENSITY_PCT: 55
+
+# Detailed-placement displacement window. These two reach
+# `detailed_placement -max_displacement {X Y}` (librelane's
+# scripts/openroad/common/dpl.tcl) and, through scripts/odbpy/reader.py, the ECO
+# buffer/diode placers; global placement does not read them, so this pair only
+# constrains legalization. LibreLane's own default for both is 100 um.
+#
+# Left at 1500/500 for the fresh ws_v3 run. A widening to 10000/10000 (wider than
+# the 3932 x 5122 um die) lived here while DPL-0036 was the open failure, on the
+# theory that the repair's trailing detailed placement could not legalize its
+# new buffers inside the window. With the repair step disabled (see below) no
+# step inserts tens of thousands of cells for DPL to place, so the window is not
+# the binding constraint, and the cost of an effectively unlimited one -- DPL
+# free to move a cell arbitrarily far from where GPL put it, on a design whose
+# measured binding constraint is congestion -- is not worth paying for it.
 PL_MAX_DISPLACEMENT_X: 1500
 PL_MAX_DISPLACEMENT_Y: 500
+
+# ---------------------------------------------------------------------------
+# Post-GPL design repair: DISABLED, on measurement. This is what killed ws_v2.
+# ---------------------------------------------------------------------------
+#
+# OpenROAD.RepairDesignPostGPL runs librelane/scripts/openroad/repair_design.tcl,
+# which builds its argument list straight out of the config:
+#
+#   repair_design -verbose \
+#       -max_wire_length $::env(DESIGN_REPAIR_MAX_WIRE_LENGTH) \
+#       -slew_margin     $::env(DESIGN_REPAIR_MAX_SLEW_PCT) \
+#       -cap_margin      $::env(DESIGN_REPAIR_MAX_CAP_PCT)
+#
+# and, before that, `buffer_ports -inputs/-outputs` when
+# DESIGN_REPAIR_BUFFER_INPUT_PORTS / _OUTPUT_PORTS are set.
+#
+# The direction of those two percentages is the opposite of what their names
+# suggest. OpenROAD derates the target limit by the margin
+# (src/rsz/src/RepairDesign.cc):
+#
+#       limit1    *= (1.0 - slew_margin_ / 100.0);
+#       max_cap1  *= (1.0 - cap_margin_  / 100.0);
+#
+# The flags are documented in src/rsz/README.md under "Over-repair": the margin
+# exists so the resizer repairs *past* the constraint, on the assumption that
+# placement parasitics understate what routing will produce. LibreLane's default
+# of 20 is therefore not "tolerate 20 % over the limit" but "repair anything
+# above 80 % of the limit".
+#
+# So the least aggressive setting available was tried first -- both margins at 0,
+# which repairs exactly the violations against the real limits and nothing beyond
+# them, plus pad buffering off (those two buffer_ports calls terminate nets at the
+# pad ring, where the standard-cell rows end and legal sites are scarcest). It is
+# not enough, and this is measured rather than inferred. The probe
+# (wafer_space_integration/probe_step31.sh) replayed this single step against
+# ws_v2's own frozen pre-repair ODB -- `--only OpenROAD.RepairDesignPostGPL` with
+# `-i 30-openroad-stamidpnr/state_out.json`, which still points at
+# 27-openroad-globalplacement/chip_top.odb -- so input, step logic, PDK and
+# netlist are identical and only the knobs differ:
+#
+#   run               slew viol  cap viol  nets repaired  buffers  area after
+#   ws_v2 (margin 20)    17,577     6,776         17,652   97,969     +79.9 %
+#   ws_v3_probe (0)      12,676     5,536         12,734   88,590     +73.7 %
+#
+# -9.6 % buffers for a 27.9 % smaller violation set: the insertion is driven by
+# real violations against the real limits, not by the 20 % over-repair, and this
+# step has no configuration that caps it. Read the `final` row of its Area meter,
+# not a mid-run one -- ws_v3_probe read +25.8 % at iteration 209,000 and +73.7 %
+# on `final`.
+#
+# Where the mass comes from, from the run's own logs:
+#
+#   30-openroad-stamidpnr  max slew violation count 157453, cap 5945, fanout 99
+#   31-...repairdesignpostgpl
+#     RSZ-0034  Found 17577 slew violations
+#     RSZ-0035  Found 98 fanout violations
+#     RSZ-0036  Found 6776 capacitance violations
+#     RSZ-0038  Inserted 97969 buffers in 17652 nets
+#     RSZ-0042  Inserted 178 tiel + 125 tieh
+#
+# 97,969 buffers on 17,652 nets is ~5.6 buffers per net, +79.9 % cell area,
+# inserted into a placement that 30-openroad-stamidpnr/state_out.json records at
+# 43.75 % instance utilization (43.21 % stdcell) -- i.e. it takes the design to
+# roughly 79 % full, and the detailed placement the step then runs
+# (`source scripts/openroad/common/dpl.tcl`) aborts on it:
+#
+#   31-openroad-repairdesignpostgpl.log:358  + detailed_placement -max_displacement  1500 500
+#   31-openroad-repairdesignpostgpl.log:359  [INFO DPL-0034] Detailed placement failed on the following 23 instances:
+#   31-openroad-repairdesignpostgpl.log:383  [ERROR DPL-0036] Detailed placement failed.
+#   31-openroad-repairdesignpostgpl.log:384  Error: repair_design.tcl, 71 DPL-0036
+#   logs/ws_flow.ws_v2.log:58391            WS_EXIT:2
+#
+# 157,453 slew violations is a large number and two facts bound how much of it
+# is real: the measurement is mid-PnR with the clock not yet propagated
+# (unpropagated.rpt is empty, WNS -574 ns, report_clock_min_period 614 ns against
+# a 40 ns clock), and all 52 warnings the step raised are the harmless STA-1140
+# duplicate-Library read.
+#
+# DISABLED, because that measurement leaves nothing else. LibreLane's own switch
+# for the step is RUN_POST_GPL_DESIGN_REPAIR ("Enables resizer design repair
+# after global placement using the OpenROAD.RepairDesignPostGPL step", default
+# true); false skips it, and with it the trailing detailed placement that aborted
+# the flow, so the flow reaches CTS and routing instead of dying in placement.
+# Drive-strength repair is not lost by doing this: the Chip flow still runs
+# OpenROAD.ResizerTimingPostCTS (step 37, RUN_POST_CTS_RESIZER_TIMING) and
+# OpenROAD.ResizerTimingPostGRT (step 45, RUN_POST_GRT_RESIZER_TIMING), both
+# after the clock is propagated and on parasitics estimated from a real clock
+# tree -- a strictly better place to fix slew than a pre-CTS placement with
+# estimated wires -- and OpenROAD.DetailedPlacement (step 34) still runs the same
+# DPL the skipped step would have run.
+#
+# What is given up: the ~157k pre-CTS slew violations are no longer touched
+# before CTS, so any that are real are left to those two resizer steps or show up
+# as sign-off findings (Checker.MaxSlewViolations, step 78). What is bought: the
+# repair no longer triples the cell count and fills the layout to ~79 % before
+# CTS -- on a design whose measured binding constraint is routing congestion, an
+# extra 88-98k cells sitting in the placement ahead of CTS is a cost carried into
+# global routing for no benefit the post-CTS resizer cannot provide.
+#
+# The DESIGN_REPAIR_* values are left at their least aggressive setting while the
+# step is off, so that re-enabling it starts from there rather than from
+# LibreLane's 20/20. They are inert until that happens.
+DESIGN_REPAIR_MAX_SLEW_PCT: 0
+DESIGN_REPAIR_MAX_CAP_PCT: 0
+DESIGN_REPAIR_MAX_WIRE_LENGTH: 0
+DESIGN_REPAIR_BUFFER_INPUT_PORTS: false
+DESIGN_REPAIR_BUFFER_OUTPUT_PORTS: false
+RUN_POST_GPL_DESIGN_REPAIR: false
 
 # Power distribution. The template's pdn_cfg.tcl ends by sourcing its SRAM stripe
 # grid (pdn_5v_sram.tcl, or pdn_3v3_sram.tcl when SRAM_DEFINE says so), and that
@@ -182,6 +305,48 @@ PDN_CFG: dir::pdn/pdn_cfg_grx930.tcl
 # count and ignores cost, so it selects 0.3 by construction; the sweep was run
 # because it cannot answer the question that matters. Cost is now measured.
 #
+# MEASURED ON THE ASSEMBLED DIE (2026-10-13, ws_v3 step 37): 0.2 DOES NOT RUN. GRT
+# aborts with `[ERROR GRT-0183] Net net21814: heap underflow during 3D maze
+# routing` after its 14th overflow-removal iteration (6:58 wall, 3 GiB peak), and
+# it is deterministic: resuming the frozen step-36 state with this file unchanged
+# reproduces the same net at the same iteration. So the value below is 0.1, not
+# 0.2, and the reason is not that 0.2 is wrong about DRT -- it is that 0.2 never
+# reaches DRT on the pad-ring die.
+#
+# What GRT-0183 means, from upstream source rather than from the message. In
+# `mazeRouteMSMDOrder3D` the maze expansion gives up when the source subtree's
+# priority queue empties before it reaches the destination subtree -- "no path
+# could be found within the search region" for that edge (OpenROAD PR #10711,
+# which stops treating it as fatal and keeps the edge's original route via
+# `recoverEdge`; merged Aug 2026). A sibling fix, PR #11093 (merged 2026-08-07),
+# is a FastRoute gcell-capacity defect: `initBlockedIntervals` rounded each
+# blocked interval up to a track separately, so the charge depended on how the
+# blocked metal happened to be fragmented and could rise when metal was removed --
+# "mainly impacts Metal 1 resources". This image pins `openroad-2026-02-17`
+# (LibreLane 3.1.0.dev1), so BOTH post-date it: the no-path state is what the
+# configuration reaches, and the abort is what this build does when it reaches it.
+#
+# The boundary, measured with `wafer_space_integration/probe_grt.sh` -- one knob
+# changed per arm, same frozen state, each arm ~7 min / 3 GiB:
+#
+#   arm                        iterations  final overflow   GRT-0115   wire (um)
+#   ws_v3 as-is (0.2)          abort at 14  --               --         --
+#   0.1 (this file)                       8   0 everywhere      no       39,459,512
+#   0.15                                 12   18 (M2 2, M4 16)  yes      41,057,898
+#   GRT_OVERFLOW_ITERS 1                  1   63,525 (M2 47,168) yes      39,475,195
+#   M1 layer adjustment -0.2 (0.2 kept)  13   7                 yes      41,205,578
+#
+# 0.1 is the value landed because it is the one that PASSES AND CONVERGES: zero
+# overflow on every layer, no GRT-0115, 8 iterations. 0.15 also completes but
+# stops 18 units short of its own budget, which is the mini-0.3 signature; and the
+# M1-relax arm, which keeps this 0.2 reservation on M2-M5 (their resources are
+# byte-identical to the 0.2 arms: 2,255,039 / 2,467,749 / 2,157,644 / 1,351,235)
+# and gives Metal1 +52 % (709,799 -> 1,080,188), completes with 7 units left -- so
+# the failing region was not "Metal1 out of tracks", it was a local no-path that
+# more capacity ANYWHERE breaks. Metal1's own usage is 7.6-8.6 % against Metal2's
+# 59-61 %, i.e. the pressure is on the vertical layers and Metal1 was never the
+# binding one.
+#
 # THE FALSIFIER, recorded rather than buried. One measurement still favours 0.3:
 # its per-iteration gain is -7.8 % where 0.0/0.1/0.2 have settled into -3.9 %,
 # -3.7 % and -4.3 %. At equal iteration count 0.3 is further from its own
@@ -190,7 +355,29 @@ PDN_CFG: dir::pdn/pdn_cfg_grx930.tcl
 # plateau stalling far above 0.3's, the value below goes back to 0.3. The decisive
 # next measurement is 0.2 vs 0.3 at full iteration count on the same layout pair
 # -- not more sweep points, and not more fast arms.
-GRT_ADJUSTMENT: 0.2
+# 0.1, not 0.2: see the die-level measurement at the end of the block above.
+# What it costs is the DRT half of the sweep: on the slot core 0.1 finished DRT
+# with 344,494 violations against 0.2's 254,201, i.e. +90,293 (2 iterations,
+# Metal1-Metal5, same six arguments -- the table above). That cost is real but it
+# is a cost of RUNNING, and 0.2 does not run: the choice here is between a route
+# that reaches detailed routing at 0.1 and a fatal abort at 0.2. The die's own DRT
+# at 0.1 IS measured now (build/die_drt_chain.sh, tag die02, 2026-10-14): 353,871
+# initial route -> 213,354 -> 204,357 at iteration 2 (2 iterations, Metal1-Metal5,
+# 8 threads, -or_seed 42 -- the slot-core arms' protocol), 1:15:42 wall, 8,123 MB
+# peak, curve classified CONVERGING. That is cleaner than the slot core at 0.2
+# (254,201), so the give-back's price on the layout that ships is smaller than the
+# sweep's core-side number -- see Claude outputs/die_drt_at01.md.
+# What it does NOT yet do is make the flow reach detailed routing: on the pinned
+# build the die now dies one step later, in OpenROAD.RepairAntennas ->
+# OpenROAD.DiodeInsertion, where repair_antennas' own global-router pass hits the
+# same fatal GRT-0183 (net _167563_) after 3,846 jumpers and 2,522 diodes. The
+# measurement above therefore runs on the post-GlobalRouting database with the
+# composite skipped (-c RUN_ANTENNA_REPAIR=false) -- the only pre-DRT state the
+# die reaches here; see Claude outputs/ws_run3_readiness_gaps.md section 1b.
+# Revisit this value if the engine pin ever moves past the two Aug 2026 GRT fixes
+# (PR #11093 capacity, PR #10711 recoverEdge): with the abort made recoverable,
+# 0.2 becomes runnable again and the sweep's DRT numbers are the ones to pick from.
+GRT_ADJUSTMENT: 0.1
 GRT_ALLOW_CONGESTION: true
 
 # Measured on OL2: Metal2 as the bottom layer produced 13-20 M initial-route
@@ -201,3 +388,86 @@ RT_MIN_LAYER: Metal1
 # here so the intent survives someone editing the template.
 DRT_ANTENNA_REPAIR_ITERS: 10
 DRT_ANTENNA_REPAIR_MARGIN: 10
+
+# ---------------------------------------------------------------------------
+# Detailed-router iteration cap: 8, not the router's default 64.
+# ---------------------------------------------------------------------------
+#
+# `DRT_OPT_ITERS` is the `OpenROAD.DetailedRouting` variable that lands on
+# TritonRoute's `-droute_end_iter` (installed LibreLane 3.1.0.dev1:
+# steps/openroad.py declares it `default=64`, scripts/openroad/drt.tcl:88 does
+# `lappend drt_args -droute_end_iter $::env(DRT_OPT_ITERS)`). Unset -- which is
+# what ws_v3 ran with -- it resolves to 64.
+#
+# One cap, up to eleven routing jobs. The STEP runs DetailedRouting once
+# (flows/classic.py:87, gated by RUN_DRT), but the step contains a loop:
+# drt.tcl:85-121 routes the design (drt-run-0), then keeps running
+# check_antennas / repair_antennas and re-routing (drt-run-1, ...) while diodes
+# are actually being inserted, up to DRT_ANTENNA_REPAIR_ITERS times -- 10 here --
+# and every pass gets a fresh `-droute_end_iter` budget from this key. So the
+# step's worst case is (1 + DRT_ANTENNA_REPAIR_ITERS) x (initial route +
+# DRT_OPT_ITERS iterations), and the figure two paragraphs down is PER PASS.
+# In practice the loop exits as soon as antenna repair stops inserting diodes,
+# and what bounds the whole step is the per-pass curve -- which is what
+# wafer_space_integration/watch_drt_curve.sh watches, writing the verdict
+# (converging / stalled / diverged / clean) automatically rather than leaving a
+# step of this length to be eyeballed.
+#
+# What the default costs, measured rather than assumed:
+#
+#   * Per-iteration wall on THIS layout. Fast loop, 12.93 mm2 slot core, 8
+#     threads, GRT_ADJUSTMENT 0.2, from drt_fast/logs/grt02_drt.log's own
+#     DRT-0267 lines: initial route 37:55, then 26:05 and 25:25 for optimization
+#     iterations 1 and 2. Eight threads is what this flow resolves to as well
+#     (`DRT_THREADS` unset -> machine thread count, and the box has 8), so the
+#     two instruments are comparable. The default 64 therefore budgets
+#     ~38 min + 64 x ~26 min = ~28 h of detailed routing, and that is a floor:
+#     the fast loop routes the bare core ODB while this flow routes the
+#     assembled die.
+#   * The only UNBOUNDED DRT run this design has, v8 (fat core, GRT 0.0),
+#     occupied step 43-openroad-detailedrouting from 2026-10-01 01:26 to
+#     2026-10-11 15:58 -- 10.6 days for 26 optimization iterations -- and its own
+#     DRT-0267 lines record single iterations of 34 min early on growing to
+#     16-27 h later. That is the "days" this cap removes.
+#
+# What the cap costs in violations. The only full-length violation curve on this
+# design is v8's (fat core, GRT 0.0), because no unbounded run exists on the
+# tapeout layout; the tapeout curve is measured only to iteration 2. On the
+# tapeout layout, at 0.2, the fast loop gives 764,679 -> 265,661 -> 254,201,
+# and its first three points are byte-identical to v8's, so a cap changes
+# nothing about iterations 0-2 -- it only truncates what follows:
+#
+#   iteration   0          1         2         4         8         12        16        17        25
+#   v8 viols    1,081,775  405,529   387,049   266,147   254,306   242,556   237,089   649,172   711,100
+#   vs floor    +844,686   +168,440  +149,960  +29,058   +17,217   +5,467    0         +412,083  +474,011
+#
+#   * The minimum is INTERIOR. Iteration 16 is the best point the unbounded
+#     router reached (237,089); iteration 17 is 2.74x worse (649,172) and
+#     iteration 25 spikes to 711,100 (3.0x). Uncapped iterations do not buy a
+#     better route here, they buy a longer walk that can end far above the
+#     router's own best.
+#   * cap 2 (the fast-loop convention the sweep tables were measured at):
+#     387,049, i.e. 149,960 violations (63.2 %) above that floor.
+#   * cap 8 (this file): 254,306, i.e. 17,217 (7.3 %) above it, and by iteration
+#     8 the curve is inside its plateau (-0.5 % to -0.8 % per iteration), so
+#     those 17,217 are the tail of the curve -- on v8 the iterations that
+#     removed them were the ones measured in hours each, not minutes.
+#   * cap 16 recovers exactly those 17,217 and doubles the wall clock to ~7 h.
+#
+# So 8 is the knee of that trade: a routing verdict in ~4 h (38 min + 8 x 26 min)
+# per pass instead of ~28 h to 10.6 days, inside the measured plateau, and
+# stopped before the observed divergence onset. The number is a decision, not a measurement:
+# this run is what measures the tapeout layout's own curve, and if it is still
+# falling steeply at 8 the cap is what to raise first.
+#
+# Two things this cap is NOT:
+#
+#   * Not a way to pass. The tapeout layout is at 254,201 TrDRC violations after
+#     2 iterations on the core, and ERROR_ON_TR_DRC is True with threshold 0, so
+#     the step fails at the checker whatever the cap is. The cap buys a VERDICT
+#     -- converging, stalled or diverging -- not a clean route.
+#   * Not a block on the open falsifier experiment (0.2 vs 0.3 at full iteration
+#     count, Claude outputs/grt_adjustment_sweep.md). That runs in the standalone
+#     fast loop, whose FAST_END_ITER is independent of this file. Raise or remove
+#     this key only for a deliberate full-length FLOW DRT.
+DRT_OPT_ITERS: 8
