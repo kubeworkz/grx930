@@ -70,6 +70,15 @@
  * bit more is twice the range at the same LSB, and the noise, which is in
  * that LSB, is what it was.  With --gatefit it is B bits over the fitted
  * range, which is the same range in finer steps.
+ * --gatescale M gives the last layer's outputs one scale, fixed at
+ * calibration: the least-squares slope of the declared reference on the
+ * tile's outputs, over M images the network was not trained on (the first
+ * of the 6,000 it holds out), run through the same tile after the test
+ * images and with the light's shots their own.  The gate's figures are
+ * given again with the outputs times that scale; and the scale the test
+ * images would fit themselves, which no calibration knows and no scale
+ * betters, with what it leaves.  The run's other figures are what they
+ * were.
  * A light (--src, --srcline, --srcflat) is the tile's: with layers on the
  * host it lights the rest, and what a host does for its lines, read with
  * --levelprobe and applied with --levelfix, it does to the tile's layers'
@@ -1236,6 +1245,9 @@ typedef struct {
     double  gpeak, gworst;      /* the largest that reference is, and the largest the error */
     double  hpeak, hworst;      /* the same two against the operands as they were given */
     int     gright, gagree;     /* images that reference has right, and images the tile gives its class */
+    /* and, for one scale on the last layer's outputs (eval --gatescale), the
+     * outputs and that reference, images x N_OUT: NULL unless asked for */
+    double *gy, *gf;
 } probe;
 
 static int probe_init(probe *p, int images, int hidden)
@@ -1251,6 +1263,8 @@ static void probe_free(probe *p)
 {
     free(p->logit);
     free(p->margin);
+    free(p->gy);
+    free(p->gf);
 }
 
 /* M images: their operands, what tile_batch() left in bw for them, and the
@@ -1303,6 +1317,10 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
                     p->gpeak = fabs((double)fmt);
                 if (fabs(df) > p->gworst)
                     p->gworst = fabs(df);
+                if (p->gy) {
+                    p->gy[(size_t)p->images * N_OUT + o] = (double)y2[o];
+                    p->gf[(size_t)p->images * N_OUT + o] = (double)fmt;
+                }
                 if (fabs((double)loc) > p->hpeak)
                     p->hpeak = fabs((double)loc);
                 if (fabs(dl) > p->hworst)
@@ -2342,6 +2360,122 @@ static void join_ints(char *buf, size_t size, const int *v, int n)
         used += (size_t)snprintf(buf + used, size - used, i ? ",%d" : "%d", v[i]);
 }
 
+/*
+ * One scale on the last layer's outputs (eval --gatescale).  scale_sums()
+ * adds, over M images tile_batch() left in bw, the tile's last outputs times
+ * their declared reference and the outputs squared: the scale is the one
+ * over the other, the least-squares slope of that reference on the outputs.
+ * scale_best() is the same over the images the probe kept, and
+ * scale_calibrate() over M images of pixels x from the first'th on, run
+ * through the tile after the test images: the light's shots are numbered
+ * from N_TEST on, so that none of them is a test image's.  scale_fix() is
+ * what eval reports: that scale, the images it was fixed on, the scale the
+ * probe's images would fit themselves, and the gate's figures with each of
+ * the two.  scale_gate()
+ * gives the gate's figures again with the outputs times a scale: the rms
+ * error over the reference's rms, over the largest the reference is, the
+ * largest error over that, and how often the class the scaled outputs give
+ * with their biases is the class the reference gives with them.
+ */
+typedef struct {
+    double rms, rmsfs, maxfs, agree;
+} scale_result;
+
+static void scale_sums(const host_net *hn, int32_t *const *q, int bits, int M, const batch_ws *bw,
+                       double *yf, double *yy)
+{
+    const int H = hn->hidden;
+    int m, o, k;
+    for (m = 0; m < M; ++m)
+        for (o = 0; o < N_OUT; ++o) {
+            const double y = (double)bw->y[H][m * N_OUT + o];
+            int64_t fmt = 0;
+            for (k = 0; k < N_HID; ++k)
+                fmt += (int64_t)contract_quant(bw->a[H][m * N_HID + k], bits, hn->din) * q[H][o * N_HID + k];
+            *yf += y * (double)fmt;
+            *yy += y * y;
+        }
+}
+
+static double scale_best(const probe *p)
+{
+    double yf = 0.0, yy = 0.0;
+    long i;
+    for (i = 0; i < (long)p->images * N_OUT; ++i) {
+        yf += p->gy[i] * p->gf[i];
+        yy += p->gy[i] * p->gy[i];
+    }
+    return yy > 0.0 ? yf / yy : 1.0;
+}
+
+static void scale_gate(const probe *p, const host_net *hn, double s, scale_result *r)
+{
+    const int H = hn->hidden;
+    double e = 0.0, f2 = 0.0, worst = 0.0;
+    int i, o, agree = 0;
+    for (i = 0; i < p->images; ++i) {
+        const double *y = p->gy + (size_t)i * N_OUT, *f = p->gf + (size_t)i * N_OUT;
+        int yb = 0, fb = 0;
+        for (o = 0; o < N_OUT; ++o) {
+            const double d = s * y[o] - f[o];
+            e  += d * d;
+            f2 += f[o] * f[o];
+            if (fabs(d) > worst)
+                worst = fabs(d);
+            if (s * y[o] + (double)hn->b[H][o] > s * y[yb] + (double)hn->b[H][yb])
+                yb = o;
+            if (f[o] + (double)hn->b[H][o] > f[fb] + (double)hn->b[H][fb])
+                fb = o;
+        }
+        agree += yb == fb;
+    }
+    r->rms   = f2 > 0.0 ? sqrt(e / f2) : 0.0;
+    r->rmsfs = p->gpeak > 0.0 ? sqrt(e / ((double)p->images * N_OUT)) / p->gpeak : 0.0;
+    r->maxfs = p->gpeak > 0.0 ? worst / p->gpeak : 0.0;
+    r->agree = p->images ? 100.0 * agree / p->images : 0.0;
+}
+
+static int scale_calibrate(const host_net *ht, const host_net *hn, int32_t *const *q, int bits,
+                           const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, uint32_t seed,
+                           uint32_t *gemm, gemm_buf *g, const uint8_t *x, int first, int M, batch_ws *bw,
+                           int32_t *a1, double *scale)
+{
+    double yf = 0.0, yy = 0.0;
+    int base, m, k;
+    for (base = 0; base < M; base += MAX_M) {
+        const int B = (M - base < MAX_M) ? M - base : MAX_M;
+        light.base = N_TEST + base;
+        for (m = 0; m < B; ++m)
+            for (k = 0; k < N_IN; ++k)
+                a1[m * N_IN + k] = pixel_operand(x[(size_t)(first + base + m) * N_IN + k], hn->din);
+        if (tile_batch(ht, cfg, tile, dev, seed, gemm, g, B, a1, bw) < 0)
+            return -1;
+        scale_sums(hn, q, bits, B, bw, &yf, &yy);
+    }
+    *scale = yy > 0.0 ? yf / yy : 1.0;
+    return 0;
+}
+
+typedef struct {
+    double       scale, best;       /* fixed on the calibration's images, and the probe's images' own */
+    int          images, first;     /* how many images the scale was fixed on, and the first of them */
+    scale_result at_scale, at_best; /* the gate's figures with the outputs times each */
+} scale_report;
+
+static int scale_fix(const probe *p, const host_net *ht, const host_net *hn, int32_t *const *q, int bits,
+                     const pta_cfg *cfg, const pta_tile *tile, pta_device *dev, uint32_t seed, uint32_t *gemm,
+                     gemm_buf *g, const uint8_t *x, int first, int M, batch_ws *bw, int32_t *a1, scale_report *r)
+{
+    if (scale_calibrate(ht, hn, q, bits, cfg, tile, dev, seed, gemm, g, x, first, M, bw, a1, &r->scale) != 0)
+        return -1;
+    r->images = M;
+    r->first  = first;
+    r->best   = scale_best(p);
+    scale_gate(p, hn, r->scale, &r->at_scale);
+    scale_gate(p, hn, r->best, &r->at_best);
+    return 0;
+}
+
 static int cmd_eval(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
@@ -2350,7 +2484,7 @@ static int cmd_eval(int argc, char **argv)
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
         "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
-        "--host", "--gate", "--gatefit", "--gatebits", NULL};
+        "--host", "--gate", "--gatefit", "--gatebits", "--gatescale", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2387,6 +2521,9 @@ static int cmd_eval(int argc, char **argv)
     const double fit_share = gatefit ? atof(gatefit) : 0.0;
     const char *gatebits = opt(argc, argv, "--gatebits", NULL);
     const int last_bits = gatebits ? atoi(gatebits) : 0;
+    const char *gatescale = opt(argc, argv, "--gatescale", NULL);
+    const int scale_images = gatescale ? atoi(gatescale) : 0;
+    scale_report rep;
     int64_t fit_peak = 0;
     int fit_was = 0;
     const int lit = src_all != 0.0 || src_line != 0.0 || src_flat != 0.0;
@@ -2413,6 +2550,7 @@ static int cmd_eval(int argc, char **argv)
 
     memset(&pr, 0, sizeof pr);
     memset(&lit_s, 0, sizeof lit_s);
+    memset(&rep, 0, sizeof rep);
     if (check_opts(argc, argv, names) != 0 || !data || !path || images < 1 || images > N_TEST) {
         fprintf(stderr, "pta_mnist eval: --data DIR --net NET [options] (pta_mnist help)\n");
         return 2;
@@ -2504,6 +2642,13 @@ static int cmd_eval(int argc, char **argv)
                      last_bits < atoi(opt(argc, argv, "--adcbits", "0")) || last_bits > 15)) {
         fprintf(stderr, "pta_mnist: --gatebits is the bits of the last layer's converter, from "
                         "--adcbits' to 15, and needs --gate and --adcbits\n");
+        return 2;
+    }
+    /* One scale on the last layer's outputs is fixed on images the network
+     * was not trained on, which are not the test images. */
+    if (gatescale && (!gate || scale_images < 1 || scale_images > N_ALL - N_TRAIN)) {
+        fprintf(stderr, "pta_mnist: --gatescale is how many of the %d held-out training images fix "
+                        "the last layer's output scale, and needs --gate\n", N_ALL - N_TRAIN);
         return 2;
     }
 
@@ -2640,6 +2785,12 @@ static int cmd_eval(int argc, char **argv)
         quant_weights(hn, net->wbits, pq);
         pr.gate      = gate;
         pr.gate_bits = (cfg[H].impair & PTA_QUANT) ? (int)cfg[H].act_bits : 0;
+        if (gatescale) {
+            pr.gy = (double *)malloc((size_t)images * N_OUT * sizeof(double));
+            pr.gf = (double *)malloc((size_t)images * N_OUT * sizeof(double));
+            if (!pr.gy || !pr.gf)
+                return 2;
+        }
     }
 
     tile.rows  = tile_rows;
@@ -2717,6 +2868,14 @@ static int cmd_eval(int argc, char **argv)
      * last layer is one tile's sum and the two are the same thing. */
     if (gatefit && N_HID <= tile_rows && pr.gpeak != (double)fit_peak) {
         fprintf(stderr, "pta_mnist: --gatefit fitted the range to a reference the probe did not measure\n");
+        return 2;
+    }
+    /* The last layer's output scale, fixed at calibration: the held-out images,
+     * after the test images and through the same tile, with its lines as they
+     * were read and the light's shots their own. */
+    if (gatescale && scale_fix(&pr, ht, hn, pq, pr.gate_bits, cfg, &tile, &dev, seed, &gemm, g, tr.x, N_TRAIN,
+                               scale_images, bw, a1, &rep) != 0) {
+        fprintf(stderr, "pta_mnist: pta_gemm refused a GEMM\n");
         return 2;
     }
     join_ints(s_txt, sizeof s_txt, S, H + 1);
@@ -2818,6 +2977,16 @@ static int cmd_eval(int argc, char **argv)
         /* And the last converter's width, where it has one of its own. */
         if (gatebits)
             printf(" gate_adcbits=%d", last_bits);
+        /* And the gate's figures with the last layer's outputs times the scale
+         * fixed on the held-out images, and which images those were; and the
+         * scale the test images would fit themselves, with the rms error it
+         * leaves. */
+        if (gatescale)
+            printf(" gate_scale=%.5f gate_scale_images=%d gate_scale_first=%d gate_scale_rms=%.5f "
+                   "gate_scale_rmsfs=%.5f gate_scale_maxfs=%.5f gate_scale_agree=%.2f gate_scale_best=%.5f "
+                   "gate_scale_best_rms=%.5f",
+                   rep.scale, rep.images, rep.first, rep.at_scale.rms, rep.at_scale.rmsfs, rep.at_scale.maxfs,
+                   rep.at_scale.agree, rep.best, rep.at_best.rms);
         probe_free(&pr);
         for (l = 0; l <= H; ++l)
             free(pq[l]);
@@ -3848,6 +4017,191 @@ static int cmd_selftest(void)
             if (!spared || !gained || !moved || !noisy || !mended)
                 errors += fail("a light on a tile with layers on the host is not the tile's layers' alone");
             free(kept);
+        }
+        /* 5h. one scale on the last layer's outputs.  The same network at the
+         *     fitted step, the first two layers on the host, and as many other
+         *     made-up images to fix the scale on.  At a scale of one the gate's
+         *     figures are the probe's own, to the bit.  The scale fixed on the
+         *     other images is the one the probe would fit on them, to the bit.
+         *     With the format alone it is within a hundredth of one, and with
+         *     2% of crosstalk it is lower: crosstalk swells a sum whose inputs
+         *     are none below nought.  There the outputs times it are nearer
+         *     their reference than the outputs are.  The scale the images fit
+         *     themselves leaves no more than one does, than the fixed one does,
+         *     or than a hundredth either side of it.  The last layer is given
+         *     biases here, which a class is taken with: the last output's is
+         *     four times full scale and the rest are nought, so that every
+         *     image's class is the last.  Times two the outputs are as far off
+         *     as their reference is large, in rms and at the largest, to two
+         *     hundredths, and give the class worked out here; times nought they
+         *     are as far off as their reference is large, exactly, and give
+         *     every image the biases' class.  What eval reports, on made-up
+         *     pixels from the seventh image on, is that scale done by hand on
+         *     the same images, to the bit, with its last batch's shots
+         *     numbered from N_TEST on; the images and the first of them it was
+         *     given; the best scale of the images the probe kept; and the
+         *     gate's figures with each of the two, figure for figure. */
+        {
+            int32_t *a2 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
+            double fixed[2] = {0.0, 0.0}, at_one[2] = {0.0, 0.0}, at_fixed[2] = {0.0, 0.0};
+            int run = a2 != NULL && fitted, one = 1, same = 1, least = 1, twice = 1, calibrated = 0, lower, pass2;
+            int bias_best = 0;
+            uint32_t gemm = 0;
+            for (i = 0; a2 && i < M * N_IN; ++i)
+                a2[i] = (int32_t)(splitmix64(&r5) % (uint64_t)(1 << (D - 1)));
+            for (i = 0; i < N_OUT; ++i)
+                hn.b[H][i] = 0;
+            hn.b[H][N_OUT - 1] = ((int64_t)4 * 127) << s_fit;     /* four times full scale */
+            bias_best = N_OUT - 1;
+            for (pass2 = 0; run && pass2 < 2; ++pass2) {
+                probe p, pc;
+                scale_result r1, rf, rb, rx, r2;
+                double yf = 0.0, yy = 0.0, best;
+                for (l = 0; l <= H; ++l) {
+                    cfg[l].impair    = PTA_QUANT | (pass2 ? PTA_XTALK : 0u);
+                    cfg[l].xtalk     = pass2 ? 5u : 0u;
+                    cfg[l].w_bits    = WB;
+                    cfg[l].adc_bits  = BITS;
+                    cfg[l].adc_shift = (uint32_t)s_fit;
+                }
+                host_layers = H;
+                if (probe_init(&p, M, H) != 0 || probe_init(&pc, M, H) != 0) {
+                    run = 0;
+                    break;
+                }
+                p.gate = pc.gate = 1;
+                p.gate_bits = pc.gate_bits = AB;
+                p.gy  = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                p.gf  = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                pc.gy = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                pc.gf = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                if (!p.gy || !p.gf || !pc.gy || !pc.gf ||
+                    tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0) {
+                    run = 0;
+                } else {
+                    probe_batch(&p, &hn, q, M, a1, bw, labels);
+                    if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a2, bw) < 0) {
+                        run = 0;
+                    } else {
+                        scale_sums(&hn, q, AB, M, bw, &yf, &yy);
+                        probe_batch(&pc, &hn, q, M, a2, bw, labels);
+                        fixed[pass2] = yy > 0.0 ? yf / yy : 0.0;
+                        same &= fixed[pass2] == scale_best(&pc);
+                        best = scale_best(&p);
+                        scale_gate(&p, &hn, 1.0, &r1);
+                        scale_gate(&p, &hn, fixed[pass2], &rf);
+                        scale_gate(&p, &hn, best, &rb);
+                        one &= r1.rms == sqrt(p.ge / p.gr) && r1.rmsfs == sqrt(p.ge / (M * N_OUT)) / p.gpeak &&
+                               r1.maxfs == p.gworst / p.gpeak && r1.agree == 100.0 * p.gagree / M;
+                        at_one[pass2]   = r1.rms;
+                        at_fixed[pass2] = rf.rms;
+                        least &= rb.rms <= r1.rms && rb.rms <= rf.rms;
+                        scale_gate(&p, &hn, best * 0.99, &rx);
+                        least &= rb.rms <= rx.rms;
+                        scale_gate(&p, &hn, best * 1.01, &rx);
+                        least &= rb.rms <= rx.rms;
+                        if (pass2 == 0) {
+                            int m0, o0, theirs = 0, doubled = 0;
+                            twice = 1;
+                            /* times two and times nought: the class worked out here, and the
+                             * biases' own; and the reference's own size */
+                            for (m0 = 0; m0 < M; ++m0) {
+                                const double *f = p.gf + (size_t)m0 * N_OUT, *y = p.gy + (size_t)m0 * N_OUT;
+                                int fb = 0, yb = 0;
+                                for (o0 = 0; o0 < N_OUT; ++o0) {
+                                    if (f[o0] + (double)hn.b[H][o0] > f[fb] + (double)hn.b[H][fb])
+                                        fb = o0;
+                                    if (2.0 * y[o0] + (double)hn.b[H][o0] > 2.0 * y[yb] + (double)hn.b[H][yb])
+                                        yb = o0;
+                                }
+                                theirs  += fb == bias_best;
+                                doubled += fb == yb;
+                            }
+                            scale_gate(&p, &hn, 2.0, &r2);
+                            twice &= fabs(r2.rms - 1.0) < 0.02 && fabs(r2.maxfs - 1.0) < 0.02 &&
+                                     r2.agree == 100.0 * doubled / M && theirs == M;
+                            scale_gate(&p, &hn, 0.0, &r2);
+                            twice &= r2.rms == 1.0 && r2.maxfs == 1.0 && r2.agree == 100.0 * theirs / M;
+                        }
+                    }
+                }
+                probe_free(&p);
+                probe_free(&pc);
+            }
+            for (l = 0; l <= H; ++l) {
+                cfg[l].impair = PTA_QUANT;
+                cfg[l].xtalk  = 0u;
+            }
+            host_layers = 0;
+            /* what eval reports: the format alone, which draws nothing */
+            {
+                uint8_t *px = (uint8_t *)malloc((size_t)(M + 7) * N_IN);
+                int32_t *a3 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
+                double yf = 0.0, yy = 0.0;
+                probe pp;
+                scale_report rep;
+                scale_result ra, rb;
+                const int base_was = light.base;    /* the tests after this one number their shots from it */
+                uint32_t gemm = 0;
+                for (l = 0; l <= H; ++l)
+                    cfg[l].adc_shift = (uint32_t)s_fit;
+                host_layers = H;
+                for (i = 0; px && i < (M + 7) * N_IN; ++i)
+                    px[i] = (uint8_t)(splitmix64(&r5) & 0xFF);
+                memset(&pp, 0, sizeof pp);
+                if (!px || !a3 || probe_init(&pp, M, H) != 0 ||
+                    !(pp.gy = (double *)malloc((size_t)M * N_OUT * sizeof(double))) ||
+                    !(pp.gf = (double *)malloc((size_t)M * N_OUT * sizeof(double))) ||
+                    tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a1, bw) < 0) {
+                    run = 0;
+                } else {
+                    pp.gate      = 1;
+                    pp.gate_bits = AB;
+                    probe_batch(&pp, &hn, q, M, a1, bw, labels);
+                    if (scale_fix(&pp, &hn, &hn, q, AB, cfg, &tile, &dev, 7, &gemm, g, px, 7, M, bw, a3, &rep) != 0) {
+                        run = 0;
+                    } else {
+                        calibrated = light.base == N_TEST && rep.images == M && rep.first == 7 &&
+                                     rep.best == scale_best(&pp);
+                        for (i = 0; i < M * N_IN; ++i)
+                            a3[i] = pixel_operand(px[(size_t)7 * N_IN + i], D);
+                        if (tile_batch(&hn, cfg, &tile, &dev, 7, &gemm, g, M, a3, bw) < 0)
+                            run = 0;
+                        else
+                            scale_sums(&hn, q, AB, M, bw, &yf, &yy);
+                        scale_gate(&pp, &hn, rep.scale, &ra);
+                        scale_gate(&pp, &hn, rep.best, &rb);
+                        calibrated &= yy > 0.0 && rep.scale == yf / yy &&
+                                      ra.rms == rep.at_scale.rms && ra.rmsfs == rep.at_scale.rmsfs &&
+                                      ra.maxfs == rep.at_scale.maxfs && ra.agree == rep.at_scale.agree &&
+                                      rb.rms == rep.at_best.rms && rb.rmsfs == rep.at_best.rmsfs &&
+                                      rb.maxfs == rep.at_best.maxfs && rb.agree == rep.at_best.agree &&
+                                      ra.rms != rb.rms;
+                    }
+                }
+                probe_free(&pp);
+                light.base  = base_was;
+                host_layers = 0;
+                free(px);
+                free(a3);
+            }
+            lower = run && fabs(fixed[0] - 1.0) < 0.01 && fixed[1] < fixed[0] && at_fixed[1] < at_one[1];
+            one &= run;
+            printf("selftest: one scale on the last layer's outputs: at a scale of one the gate's figures "
+                   "are the probe's own: %s; the scale fixed on %d other images is the one the probe fits "
+                   "on them: %s; with the format alone it is %.4f, and with 2%% of crosstalk %.4f, where "
+                   "the outputs times it are %.2f%% of their reference's rms off and the outputs %.2f%%: %s; "
+                   "the scale the images fit themselves leaves the least: %s; and outputs times two, or "
+                   "times nought, are as far off as their reference is large, and times nought give the "
+                   "biases' class: %s; and what eval reports is that scale on the images it was given, "
+                   "its shots numbered past the test images', and the gate's figures with it and with the "
+                   "best: %s\n",
+                   one ? "so" : "NOT SO", M, same ? "so" : "NOT SO", fixed[0], fixed[1], 100.0 * at_fixed[1],
+                   100.0 * at_one[1], lower ? "so" : "NOT SO", least ? "so" : "NOT SO", twice ? "so" : "NOT SO",
+                   calibrated ? "so" : "NOT SO");
+            if (!one || !same || !least || !twice || !lower || !calibrated)
+                errors += fail("one scale on the last layer's outputs is not the least-squares slope of its reference");
+            free(a2);
         }
         pta_device_free(&dev);
         host_free(&hn);
@@ -5232,6 +5586,9 @@ static void help(void)
            "                  the largest it is, is within F of full scale (1 fits it; 0.5 leaves a bit)\n"
            "  --gatebits B    with --gate: the last layer's converter has B bits, at the step the run's\n"
            "                  converters have: a bit more is twice the range at the same LSB\n"
+           "  --gatescale M   with --gate: the gate's figures again with the last layer's outputs times\n"
+           "                  one scale, fixed on the first M of the 6,000 held-out training images\n"
+           "                  after the test images; and the scale the test images would fit themselves\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
