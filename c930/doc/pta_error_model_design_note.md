@@ -7164,12 +7164,13 @@ byte. It took 16 seconds.
 | Ties for the largest output | None, in either thousand |
 | Written twice | The same, byte for byte; and written again after 5j was changed, the same |
 
-grxcp keeps them in `docs/designs/canary/` with a candidate manifest, 23 files
-of 730,780 bytes, and a checker written apart from this harness,
-`pta_board_canary_golden.py`. It works every integer tensor out again from the
-inputs and the integer weights, and the double-precision logits from the
-network's file, to the last bit. Its own planted errors, 23 in its code and a
-byte changed in each of the bundle's 25 files, are all caught.
+grxcp keeps them in `docs/designs/canary/`, 23 artifacts of 730,780 bytes, with
+a candidate manifest and a `SHA256SUMS`, and a checker written apart from this
+harness, `pta_board_canary_golden.py`. It works every integer tensor out again
+from the inputs and the integer weights, and the double-precision logits from
+the network's file, to the last bit. Its own planted errors, 23 in its code and
+a byte changed in each of the bundle's 25 files, the manifest and `SHA256SUMS`
+among them, are all caught.
 
 **What this is not.** A frozen canary: the manifest is a candidate, and the
 freeze is Gridworkz's, on 2026-11-25. The band: no PTA run is in it, and the
