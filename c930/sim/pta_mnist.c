@@ -96,6 +96,16 @@
  * its bias.  Beside them a double-precision pass of the network as trained,
  * for the task's quality.  It runs the same images through the tile with
  * its format alone and says how many codes differ: none, or it fails.
+ * eval --gateref codes then holds the last layer to that reference: the
+ * converter's code of the declared format's exact sum, at the last layer's
+ * step and held to its codes, which the owner ruled is the canary's.  The
+ * gate's figures are against it, with the largest error in codes and how
+ * many outputs are a code off or more, two or more, and so on to 32.
+ * eval --lightseed N draws a light's line levels, which are a source's own
+ * and do not move from one run of the same vectors to the next, from a seed
+ * of their own, where every shot's noise stays the run's: so that runs of
+ * one source on many seeds are repeats, and what moves from repeat to repeat
+ * can be told from what moves from source to source.
  * A light (--src, --srcline, --srcflat) is the tile's: with layers on the
  * host it lights the rest, and what a host does for its lines, read with
  * --levelprobe and applied with --levelfix, it does to the tile's layers'
@@ -1015,11 +1025,13 @@ static int light_weights(const host_net *hn, const pta_cfg *cfg)
 }
 
 /* Returns 0, or -1 if the buses do not divide the tile's rows or memory ran out.
- * cfg is the run's, a layer each: the term uses each layer's own quantisers. */
-static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, double all,
-                       double line, double flat, int buses, int offset)
+ * cfg is the run's, a layer each: the term uses each layer's own quantisers.
+ * The lines' levels are drawn from level_seed, and every shot's noise from
+ * seed. */
+static int light_setup_at(const host_net *hn, const pta_cfg *cfg, uint32_t seed, uint32_t level_seed,
+                          double all, double line, double flat, int buses, int offset)
 {
-    uint64_t s = ((uint64_t)seed << 32) | 0x11697u;
+    uint64_t s = ((uint64_t)level_seed << 32) | 0x11697u;
     int i;
 
     light_free();
@@ -1046,6 +1058,14 @@ static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, do
         light.level[i] = flat * gauss01(&s);
     light.on = 1;
     return 0;
+}
+
+/* The same, the levels and the shots from one seed, as every run before
+ * eval --lightseed had them. */
+static int light_setup(const host_net *hn, const pta_cfg *cfg, uint32_t seed, double all,
+                       double line, double flat, int buses, int offset)
+{
+    return light_setup_at(hn, cfg, seed, seed, all, line, flat, buses, offset);
 }
 
 /* Layer l's share, for M images whose operands are a: added to its sums y. */
@@ -1257,6 +1277,44 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
  */
 #define PROBE_DRAWS 32
 
+/* floor(v / 2^s), for v of either sign, as the tile's arithmetic shift has it. */
+static int64_t floor_shift(int64_t v, int s)
+{
+    return v >= 0 ? v >> s : ~((~v) >> s);
+}
+
+/*
+ * The last layer's declared reference (eval --gate).  It is the declared
+ * format's exact sum, as every run before eval --gateref had it; or, with
+ * gate_codes at the step's S, the converter's code of that sum, as the tile's
+ * converter rounds it with no impairment: floor(sum / 2^S + 1/2), held to
+ * its codes, times 2^S.  The gate's tail counts the outputs that many codes
+ * off or more, to the nearest code: the light is added after the converter,
+ * so a lit output need not be a code.
+ */
+#define GATE_TAIL 32
+static int     gate_codes = -1;     /* the last layer's step S, or -1 for the sum */
+static int64_t gate_lim;            /* its converter's codes are -gate_lim .. gate_lim - 1 */
+
+static int64_t gate_reference(int64_t sum)
+{
+    int64_t c;
+    if (gate_codes < 0)
+        return sum;
+    c = floor_shift(sum + (gate_codes > 0 ? (int64_t)1 << (gate_codes - 1) : 0), gate_codes);
+    if (c > gate_lim - 1)
+        c = gate_lim - 1;
+    if (c < -gate_lim)
+        c = -gate_lim;
+    return c * ((int64_t)1 << gate_codes);
+}
+
+/* Whether an error d is t + 1 codes off or more, to the nearest code. */
+static int gate_off(double d, int t)
+{
+    return fabs(d) > ldexp(t + 0.5, gate_codes);
+}
+
 typedef struct {
     int     hidden;
     double  e[MAX_L], r[MAX_L]; /* sums of squares: a layer's own error, and the
@@ -1281,6 +1339,7 @@ typedef struct {
     double  gpeak, gworst;      /* the largest that reference is, and the largest the error */
     double  hpeak, hworst;      /* the same two against the operands as they were given */
     int     gright, gagree;     /* images that reference has right, and images the tile gives its class */
+    long    gtail[GATE_TAIL];   /* with the reference in codes: outputs t + 1 codes off or more */
     /* and, for one scale on the last layer's outputs (eval --gatescale), the
      * outputs and that reference, images x N_OUT: NULL unless asked for */
     double *gy, *gf;
@@ -1310,7 +1369,7 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
 {
     const int H = hn->hidden;
     image_ws ws;
-    int m, n, k, o, j, l;
+    int m, n, k, o, j, l, t;
     for (m = 0; m < M; ++m) {
         double err[N_OUT], *lg = p->logit + (size_t)p->images * N_OUT, em = 0.0, gm = 0.0;
         const int64_t *y2 = bw->y[H] + m * N_OUT;
@@ -1346,7 +1405,11 @@ static void probe_batch(probe *p, const host_net *hn, int32_t *const *q, int M, 
                 for (k = 0; k < N_HID; ++k)
                     fmt += (int64_t)contract_quant(bw->a[H][m * N_HID + k], p->gate_bits, hn->din) *
                            q[H][o * N_HID + k];
+                fmt = gate_reference(fmt);
                 df = (double)(y2[o] - fmt);
+                if (gate_codes >= 0)
+                    for (t = 0; t < GATE_TAIL; ++t)
+                        p->gtail[t] += gate_off(df, t);
                 p->ge += df * df;
                 p->gr += (double)fmt * (double)fmt;
                 if (fabs((double)fmt) > p->gpeak)
@@ -2446,6 +2509,8 @@ static void join_ints(char *buf, size_t size, const int *v, int n)
  */
 typedef struct {
     double rms, rmsfs, maxfs, agree;
+    double worst;                   /* the largest error, in the sums' units */
+    long   tail[GATE_TAIL];         /* with the reference in codes: as the probe's */
 } scale_result;
 
 static void scale_sums(const host_net *hn, int32_t *const *q, int bits, int M, const batch_ws *bw,
@@ -2459,6 +2524,7 @@ static void scale_sums(const host_net *hn, int32_t *const *q, int bits, int M, c
             int64_t fmt = 0;
             for (k = 0; k < N_HID; ++k)
                 fmt += (int64_t)contract_quant(bw->a[H][m * N_HID + k], bits, hn->din) * q[H][o * N_HID + k];
+            fmt = gate_reference(fmt);
             *yf += y * (double)fmt;
             *yy += y * y;
         }
@@ -2479,7 +2545,8 @@ static void scale_gate(const probe *p, const host_net *hn, double s, scale_resul
 {
     const int H = hn->hidden;
     double e = 0.0, f2 = 0.0, worst = 0.0;
-    int i, o, agree = 0;
+    int i, o, t, agree = 0;
+    memset(r->tail, 0, sizeof r->tail);
     for (i = 0; i < p->images; ++i) {
         const double *y = p->gy + (size_t)i * N_OUT, *f = p->gf + (size_t)i * N_OUT;
         int yb = 0, fb = 0;
@@ -2489,6 +2556,9 @@ static void scale_gate(const probe *p, const host_net *hn, double s, scale_resul
             f2 += f[o] * f[o];
             if (fabs(d) > worst)
                 worst = fabs(d);
+            if (gate_codes >= 0)
+                for (t = 0; t < GATE_TAIL; ++t)
+                    r->tail[t] += gate_off(d, t);
             if (s * y[o] + (double)hn->b[H][o] > s * y[yb] + (double)hn->b[H][yb])
                 yb = o;
             if (f[o] + (double)hn->b[H][o] > f[fb] + (double)hn->b[H][fb])
@@ -2500,6 +2570,7 @@ static void scale_gate(const probe *p, const host_net *hn, double s, scale_resul
     r->rmsfs = p->gpeak > 0.0 ? sqrt(e / ((double)p->images * N_OUT)) / p->gpeak : 0.0;
     r->maxfs = p->gpeak > 0.0 ? worst / p->gpeak : 0.0;
     r->agree = p->images ? 100.0 * agree / p->images : 0.0;
+    r->worst = worst;
 }
 
 static int scale_calibrate(const host_net *ht, const host_net *hn, int32_t *const *q, int bits,
@@ -2556,12 +2627,6 @@ static int scale_fix(const probe *p, const host_net *ht, const host_net *hn, int
  * range fault, and is counted.  The class is the largest of each code at
  * its step with its bias, the first of them if two are.
  */
-/* floor(v / 2^s), for v of either sign, as the tile's arithmetic shift has it. */
-static int64_t floor_shift(int64_t v, int s)
-{
-    return v >= 0 ? v >> s : ~((~v) >> s);
-}
-
 /* The class: the largest code at its step with its bias; of two the same,
  * the first. */
 static int golden_class(const int8_t *codes, const int64_t *b, int S)
@@ -2872,7 +2937,7 @@ static int cmd_eval(int argc, char **argv)
         "--probe", "--thermal8", "--photons8", "--rows", "--cols", "--maxk", "--maxn", "--src",
         "--srcline", "--srcflat", "--buses", "--srcsign", "--thermalline", "--hidshift",
         "--w1gain", "--levelprobe", "--levelfix", "--levelref", "--levelpart", "--levellayer",
-        "--host", "--gate", "--gatefit", "--gatebits", "--gatescale", NULL};
+        "--host", "--gate", "--gatefit", "--gatebits", "--gatescale", "--gateref", "--lightseed", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
     const char *drift = opt(argc, argv, "--drift", "none");
     const int images = atoi(opt(argc, argv, "--images", "10000"));
@@ -2911,6 +2976,10 @@ static int cmd_eval(int argc, char **argv)
     const int last_bits = gatebits ? atoi(gatebits) : 0;
     const char *gatescale = opt(argc, argv, "--gatescale", NULL);
     const int scale_images = gatescale ? atoi(gatescale) : 0;
+    const char *gateref = opt(argc, argv, "--gateref", "sum");
+    const int ref_codes = strcmp(gateref, "codes") == 0;
+    const char *lightseed = opt(argc, argv, "--lightseed", NULL);
+    const uint32_t level_seed = lightseed ? (uint32_t)strtoul(lightseed, NULL, 0) : seed;
     scale_report rep;
     int64_t fit_peak = 0;
     int fit_was = 0;
@@ -3046,10 +3115,28 @@ static int cmd_eval(int argc, char **argv)
                         "the last layer's output scale, and needs --gate\n", N_ALL - N_TRAIN);
         return 2;
     }
+    /* The converter's codes are a reference where there is a converter, at a
+     * step the run does not move and with the width the run declares. */
+    if ((!ref_codes && strcmp(gateref, "sum") != 0) ||
+        (ref_codes && (!gate || gatefit || gatebits || atoi(opt(argc, argv, "--adcbits", "0")) < 2))) {
+        fprintf(stderr, "pta_mnist: --gateref is sum or codes; codes needs --gate and --adcbits, and "
+                        "is not taken with --gatefit or --gatebits\n");
+        return 2;
+    }
+    /* A light's levels from a seed of their own need a light. */
+    if (lightseed && !lit) {
+        fprintf(stderr, "pta_mnist: --lightseed is the seed of a light's line levels, and needs --src, "
+                        "--srcline or --srcflat\n");
+        return 2;
+    }
 
     memset(cfg, 0, sizeof cfg);
     if (parse_impair(opt(argc, argv, "--impair", "quant"), &cfg[0].impair) != 0) {
         fprintf(stderr, "pta_mnist: --impair takes none or a list of quant,thermal,shot,prog,drift,xtalk\n");
+        return 2;
+    }
+    if (ref_codes && !(cfg[0].impair & PTA_QUANT)) {
+        fprintf(stderr, "pta_mnist: --gateref codes needs the tile's format, --impair quant\n");
         return 2;
     }
     cfg[0].w_bits   = (uint32_t)atoi(opt(argc, argv, "--wbits", "-1"));
@@ -3127,6 +3214,11 @@ static int cmd_eval(int argc, char **argv)
     }
     for (l = 0; l <= H; ++l)
         cfg[l].adc_shift = (uint32_t)S[l];
+    /* The last layer's reference in its converter's codes, at the step it has. */
+    if (ref_codes) {
+        gate_codes = S[H];
+        gate_lim   = (int64_t)1 << (cfg[H].adc_bits - 1);
+    }
 
     /*
      * Noise in LSB of an 8-bit ADC, whatever ADC the run has.  The clip rule
@@ -3209,8 +3301,8 @@ static int cmd_eval(int argc, char **argv)
     if ((cfg[0].impair & PTA_DRIFT) && post_steps)
         pta_drift_age(&dev, &cfg[0], post_steps);
 
-    if (lit && light_setup(hn, cfg, seed, src_all, src_line, src_flat, buses,
-                           strcmp(src_sign, "offset") == 0) != 0)
+    if (lit && light_setup_at(hn, cfg, seed, level_seed, src_all, src_line, src_flat, buses,
+                              strcmp(src_sign, "offset") == 0) != 0)
         return 2;
     if (lit)
         light.keep = fix != FIX_NONE;
@@ -3305,6 +3397,15 @@ static int cmd_eval(int argc, char **argv)
     if (lit)
         printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
                buses, src_sign);
+    /* And the levels' own seed, when they have one, with the rms of the levels
+     * it drew: runs of one source show the same. */
+    if (lightseed) {
+        double l2 = 0.0;
+        int li;
+        for (li = 0; li < light.lines; ++li)
+            l2 += light.level[li] * light.level[li];
+        printf(" lightseed=%u light_levels=%.6f", level_seed, light.lines ? sqrt(l2 / light.lines) : 0.0);
+    }
     /* And the level probe only when it was taken: what the lines were, and what it left. */
     if (levelprobe)
         printf(" levelprobe=%d level_found=%.4f level_left=%.4f", levelprobe, level_found,
@@ -3372,6 +3473,14 @@ static int cmd_eval(int argc, char **argv)
                    "gate8_rmsfs=%.5f gate8_maxfs=%.5f gate8_peak=%.0f gate_ref=%.2f gate_agree=%.2f",
                    pr.gate_bits, pv.gate_rms, pv.gate_rmsfs, pv.gate_maxfs, pv.gate_peak, pv.gate8_rmsfs,
                    pv.gate8_maxfs, pv.gate8_peak, pv.gate_ref, pv.gate_agree);
+        /* And, with the reference in the converter's codes, its step, the
+         * largest error in codes, and the outputs a code off or more, two or
+         * more, and so on. */
+        if (gate_codes >= 0) {
+            printf(" gate_codes=%d gate_maxcode=%.2f gate_tail=", gate_codes, ldexp(pr.gworst, -gate_codes));
+            for (l = 0; l < GATE_TAIL; ++l)
+                printf("%s%ld", l ? "," : "", pr.gtail[l]);
+        }
         /* And the range, when it was fitted: the share asked, and the shift the
          * training images' rule had given the last layer. */
         if (gatefit)
@@ -3389,11 +3498,18 @@ static int cmd_eval(int argc, char **argv)
                    "gate_scale_best_rms=%.5f",
                    rep.scale, rep.images, rep.first, rep.at_scale.rms, rep.at_scale.rmsfs, rep.at_scale.maxfs,
                    rep.at_scale.agree, rep.best, rep.at_best.rms);
+        /* And the same two with the outputs times that scale. */
+        if (gatescale && gate_codes >= 0) {
+            printf(" gate_scale_maxcode=%.2f gate_scale_tail=", ldexp(rep.at_scale.worst, -gate_codes));
+            for (l = 0; l < GATE_TAIL; ++l)
+                printf("%s%ld", l ? "," : "", rep.at_scale.tail[l]);
+        }
         probe_free(&pr);
         for (l = 0; l <= H; ++l)
             free(pq[l]);
     }
     printf("\n");
+    gate_codes = -1;
     light_free();
     pta_device_free(&dev);
     host_free(hn);
@@ -4694,6 +4810,249 @@ static int cmd_selftest(void)
                 if (!ok5j)
                     errors += fail("the golden pass is not the tile's format alone");
             }
+        }
+        /* 5k. the last layer held to its converter's codes (eval --gateref
+         *     codes).  gate_reference() at a step's edges, worked by hand.
+         *     Then the same network, its two hidden layers the host's, with
+         *     the last layer's biases levelled so that a class can move.  With
+         *     the format alone, at the fitted step and two under it, the
+         *     reference the probe holds the tile to is golden_image()'s codes
+         *     at their step, image for image, codes held at the range among
+         *     them; the tile is that reference exactly, every image's class
+         *     its class and no output a code off; and how often it is right is
+         *     the golden class's.  With noise and crosstalk the probe's
+         *     figures, its largest error and its tail are what is worked out
+         *     here from the tile's outputs and the golden codes, and the tail
+         *     falls as it goes; the scale's sums are against the codes, and
+         *     its figures at one are the probe's.  With no step the reference
+         *     is the sum, as before. */
+        {
+            int32_t k1[N_HID], k2[N_HID], ksum[N_OUT];
+            int8_t kc[N_OUT];
+            uint8_t kca[N_HID];
+            long kclip = 0, held_under = 0, off1 = 0, ktail[GATE_TAIL];
+            int64_t kmean[N_OUT];
+            const int64_t k9 = (int64_t)1 << 9;
+            const int hA = D - AB, hW = WB < D ? D - WB : 0;
+            int hand, exact = 1, worked = 1, falls = 1, scaled = 1, as_sum = 1, moved = 0;
+            int kpass, km, ko, kt;
+            gate_codes = 9;
+            gate_lim   = 128;
+            hand = gate_reference(255) == 0 && gate_reference(256) == k9 && gate_reference(767) == k9 &&
+                   gate_reference(768) == 2 * k9 && gate_reference(-256) == 0 && gate_reference(-257) == -k9 &&
+                   gate_reference(127 * k9 + 255) == 127 * k9 && gate_reference(127 * k9 + 256) == 127 * k9 &&
+                   gate_reference(1000 * k9) == 127 * k9 && gate_reference(-128 * k9 - 256) == -128 * k9 &&
+                   gate_reference(-1000 * k9) == -128 * k9 && gate_off(1.5 * k9, 0) && !gate_off(0.5 * k9, 0) &&
+                   gate_off(2.51 * k9, 2) && !gate_off(2.5 * k9, 2);
+            gate_codes = 0;
+            hand &= gate_reference(-5) == -5 && gate_reference(7) == 7 && gate_reference(300) == 127;
+            gate_codes = -1;
+            hand &= gate_reference(-123457) == -123457 && gate_reference(65536) == 65536;
+            hn.host = H;
+            light_free();
+            /* the last layer's biases levelled: each output's mean code at the fitted step taken off */
+            memset(kmean, 0, sizeof kmean);
+            for (km = 0; km < M; ++km) {
+                golden_image(&hn, q, AB, WB, BITS, s_fit, a1 + km * N_IN, k1, k2, kca, ksum, kc, &kclip);
+                for (ko = 0; ko < N_OUT; ++ko)
+                    kmean[ko] += (int64_t)kc[ko] * ((int64_t)1 << s_fit);
+            }
+            for (ko = 0; ko < N_OUT; ++ko)
+                hn.b[H][ko] = -kmean[ko] / M;
+            for (kpass = 0; kpass < 3; ++kpass) {
+                const int step = kpass == 1 ? s_fit - 2 : s_fit;
+                uint32_t gemm = 0;
+                double ge = 0.0, gr = 0.0, worst = 0.0, yf = 0.0, yy = 0.0, yf2 = 0.0, yy2 = 0.0;
+                int gagree = 0, gright = 0;
+                probe kp;
+                scale_result kr;
+                memset(cfg, 0, sizeof cfg);
+                for (l = 0; l <= H; ++l) {
+                    cfg[l].impair    = PTA_QUANT | (kpass == 2 ? PTA_THERMAL | PTA_XTALK : 0u);
+                    cfg[l].sigma_th  = kpass == 2 ? 64u : 0u;
+                    cfg[l].xtalk     = kpass == 2 ? 2u : 0u;
+                    cfg[l].w_bits    = WB;
+                    cfg[l].act_bits  = AB;
+                    cfg[l].adc_bits  = BITS;
+                    cfg[l].adc_shift = (uint32_t)step;
+                }
+                for (l = 0; l < H; ++l)
+                    cfg[l].w_bits = D;
+                host_layers = H;
+                if (tile_batch(&hn, cfg, &tile, &dev, 11u + (uint32_t)kpass, &gemm, g, M, a1, bw) < 0 ||
+                    probe_init(&kp, M, H) != 0) {
+                    host_layers = 0;
+                    worked = 0;
+                    break;
+                }
+                host_layers = 0;
+                kp.gate      = 1;
+                kp.gate_bits = AB;
+                kp.gy = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                kp.gf = (double *)malloc((size_t)M * N_OUT * sizeof(double));
+                if (!kp.gy || !kp.gf) {
+                    probe_free(&kp);
+                    worked = 0;
+                    break;
+                }
+                gate_codes = step;
+                gate_lim   = (int64_t)1 << (BITS - 1);
+                probe_batch(&kp, &hn, q, M, a1, bw, labels);
+                scale_sums(&hn, q, AB, M, bw, &yf, &yy);
+                scale_gate(&kp, &hn, 1.0, &kr);
+                memset(ktail, 0, sizeof ktail);
+                for (km = 0; km < M; ++km) {
+                    long clip = 0;
+                    int yb = 0;
+                    const int c = golden_image(&hn, q, AB, WB, BITS, step, a1 + km * N_IN, k1, k2, kca, ksum, kc,
+                                               &clip);
+                    if (kpass == 1)
+                        held_under += clip;
+                    for (ko = 0; ko < N_OUT; ++ko) {
+                        const double y = (double)bw->y[H][km * N_OUT + ko];
+                        const double ref = (double)((int64_t)kc[ko] * ((int64_t)1 << step));
+                        const double d = y - ref;
+                        ge += d * d;
+                        gr += ref * ref;
+                        if (fabs(d) > worst)
+                            worst = fabs(d);
+                        for (kt = 0; kt < GATE_TAIL; ++kt)
+                            ktail[kt] += fabs(d) >= ldexp((double)(kt + 1), step);
+                        worked &= kp.gf[(size_t)km * N_OUT + ko] == ref;
+                        yf2 += y * ref;
+                        yy2 += y * y;
+                        if (y + (double)hn.b[H][ko] > (double)bw->y[H][km * N_OUT + yb] + (double)hn.b[H][yb])
+                            yb = ko;
+                    }
+                    gagree += c == yb;
+                    gright += c == labels[km];
+                }
+                worked &= kp.ge == ge && kp.gr == gr && kp.gworst == worst && kp.gagree == gagree &&
+                          kp.gright == gright && yf == yf2 && yy == yy2;
+                for (kt = 0; kt < GATE_TAIL; ++kt)
+                    worked &= kp.gtail[kt] == ktail[kt];
+                scaled &= kr.rms == (gr > 0.0 ? sqrt(ge / gr) : 0.0) && kr.worst == worst;
+                for (kt = 0; kt < GATE_TAIL; ++kt)
+                    scaled &= kr.tail[kt] == ktail[kt];
+                if (kpass < 2) {
+                    exact &= ge == 0.0 && worst == 0.0 && gagree == M && ktail[0] == 0;
+                } else {
+                    off1  = ktail[0];
+                    moved = M - gagree;
+                    falls &= ktail[0] > 0;
+                    for (kt = 1; kt < GATE_TAIL; ++kt)
+                        falls &= ktail[kt] <= ktail[kt - 1];
+                    /* and with no step, the same outputs against the sum */
+                    gate_codes = -1;
+                    {
+                        probe ks2;
+                        if (probe_init(&ks2, M, H) == 0 &&
+                            (ks2.gy = (double *)malloc((size_t)M * N_OUT * sizeof(double))) != NULL &&
+                            (ks2.gf = (double *)malloc((size_t)M * N_OUT * sizeof(double))) != NULL) {
+                            ks2.gate      = 1;
+                            ks2.gate_bits = AB;
+                            probe_batch(&ks2, &hn, q, M, a1, bw, labels);
+                            for (km = 0; km < M; ++km) {
+                                long clip = 0;
+                                golden_image(&hn, q, AB, WB, BITS, step, a1 + km * N_IN, k1, k2, kca, ksum, kc,
+                                             &clip);
+                                for (ko = 0; ko < N_OUT; ++ko)
+                                    as_sum &= ks2.gf[(size_t)km * N_OUT + ko] ==
+                                              (double)((int64_t)ksum[ko] * ((int64_t)1 << (hA + hW)));
+                            }
+                            for (kt = 0; kt < GATE_TAIL; ++kt)
+                                as_sum &= ks2.gtail[kt] == 0;
+                        } else {
+                            as_sum = 0;
+                        }
+                        probe_free(&ks2);
+                    }
+                }
+                gate_codes = -1;
+                probe_free(&kp);
+            }
+            gate_codes = -1;
+            hn.host = 0;
+            exact &= held_under > 0;
+            printf("selftest: the last layer held to its converter's codes: by hand at a step's edges: %s; "
+                   "with the format alone, at the fitted step and two under it (%ld codes held), the probe's "
+                   "reference is the golden codes and the tile is that reference exactly: %s; with noise and "
+                   "crosstalk the probe's figures, largest error and tail are those worked out here, %ld of %d "
+                   "outputs a code off or more and %d classes moved, and the tail falls: %s; the scale's sums "
+                   "and its figures at one are against the codes: %s; and with no step the reference is the "
+                   "sum: %s\n", hand ? "so" : "NOT SO", held_under, exact && worked ? "so" : "NOT SO", off1,
+                   M * N_OUT, moved, worked && falls ? "so" : "NOT SO", scaled ? "so" : "NOT SO",
+                   as_sum ? "so" : "NOT SO");
+            if (!(hand && exact && worked && falls && scaled && as_sum && moved > 0))
+                errors += fail("the gate's codes are not the converter's");
+        }
+        /* 5l. a light's levels from a seed of their own (eval --lightseed).
+         *     The same network's last layer, and the operands it was last
+         *     given.  A light set up with the shots' seed A and the levels'
+         *     B has B's levels, line for line; with no level it adds what A's
+         *     own light adds, and with no shot's noise what B's adds.  And
+         *     light_setup() is light_setup_at() with the two seeds the same:
+         *     the light every run before had. */
+        {
+            const int NL = 2;
+            int64_t *ya = (int64_t *)calloc((size_t)M * N_OUT, sizeof(int64_t));
+            int64_t *yb = (int64_t *)calloc((size_t)M * N_OUT, sizeof(int64_t));
+            double *lev = (double *)malloc((size_t)tile.rows * sizeof(double));
+            int lines = 0, levels = 1, shots = 1, steady = 1, same_old = 1, ii, pass3;
+            cfg[H].impair = PTA_QUANT;
+            for (pass3 = 0; ya && yb && lev && pass3 < 3; ++pass3) {
+                /* 0: levels alone; 1: shots alone; 2: both, and light_setup() against light_setup_at() */
+                const double fl = pass3 == 1 ? 0.0 : 0.2, al = pass3 == 0 ? 0.0 : 0.01, li = pass3 == 0 ? 0.0 : 0.05;
+                memset(ya, 0, (size_t)M * N_OUT * sizeof(int64_t));
+                memset(yb, 0, (size_t)M * N_OUT * sizeof(int64_t));
+                if (light_setup_at(&hn, cfg, 21, 34, al, li, fl, NL, 0) != 0) {
+                    levels = 0;
+                    break;
+                }
+                lines = light.lines;
+                for (ii = 0; ii < light.lines; ++ii)
+                    lev[ii] = light.level[ii];
+                light_add(&hn, &cfg[H], H, M, bw->a[H], ya);
+                if (light_setup_at(&hn, cfg, pass3 == 0 ? 34 : 21, pass3 == 0 ? 34 : 21, al, li, fl, NL, 0) != 0) {
+                    levels = 0;
+                    break;
+                }
+                light_add(&hn, &cfg[H], H, M, bw->a[H], yb);
+                if (pass3 == 0)
+                    for (ii = 0; ii < light.lines; ++ii)
+                        levels &= light.level[ii] == lev[ii] && lev[ii] != 0.0;
+                for (ii = 0; ii < M * N_OUT; ++ii) {
+                    if (pass3 == 0)
+                        steady &= ya[ii] == yb[ii];
+                    if (pass3 == 1)
+                        shots &= ya[ii] == yb[ii];
+                }
+                if (pass3 == 2) {
+                    int64_t *yc = ya;
+                    double lev2[1];
+                    memset(yc, 0, (size_t)M * N_OUT * sizeof(int64_t));
+                    if (light_setup(&hn, cfg, 21, al, li, fl, NL, 0) != 0) {
+                        same_old = 0;
+                        break;
+                    }
+                    lev2[0] = light.level[0];
+                    light_add(&hn, &cfg[H], H, M, bw->a[H], yc);
+                    for (ii = 0; ii < M * N_OUT; ++ii)
+                        same_old &= yc[ii] == yb[ii];
+                    same_old &= lev2[0] != lev[0];      /* 21's levels are not 34's */
+                }
+            }
+            light_free();
+            printf("selftest: a light's levels from a seed of their own: with the shots' seed and the levels' "
+                   "apart, the %d lines' levels are the levels' seed's: %s; with no level the light is the "
+                   "shots' seed's own: %s, and with no shot's noise the levels' seed's: %s; and one seed for "
+                   "both is the light every run before had: %s\n", lines, levels ? "so" : "NOT SO",
+                   shots ? "so" : "NOT SO", steady ? "so" : "NOT SO", same_old ? "so" : "NOT SO");
+            if (!(lines > 0 && levels && shots && steady && same_old))
+                errors += fail("a light's levels are not their seed's");
+            free(ya);
+            free(yb);
+            free(lev);
         }
         pta_device_free(&dev);
         host_free(&hn);
@@ -6263,6 +6622,9 @@ static void help(void)
     printf("  --src X         the light source: every line's power together, rms fraction a shot\n"
            "  --srcline X     each line's on its own, rms fraction a shot\n"
            "  --srcflat X     each line's level, rms fraction, fixed for the run\n"
+           "  --lightseed N   the seed the lines' levels are drawn from, where the shots' noise\n"
+           "                  stays the run's: one source's repeats.  The line gives the levels' rms,\n"
+           "                  light_levels (the run's --seed)\n"
            "  --buses B       the tile's rows as B runs that share their lines (1)\n"
            "  --srcsign pair|offset   what a line's light reaches a column through: its weight\n"
            "                  alone, or its weight and an offset the host takes off (pair)\n"
@@ -6293,6 +6655,9 @@ static void help(void)
            "  --gatescale M   with --gate: the gate's figures again with the last layer's outputs times\n"
            "                  one scale, fixed on the first M of the 6,000 held-out training images\n"
            "                  after the test images; and the scale the test images would fit themselves\n"
+           "  --gateref codes with --gate: the last layer held to its converter's codes, at its step, in\n"
+           "                  place of the declared format's exact sum (sum); with the largest error in\n"
+           "                  codes and how many outputs are 1 to 32 codes off or more.  Needs --adcbits\n"
            "  --thermalline X thermal sigma as a fraction of one line's light at a detector, an\n"
            "                  input at full scale through a weight of one: the same in every\n"
            "                  layer, as one laser fixes it.  Needs --adcbits\n"
