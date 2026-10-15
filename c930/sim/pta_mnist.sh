@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|canary|golden|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|canary|golden|band|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -88,8 +88,8 @@
 # that network's images: grxgpu's first-board classifier, 8 x 8 images, two
 # hidden layers 64 wide and 16 outputs, with MNIST_DIR's images pooled to
 # 8 x 8.  Such a directory runs `chain`, `chainfit`, `chainbit`, `chainlit`,
-# `chainrows`, `chaingain`, `canary` and `golden` and nothing else, and they
-# run in no other.
+# `chainrows`, `chaingain`, `canary`, `golden` and `band` and nothing else, and
+# they run in no other.
 # CHAIN_TILE sets `chain`'s tile (default 128x64) and CHAIN_DRAWS the draws it
 # runs (default "0 1 2 3 4");
 # CHAINFIT_TILE and CHAINFIT_DRAWS are `chainfit`'s, which is the same network
@@ -105,11 +105,17 @@
 # runs its five networks as `chaingain` runs the reference ones; CANARY_TILE
 # and CANARY_DRAWS are its.  `golden` writes the canary's golden tensors
 # twice, from the network `canary` trained, into out/golden.a and out/golden.b,
-# and holds the two to each other byte for byte.
+# and holds the two to each other byte for byte.  `band` runs the canary and
+# the four networks of its recipe with the last layer held to its converter's
+# codes, the reference the owner ruled, and one scale fixed on the calibration
+# set: the format alone, version 2's budget dark and lit, and lit at 0.4 to 1.4
+# times every row of the budget.  BAND_DRAWS sets the canary's draws a row
+# (default 1000) and BAND_OTHER the other four's, of the budget's two rows
+# (default 100).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,108p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,114p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -126,11 +132,13 @@ chain) defs="-DN_SIDE=8 -DN_HID=64 -DN_OUT=16" ;;
 esac
 if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ] && [ "$what" != chainbit ] &&
    [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ] && [ "$what" != canary ] &&
-   [ "$what" != golden ]; then
-    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows, chaingain, canary and golden and nothing else" >&2; exit 2
+   [ "$what" != golden ] && [ "$what" != band ]; then
+    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows, chaingain, canary, golden and band and nothing else" >&2
+    exit 2
 fi
 if { [ "$what" = chain ] || [ "$what" = chainfit ] || [ "$what" = chainbit ] || [ "$what" = chainlit ] ||
-     [ "$what" = chainrows ] || [ "$what" = chaingain ] || [ "$what" = canary ] || [ "$what" = golden ]; } &&
+     [ "$what" = chainrows ] || [ "$what" = chaingain ] || [ "$what" = canary ] || [ "$what" = golden ] ||
+     [ "$what" = band ]; } &&
    [ "$shape" != chain ]; then
     echo "$what needs SHAPE=chain, and a WORK_DIR of its own" >&2; exit 2
 fi
@@ -7517,6 +7525,319 @@ if [ "$what" = golden ]; then
     echo "== golden: written twice, the same byte for byte: $(cat "$work/out/golden.a.txt")"
     (cd "$work/out/golden.a" && sha256sum -- *.bin)
     sha256sum "$net" | sed "s#$work/nets/##"
+fi
+
+# The band.  The canary, and the four other networks of its recipe, through
+# the 128 x 64 tile with the last layer held to its converter's codes, as the
+# owner ruled on 2026-10-14 (eval --gateref codes), and one scale fixed on the
+# calibration set's thousand images from image 54,000.  The rows: the format
+# alone; version 2's budget with no source; the same lit, with B16's source
+# read and corrected on the weights at 8 bits, the board's own case; and lit
+# with every row of the budget, the source's three among them, 0.4, 0.6, 0.8,
+# 1.2 and 1.4 times its size.  The canary runs every row on BAND_DRAWS draws;
+# the other four the budget's two rows on BAND_OTHER, and the format alone on
+# one, which draws nothing.  A draw is another run of the same thousand
+# vectors: the tile programmed again at every load of its weights, and every
+# shot's noise and the source's drawn again.  The band itself is grxcp's to
+# propose from these lines and the owner's to rule; here are the lines, the
+# check that each is the run its place says, and the tables.
+if [ "$what" = band ]; then
+    draws=${BAND_DRAWS:-1000}
+    other=${BAND_OTHER:-100}
+    canary_seed=1
+    [ "$draws" -ge 1 ] && [ "$other" -ge 1 ] && [ "$other" -le "$draws" ] ||
+        { echo "band: BAND_DRAWS and BAND_OTHER are counts, and BAND_OTHER is no more than BAND_DRAWS" >&2; exit 2; }
+    [ -s "$work/out/golden.a.txt" ] ||
+        { echo "band: run golden first: the canary's reference is held to its line" >&2; exit 2; }
+    band_net() { echo "h2_d8_b6_host2_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"; }
+    for sd in 1 2 3 4 5; do
+        [ -s "$work/nets/$(band_net $sd)" ] || { echo "band: $(band_net $sd) is not there: run canary first" >&2; exit 2; }
+    done
+    q="--rows 128 --cols 64 --abits 6 --adcbits 8"
+    t="--images 1000 --host 2 --probe 1 --gate 1 --gatescale 1000 --gateref codes"
+    all="quant,thermal,shot,prog,xtalk"
+    # band_budget F, band_source F: version 2's four rows, and B16's source
+    # and the reading of its lines, each row F times its size: the noise's
+    # sigma and the crosstalk times F, and so the photons over F squared
+    band_budget() { awk -v f="$1" 'BEGIN { printf "--thermal8 %g --photons8 %g --prog %g --xtalk %g", 0.25 * f, 30 / (f * f), f, 0.02 * f }'; }
+    band_source() { awk -v f="$1" 'BEGIN { printf "--src %g --srcline %g --srcflat %g --buses 2 --levelprobe 16 --levelfix weights8", 0.01 * f, 0.05 * f, 0.2 * f }'; }
+    {
+        echo "format only|--impair quant"
+        echo "as budgeted|--impair $all $(band_budget 1)"
+        echo "as budgeted, lit|--impair $all $(band_budget 1) $(band_source 1)"
+        for f in 0.4 0.6 0.8 1.2 1.4; do
+            echo "lit, $f of the budget|--impair $all $(band_budget $f) $(band_source $f)"
+        done
+        echo "as budgeted, lit, ten sources|--impair $all $(band_budget 1) $(band_source 1)"
+    } | sed "s/|/|$q /; s/\$/ $t/" > "$work/out/band_settings.txt"
+    # band_row NAME: a row's name as a file's
+    band_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # band_one NET ROW DRAW ARGS...: one run, its line to out/band.d/NET_ROW_dDRAW.txt.  A
+    # lit run whose source has a line all but dark, which the reading of its lines cannot
+    # correct, is refused, as a board's calibration would refuse that source, and its file
+    # says so; any other failure is the sweep's
+    band_one() {
+        local net=$1 row=$2 dd=$3 out err
+        shift 3
+        out="$PTA_WORK/out/band.d/$(basename "$net" .net)_${row}_d$dd.txt"
+        if ! err=$("$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" 2>&1 > "$out"); then
+            [ "$err" = "pta_mnist: --levelfix could not be applied: a line was read under a twentieth of its level" ] ||
+                { echo "$err" >&2; return 1; }
+            echo "refused=dark_line" > "$out"
+        fi
+    }
+    export -f band_one
+    mkdir -p "$work/out/band.d"
+    while IFS='|' read -r name setting; do
+        n=$draws
+        [ "$name" = "format only" ] && n=1
+        for ((dd = 0; dd < n; ++dd)); do
+            for sd in 1 2 3 4 5; do
+                if [ "$sd" != "$canary_seed" ]; then
+                    [ "$dd" -lt "$other" ] || continue
+                    case "$name" in "format only"|"as budgeted"|"as budgeted, lit") ;; *) continue ;; esac
+                fi
+                # the ten sources: the lit row's first ten draws' line levels, a draw's
+                # the one its draw's last digit says, on every draw's own shots
+                extra=
+                [ "$name" = "as budgeted, lit, ten sources" ] && extra=" --lightseed $((sd + 10 * (dd % 10)))"
+                echo "$(band_net $sd) $(band_row "$name") $dd --seed $((sd + 10 * dd)) $setting$extra"
+            done
+        done
+    done < "$work/out/band_settings.txt" | xargs -P "$jobs" -L 1 bash -c 'band_one "$@"' _
+
+    # Every run has to be the one its place says, and no other line may be
+    # there.  A run's file names its network, row and draw.  Its line has to
+    # be that network, trained as `canary` trained it, its first two layers
+    # the host's at eight bits; on the draw's seed; with the row's
+    # impairments and no other, each at its factor of version 2's figure,
+    # the crosstalk to its 1/256 step and the photons to 6%, and a lit row's
+    # source and the reading of its lines; the reference in codes, at the
+    # step training's rule gives its network, the canary's the golden line's; and
+    # the scale fixed on a thousand images from 54,000, within a hundredth of
+    # the one the test images would fit themselves.  Every run's largest
+    # reference, and how often that reference is right, are its network's
+    # with the format alone, and the canary's is the golden line's.  The
+    # format alone is its reference exactly: no error, no output a code off,
+    # every class, a scale of one, and the tile's accuracy the reference's.
+    # A tail falls as it goes, and says what the largest error says.
+    {
+        printf 'GOLDEN\t%s\n' "$(cat "$work/out/golden.a.txt")"
+        awk '{ print "SET\t" $0 }' "$work/out/band_settings.txt"
+        find "$work/out/band.d" -name '*.txt' -print0 | sort -z | xargs -0 awk '{ print FILENAME "\t" $0 }'
+    } > "$work/out/band_lines.txt"
+    band_ok=$(awk -v draws="$draws" -v other="$other" -v c="$canary_seed" -v noise="$PTA_REF_NOISE" -v ep="$PTA_REF_EPOCHS" '
+        function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+        function parse(text,    n, i, kv, f) { delete v; n = split(text, f, " "); for (i = 1; i <= n; ++i) { split(f[i], kv, "="); v[kv[1]] = kv[2] } }
+        function san(x) { gsub(/[^A-Za-z0-9]/, "_", x); return x }
+        function tail_ok(list, top,    tt, j, n) {
+            n = split(list, tt, ",")
+            if (n != 32 || tt[1] > 16000) return 0
+            for (j = 1; j <= 32; ++j) {
+                if (j > 1 && tt[j] + 0 > tt[j - 1] + 0) return 0
+                if (top > j - 0.5 + 0.01 && tt[j] + 0 == 0) return 0
+                if (top < j - 0.5 - 0.01 && tt[j] + 0 != 0) return 0
+            }
+            return 1 }
+        BEGIN { FS = "\t"
+                want[1] = "format only"; want[2] = "as budgeted"; want[3] = "as budgeted, lit"
+                want[4] = "lit, 0.4 of the budget"; want[5] = "lit, 0.6 of the budget"; want[6] = "lit, 0.8 of the budget"
+                want[7] = "lit, 1.2 of the budget"; want[8] = "lit, 1.4 of the budget"; want[9] = "as budgeted, lit, ten sources"
+                fac[1] = 0; fac[2] = 1; fac[3] = 1; fac[4] = 0.4; fac[5] = 0.6; fac[6] = 0.8; fac[7] = 1.2; fac[8] = 1.4; fac[9] = 1
+                for (i = 1; i <= 9; ++i) { islit[i] = i >= 3; rowof[san(want[i])] = i }
+                none = "0"; for (j = 2; j <= 32; ++j) none = none ",0" }
+        $1 == "GOLDEN" { parse($2); gright = v["declared_right"]; gstep = v["S"]; gseed = v["net_seed"]; next }
+        $1 == "SET" { split($2, p, "|"); ++rows; if (p[1] != want[rows]) badset = 1; next }
+        { f = $1; sub(/.*\//, "", f)
+          if (!match(f, /_d[0-9]+\.txt$/)) { ++stray; next }
+          dd = substr(f, RSTART + 2, RLENGTH - 6) + 0; stem = substr(f, 1, RSTART - 1)
+          if (!match(stem, /^h2_d8_b6_host2_s[0-9]+_n[0-9.]+_e[0-9]+_/)) { ++stray; next }
+          pre = substr(stem, 1, RLENGTH); r = substr(stem, RLENGTH + 1)
+          if (pre != "h2_d8_b6_host2_s" substr(pre, 17, 1) "_n" noise "_e" ep "_" || !(r in rowof)) { ++stray; next }
+          sd = substr(pre, 17, 1) + 0; i = rowof[r]; k = sd SUBSEP i SUBSEP dd
+          if (k in got) ++twice
+          else ++ngot
+          got[k] = $2 }
+        END {
+          ok = rows == 9 && !badset && !stray && !twice && gseed == c && gstep > 0 && gright > 0
+          expect = 0
+          for (sd = 1; sd <= 5; ++sd) {
+              k = sd SUBSEP 1 SUBSEP 0
+              if (!(k in got)) { ok = 0; continue }
+              parse(got[k]); fpeak[sd] = v["gate_peak"]; fref[sd] = v["gate_ref"]; facc[sd] = v["acc"]
+              split(v["S"], fs, ","); fstep[sd] = fs[3] }
+          ok = ok && fref[c] == gright && facc[c] == gright && fstep[c] == gstep
+          for (i = 1; i <= 9; ++i) for (sd = 1; sd <= 5; ++sd) {
+              n = (i == 1) ? 1 : (sd == c ? draws : (i <= 3 ? other : 0))
+              for (dd = 0; dd < n; ++dd) {
+                  ++expect; k = sd SUBSEP i SUBSEP dd
+                  if (!(k in got)) { ok = 0; continue }
+                  parse(got[k]); fm = fac[i]; lit = islit[i]; fmt = i == 1
+                  # a refused run: lit, and refused for a line all but dark, and nothing else on its line
+                  if ("refused" in v) { ++refused[i]
+                                        if (!lit || v["refused"] != "dark_line" || got[k] != "refused=dark_line") {
+                                            ok = 0; if (++shown <= 5) print "band: refused where it may not be: " want[i] ", seed " sd ", draw " dd > "/dev/stderr" }
+                                        if (i == 9) { k3 = sd SUBSEP 3 SUBSEP dd; if (dd < 10 && (k3 in got)) { ok = ok && got[k] == got[k3]; ++same3 } }
+                                        continue }
+                  ns = split(v["S"], sh, ",")
+                  good = v["net_seed"] == sd && v["seed"] == sd + 10 * dd && v["net_wbits"] == 6 && v["net_host"] == 2 &&
+                         v["host_wbits"] == 8 && v["host"] == 2 && v["hidden"] == 2 && v["din"] == 8 && v["from"] == 8 &&
+                         v["epochs"] == ep && v["tile"] == "128x64" && v["abits"] == 6 && v["adcbits"] == 8 &&
+                         v["images"] == 1000 && v["drift"] == "none" && v["hours"] == 0 && v["cal"] == 0 &&
+                         v["post_hours"] == 0 && v["wbits"] == (lit ? 8 : 6) && ns == 3 &&
+                         v["gate_bits"] == 6 && ("gate_codes" in v) && v["gate_codes"] == sh[3] && sh[3] == fstep[sd] &&
+                         !("gate_fit" in v) && !("gate_adcbits" in v) && !("levelpart" in v) && !("thermalline" in v) &&
+                         !("hidshift" in v) && v["e1"] == 0 && v["e2"] == 0 && v["e3"] > 0 &&
+                         v["gate_peak"] == fpeak[sd] && v["gate_ref"] == fref[sd] &&
+                         v["gate_scale_images"] == 1000 && v["gate_scale_first"] == 54000 &&
+                         tail_ok(v["gate_tail"], v["gate_maxcode"] + 0) && tail_ok(v["gate_scale_tail"], v["gate_scale_maxcode"] + 0) &&
+                         v["impair"] == (fmt ? "0x01" : "0x57") &&
+                         near(v["thermal8"], 0.25 * fm, 0.004) && near(v["prog"], fm, 1 / 256) &&
+                         (fmt ? v["photons8"] == 0 : near(v["photons8"] * fm * fm / 30, 1, 0.06)) &&
+                         (fmt ? v["xtalk"] == 0 : near(v["xtalk"], 0.02 * fm, 1 / 512 + 1e-9) && v["xtalk"] > 0) &&
+                         (("src" in v) ? 1 : 0) == lit && (("levelprobe" in v) ? 1 : 0) == lit && (("levelfix" in v) ? 1 : 0) == lit &&
+                         (("lightseed" in v) ? 1 : 0) == (i == 9)
+                  # the ten sources: the levels of a draw are those of the lit row on the draw of its
+                  # last digit, and on that draw itself the run is the lit run, but for the field
+                  if (i == 9) { good = good && v["lightseed"] == sd + 10 * (dd % 10) && near(v["light_levels"], 0.2, 0.1)
+                                if ((dd % 10) in levels) good = good && v["light_levels"] == levels[dd % 10]
+                                else { levels[dd % 10] = v["light_levels"]; for (j in seen) if (seen[j] == v["light_levels"]) good = 0
+                                       seen[dd % 10] = v["light_levels"] }
+                                k3 = sd SUBSEP 3 SUBSEP dd
+                                if (dd < 10 && (k3 in got)) { x = got[k]; sub(/ lightseed=[0-9]+ light_levels=[0-9.]+/, "", x)
+                                                               good = good && x == got[k3]; ++same3 } }
+                  if (lit) good = good && near(v["src"], 0.01 * fm, 1e-9) && near(v["srcline"], 0.05 * fm, 1e-9) &&
+                                  near(v["srcflat"], 0.2 * fm, 1e-9) && v["buses"] == 2 && v["srcsign"] == "pair" &&
+                                  v["levelprobe"] == 16 && near(v["level_found"], 0.2 * fm, 0.1 * fm) && v["level_left"] >= 0 &&
+                                  v["level_left"] + 0 < v["level_found"] / 4 && v["levelfix"] == "weights8" &&
+                                  v["levelref"] == "none" && v["level_gain"] == 1
+                  if (fmt) good = good && v["gate_rms"] == 0 && v["gate_maxcode"] == 0 && v["gate_tail"] == none &&
+                                  v["gate_agree"] == 100 && v["gate_scale"] == 1 && v["gate_scale_rms"] == 0 &&
+                                  v["gate_scale_maxcode"] == 0 && v["gate_scale_tail"] == none &&
+                                  v["gate_scale_agree"] == 100 && v["sats"] == 0 && v["acc"] == v["gate_ref"]
+                  else good = good && v["gate_rms"] > 0 && v["gate_scale_rms"] > 0 && v["gate_maxcode"] > 0 &&
+                                  near(v["gate_scale"], v["gate_scale_best"], 0.01) &&
+                                  v["gate_scale_best_rms"] + 0 <= v["gate_scale_rms"] + 0.00001 &&
+                                  v["gate_scale_best_rms"] + 0 <= v["gate_rms"] + 0.00001 &&
+                                  v["gate_agree"] > 50 && v["gate_agree"] + 0 <= 100 &&
+                                  v["gate_scale_agree"] > 50 && v["gate_scale_agree"] + 0 <= 100 &&
+                                  v["sats"] + 0 <= v["elements"] / 100
+                  if (!good) { ok = 0; if (++shown <= 5) print "band: not the run its place says: " want[i] ", seed " sd ", draw " dd > "/dev/stderr" }
+              } }
+          for (i = 1; i <= 9; ++i) out = out " " (refused[i] + 0)
+          printf "%d %s%s", expect, (ok && expect == ngot && same3 == (draws < 10 ? draws : 10)) ? "yes" : "NO", out }' "$work/out/band_lines.txt")
+    read -r band_runs band_ok band_refused <<< "$band_ok"
+    echo "== band: $band_runs runs, each of them the network, the row and the draw its place says: $band_ok"
+    [ "$band_ok" = yes ] || exit 1
+    rows=$(sed 's/|.*//' "$work/out/band_settings.txt")
+    echo "== band: runs refused for a line of the source all but dark when the lines were read, which"
+    echo "== the reading cannot correct, as a board's calibration would refuse that source: each row's"
+    echo "== runs on every network, and of them refused.  The tables after are over the runs that ran"
+    printf '%-30s %6s %8s\n' "" "runs" "refused"
+    i=0
+    for r in $band_refused; do
+        i=$((i + 1))
+        case $i in 1) n=5 ;; 2|3) n=$((draws + 4 * other)) ;; *) n=$draws ;; esac
+        printf '%-30s %6d %8d\n' "$(sed -n "${i}p" <<< "$rows")" "$n" "$r"
+    done
+
+    # band_vals SEED ROW FIELD [DRAWS]: the field over the row's draws, or its
+    # first DRAWS of them, one a line, in the order of the files' names
+    band_vals() {
+        awk -F'\t' -v want="_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}_$(band_row "$2")_d" -v k="$3" -v most="${4:-1000000000}" '
+            index($1, want) { d = substr($1, index($1, want) + length(want)); sub(/\.txt$/, "", d)
+                              if (d + 0 >= most + 0) next
+                              n = split($2, f, " "); for (i = 1; i <= n; ++i) if (index(f[i], k "=") == 1) print substr(f[i], length(k) + 2) }' \
+            "$work/out/band_lines.txt"
+    }
+    # band_dist SEED ROW FIELD SCALE: the field times SCALE over the row's draws:
+    # mean, standard deviation, smallest, 1st percentile, median, 99th
+    # percentile and largest; a percentile p is the ceil(pn)'th smallest
+    band_dist() {
+        band_vals "$1" "$2" "$3" | awk -v s="$4" '{ print $1 * s }' | sort -g | awk '
+            { x[++n] = $1; t += $1; t2 += $1 * $1 }
+            function at(p,    k) { k = int(p * n); if (k < p * n) ++k; if (k < 1) k = 1; return x[k] }
+            END { m = t / n; sd = n > 1 ? sqrt((t2 - n * m * m) / (n - 1)) : 0
+                  printf " %7.3f %6.3f %7.3f %7.3f %7.3f %7.3f %7.3f", m, sd, x[1], at(0.01), at(0.5), at(0.99), x[n] }'
+    }
+    echo "== band: the format alone, each network: how often its reference, FC3's codes, is right, and the"
+    echo "== tile's accuracy, percent; its rms error over the reference's rms, its largest error in codes,"
+    echo "== and the scale"
+    printf '%-16s %8s %8s %8s %8s %8s\n' "" "ref" "acc" "rms" "max" "scale"
+    for sd in 1 2 3 4 5; do
+        awk -F'\t' -v want="_s${sd}_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}_format_only_d0.txt" -v sd="$sd" -v c="$canary_seed" '
+            index($1, want) { n = split($2, f, " "); for (i = 1; i <= n; ++i) { split(f[i], kv, "="); v[kv[1]] = kv[2] }
+                              printf "%-16s %8.2f %8.2f %8.3f %8.2f %8.5f\n", "seed " sd (sd == c ? ", canary" : ""), v["gate_ref"], v["acc"],
+                                     100 * v["gate_rms"], v["gate_maxcode"], v["gate_scale"] }' "$work/out/band_lines.txt"
+    done
+    echo "== band: the canary, seed $canary_seed, over its $draws draws: the last layer's rms error over its"
+    echo "== reference's rms with the scale, percent: mean, standard deviation, smallest, 1st percentile,"
+    echo "== median, 99th percentile and largest"
+    printf '%-30s %7s %6s %7s %7s %7s %7s %7s\n' "" "mean" "sd" "least" "1%" "median" "99%" "most"
+    echo "$rows" | while read -r row; do
+        [ "$row" = "format only" ] && continue
+        printf '%-30s' "$row"; band_dist "$canary_seed" "$row" gate_scale_rms 100; echo
+    done
+    echo "== band: the same without the scale"
+    printf '%-30s %7s %6s %7s %7s %7s %7s %7s\n' "" "mean" "sd" "least" "1%" "median" "99%" "most"
+    echo "$rows" | while read -r row; do
+        [ "$row" = "format only" ] && continue
+        printf '%-30s' "$row"; band_dist "$canary_seed" "$row" gate_rms 100; echo
+    done
+    echo "== band: the canary: how often the class with the scale is the reference's, percent, and the"
+    echo "== largest error in codes with the scale, over its draws"
+    printf '%-38s %7s %6s %7s %7s %7s %7s %7s\n' "" "mean" "sd" "least" "1%" "median" "99%" "most"
+    echo "$rows" | while read -r row; do
+        [ "$row" = "format only" ] && continue
+        printf '%-38s' "$row: class"; band_dist "$canary_seed" "$row" gate_scale_agree 1; echo
+        printf '%-38s' "$row: largest"; band_dist "$canary_seed" "$row" gate_scale_maxcode 1; echo
+    done
+    echo "== band: the canary: outputs of the 16,000 a run that are t or more codes off with the scale,"
+    echo "== to the nearest code: the mean over its draws, and the most"
+    sel="1 2 3 4 6 8 12 16 20 24 28 32"
+    printf '%-30s' ""; for tt in $sel; do printf ' %12s' "t=$tt"; done; echo
+    echo "$rows" | while read -r row; do
+        [ "$row" = "format only" ] && continue
+        printf '%-30s' "$row"
+        band_vals "$canary_seed" "$row" gate_scale_tail | awk -F, -v sel="$sel" '
+            { for (j = 1; j <= 32; ++j) { s[j] += $j; if ($j + 0 > m[j]) m[j] = $j + 0 } ++n }
+            END { k = split(sel, at, " "); for (i = 1; i <= k; ++i) printf " %7.1f %4d", s[at[i]] / n, m[at[i]] }'
+        echo
+    done
+    echo "== band: the five networks on the first $other draws of the budget's two rows: the rms error with"
+    echo "== the scale, percent, and the class with it, over each network's draws"
+    printf '%-26s %-16s %7s %6s %7s %7s %7s %7s\n' "" "" "mean" "sd" "least" "most" "class" "least"
+    for row in "as budgeted" "as budgeted, lit"; do
+        for sd in 1 2 3 4 5; do
+            printf '%-26s %-16s' "$row" "seed $sd$([ "$sd" = "$canary_seed" ] && echo ", canary")"
+            paste -d' ' <(band_vals "$sd" "$row" gate_scale_rms "$other") \
+                        <(band_vals "$sd" "$row" gate_scale_agree "$other") | awk '
+                { x = 100 * $1; t += x; t2 += x * x; if (n == 0 || x < lo) lo = x; if (n == 0 || x > hi) hi = x
+                  c += $2; if (n == 0 || $2 + 0 < cl) cl = $2 + 0; ++n }
+                END { m = t / n; printf " %7.3f %6.3f %7.3f %7.3f %7.2f %7.2f", m, sqrt((t2 - n * m * m) / (n - 1)), lo, hi, c / n, cl }'
+            echo
+        done
+    done
+    echo "== band: the canary lit at its budget on ten sources, the lit row's first ten draws' line"
+    echo "== levels, a draw's the one its last digit says: the rms error with the scale, percent, over"
+    echo "== each source's repeats; and the standard deviation from repeat to repeat, pooled within a"
+    echo "== source, against that of the ten sources' means"
+    printf '%-26s %5s %7s %6s %7s %7s\n' "" "runs" "mean" "sd" "least" "most"
+    awk -F'\t' -v want="_s${canary_seed}_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}_$(band_row "as budgeted, lit, ten sources")_d" '
+        index($1, want) { d = substr($1, index($1, want) + length(want)); sub(/\.txt$/, "", d); g = d % 10
+                          x = ""; n = split($2, f, " "); for (i = 1; i <= n; ++i) if (index(f[i], "gate_scale_rms=") == 1) x = 100 * substr(f[i], 16)
+                          if (x == "") next
+                          ++c[g]; s[g] += x; s2[g] += x * x
+                          if (c[g] == 1 || x < lo[g]) lo[g] = x
+                          if (c[g] == 1 || x > hi[g]) hi[g] = x
+                          ++N }
+        END { for (g = 0; g < 10; ++g) if (c[g]) {
+                  m = s[g] / c[g]; w += s2[g] - c[g] * m * m; ++K; mm += m; mm2 += m * m
+                  printf "%-26s %5d %7.3f %6.3f %7.3f %7.3f\n", "source " g, c[g], m, (c[g] > 1 ? sqrt((s2[g] - c[g] * m * m) / (c[g] - 1)) : 0), lo[g], hi[g] }
+              bm = mm / K
+              printf "%-26s %5d %7.3f %6.3f\n", "repeat to repeat", N, bm, (N > K ? sqrt(w / (N - K)) : 0)
+              printf "%-26s %5d %7.3f %6.3f\n", "source to source", K, bm, (K > 1 ? sqrt((mm2 - K * bm * bm) / (K - 1)) : 0) }' \
+        "$work/out/band_lines.txt"
 fi
 
 exit $((gate_status | ablate_status))

@@ -249,6 +249,17 @@ double-precision pass. Written twice they are the same byte for byte; the tile
 with its format alone gives every code, and no code is held at the range. grxcp
 holds them with a candidate manifest and a checker written apart from this
 harness.
+**And the twenty-first, 2026-10-15** (§5, at its end): the first board's
+canary, its band. `eval --gateref codes` holds the last layer to its
+converter's codes, the reference the owner ruled, and the format alone is then
+its reference exactly. `band` runs the canary on 1,000 draws a row: its budget
+dark and lit, lit at 0.4 to 1.4 times every row of the budget, and lit on ten
+sources a hundred times each. Lit at its budget, with the scale, the canary is
+4.04 to 7.21% of the reference's rms off; on one source the figure moves 0.043
+points from repeat to repeat, and from source to source 0.497. grxcp proposed,
+by a rule written before the sweep, and the owner ruled a band of 2.5 to 7.3%,
+a class of 98.5% and a tail of at most 16 outputs 17 or more codes off. A tile
+at 1.2 times its budget still passes on 92% of draws.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -7178,6 +7189,191 @@ canary's run against these codes, and the band from it, come next. FC1's and
 FC2's engines: their tensors are the declared format, which a GRX930 NPU and a
 G100 have to give. The scale: no tensor carries one; it is fitted on the PTA's
 codes against `cal_fc3_codes_int8.bin`.
+
+### The first board's canary, its band
+
+*Added 2026-10-15.* `SHAPE=chain sim/pta_mnist.sh DIR WORK band`, after
+`golden`. Reported, not gated. The harness gains `eval --gateref codes` and
+`eval --lightseed N`.
+
+**Why.** grxcp's B19 replaced the demonstration's 1.0% with a band, set once
+the frozen canary had been through the model, and B21 made FC3's declared
+reference the converter's codes and allowed one output scale. Every gate figure
+in the sections before reads the exact sum before the converter.
+
+**What the harness does.** `eval --gateref codes`, with `--gate`, holds the
+last layer to the converter's code of the declared format's exact sum at the
+last layer's step, floor(s / 2^S + 1/2) held to its codes, times 2^S: what the
+golden pass writes. The probe's figures, the class and the scale's fit are all
+against it, and the line gains `gate_codes`, the step; `gate_maxcode`, the
+largest error in codes; and `gate_tail`, how many outputs are 1 to 32 codes off
+or more, with the scale's own two beside the scale's figures. The light is
+added after the converter, so a lit output need not be a code, and an output
+counts as t codes off or more when it is more than t − 1/2 off. `--gateref
+codes` is refused with `--gatefit` or `--gatebits`, which move the step or the
+width, and without the tile's format. `eval --lightseed N` draws a light's line
+levels, which are a source's own and do not move from one run of the vectors to
+the next, from a seed of their own, where every shot's noise stays the run's;
+the line gives the seed and the levels' rms, `light_levels`. It is refused
+without a light.
+
+The self-test's 46 lines are as they were, with two more, and a build of the
+chain's shape prints 33, two more. One holds `gate_reference()` to cases worked
+by hand at a step's edges, and the probe to the golden codes: with the format
+alone, at the fitted step and two steps under, the probe's reference is
+`golden_image()`'s codes image for image, held codes among them, and the tile
+is that reference exactly; with noise and crosstalk its figures, largest error
+and tail are those worked out apart, and the scale's sums and figures are
+against the codes. The other holds the light's two seeds apart: with no level
+the light is the shots' seed's, with no shot's noise the levels', and one seed
+for both is the light every run before had. 23 errors were planted one at a
+time in the new C, each built at the chain's shape and held to the self-test,
+to the mode on twelve draws, and to the four refusals run by hand. The first
+time 22 were stopped: a refusal taken away was still refused by a later check,
+with another message, so the refusals were then held to their own messages. All
+23 are stopped now: 12 by the self-test, 7 by the mode and 4 by a refusal.
+
+**What it runs.** The twenty-first mode, in `canary`'s work directory, after
+`golden`, whose line the canary's reference is held to. Every run is on the
+gate's thousand with the scale fixed on the calibration set's thousand, and the
+format alone runs once a network.
+
+| Row | What it runs |
+|---|---|
+| format only | The tile's format and nothing drawn |
+| as budgeted | Version 2's four rows |
+| as budgeted, lit | The same, with B16's source read and corrected on the weights at 8 bits: the board's case |
+| lit, 0.4 to 1.4 of the budget | Every row of the budget, the source's three among them, that many times its size |
+| as budgeted, lit, ten sources | The lit row on the line levels of its first ten draws, each source on every tenth draw |
+
+The canary runs every row on `BAND_DRAWS` draws, 1,000; the other four networks
+the budget's two rows on `BAND_OTHER`, 100. 8,805 runs. A draw is another run
+of the same vectors: the tile programmed again at every load of its weights,
+every shot drawn again, and, but for the ten sources, the source's lines drawn
+again. A run whose source has a line all but dark, which the reading of its
+lines cannot correct, is refused, as a board's calibration would refuse that
+source, and its file says so.
+
+**How it was run.** The rule for the band and nine predictions were written at
+01:13 UTC, after three runs of the canary on one draw and before any sweep. A
+run on twelve draws showed the lit rows' spread to be the source's: so the
+harness gained `--lightseed` and the mode the ten sources. The first sweep
+stopped short of its check, on 20 runs of the 1.4 row refused for a dark line,
+which the mode did not yet record; it records them now, and the second sweep
+wrote every line of the first, byte for byte, and the 20 refusals. The rule's
+tail could not be read from it: the harness counted to eight codes, and the
+worst lit draw at the budget had 385 outputs eight or more off. The tail now
+counts to 32, and a third sweep's lines are the second's field for field but
+for the tails, whose first eight counts are the second's. It took 25 minutes
+beside other work on the machine.
+
+The mode checks each run against its place: the network, as `canary` trained
+it; the draw's seed; each impairment at its factor of version 2's figure, the
+crosstalk to its 1/256 step and the photons to 6%; a lit run's source, its
+lines' reading near their factor's flatness, and the reading applied at 8 bits;
+the reference in codes at its network's step, the canary's the golden line's;
+how often the reference is right, and its largest value, its network's with the
+format alone, the canary's 96.60%, the golden line's; the format alone exact;
+tails that fall and say what the largest error says; a ten-sources run's levels
+the same as every run of its source's and no other source's, and on its
+source's own draw the lit run, byte for byte; and a refusal only in a lit row,
+and only for a dark line. 50 errors were planted in the mode, and all are
+caught: 22 doctored lines, judged by the check alone; 15 changes to the script,
+each run on twelve draws; and 13 changes to the tables' code, each of which
+prints other tables than the script's own, and grxcp's model, which works the
+tables out again from the runs, refuses them.
+
+With the script and the harness as they now are, the checks and tables of
+`refcomb`, `chain`, `chainfit`, `chainbit`, `chainlit`, `chainrows`,
+`chaingain` and `canary` alone, on the lines their own sweeps wrote for MNIST,
+say yes and print what those sweeps printed. Thirteen runs those modes made
+were run again, and each is its line; five networks they trained were trained
+again, the canary among them, and each is its file. And `golden` writes again
+the 19 tensors grxcp keeps, byte for byte.
+
+**What it found.** The canary over its draws, with the scale:
+
+| The canary, 1,000 draws a row | rms error with the scale, %: mean | sd | least | median | 99th percentile | most | Class with the scale, %: least | Largest error, codes: most | Refused |
+|---|---|---|---|---|---|---|---|---|---|
+| as budgeted | 3.322 | 0.020 | 3.260 | 3.321 | 3.367 | 3.385 | 99.1 | 7.79 | 0 |
+| as budgeted, lit | 5.180 | 0.533 | 4.040 | 5.129 | 6.598 | 7.212 | 98.5 | 21.91 | 0 |
+| lit, 0.4 of the budget | 2.219 | 0.156 | 1.909 | 2.195 | 2.652 | 2.881 | 99.3 | 9.27 | 0 |
+| lit, 0.6 of the budget | 3.118 | 0.271 | 2.567 | 3.084 | 3.886 | 4.257 | 99.0 | 12.99 | 0 |
+| lit, 0.8 of the budget | 4.101 | 0.399 | 3.261 | 4.058 | 5.204 | 5.686 | 98.8 | 17.29 | 0 |
+| lit, 1.2 of the budget | 6.283 | 0.680 | 4.789 | 6.223 | 8.090 | 8.788 | 98.1 | 26.34 | 0 |
+| lit, 1.4 of the budget | 7.424 | 0.829 | 5.534 | 7.370 | 9.599 | 10.408 | 97.6 | 31.13 | 20 |
+| as budgeted, lit, ten sources | 4.879 | 0.474 | 4.170 | 4.784 | 5.763 | 5.823 | 98.5 | 15.21 | 0 |
+
+With the format alone every network is its reference exactly, and how often
+that reference is right, 96.20 to 96.70%, is the tile's accuracy. With no
+source the canary is 3.32% of the reference's rms off, ± 0.02 from draw to
+draw. Lit, it is 5.18%, ± 0.53, and 4.04 to 7.21%; without the scale 5.54%. The
+lit spread is the source's: on one source the figure moves 0.043 points from
+repeat to repeat, where the ten sources' means are 4.27 to 5.70%, 0.497 points
+apart. The rows rise with the factor, and the tail with them: lit at the budget
+the worst draw has 20 outputs 16 or more codes off and 16 at 17.
+
+**The band.** By the rule: its upper edge the lit row's worst draw, rounded up
+to a tenth of a point, 7.3%; its lower edge the 0.6 row's best, rounded down,
+2.5%; the class the lit row's worst, 98.5%; and the tail the fewest codes at
+which the lit row's worst draw has at most 16 outputs off, 17, with 16 allowed.
+grxcp's model applies it, and how often the canary's draws pass:
+
+| The canary's draws | Inside the band, % | Class, % | Tail, % | All three, % |
+|---|---|---|---|---|
+| as budgeted | 100.0 | 100.0 | 100.0 | 100.0 |
+| as budgeted, lit | 100.0 | 100.0 | 100.0 | 100.0 |
+| lit, 0.4 of the budget | 5.2 | 100.0 | 100.0 | 5.2 |
+| lit, 0.6 of the budget | 100.0 | 100.0 | 100.0 | 100.0 |
+| lit, 0.8 of the budget | 100.0 | 100.0 | 100.0 | 100.0 |
+| lit, 1.2 of the budget | 92.0 | 98.6 | 99.5 | 91.6 |
+| lit, 1.4 of the budget (20 refused) | 46.0 | 88.2 | 95.5 | 44.3 |
+| as budgeted, lit, ten sources | 100.0 | 100.0 | 100.0 | 100.0 |
+
+A tile at 0.6 to 1.0 of its budget passes on every draw, and one at 0.4 fails
+on all but 5.2%, as more likely a wrong measurement than so good a tile. At 1.2
+times its budget it still passes on 91.6% of draws, and at 1.4 on 44.3%: a
+fixed band cannot tell a tile a fifth over its budget from one at it, because
+most of the spread is which source a board has. The other four networks, lit at
+the budget, pass on 99 to 100% of their draws. The owner ruled the band, the
+class and the tail as the rule gives them, at 15:01 UTC, and left a band set
+per board, from a board's measured source, as an open question (grxcp's B22).
+
+**What was predicted.** Nine things, with the rule. 5 were right as written.
+
+1. That with the format alone every network is exact, and the canary's
+   reference right on 96.60%, the golden line's figure. Right.
+
+2. That lit at its budget the canary is 4.5 to 4.9%, with a standard deviation
+   of 0.05 to 0.25 and a largest of at most 5.5. Wrong: 5.18, 0.53 and 7.21;
+   the spread was put at the noise's, and it is the source's.
+
+3. That with no source it is 3.1 to 3.5%. Right: 3.32.
+
+4. That the lit rows rise with the factor, the 0.6 row's mean 2.4 to 3.3%.
+   Right: 3.12.
+
+5. That the 1.2 row is 5.3 to 6.0%, and under a tenth of it at or under the
+   budget's worst. Wrong: 6.28, and 89.9% of it is.
+
+6. That the class lit at the budget is 99.1 to 99.6%, at least 98.5. Right:
+   99.36, and 98.5.
+
+7. That lit at the budget a run has 2 to 20 outputs eight or more codes off, at
+   most 60. Wrong: 38.3 and 385.
+
+8. That the other four networks lit at the budget are within 0.6 points of the
+   canary. Right.
+
+9. That the mode's check says yes on its first sweep. Wrong: the first sweep
+   stopped on its refusals.
+
+**What this is not.** Everything the sections before say of themselves: a
+model, with FC1 and FC2 the host's, exactly. A board's source: B16's is drawn
+here, and a board's own may sit anywhere in this spread, or outside it. A band
+for any network but the canary. A converter that sees the light: the light is
+added after it. A refused run is a calibration's fault and not Gate F's, and
+the band says nothing of how often a board's source would be refused.
 
 ---
 
