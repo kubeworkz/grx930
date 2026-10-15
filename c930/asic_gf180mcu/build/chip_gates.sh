@@ -17,11 +17,18 @@
 #   That property is checkable rather than asserted -- the workflow names no gate
 #   command at all:
 #
-#     grep -nE 'make sim|check_rom|run_adapter_lint|run_cache_index_alias|run_tag_width_guard|run_cache_split_lockstep|dcache_mmio_hold' \
+#     grep -nE 'make sim|check_rom|run_adapter_lint|run_cache_index_alias|run_tag_width_guard|run_cache_split_lockstep|dcache_mmio_hold|script_exec_bit' \
 #       .github/workflows/build-gf180mcu.yml
 #
 # THE GATES, IN THE ORDER THEY MUST RUN
 #
+#   script-exec-bit       every shell script tracked in the index is mode 100755,
+#                         so a Linux checkout can run it as ./x.sh. About the tree
+#                         rather than the design, seconds rather than minutes, and
+#                         the one check the box cannot make for itself: this git
+#                         has core.filemode=false, so chmod +x here changes
+#                         nothing git records and only a checkout that reads the
+#                         mode finds the fault. (build/script_exec_bit.sh)
 #   boot-from-rom         the chip powers up from its own ROM at 0x0001_0000 =
 #                         CORE_RESET_PC, with no SRAM preload, and reaches the
 #                         firmware's UART banner -- on the tree the OL2 flow reads
@@ -65,7 +72,7 @@
 #
 # USAGE
 #
-#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all eight
+#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all nine
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --list               # names only
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --only mmio-hold     # one of them
 #
@@ -83,12 +90,15 @@ LOGDIR="$ROOT/c930/asic_gf180mcu/build"
 # name | working dir | command | expect(pass|fail) | evidence pattern | tools
 #
 # The three c930/tb scripts are run as `bash <script>`, not `./<script>`, and that
-# is not a style choice: they are mode 100644 in the index (as is every other .sh
-# here), so a Linux checkout -- CI -- gets them without the executable bit and
-# `./run_cache_index_alias.sh` is "Permission denied" there, while this box's MSYS
-# runs it happily. Naming the interpreter removes the dependency rather than
-# betting on a mode nothing in the repo sets. (Their own usage lines say `./`,
-# which is the wart behind that bet; it is not this file's to fix.)
+# is not a style choice even though the script-exec-bit gate above now keeps every
+# tracked .sh at 100755: naming the interpreter is the stronger half of the pair.
+# It holds where the mode cannot -- a noexec mount, a copy out of a zip, a runner
+# that checked the tree out before the mode was fixed -- and it is what made these
+# three run on the runner that did have them at 100644. The gate is the other
+# half: it keeps the mode right for the person who types ./run_cache_index_alias.sh
+# at a prompt, which is what these scripts' own usage lines tell them to do. (The
+# 100644 index is what made CI answer "Permission denied" three steps wide on the
+# revision before that fix; the history is in build/script_exec_bit.sh.)
 #
 # The pattern is the literal line that has to be in the gate's own log for its
 # verdict to count: an exit status alone cannot tell a gate that checked something
@@ -97,6 +107,7 @@ LOGDIR="$ROOT/c930/asic_gf180mcu/build"
 # Matched with grep -F, so a pattern containing regex metacharacters -- `[PASS]
 # tb_dcache_mmio_hold` -- is the line itself and not a character class.
 GATES=$(cat <<'EOF'
+script-exec-bit|c930/asic_gf180mcu|bash build/script_exec_bit.sh|pass|OVERALL: PASS|bash git
 boot-from-rom|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD|pass|RESULT: PASS|iverilog vvp make
 rom-disabled-control|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE|fail|RESULT: FAIL|iverilog vvp make
 rom-drift|c930/asic_gf180mcu|make check_rom|pass|ROM in sync|python

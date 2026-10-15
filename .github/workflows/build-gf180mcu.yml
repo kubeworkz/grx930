@@ -8,7 +8,7 @@
 #   .githooks/pre-push, so the two cannot disagree about what a gate is or how it
 #   is spelled. This workflow therefore names no gate command at all:
 #
-#     grep -nE 'make sim|check_rom|run_adapter_lint|run_cache_index_alias|run_tag_width_guard|run_cache_split_lockstep|dcache_mmio_hold' \
+#     grep -nE 'make sim|check_rom|run_adapter_lint|run_cache_index_alias|run_tag_width_guard|run_cache_split_lockstep|dcache_mmio_hold|script_exec_bit' \
 #       .github/workflows/build-gf180mcu.yml | grep -vE '^[0-9]+:[[:space:]]*#'
 #     (no output: the only two hits it has are both comments -- the line above,
 #      and one about the Makefile calling `python`, not `python3`)
