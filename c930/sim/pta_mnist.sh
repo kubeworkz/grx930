@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -87,20 +87,22 @@
 # SHAPE=chain builds the harness for another network and gives a new WORK_DIR
 # that network's images: grxgpu's first-board classifier, 8 x 8 images, two
 # hidden layers 64 wide and 16 outputs, with MNIST_DIR's images pooled to
-# 8 x 8.  Such a directory runs `chain`, `chainfit`, `chainbit`, `chainlit` and
-# `chainrows` and nothing else, and they run in no other.  CHAIN_TILE sets
-# `chain`'s tile (default 128x64) and CHAIN_DRAWS the draws it runs (default
-# "0 1 2 3 4");
+# 8 x 8.  Such a directory runs `chain`, `chainfit`, `chainbit`, `chainlit`,
+# `chainrows` and `chaingain` and nothing else, and they run in no other.
+# CHAIN_TILE sets `chain`'s tile (default 128x64) and CHAIN_DRAWS the draws it
+# runs (default "0 1 2 3 4");
 # CHAINFIT_TILE and CHAINFIT_DRAWS are `chainfit`'s, which is the same network
 # with its last layer's range fitted to the reference a board holds it to;
 # CHAINBIT_TILE and CHAINBIT_DRAWS are `chainbit`'s, which gives that layer's
 # converter a bit more; CHAINLIT_TILE and CHAINLIT_DRAWS are `chainlit`'s,
-# which lights the source over it; and CHAINROWS_TILE and CHAINROWS_DRAWS
-# are `chainrows`'s, which runs the tile's budget a row at a time.
+# which lights the source over it; CHAINROWS_TILE and CHAINROWS_DRAWS are
+# `chainrows`'s, which runs the tile's budget a row at a time; and
+# CHAINGAIN_TILE and CHAINGAIN_DRAWS are `chaingain`'s, which gives that
+# layer's outputs one scale, fixed on images the network was not trained on.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,99p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,101p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -116,11 +118,11 @@ chain) defs="-DN_SIDE=8 -DN_HID=64 -DN_OUT=16" ;;
 *) echo "SHAPE is d3 or chain" >&2; exit 2 ;;
 esac
 if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ] && [ "$what" != chainbit ] &&
-   [ "$what" != chainlit ] && [ "$what" != chainrows ]; then
-    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit and chainrows and nothing else" >&2; exit 2
+   [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ]; then
+    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows and chaingain and nothing else" >&2; exit 2
 fi
 if { [ "$what" = chain ] || [ "$what" = chainfit ] || [ "$what" = chainbit ] || [ "$what" = chainlit ] ||
-     [ "$what" = chainrows ]; } && [ "$shape" != chain ]; then
+     [ "$what" = chainrows ] || [ "$what" = chaingain ]; } && [ "$shape" != chain ]; then
     echo "$what needs SHAPE=chain, and a WORK_DIR of its own" >&2; exit 2
 fi
 
@@ -6818,6 +6820,403 @@ if [ "$what" = chainrows ]; then
     sed 's/, draw [0-9]*|.*//' "$work/out/chainrows_settings.txt" | awk '!seen[$0]++' | while read -r base; do
         printf '%-84s' "$base"
         for k in before reference; do row_probe $k "$base"; done
+        echo
+    done
+fi
+
+# `chaingain`: `chain`'s last layer, with one scale on its outputs.
+# `chainrows` found most of the crosstalk's error to be a gain on every
+# output, against the host's own network, and a source corrected on the
+# weights to take gain off; and the gate holds the layer's raw outputs to a
+# reference in their declared format.  This gives the outputs one scale,
+# fixed at calibration on the first thousand of the images the network was
+# not trained on (eval --gatescale), and gives the gate's figures again with
+# it: the scale a board could hold in its reference, and what it buys.  Nine
+# rows: the format alone; the crosstalk alone and the shot noise alone; the
+# tile as budgeted, with each of those two left out, and with its range
+# fitted; and the tile as budgeted lit, as `chainlit` lit it, at training's
+# range and fitted.  The same networks as `chain`, on five draws, on 10,000
+# images and on the first thousand, the gate's own set.  Every row but four
+# on a thousand is a run a mode before this one made, which the scale leaves
+# as it was: where a directory has what that mode wrote, every figure its
+# line printed has to be that line's, byte for byte.  Both kinds of network,
+# row for row.
+if [ "$what" = chaingain ]; then
+    tile=${CHAINGAIN_TILE:-128x64}
+    draws=${CHAINGAIN_DRAWS:-0 1 2 3 4}
+    gopt="--rows ${tile%x*} --cols ${tile#*x}"
+    all="quant,thermal,shot,prog,xtalk"
+    # the tile's format, and the four rows of version 2's budget that add to it
+    q="--abits 6 --adcbits 8"
+    th="--thermal8 0.25"
+    ph="--photons8 30"
+    pg="--prog 1"
+    xk="--xtalk 0.02"
+    r="$q $th $ph $pg $xk"
+    f="--impair quant $q"
+    b="--impair $all $r"
+    # the scale is fixed on this many of the held-out images, the gate's own number
+    cal=1000
+    t="--host 2 --probe 1 --gate 1 --gatescale $cal"
+    # the source's three rows, as grxcp's B16 has them, on B10's two buses
+    shared=0.01
+    own=0.05
+    level=0.2
+    buses=2
+    src="--src $shared --srcline $own --srcflat $level --buses $buses"
+    fix="--levelprobe 16 --levelfix weights8"
+    # row|options.  Every row's name ends in its draw, and is the name the
+    # mode before it that ran it gave it
+    for dd in $draws; do
+        for n in "" ", a thousand"; do
+            i=
+            [ -z "$n" ] || i=" --images 1000"
+            echo "format only$n, draw $dd|$f$i"
+            echo "only xtalk$n, draw $dd|--impair quant,xtalk $q $xk$i"
+            echo "only shot$n, draw $dd|--impair quant,shot $q $ph$i"
+            echo "less xtalk$n, draw $dd|--impair quant,thermal,shot,prog $q $th $ph $pg$i"
+            echo "less shot$n, draw $dd|--impair quant,thermal,prog,xtalk $q $th $pg $xk$i"
+            echo "as budgeted$n, draw $dd|$b$i"
+            echo "as budgeted, fitted$n, draw $dd|$b$i --gatefit 1"
+            echo "as budgeted, lit$n, draw $dd|$b$i $src $fix"
+            echo "as budgeted, lit, fitted$n, draw $dd|$b$i $src $fix --gatefit 1"
+        done
+    done | sed "s/|--impair/|$gopt --impair/; s/\$/ $t/" > "$work/out/chaingain_settings.txt"
+    # gain_train WBITS SEED [FROM]: a DIN_W 8 network of two hidden layers,
+    # unless it is already there, starting from the same seed's at FROM bits
+    gain_train() {
+        local net="$PTA_WORK/nets/h2_d8_b$1_s$2.net" from=()
+        [ $# -lt 3 ] || from=(--from "$PTA_WORK/nets/h2_d8_b$3_s$2.net")
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits "$1" \
+            --seed "$2" --hidden 2 "${from[@]}" --out "$net" > "$net.log"
+    }
+    # gain_ref SEED: that seed's reference network, the header's recipe at
+    # this shape
+    gain_ref() {
+        local net="$PTA_WORK/nets/h2_d8_b6_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"
+        [ -s "$net" ] || "$PTA_WORK/pta_mnist" train --data "$PTA_WORK/data" --din 8 --wbits 6 \
+            --seed "$1" --hidden 2 --from "$PTA_WORK/nets/h2_d8_b8_s$1.net" \
+            --sumnoise "$PTA_REF_NOISE" --epochs "$PTA_REF_EPOCHS" --out "$net" > "$net.log"
+    }
+    # gain_one NET ROW ARGS...: one test-set pass and its calibration, its
+    # line to out/chaingain.d/NET_ROW.txt
+    gain_one() {
+        local net=$1 row=$2
+        shift 2
+        mkdir -p "$PTA_WORK/out/chaingain.d"
+        "$PTA_WORK/pta_mnist" eval --data "$PTA_WORK/data" --net "$PTA_WORK/nets/$net" "$@" \
+            > "$PTA_WORK/out/chaingain.d/$(basename "$net" .net)_$row.txt"
+    }
+    export -f gain_train gain_ref gain_one
+    # gain_row NAME: a row's name as a file's
+    gain_row() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+    # gain_net SEED KIND: the network's file, trained before or the reference
+    gain_net() {
+        if [ "$2" = before ]; then echo "h2_d8_b6_s$1.net"
+        else echo "h2_d8_b6_s$1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"; fi
+    }
+    for s in 1 2 3 4 5; do echo 8 $s; done | xargs -P "$jobs" -L 1 bash -c 'gain_train "$@"' _
+    for s in 1 2 3 4 5; do echo 6 $s 8; done | xargs -P "$jobs" -L 1 bash -c 'gain_train "$@"' _
+    for s in 1 2 3 4 5; do echo $s; done | xargs -P "$jobs" -L 1 bash -c 'gain_ref "$@"' _
+    for k in before reference; do
+        while IFS='|' read -r name setting; do
+            dd=${name##*, draw }
+            for sd in 1 2 3 4 5; do echo "$(gain_net $sd $k) $(gain_row "$name") --seed $((sd + 10 * dd)) $setting"; done
+        done < "$work/out/chaingain_settings.txt"
+    done | xargs -P "$jobs" -L 1 bash -c 'gain_one "$@"' _
+
+    # gain_file SEED KIND NAME: the file gain_one wrote for that run
+    gain_file() { echo "$work/out/chaingain.d/$(basename "$(gain_net "$1" "$2")" .net)_$(gain_row "$3").txt"; }
+    # gain_was NAME: the mode before this one that ran a row, or nothing:
+    # `chain` the format alone and the tile as budgeted, `chainfit` that
+    # fitted, `chainlit` it lit, and `chainrows` the other four on all the
+    # images, which it ran on no thousand
+    gain_was() {
+        case "$1" in
+        "format only, "*|"as budgeted, draw "*|"as budgeted, a thousand, draw "*) echo chain.d ;;
+        "as budgeted, fitted, "*) echo chainfit.d ;;
+        "as budgeted, lit, "*) echo chainlit.d ;;
+        *", a thousand, draw "*) ;;
+        "only "*|"less "*) echo chainrows.d ;;
+        esac
+    }
+    # The scale leaves a run as it was: its figures are printed after every
+    # other, and where this directory has the mode before's lines, every run
+    # that mode made has to be among them and its line up to the scale's
+    # figures has to be that line, byte for byte.  A line that is not there
+    # is one that is not the same.
+    if [ -d "$work/out/chain.d" ] || [ -d "$work/out/chainfit.d" ] || [ -d "$work/out/chainrows.d" ] ||
+       [ -d "$work/out/chainlit.d" ]; then
+        same=0
+        other=0
+        for k in before reference; do for sd in 1 2 3 4 5; do
+            while IFS='|' read -r name setting; do
+                was=$(gain_was "$name")
+                [ -n "$was" ] && [ -d "$work/out/$was" ] || continue
+                was="$work/out/$was/$(basename "$(gain_file $sd $k "$name")")"
+                if [ -s "$was" ] && sed 's/ gate_scale=.*$//' "$(gain_file $sd $k "$name")" | cmp -s "$was" -; then
+                    same=$((same + 1))
+                else
+                    other=$((other + 1))
+                fi
+            done < "$work/out/chaingain_settings.txt"
+        done; done
+        echo "== chaingain: against what chain, chainfit, chainrows and chainlit wrote for the same runs: $same the same, $other not"
+        [ "$other" = 0 ] || exit 1
+    fi
+    # Every network has to be the kind its column says, and every run the row
+    # its name says, as `chainlit` and `chainrows` hold their own.  A run's
+    # name says its draw, which rows of the budget are in it, whether its
+    # range is training's or fitted, whether the source is lit, and whether
+    # it is of a thousand images or of all, which have to be what it was
+    # asked and what its line printed: the impairments it names and no
+    # other, each at version 2's figure and nought for the ones left out; a
+    # lit run's source, buses and lines' reading as `chainlit` holds them,
+    # and its weights 8 bits wide where every other run's are 6; and a
+    # fitted run's share, 1, and the shift training's rule had given, its
+    # last shift the smallest at which the largest its declared reference
+    # is, is within 127 codes.  Every run's largest reference is the format
+    # alone's of the first draw, of as many images, and so is the range of a
+    # run that is not fitted.  The format alone has no sum past its range
+    # wherever its reference is within its codes.  And of the scale, every
+    # run says it was fixed on a thousand images, and gives its figures with
+    # the scale: the scale is within a hundredth of the one the test images
+    # would fit themselves, which a run can come to by chance; what
+    # that one leaves is no more than what the run leaves with no scale, or
+    # with its own, to the printed figure; its rms error is no more than its
+    # largest; and its class is the reference's on more than half the
+    # images.  The scale was fixed from image 54,000 of the training set on,
+    # the first of the 6,000 the network was not trained on.  The two rows
+    # with nothing drawn in them, the format alone and the crosstalk alone,
+    # are on every draw the run they are on the first, figure for figure,
+    # the scale's figures among them.
+    gain_ok=yes
+    gain_runs=0
+    for k in before reference; do for sd in 1 2 3 4 5; do
+        log="$work/nets/$(gain_net $sd $k).log"
+        awk -v k="$k" -v f="$PTA_REF_NOISE" -v e="$PTA_REF_EPOCHS" -v sd="$sd" '
+            { for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              ok = v["din"] == 8 && v["wbits"] == 6 && v["from"] == 8 && v["seed"] == sd && v["epochs"] >= 2 &&
+                   v["hidden"] == 2
+              if (k == "before") ok = ok && !("sumnoise" in v) && !("fixed_epochs" in v)
+              else { n = split(v["got"], g, ",")
+                     ok = ok && f == 0.1 && e == 8 && v["sumnoise"] == f + 0 && n == 3 &&
+                          v["fixed_epochs"] == e && v["epochs"] == e
+                     for (i = 1; i <= n; ++i) ok = ok && g[i] > 0.95 * f && g[i] < 1.05 * f }
+              lines++ }
+            END { exit !(lines == 1 && ok) }' "$log" || gain_ok=NO
+        while IFS='|' read -r name setting; do
+            first="format only"
+            [ "${name%, a thousand, draw *}" = "$name" ] || first="format only, a thousand"
+            cat "$log" "$(gain_file $sd $k "$first, draw ${draws%% *}")" \
+                "$(gain_file $sd $k "${name%, draw *}, draw ${draws%% *}")" "$(gain_file $sd $k "$name")" |
+            awk -v opts="$setting" -v tile="$tile" -v name="$name" -v sd="$sd" -v d0="${draws%% *}" '
+                function near(a, b, tol,    d) { d = a - b; if (d < 0) d = -d; return d <= tol }
+                function asked(key) { return (key in given) ? want[key] + 0 : 0 }
+                function has(key) { return (key in given) ? 1 : 0 }
+                function figs() { return v["gate_rms"] " " v["gate_rmsfs"] " " v["gate_maxfs"] " " v["gate_agree"] " " \
+                                         v["agree"] " " v["e3"] " " v["gate_scale"] " " v["gate_scale_rms"] " " \
+                                         v["gate_scale_rmsfs"] " " v["gate_scale_maxfs"] " " v["gate_scale_agree"] " " \
+                                         v["gate_scale_best"] " " v["gate_scale_best_rms"] }
+                BEGIN { n = split(opts, o, " ")
+                        for (i = 1; i < n; ++i) if (o[i] ~ /^--/) { want[substr(o[i], 3)] = o[i + 1]; given[substr(o[i], 3)] = 1 }
+                        bit["quant"] = 1; bit["thermal"] = 2; bit["shot"] = 4; bit["drift"] = 8; bit["xtalk"] = 16; bit["prog"] = 64
+                        m = split(want["impair"], im, ","); for (i = 1; i <= m; ++i) { mask += bit[im[i]]; on[im[i]] = 1 }
+                        drawn = match(name, /, draw [0-9]+$/) ? 1 : 0
+                        draw = drawn ? substr(name, RSTART + 7) + 0 : 0
+                        base = drawn ? substr(name, 1, RSTART - 1) : name
+                        few = (base ~ /, a thousand$/) ? 1 : 0
+                        core = few ? substr(base, 1, length(base) - 12) : base
+                        kind = 0; lit = 0
+                        if (core ~ /, lit, fitted$/) { kind = 1; lit = 1; core = substr(core, 1, length(core) - 13) }
+                        else if (core ~ /, lit$/) { lit = 1; core = substr(core, 1, length(core) - 5) }
+                        else if (core ~ /, fitted$/) { kind = 1; core = substr(core, 1, length(core) - 8) }
+                        nth = 0; nsh = 0; npr = 0; nxt = 0
+                        if (core == "as budgeted") { nth = 1; nsh = 1; npr = 1; nxt = 1 }
+                        else if (core == "only shot") nsh = 1
+                        else if (core == "only xtalk") nxt = 1
+                        else if (core == "less shot") { nth = 1; npr = 1; nxt = 1 }
+                        else if (core == "less xtalk") { nth = 1; nsh = 1; npr = 1 }
+                        fmt = (core == "format only") ? 1 : 0
+                        known = (fmt || nth + nsh + npr + nxt > 0) && (core == "as budgeted" || (!lit && !kind))
+                        still = (!lit && nth + nsh + npr == 0) ? 1 : 0
+                        split(tile, tt, "x"); per = 16 * int((64 + tt[1] - 1) / tt[1])
+                        sane = drawn && known && m == 1 + nth + nsh + npr + nxt && ("quant" in on) &&
+                               asked("abits") == 6 && asked("adcbits") == 8 &&
+                               has("thermal8") == nth && asked("thermal8") == 0.25 * nth && (("thermal" in on) ? 1 : 0) == nth &&
+                               has("photons8") == nsh && asked("photons8") == 30 * nsh && (("shot" in on) ? 1 : 0) == nsh &&
+                               has("prog") == npr && asked("prog") == npr && (("prog" in on) ? 1 : 0) == npr &&
+                               has("xtalk") == nxt && asked("xtalk") == 0.02 * nxt && (("xtalk" in on) ? 1 : 0) == nxt &&
+                               !("drift" in on) && !has("drift") && !has("hours") && !has("calibrate") &&
+                               !has("post-hours") && !has("trimstep") && !has("trimmax") && !has("wbits") && !has("seed") &&
+                               has("src") == lit && asked("src") == 0.01 * lit &&
+                               has("srcline") == lit && asked("srcline") == 0.05 * lit &&
+                               has("srcflat") == lit && asked("srcflat") == 0.2 * lit &&
+                               has("buses") == lit && asked("buses") == 2 * lit &&
+                               has("levelprobe") == lit && asked("levelprobe") == 16 * lit &&
+                               has("levelfix") == lit && (!lit || want["levelfix"] == "weights8") &&
+                               !has("srcsign") && !has("levelref") && !has("levelpart") && !has("levellayer") &&
+                               has("host") && asked("host") == 2 && has("probe") && asked("probe") == 1 &&
+                               has("gate") && asked("gate") == 1 && has("images") == few && asked("images") == 1000 * few &&
+                               has("gatefit") == kind && (!kind || asked("gatefit") == 1) && !has("gatebits") &&
+                               has("gatescale") && asked("gatescale") == 1000 }
+                { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+                NR == 1 { digital = v["digital"]; epochs = v["epochs"] }
+                NR == 2 { right = v["correct"]; gref = v["gate_ref"]; split(v["S"], s0, ","); was = s0[3]; peak0 = v["gate_peak"]
+                          theirs = ("gate_ref" in v) && v["impair"] == "0x01" && v["seed"] == sd + 10 * d0 && v["net_seed"] == sd &&
+                                   v["images"] == (few ? 1000 : 10000) && !("src" in v) && !("gate_fit" in v) }
+                NR == 3 { own = v["correct"]; ofig = figs() }
+                NR == 4 { ns = split(v["S"], sh, ","); n8 = split(v["S8"], s8, ",")
+                          fig = figs()
+                          ok = sane && theirs && v["tile"] == tile && v["net_seed"] == sd && v["seed"] == sd + 10 * draw &&
+                               v["net_wbits"] == 6 && v["digital"] == digital && v["epochs"] == epochs && v["from"] == 8 &&
+                               v["hidden"] == 2 && ns == 3 && v["impair"] == sprintf("0x%02x", mask) && v["abits"] == 6 &&
+                               v["adcbits"] == 8 && v["wbits"] == (lit ? 8 : 6) && v["drift"] == "none" &&
+                               v["hours"] == 0 && v["steps"] == 0 && v["cal"] == 0 && v["post_hours"] == 0 &&
+                               near(v["trimstep"], 0.25, 1e-12) && v["trimmax"] == 128 && v["images"] == (few ? 1000 : 10000) &&
+                               ("host" in v) && v["host"] == 2 &&
+                               (("src" in v) ? 1 : 0) == lit && (("levelprobe" in v) ? 1 : 0) == lit &&
+                               (("levelfix" in v) ? 1 : 0) == lit && !("levelpart" in v) &&
+                               !("hidshift" in v) && !("thermalline" in v) && !("gate_adcbits" in v) &&
+                               ("gate_bits" in v) && v["gate_bits"] == 6 && ("gate_rms" in v) && v["gate_rms"] > 0 &&
+                               v["gate_peak"] > 0 && v["gate8_peak"] > 0 && v["gate_rmsfs"] > 0 &&
+                               v["gate_rmsfs"] + 0 <= v["gate_maxfs"] + 0 && v["gate8_rmsfs"] + 0 <= v["gate8_maxfs"] + 0 &&
+                               ("e1" in v) && ("e2" in v) && v["e1"] == 0 && v["e2"] == 0 && v["e3"] > 0 &&
+                               ("gain" in v) && ("eres" in v) && ("elog" in v) && v["eres"] > 0 &&
+                               v["eres"] + 0 <= v["elog"] + 0 && v["elog"] == v["e3"] &&
+                               ("agree" in v) && ("ref" in v) && v["agree"] > 50 &&
+                               ("sats" in v) && ("elements" in v) && v["elements"] == per * v["images"] &&
+                               v["sats"] + 0 <= v["elements"] / 100 &&
+                               ("gate_agree" in v) && ("gate_ref" in v) && v["gate_agree"] > 50 &&
+                               v["gate_agree"] + 0 <= 100 && v["gate_ref"] == gref && v["gate_ref"] > 0 &&
+                               v["gate_peak"] == peak0 && sh[1] == s0[1] && sh[2] == s0[2] && n8 == 3 &&
+                               near(v["thermal8"], 0.25 * nth, 1e-6) &&
+                               (nsh ? near(v["photons8"] / 30, 1, 0.03) : v["photons8"] == 0) &&
+                               near(v["prog"], npr, 1e-9) &&
+                               (nxt ? (near(v["xtalk"], 0.02, 1 / 512 + 1e-9) && v["xtalk"] > 0) : v["xtalk"] == 0)
+                          # the scale
+                          ok = ok && ("gate_scale" in v) && v["gate_scale_images"] == 1000 && v["gate_scale_first"] == 54000 &&
+                               v["gate_scale"] > 0.5 &&
+                               v["gate_scale"] < 1.5 && ("gate_scale_best" in v) &&
+                               near(v["gate_scale"], v["gate_scale_best"], 0.01) && v["gate_scale_rms"] > 0 &&
+                               v["gate_scale_best_rms"] + 0 <= v["gate_rms"] + 0.00001 &&
+                               v["gate_scale_best_rms"] + 0 <= v["gate_scale_rms"] + 0.00001 &&
+                               v["gate_scale_rmsfs"] + 0 <= v["gate_scale_maxfs"] + 0 &&
+                               v["gate_scale_agree"] > 50 && v["gate_scale_agree"] + 0 <= 100
+                          if (lit) ok = ok && v["src"] == 0.01 && v["srcline"] == 0.05 && v["srcflat"] == 0.2 &&
+                                         v["buses"] == 2 && v["srcsign"] == "pair" &&
+                                         v["levelprobe"] == 16 && near(v["level_found"], 0.2, 0.1) &&
+                                         v["level_left"] > 0 && v["level_left"] + 0 < v["level_found"] / 4 &&
+                                         v["levelfix"] == "weights8" && v["levelref"] == "none" && v["level_gain"] == 1 &&
+                                         v["level_clip"] >= 0 && v["level_clip"] < 0.5
+                          if (kind == 0) { ok = ok && !("gate_fit" in v) && !("gate_was" in v) && sh[3] == was && s8[3] == sh[3]
+                                           if (fmt && int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= 127) ok = ok && v["sats"] == 0 }
+                          else ok = ok && ("gate_fit" in v) && v["gate_fit"] == 1 && ("gate_was" in v) && v["gate_was"] == was &&
+                                    int(v["gate_peak"] / 2 ^ sh[3] + 0.5) <= 127 &&
+                                    (sh[3] == 0 || int(v["gate_peak"] / 2 ^ (sh[3] - 1) + 0.5) > 127) && s8[3] == sh[3]
+                          if (still) ok = ok && v["correct"] == own && fig == ofig && (!fmt || own == right) }
+                END { exit !(NR == 4 && ok) }' || gain_ok=NO
+            gain_runs=$((gain_runs + 1))
+        done < "$work/out/chaingain_settings.txt"
+    done; done
+    echo "== chaingain: $gain_runs runs, each of them the network and the row its place says: $gain_ok"
+    [ "$gain_ok" = yes ] || exit 1
+
+    # gain_lines KIND BASE: a row's lines over its draws, five networks a draw
+    gain_lines() {
+        local sd dd
+        for sd in 1 2 3 4 5; do
+            for dd in $draws; do cat "$(gain_file $sd "$1" "$2, draw $dd")"; done
+        done
+    }
+    # gain_scale KIND BASE: a row over its runs, and the scale: fixed on the
+    # held-out images, a mean and the least and the most of any run; the one
+    # the test images would fit themselves, a mean; and the most the two
+    # differ by in a run
+    gain_scale() {
+        gain_lines "$1" "$2" | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              s = v["gate_scale"] + 0; bs = v["gate_scale_best"] + 0; d = s - bs; if (d < 0) d = -d
+              if (runs == 0 || s < least) least = s
+              if (runs == 0 || s > most) most = s
+              if (d > apart) apart = d
+              ss += s; sb += bs; runs++ }
+            END { printf " %7.5f %7.5f %7.5f %7.5f %7.5f", ss / runs, least, most, sb / runs, apart }'
+    }
+    # gain_gate KIND BASE RMS RMSFS MAXFS: a row over its runs, the last
+    # layer against its declared format, with no scale or with one: its rms
+    # error over the reference's rms, over the largest the reference is, and
+    # its largest over that, percent, each a mean; and the runs within 1.0%,
+    # 1.0% and 2.0% on the three
+    gain_gate() {
+        gain_lines "$1" "$2" | awk -v a="$3" -v b="$4" -v c="$5" '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = 100 * v[a]; y = 100 * v[b]; z = 100 * v[c]
+              xs += x; ys += y; zs += z
+              px += (x <= 1.0); py += (y <= 1.0); pz += (z <= 2.0); runs++ }
+            END { printf " %6.3f %6.3f %6.3f %3d %2d %2d", xs / runs, ys / runs, zs / runs, px, py, pz }'
+    }
+    # gain_best KIND BASE: what the scale the test images would fit
+    # themselves leaves of the rms error over the reference's rms, percent,
+    # a mean over the row's runs
+    gain_best() {
+        gain_lines "$1" "$2" | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              s += 100 * v["gate_scale_best_rms"]; runs++ }
+            END { printf " %6.3f", s / runs }'
+    }
+    # gain_class KIND BASE: a row over its runs, and how often the class the
+    # tile gives is the class its declared reference gives, percent: with no
+    # scale, a mean and the runs at 99.5% or more; and with the scale, a
+    # mean, the runs at 99.5% or more, and the least of any run
+    gain_class() {
+        gain_lines "$1" "$2" | awk '
+            { delete v; for (i = 1; i <= NF; ++i) { split($i, kv, "="); v[kv[1]] = kv[2] }
+              x = v["gate_agree"] + 0; y = v["gate_scale_agree"] + 0
+              xs += x; ys += y; px += (x >= 99.5); py += (y >= 99.5)
+              if (runs == 0 || y < least) least = y
+              runs++ }
+            END { printf " %7.3f %3d %7.3f %3d %7.2f", xs / runs, px, ys / runs, py, least }'
+    }
+    echo "== chaingain: the $tile tile at v2, the last layer of three on it, five networks and their"
+    echo "== draws.  The scale, a row over its runs: fixed on $cal held-out images, a mean, the least and"
+    echo "== the most; the one the test images would fit themselves, a mean; and the most the two differ by"
+    printf '%-84s %39s %39s' "" "before" "reference"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chaingain_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do gain_scale $k "$base"; done
+        echo
+    done
+    for ref in "no scale|gate_rms gate_rmsfs gate_maxfs" "the scale|gate_scale_rms gate_scale_rmsfs gate_scale_maxfs"; do
+        echo "== chaingain: the last layer's error against its declared format with ${ref%|*}, percent, a"
+        echo "== row over its runs: its rms over the reference's rms, over the largest the reference is, and"
+        echo "== its largest over that, a mean; and the runs within 1.0%, 1.0% and 2.0% on the three"
+        printf '%-84s %30s %30s' "" "before" "reference"
+        echo
+        sed 's/, draw [0-9]*|.*//' "$work/out/chaingain_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+            printf '%-84s' "$base"
+            for k in before reference; do gain_gate $k "$base" ${ref#*|}; done
+            echo
+        done
+    done
+    echo "== chaingain: what the scale the test images would fit themselves leaves of the rms error over"
+    echo "== the reference's rms, percent, a mean over a row's runs: no scale does better"
+    printf '%-84s%7s%7s' "" "before" "ref."
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chaingain_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do gain_best $k "$base"; done
+        echo
+    done
+    echo "== chaingain: the class the tile gives against the class its declared reference gives, percent,"
+    echo "== a row over its runs: with no scale, a mean and the runs at 99.5% or more; and with the scale,"
+    echo "== a mean, the runs at 99.5% or more, and the least of any run"
+    printf '%-84s %31s %31s' "" "before" "reference"
+    echo
+    sed 's/, draw [0-9]*|.*//' "$work/out/chaingain_settings.txt" | awk '!seen[$0]++' | while read -r base; do
+        printf '%-84s' "$base"
+        for k in before reference; do gain_class $k "$base"; done
         echo
     done
 fi

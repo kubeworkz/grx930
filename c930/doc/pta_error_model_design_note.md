@@ -213,6 +213,20 @@ before found and could not name: on two of the three sets the lit tile is
 nearer its reference with the crosstalk than without. And against the
 demonstration's 1.0% the format alone, an 8-bit converter with no row of the
 budget, is already 0.71, 1.04 and 0.76% of the reference's rms off.
+**And the eighteenth, 2026-10-14** (§5, at its end): that layer with one scale
+on its outputs. The section before found most of the crosstalk to be a gain on
+every output, and could not say what one constant would buy at the
+demonstration's gate. `eval --gatescale M` now fixes one scale at calibration,
+the least-squares slope of the declared reference on the tile's outputs over M
+images the network was not trained on, and gives the gate's figures again with
+the outputs times it. Fixed on a thousand, the scale is 0.967 to 0.974 wherever
+the crosstalk is, and within 0.0011 of one where it is not. It takes the tile
+as budgeted from 4.46, 4.67 and 4.18 to 3.13, 3.46 and 3.14% of the reference's
+rms, about half its squared error, and the crosstalk alone from 3.52, 3.42 and
+3.10 to 1.65, 1.58 and 1.55%. It is within 0.0016 of the scale the test images
+would fit themselves, in every run with no source. Lit, it buys 0.34, 0.18 and
+0.13 of a point: the source had already taken gain off. It moves no class, and
+it brings no run within the demonstration's 1.0%.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -6497,6 +6511,7 @@ goes with.
 network. None was fitted against the declared format, which is what the
 demonstration compares. And no row had a gain taken out of its outputs before
 that comparison, so what one constant would buy at the gate is not measured.
+*The section after this one measures it.*
 What is left against the host's network says the four rows would add 3.28, 3.47
 and 3.20 where they add 4.41, 4.57 and 4.12: an estimate, from another
 reference. The model's crosstalk is the same fraction of each neighbour in
@@ -6566,6 +6581,301 @@ A device's crosstalk. A gain against the declared format, or a tile with its
 gain calibrated out. A source through an offset, a cycle of calibrations or a
 drifted tile. A remedy for the crosstalk, the shot noise or the rail. Five
 draws, of the same five networks.
+
+### The first board's last layer, with one scale on its outputs
+
+*Added 2026-10-14.* `SHAPE=chain sim/pta_mnist.sh DIR WORK chaingain`.
+Reported, not gated. The harness gains `eval --gatescale M`, and nothing else
+it prints moves.
+
+**Why.** The section before found that most of the crosstalk's error is a gain
+on every output, and that a source read and corrected on the weights takes gain
+off. Its gain was the probe's, fitted against the host's own network, and the
+demonstration holds the layer to its declared format. No row had a gain taken
+out before that comparison, so what one constant would buy at the gate was not
+measured. The demonstration's owner put the question of an output scale off
+until it was (grxcp's B19, 2026-10-13).
+
+**What the harness does.** `eval --gatescale M`, with `--gate`, runs M more
+images through the same tile after the test images: the first M of the 6,000
+the network was not trained on, from training image 54,000, with the light's
+shots numbered past the test images'. Over their last layer it fixes one scale,
+the least-squares slope of the declared reference on the tile's outputs, with
+no offset: the sum of each output times its reference, over the sum of the
+outputs squared. It then gives the gate's figures again with the test images'
+outputs times that scale: the rms error over the reference's rms, over the
+largest the reference is, and the largest error over that; and how often the
+class, of the outputs times the scale and the biases, is the declared
+reference's. Beside them it gives the scale the test images would fit
+themselves, which no calibration knows and no scale betters, and what that
+leaves. The scale is applied on the host's side, exactly. Every other figure
+the line prints is what it was, and a line with no `--gatescale` says nothing
+of one.
+
+The self-test's 43 lines are as they were, with one more, and a build of the
+chain's shape prints 29, one more. The new block uses the made-up network of
+the blocks before it, its first two layers on the host and the last layer's
+biases nought but one. At a scale of one the gate's figures are the probe's
+own. The scale fixed on 37 other images is the one the probe fits on them. With
+the format alone it is within a hundredth of one, and with 2% of crosstalk
+under it, nearer the reference. The scale the images fit themselves leaves the
+least, the outputs times two or times nought are as far off as their reference
+is large, and times nought they give the biases' class. And what `eval` reports
+is that scale on the images it was given, its shots numbered past the test
+images', with the gate's figures at it and at the best. 25 errors were planted
+one at a time in that code and built at both shapes: the scale's sums, the
+reference's width, the best scale, the scaled error and its three figures, the
+class with and without the biases, what the probe keeps, the calibration's
+images and shots, and what is reported. Each fails the self-test at both
+shapes.
+
+**What it runs.** The eighteenth mode, in `chain`'s work directories and on its
+networks, tile and draws: nine rows, on 10,000 images and on the first
+thousand, on five draws, with `--host 2 --probe 1 --gate 1 --gatescale 1000`.
+That is 900 evaluations a data set.
+
+| Row | What it runs |
+|---|---|
+| format only | `--impair quant`: the tile's format and nothing drawn. `chain`'s row |
+| only xtalk | and the crosstalk, `--xtalk 0.02`. `chainrows`' row |
+| only shot | and the shot noise, `--photons8 30`. `chainrows`' row |
+| less xtalk, less shot | The tile as budgeted with that row left out. `chainrows`' rows |
+| as budgeted | All four of version 2's rows. `chain`'s row |
+| as budgeted, fitted | With the last layer's range fitted, `--gatefit 1`. `chainfit`'s row |
+| as budgeted, lit; as budgeted, lit, fitted | With `chainlit`'s source, read and corrected on the weights at 8 bits. `chainlit`'s rows |
+| each of those nine, a thousand | The same on the test set's first thousand images, the gate's own. The four of `chainrows`' rows are new there |
+
+Fourteen of the eighteen are runs `chain`, `chainfit`, `chainrows` and
+`chainlit` made. The scale leaves a run as it was, and the mode holds each of
+those lines, up to the scale's figures, to the line that mode wrote: 700 a data
+set, all the same.
+
+**How it was run.** The mode's check and ten predictions were written first,
+the predictions at 15:23 UTC. It was run on two draws of MNIST to see the check
+say yes, and it said no: in 7 runs of 360 the fixed scale and the test images'
+own were the same to five places, which a condition had said they could not be.
+The condition was a wrong one, and was taken out. It was then swept. Looking at
+it, the mode's check could not see a mistake in how `cmd_eval` called the
+calibration or printed it, so the reporting was moved into a function the
+self-test reaches and the line gained the first image the scale was fixed on;
+the sweep was run again, and every line but for that field was the line it had
+been. The check was then made to hold the calibration to a thousand images from
+image 54,000 whatever the script asks, and the fixed scale to within a
+hundredth of the test images' own, where it had allowed two. The sweep was run
+a third time, at 16:28 UTC, and took 33 minutes for the three data sets side by
+side, beside the planted errors. Each of its 2,700 lines is the line the second
+wrote, byte for byte, and the figures here are the third's. One of the planted
+errors then found a gap, below, and the check was changed where it holds a run
+to the line a mode before wrote: a line that is not there is now one that is
+not the same. The mode's check and tables alone, with the script as it now is,
+on each data set's sweep, say yes, hold the same 700 lines and print what the
+sweep printed.
+
+The mode checks every network and every run against its place, as `chainrows`
+does its own. A run's name says its row, its draw and how many images, and its
+line has to say the same: the impairments it names and no other, at version 2's
+figures, the source's rows where it is lit, a range fitted where it says so.
+Every run's scale was fixed on 1,000 images from image 54,000, is between a
+half and one and a half, and is within a hundredth of the test images' own;
+what the test images' own leaves is no more than no scale leaves or the fixed
+one, and the scaled rms over the largest reference is no more than the scaled
+largest error. And a run with nothing drawn in it, the format alone and the
+crosstalk alone with no source, is on every draw the run it is on the first,
+the scale's figures with the rest.
+
+157 errors were planted one at a time, and all but 2 fail. 25 in the harness's
+new code, against the self-test. 67 in a training's line, a run's line or the
+line a run is held to, against the check with nothing run again. Of the seven
+first planted that hold a run to a mode before, one found the gap: rows held to
+the lines of a mode that never ran them were counted out, and not counted
+against. Another was no error: it held the fitted rows to `chainlit`'s lines,
+and `chainlit` ran those rows too, its lines `chainfit`'s byte for byte. It was
+put in place of one that holds them to `chainrows`', a line `chainlit` wrote
+was put aside to be missed, and those eight were run again with the check as it
+now is: each fails. The rest never reach the part changed. 31 in the script,
+each run in a directory of its own. 6 in how `cmd_eval` reaches the
+calibration, each built into the harness and the mode run with it on one draw:
+the scale fixed on the test images, on the training images, on as many images
+as were tested, through the network as written and not as the source's
+correction rewrote it, its figures printed in each other's place, and the
+outputs not kept. Each fails, the last by a crash and not by a check. A scale
+fixed on all 6,000 held-out images is taken, and one with no `--gate`, or on
+none or on 6,001, is refused. And 28 in the tables' own code, which the check
+does not see and which have to move a table. The 2 that do not are the class's
+columns: the least with no scale printed for the least with it, and the runs at
+99.5% with and without the scale exchanged. With no source the scale moves no
+run's class, so on the lines they were tried on the two columns are the same
+and a table cannot show it. With the script and the harness as they now are,
+`refcomb`'s, `chain`'s, `chainfit`'s, `chainbit`'s, `chainlit`'s and
+`chainrows`' checks and tables alone, on the lines their own sweeps wrote for
+MNIST, say yes and print what those sweeps printed. Ten runs those modes and
+the ones before them made were also run again with it, and each is the line its
+sweep wrote, byte for byte.
+
+**The scale.** Fixed on the held-out thousand, a mean over a row's 25 runs on
+10,000 images:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 1.0001 | 1.0002 | 1.0002 | 1.0002 | 1.0002 | 1.0003 |
+| The crosstalk alone | 0.9682 | 0.9698 | 0.9701 | 0.9707 | 0.9729 | 0.9738 |
+| The shot noise alone | 0.9991 | 0.9993 | 0.9991 | 0.9991 | 0.9992 | 0.9993 |
+| As budgeted, less the crosstalk | 0.9989 | 0.9992 | 0.9989 | 0.9989 | 0.9990 | 0.9991 |
+| less the shot noise | 0.9681 | 0.9697 | 0.9700 | 0.9706 | 0.9727 | 0.9736 |
+| As budgeted | 0.9673 | 0.9691 | 0.9692 | 0.9696 | 0.9720 | 0.9730 |
+| As budgeted, fitted | 0.9673 | 0.9690 | 0.9692 | 0.9692 | 0.9717 | 0.9730 |
+| As budgeted, lit | 0.9799 | 0.9841 | 0.9981 | 0.9996 | 0.9997 | 1.0033 |
+| As budgeted, lit, fitted | 0.9799 | 0.9840 | 0.9981 | 0.9990 | 0.9994 | 1.0033 |
+| The most a run's scale is from the test images' own, any row | 0.0032 | 0.0028 | 0.0036 | 0.0041 | 0.0038 | 0.0039 |
+
+With no source every row with the crosstalk in it has a scale 0.967 to 0.974,
+and every row without it a scale within 0.0011 of one. Lit, it is 0.984, 1.000
+and 1.003 for the reference networks. In every run with no source the fixed
+scale is within 0.0016 of the one the test images would fit themselves, and lit
+within 0.0041. In no run does it leave more than 0.004 of a point more of the
+reference's rms than theirs would, 0.016 lit. So a thousand images the gate is
+not judged on fix it as well as the gate's own would.
+
+**What it buys.** The rms error against the declared format, percent of the
+reference's rms, on 10,000 images: with no scale, and with the outputs times
+the scale.
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| The format alone | 0.96 → 0.96 | 0.71 → 0.71 | 0.91 → 0.91 | 1.04 → 1.04 | 0.85 → 0.85 | 0.76 → 0.76 |
+| The crosstalk alone | 3.64 → 1.58 | 3.52 → 1.65 | 3.38 → 1.38 | 3.42 → 1.58 | 3.14 → 1.47 | 3.10 → 1.55 |
+| The shot noise alone | 3.08 → 3.08 | 2.66 → 2.66 | 2.99 → 2.99 | 3.15 → 3.14 | 2.82 → 2.82 | 2.72 → 2.72 |
+| As budgeted, less the crosstalk | 3.25 → 3.25 | 2.80 → 2.79 | 3.13 → 3.13 | 3.30 → 3.30 | 2.99 → 2.99 | 2.88 → 2.88 |
+| less the shot noise | 3.78 → 1.86 | 3.63 → 1.86 | 3.51 → 1.65 | 3.57 → 1.86 | 3.30 → 1.76 | 3.24 → 1.80 |
+| As budgeted | 4.81 → 3.43 | 4.46 → 3.13 | 4.54 → 3.25 | 4.67 → 3.46 | 4.28 → 3.18 | 4.18 → 3.14 |
+| As budgeted, fitted | 4.81 → 3.43 | 4.64 → 3.35 | 4.54 → 3.25 | 5.05 → 3.92 | 4.61 → 3.59 | 4.18 → 3.14 |
+| As budgeted, lit | 5.10 → 4.58 | 5.18 → 4.84 | 4.84 → 4.66 | 5.34 → 5.16 | 4.89 → 4.76 | 5.27 → 5.15 |
+| As budgeted, lit, fitted | 5.10 → 4.58 | 5.33 → 4.99 | 4.84 → 4.66 | 5.66 → 5.49 | 5.18 → 5.05 | 5.27 → 5.15 |
+| As budgeted: the share of the squared error the scale takes off | 0.49 | 0.51 | 0.49 | 0.45 | 0.45 | 0.43 |
+| As budgeted, lit: the same | 0.19 | 0.13 | 0.07 | 0.07 | 0.05 | 0.05 |
+
+As budgeted, with no source, the scale takes the reference networks from 4.46,
+4.67 and 4.18 to 3.13, 3.46 and 3.14%: 0.43 to 0.51 of the squared error. That
+is within 0.33, 0.16 and 0.27 of the tile with the crosstalk left out and no
+scale. The crosstalk alone goes from 3.52, 3.42 and 3.10 to 1.65, 1.58 and
+1.55%. Over the format alone, squares for squares, it still adds 1.49, 1.19 and
+1.36, where with no scale it adds 3.45, 3.26 and 3.01: the rest of it is not
+one gain on every output. Where the crosstalk is not, the scale moves the rms
+by under 0.002: the shot noise and the format are no gain.
+
+The scale is the gain the probe measured against the host's network. One and
+the format alone's gain over one and the row's is the scale to 0.0089 in every
+run with no source, and the scale is below it by 0.0035 to 0.0089 in every run
+with the crosstalk in it. The probe took each image's common shift out before
+it fitted its gain, and the scale takes none out.
+
+**Lit, it buys little.** With the source the scale is 0.984, 1.000 and 1.003,
+and it takes the lit tile from 5.18, 5.34 and 5.27 to 4.84, 5.16 and 5.15%:
+0.34, 0.18 and 0.13 of a point, where with no source it took off 1.33, 1.21 and
+1.04, and 0.05 to 0.13 of the squared error. The source had already taken gain
+off, as the section before found, and the lit tile's scale is nearest one where
+it took most. With the scale the lit tile is still further from its reference
+than the tile with no source and no scale, on every set, for the reference
+networks.
+
+**At the gate.** On the test set's first thousand images, the gate's own, with
+the runs of 25 within the demonstration's bounds in brackets:
+
+| | MNIST, before | MNIST, reference | Fashion-MNIST, before | Fashion-MNIST, reference | Inverted, before | Inverted, reference |
+|---|---|---|---|---|---|---|
+| As budgeted: rms over the reference's rms, no scale (runs within 1.0%) | 4.87 (0) | 4.52 (0) | 4.54 (0) | 4.67 (0) | 4.34 (0) | 4.24 (0) |
+| with the scale | 3.49 (0) | 3.18 (0) | 3.25 (0) | 3.46 (0) | 3.24 (0) | 3.21 (0) |
+| rms over the largest the reference is, no scale (runs within 1.0%) | 1.79 (0) | 1.72 (0) | 1.42 (0) | 1.42 (0) | 1.59 (0) | 1.54 (0) |
+| with the scale | 1.29 (0) | 1.21 (0) | 1.01 (15) | 1.05 (10) | 1.19 (0) | 1.17 (0) |
+| largest error over the largest the reference is, no scale (runs within 2.0%) | 8.42 (0) | 7.69 (0) | 7.18 (0) | 7.53 (0) | 7.47 (0) | 7.16 (0) |
+| with the scale | 5.79 (0) | 5.69 (0) | 4.80 (0) | 6.15 (0) | 5.52 (0) | 5.33 (0) |
+| Lit, fitted: rms over the reference's rms, no scale | 5.16 (0) | 5.22 (0) | 4.86 (0) | 5.48 (0) | 5.06 (0) | 5.31 (0) |
+| with the scale | 4.63 (0) | 4.87 (0) | 4.68 (0) | 5.30 (0) | 4.94 (0) | 5.19 (0) |
+| rms over the largest the reference is, no scale | 1.90 (0) | 1.99 (0) | 1.52 (0) | 1.67 (0) | 1.85 (0) | 1.93 (0) |
+| with the scale | 1.70 (0) | 1.86 (0) | 1.46 (0) | 1.61 (0) | 1.81 (0) | 1.89 (0) |
+| largest error, no scale | 9.89 (0) | 10.43 (0) | 8.77 (0) | 9.49 (0) | 10.65 (0) | 11.31 (0) |
+| with the scale | 9.62 (0) | 10.89 (0) | 8.33 (0) | 8.96 (0) | 10.39 (0) | 11.04 (0) |
+
+No run of the 150 is within 1.0% of the reference's rms with the scale, with no
+source or lit, as no run was without it. Over the largest the reference is, the
+tile with no source goes from 1.72, 1.42 and 1.54 to 1.21, 1.05 and 1.17%, and
+25 of its 150 runs are then within 1.0%, all of them Fashion-MNIST's. Lit and
+fitted, it goes from 1.99, 1.67 and 1.93 to 1.86, 1.61 and 1.89%, and none is.
+With no source the scale leaves the largest error 0.67 to 0.82 of what it was
+on the gate's thousand and 0.68 to 0.97 on 10,000 images: a gain's error grows
+with the output, and some of the largest was a gain's. Lit and fitted it leaves
+it 0.95 to 1.04 of what it was, either way. No run of the 300 is within 2.0%
+with it.
+
+**The class does not move.** One scale on every output changes which is the
+largest only through the biases. With it the class is the declared reference's
+as often as with none, to 0.004 of a point, in every row, set and kind, and
+with no source in no run at all. Of 25 runs 23, 0 and 0 are at the
+demonstration's 99.5% as budgeted, as without it.
+
+**What these runs do not say.** The scale is applied to the outputs exactly, on
+the host's side. A chip would write it into the weights or into the converter's
+codes, which rounds, and that is not modelled. It is one scale for all sixteen
+of the layer's outputs, and for the last layer alone; a scale an output was not
+tried. The images it is fixed on are the training set's own, held out: a board
+would need a calibration set of its own, declared and frozen with the workload.
+A tile that drifts after calibration, or a scale fixed again in a cycle, is not
+modelled. And whether the demonstration's reference may carry a scale is its
+owner's to rule.
+
+**What was predicted.** Ten things, written on 2026-10-14 at 15:23 UTC, when
+the harness change, its self-test and its planted errors, the mode and its
+check existed and nothing of the mode had run. Eight runs made by hand on
+MNIST, to see every earlier field unchanged, informed them, and they say so.
+All are for the reference networks, a mean over the runs of 10,000 images,
+percent of the reference's rms, unless said. 7 were right as written.
+
+1. That the scale fixed on the held-out thousand is within 0.003 of the test
+   images' own in every run with no source, and within 0.01 in every lit run.
+   Right: 0.0016 and 0.0041.
+
+2. That with no source the scale is 0.96 to 0.98 in every row with the
+   crosstalk in it, and within 0.005 of one in every row without it. Right:
+   0.967 to 0.974, and 0.0011.
+
+3. That it takes the tile as budgeted to 3.0 to 3.6% on every set. Right: 3.13,
+   3.46 and 3.14.
+
+4. That with the shot noise alone, and with the format alone, the rms with the
+   scale is within 0.02 of the rms without it. Right: within 0.001.
+
+5. That with the crosstalk alone it takes the rms to 1.5 to 2.0 on every set.
+   Right: 1.65, 1.58 and 1.55.
+
+6. That lit, the scale is 0.97 to 0.995 at training's range, and takes the lit
+   tile to 4.7 to 5.2; that lit and fitted, on the first thousand, it takes it
+   to 5.0 to 5.4; and that it helps less lit than dark. Wrong. The scale is
+   0.984, 1.000 and 1.003: on Fashion-MNIST and on the inverted set the source
+   had taken off as much gain as the crosstalk put on. Lit and fitted on MNIST
+   it goes to 4.87. The rest held: 4.84, 5.16 and 5.15, and less lit than dark.
+
+7. That as budgeted with no source the class is the declared reference's on 0.0
+   to 0.3 of a point more of the images with the scale. Right: on none more,
+   and none fewer.
+
+8. That on the first thousand, as budgeted with no source, no run of the 150 is
+   within 1.0% of the reference's rms with the scale, and over the largest the
+   reference is the rms is 1.0 to 1.25% on MNIST and on the inverted set and
+   0.85 to 1.0% on Fashion-MNIST. Wrong on Fashion-MNIST: 1.21, 1.05 and 1.17.
+   No run is within.
+
+9. That the largest error is the shot noise's tail, and the scale leaves it 0.8
+   to 1.0 of what it was, on every set and kind. Wrong: 0.68 to 0.97. Some of
+   the largest error is a gain's.
+
+10. That the mode's check says yes, and 700 lines a data set are the earlier
+    modes' own, byte for byte, up to the scale's figures. Right.
+
+**What this is not.** Everything the five sections before say of themselves: a
+stand-in classifier, in a model, with the chain's other engines taken as exact.
+A scale written into a chip. A calibration of the gain an output at a time, or
+with an offset. A ruling on the demonstration's reference. Five draws, of the
+same five networks.
 
 ---
 
