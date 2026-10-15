@@ -71,6 +71,21 @@
 #   not a defect this gate found. Arm [E] holds the boundary open by checking both
 #   sides of it (.githooks/pre-push is in, c930/sw/bin2hex.py is out).
 #
+# THE ENVIRONMENT THIS RUNS IN
+#
+#   Git exports GIT_DIR to hooks, and GIT_DIR outranks -C: `git -C X ...` then
+#   runs in X but against GIT_DIR's repository. In a plain checkout that is this
+#   repo and the difference is invisible; in a linked worktree it is the
+#   worktree's own gitdir, and then the difference between "which repository" and
+#   "where the command runs" is the difference between the throwaway fixture and
+#   the repository being pushed. This file is the only one here that both builds
+#   git repositories and runs from the pre-push hook, so it is the only one that
+#   can damage a repository that way. It did, once: on 2026-10-14 a hook-run
+#   fixture wrote nine of its entries into the index of the worktree being pushed
+#   and turned the real repository's core.bare on. Every git call below goes
+#   through the `git` function defined at the top of the code, which removes
+#   those variables before git sees them, and arm [E] keeps it that way.
+#
 # THE ARMS: THE GATE TESTS ITSELF FIRST
 #
 #   A gate whose matching is dead reports no violations, and "no violations" is
@@ -96,6 +111,11 @@
 #       audit then passes
 #   [D] this repo's real index: the content arm finds .githooks/pre-push (bash, no
 #       extension) and does not claim c930/sw/bin2hex.py
+#   [E] the environment cannot redirect the fixture: with GIT_DIR exported the way
+#       git exports it to a hook in a linked worktree, the arm-C fixture still
+#       builds in its own directory, and a stand-in repository with a linked
+#       worktree -- the shape of the repo a push comes from -- comes out of it
+#       with its index unchanged and still not bare
 #
 # WHAT THIS GATE DOES NOT PROVE
 #
@@ -120,6 +140,41 @@
 #   usage error (unknown flag, two repos, not a git repository): a run that could
 #   not check must not read as a run that checked and found nothing.
 set -u
+
+# ---------------------------------------------------------------------------
+# the environment this runs in, before anything else
+# ---------------------------------------------------------------------------
+
+# Git exports GIT_DIR (and friends) to hooks, and GIT_DIR outranks -C: a command
+# spelled `git -C "$d" ...` runs in $d's working directory but against GIT_DIR's
+# repository. That is invisible in a plain checkout, where the inherited GIT_DIR
+# IS this repo, and wrong in a linked worktree, where it is the worktree's own
+# gitdir and the audit then reads -- and the fixture writes -- the repo being
+# pushed instead of the throwaway one.
+#
+# This gate is the one file here that both builds git repositories and runs from
+# the pre-push hook, so it is the one that can do that damage. It did, on
+# 2026-10-14: a hook-run fixture wrote nine of its entries into the index of the
+# worktree being pushed, left one behind (hidden by the skip-worktree flag the
+# fixture itself sets), and turned the real repo's core.bare on, because
+# `git init` obeys GIT_DIR too. Arm [E] is the regression test for exactly this.
+#
+# `git` below is therefore not git: it is git with the variables that can point
+# it at another repository removed. Unsetting beats neutralizing -- there is no
+# value of GIT_DIR that means "no, really, use -C". GIT_CONFIG_* are cleared for
+# a smaller reason: the fixture pins the identity, branch and autocrlf it needs
+# per call, and an ambient GIT_CONFIG_COUNT would be a way for a surrounding
+# environment to change what the fixture commits. GIT_CEILING_DIRECTORIES is
+# kept -- it only bounds discovery upward and cannot redirect it.
+#
+git() {
+  # `env ... git`, not `command git`: env resolves the name itself and cannot see
+  # a shell function, so the lookup finds the real git and cannot come back here.
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE \
+      -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+      git "$@"
+}
 
 # ---------------------------------------------------------------------------
 # the rule
@@ -363,7 +418,11 @@ arm_b() {           # line 1 is what is read, and only line 1
 fixture_repo() {    # $1 = a path to build in
   local d=$1 sha
   mkdir -p "$d" || return 1
-  git -c init.defaultBranch=main init -q "$d" || return 1
+  # -C as well as the function: the function strips the inherited variables, and
+  # -C then says which directory init is about, so neither alone is load-bearing.
+  # Without the function this line re-inits whatever GIT_DIR names -- the real
+  # repo, when a hook runs the arms -- and `git init` sets core.bare on it.
+  git -C "$d" -c init.defaultBranch=main init -q || return 1
 
   sha=$(printf '#!/usr/bin/env bash\necho hi\n' | git -C "$d" hash-object -w --stdin)
   git -C "$d" update-index --add --cacheinfo "100644,$sha,tools/no-extension" || return 1
@@ -492,6 +551,50 @@ arm_d() {           # this repo's real index
   fi
 }
 
+# The one arm about the environment rather than the rule. Git hands a hook in a
+# linked worktree a GIT_DIR that is not the directory any command runs in, and a
+# fixture that obeys it writes into the repository being pushed instead of its
+# own -- the 2026-10-14 incident, described at the top of this file. Arm E stands
+# a throwaway repo with a linked worktree in for that repository, exports its
+# gitdir exactly as a hook would, builds the arm-C fixture under it, and asserts
+# the stand-in came out untouched. Remove the `git` wrapper and this arm fails on
+# a stand-in that costs nothing; the real repository is never the experiment.
+arm_e() {           # $1 = a scratch directory
+  local base=$1 stand wt fix gd
+  stand="$base/stand-in"; wt="$base/stand-in-wt"; fix="$base/fixture"
+  mkdir -p "$base" || { bad E "cannot create $base"; return; }
+
+  # The stand-in: a repository with a linked worktree, because that is the shape
+  # in which an inherited GIT_DIR is a path that is NOT where commands run.
+  git -C "$base" -c init.defaultBranch=main init -q "$stand" || { bad E "cannot init the stand-in repository"; return; }
+  git -C "$stand" -c user.email=gate@example.invalid -c user.name=gate -c commit.gpgsign=false \
+    commit -q --allow-empty -m "stand-in: base" || { bad E "cannot commit in the stand-in"; return; }
+  git -C "$stand" worktree add -q "$wt" -b stand-in-wt 2>/dev/null || { bad E "cannot add the stand-in's linked worktree"; return; }
+
+  local before_list before_bare after_list after_bare
+  before_list=$(git -C "$wt" ls-files -s | wc -l | tr -d ' ')
+  before_bare=$(git -C "$stand" rev-parse --is-bare-repository 2>&1)
+  gd=$(git -C "$wt" rev-parse --absolute-git-dir 2>&1) || { bad E "cannot read the stand-in worktree's gitdir"; return; }
+
+  # Exactly what git hands a hook in a linked worktree -- and the fixture under it.
+  ( export GIT_DIR="$gd"; fixture_repo "$fix" >/dev/null 2>&1 )
+
+  after_list=$(git -C "$wt" ls-files -s | wc -l | tr -d ' ')
+  after_bare=$(git -C "$stand" rev-parse --is-bare-repository 2>&1)
+  chk E "the stand-in's index is untouched by the fixture" "$before_list" "$after_list"
+  chk E "the stand-in is still not bare" "$before_bare" "$after_bare"
+  if git -C "$wt" ls-files | grep -qxF 'tools/no-extension'; then
+    bad E "a fixture entry (tools/no-extension) landed in the stand-in's index"
+  else
+    ok E "no fixture entry landed in the stand-in's index"
+  fi
+
+  # And the fixture is where it was asked for, whole: the same 12 entries arm C
+  # relies on, in a working tree of its own rather than in the stand-in.
+  chk E "the fixture was built where it was asked for" "12" "$(git -C "$fix" ls-files -s | wc -l | tr -d ' ')"
+  chk E "and it is that working tree, not the stand-in" "false" "$(git -C "$fix" rev-parse --is-bare-repository 2>&1)"
+}
+
 # ---------------------------------------------------------------------------
 # the run
 # ---------------------------------------------------------------------------
@@ -530,6 +633,7 @@ main() {
   arm_b "$tmp/first-line"
   arm_c "$tmp/fixture"
   arm_d "$repo"
+  arm_e "$tmp/env"
   printf 'ARMS      %s passed, %s failed\n\n' "$arm_pass" "$arm_fail"
 
   local rc=0
