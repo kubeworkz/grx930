@@ -2,7 +2,7 @@
 # pta_mnist.sh - gate C1(a), the accuracy sweep on the D3 network
 # (doc/pta_error_model_design_note.md section 5).  Runs on Linux or WSL.
 #
-#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|canary|all]
+#   sim/pta_mnist.sh MNIST_DIR WORK_DIR [gate|ablate|sweep|joint|calib|budget|depth|geometry|source|laser|fill|tighten|v2|trained|refsource|reflaser|refdrift|refcycle|refcal|refdraws|reflevel|reffix|refpoint|refhold|refrows|refcomb|chain|chainfit|chainbit|chainlit|chainrows|chaingain|canary|golden|all]
 #
 # MNIST_DIR holds MNIST's four idx .gz files.  WORK_DIR receives the
 # uncompressed data, the two builds, the trained networks (kept, so a rerun
@@ -88,8 +88,8 @@
 # that network's images: grxgpu's first-board classifier, 8 x 8 images, two
 # hidden layers 64 wide and 16 outputs, with MNIST_DIR's images pooled to
 # 8 x 8.  Such a directory runs `chain`, `chainfit`, `chainbit`, `chainlit`,
-# `chainrows`, `chaingain` and `canary` and nothing else, and they run in no
-# other.
+# `chainrows`, `chaingain`, `canary` and `golden` and nothing else, and they
+# run in no other.
 # CHAIN_TILE sets `chain`'s tile (default 128x64) and CHAIN_DRAWS the draws it
 # runs (default "0 1 2 3 4");
 # CHAINFIT_TILE and CHAINFIT_DRAWS are `chainfit`'s, which is the same network
@@ -103,11 +103,13 @@
 # `canary` trains the first board's canary as grxcp's B20 fixed it, its first
 # two layers the host's at eight bits and its last trained for the tile, and
 # runs its five networks as `chaingain` runs the reference ones; CANARY_TILE
-# and CANARY_DRAWS are its.
+# and CANARY_DRAWS are its.  `golden` writes the canary's golden tensors
+# twice, from the network `canary` trained, into out/golden.a and out/golden.b,
+# and holds the two to each other byte for byte.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-[ $# -ge 2 ] || { sed -n '2,106p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,108p' "$0"; exit 2; }
 mnist=$1
 work=$2
 what=${3:-all}
@@ -123,11 +125,13 @@ chain) defs="-DN_SIDE=8 -DN_HID=64 -DN_OUT=16" ;;
 *) echo "SHAPE is d3 or chain" >&2; exit 2 ;;
 esac
 if [ "$shape" = chain ] && [ "$what" != chain ] && [ "$what" != chainfit ] && [ "$what" != chainbit ] &&
-   [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ] && [ "$what" != canary ]; then
-    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows, chaingain and canary and nothing else" >&2; exit 2
+   [ "$what" != chainlit ] && [ "$what" != chainrows ] && [ "$what" != chaingain ] && [ "$what" != canary ] &&
+   [ "$what" != golden ]; then
+    echo "SHAPE=chain runs chain, chainfit, chainbit, chainlit, chainrows, chaingain, canary and golden and nothing else" >&2; exit 2
 fi
 if { [ "$what" = chain ] || [ "$what" = chainfit ] || [ "$what" = chainbit ] || [ "$what" = chainlit ] ||
-     [ "$what" = chainrows ] || [ "$what" = chaingain ] || [ "$what" = canary ]; } && [ "$shape" != chain ]; then
+     [ "$what" = chainrows ] || [ "$what" = chaingain ] || [ "$what" = canary ] || [ "$what" = golden ]; } &&
+   [ "$shape" != chain ]; then
     echo "$what needs SHAPE=chain, and a WORK_DIR of its own" >&2; exit 2
 fi
 
@@ -7490,6 +7494,29 @@ if [ "$what" = canary ]; then
             echo
         done
     done
+fi
+
+# The canary's golden tensors, as grxcp's B20 and the owner's rulings of
+# 2026-10-14 fix them: the network `canary` trained for seed 1, the canary;
+# the first thousand test images and the first thousand of the 6,000 held-out
+# training images, the calibration set; FC3's declared reference the 8-bit
+# converter's codes, at the step training's rule gives on the 128 x 64 tile.
+# Written twice, each into a folder of its own, and the two have to be the
+# same, byte for byte; the harness itself fails if any code is past the
+# range, or if the tile with its format alone is not the declared reference.
+if [ "$what" = golden ]; then
+    net="$work/nets/h2_d8_b6_host2_s1_n${PTA_REF_NOISE}_e${PTA_REF_EPOCHS}.net"
+    [ -s "$net" ] || { echo "golden: $net is not there: run canary first" >&2; exit 2; }
+    for r in a b; do
+        mkdir -p "$work/out/golden.$r"
+        "$work/pta_mnist" golden --data "$work/data" --net "$net" --out "$work/out/golden.$r" --abits 6 --adcbits 8 \
+            --rows 128 --cols 64 --images 1000 --cal 1000 > "$work/out/golden.$r.txt"
+    done
+    cmp -s "$work/out/golden.a.txt" "$work/out/golden.b.txt" && diff -r "$work/out/golden.a" "$work/out/golden.b" > /dev/null ||
+        { echo "golden: the two writings differ" >&2; exit 1; }
+    echo "== golden: written twice, the same byte for byte: $(cat "$work/out/golden.a.txt")"
+    (cd "$work/out/golden.a" && sha256sum -- *.bin)
+    sha256sum "$net" | sed "s#$work/nets/##"
 fi
 
 exit $((gate_status | ablate_status))

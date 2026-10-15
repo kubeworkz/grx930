@@ -239,6 +239,16 @@ difference of error is clear in any row. The canary itself is 4.61% on the
 gate's thousand as budgeted and 5.09% lit and fitted, and gives its declared
 reference's class on 99.74 and 99.42% of it. What the recipe gives up is a
 tenth of a point of accuracy on 10,000 images.
+**And the twentieth, the same day** (§5, at its end): the first board's canary,
+its golden tensors. Its owner ruled that FC3's declared reference is the 8-bit
+converter's codes, and that one output scale, fixed at calibration on a set of
+its own, may be applied. `pta_mnist golden` writes the canary's integer
+weights, its 1,000 acceptance vectors and 1,000 calibration vectors, each
+stage's output in the declared format, FC3's codes and classes, and a
+double-precision pass. Written twice they are the same byte for byte; the tile
+with its format alone gives every code, and no code is held at the range. grxcp
+holds them with a candidate manifest and a checker written apart from this
+harness.
 This is phase C1 of grxcp `docs/designs/pta_cpu_integration.md` (§6): the
 error model of that document's §4.3, built into PTM-C
 (`rtl/pta/c930_ptm_c.sv`), with a C reference (`sim/pta_tile_model.c`) that
@@ -7075,6 +7085,99 @@ so. 10 were right as written.
 stand-in task, in a model, with the chain's other engines taken as exact. A
 frozen canary, or its golden tensors. A band for Gate F. Five draws, of five
 networks.
+
+### The first board's canary, its golden tensors
+
+*Added 2026-10-14.* `SHAPE=chain sim/pta_mnist.sh DIR WORK golden`, after
+`canary`. Reported, not gated. The harness gains `pta_mnist golden`.
+
+**Why.** With the canary trained, its golden tensors were next. grxgpu's
+golden-generation plan asks for its weights and inputs, each stage's output in
+the declared format, FC3's declared reference, the classes, a high-precision
+pass, and their digests. The owner ruled three things for them on 2026-10-14,
+as grxcp recommended (its B21), recorded at 23:37 UTC before any was written.
+FC3's declared reference is the 8-bit converter's codes of FC3's exact sum,
+rounded half up at the layer's step and held to −128 … 127; every figure in the
+sections before reads the sum before the converter. One output scale for FC3
+may be applied, fixed once at calibration on the first 1,000 held-out training
+images, 54,000 to 54,999, and never on the gate's vectors; Gate F is reported
+with it and without, and the band is set on the figure with it. And the tensors
+are kept in grxcp, `docs/designs/canary/`.
+
+**What the harness does.** `pta_mnist golden --data DIR --net NET --out DIR
+--abits 6 --adcbits 8 --rows 128 --cols 64` reads a network trained with
+`--host 2` and sets it up as eval does: the host's layers at eight bits with
+their rescales, and the last layer's step by training's rule on the tile. It
+writes headerless little-endian files: each layer's integer weights and int32
+biases, FC3's weights as 6-bit codes; and for the first 1,000 test images and
+for the calibration set, the pixels, inputs and labels, FC1's and FC2's
+outputs, FC3's activation codes, its exact sums, its codes, the classes and a
+double-precision pass. Its own pass, `golden_image()`, is integer arithmetic
+alone: each hidden layer's sum with its bias, the ReLU, the rescale rounded
+half up and held at 127; FC3's codes from its activation and weight codes,
+floor(s / 32 + 1/2) of its sum s, held to the range; and the class the largest
+code at its step with its bias, the first of two the same. The double-precision
+pass is the network as trained, on the pixels over 255, each sum its bias first
+and then each product in order. The command also runs every image through the
+tile with its format alone, the hidden layers on the host, and fails if a code
+is held at the range, if a code at its step is not the tile's output, or if an
+operand is not the host's.
+
+The self-test's 45 lines are as they were, with one more, and a build of the
+chain's shape prints 31, one more. The new check, 5j, takes the same network
+with its two hidden layers made the host's, at the fitted step and two steps
+under. Image for image, `golden_image()` gives the operands the host gives the
+hidden layers and the activation codes it gives the last; each code at its step
+is the tile's output with the format alone; the class is the rule's; and two
+steps under, the codes held are the sums the tile says are past its range. The
+canary's vectors have no tie for the largest output, so 5j hands the class rule
+four ties made for it.
+
+21 errors were planted one at a time in the new code and built at the chain's
+shape. Each has to be stopped by the self-test, by the command, or by grxcp's
+checker run on a bundle made of what the command wrote. The first time, 19
+were. One was not placed, and one, the class sent to the last of two the same,
+passed all three: neither thousand has a tie. The ties in 5j were written for
+it, and all 21 are stopped now: 12 by the self-test, 3 by the command and 6 by
+the checker. With the script and the harness as they now are, the checks and
+tables of `refcomb`, `chain`, `chainfit`, `chainbit`, `chainlit`, `chainrows`,
+`chaingain` and `canary` alone, on the lines their own sweeps wrote for MNIST,
+say yes and print what those sweeps printed. Thirteen runs those modes made
+were run again, two of them the canary's, and each is its line. Five networks
+they trained were trained again, the canary among them, and each is its file
+and its training's line, byte for byte.
+
+**What it runs.** The twentieth mode, in `canary`'s work directory. It needs
+the canary that `canary` trained, seed 1's, and writes its tensors twice, into
+`out/golden.a` and `out/golden.b`, and holds the two to each other byte for
+byte. It took 16 seconds.
+
+**What it wrote.**
+
+| The canary's golden tensors | |
+|---|---|
+| The network | Seed 1's, `h2_d8_b6_host2_s1_n0.1_e8.net`, as `canary` trained it |
+| The steps | FC1 and FC2 rescaled by 2⁹; FC3's converter step 2⁹ of its operands' sum, 32 of its codes' |
+| FC3's codes | −96 to 67 on the acceptance vectors and −100 to 67 on the calibration set; none held |
+| Against the tile with its format alone | 0 of 32,000 codes differ, and 0 of 256,000 hidden operands |
+| Right, of the acceptance vectors | 96.60% with the declared format, 96.80% in double precision; the same class on 99.20% |
+| Ties for the largest output | None, in either thousand |
+| Written twice | The same, byte for byte; and written again after 5j was changed, the same |
+
+grxcp keeps them in `docs/designs/canary/`, 23 artifacts of 730,780 bytes, with
+a candidate manifest and a `SHA256SUMS`, and a checker written apart from this
+harness, `pta_board_canary_golden.py`. It works every integer tensor out again
+from the inputs and the integer weights, and the double-precision logits from
+the network's file, to the last bit. Its own planted errors, 23 in its code and
+a byte changed in each of the bundle's 25 files, the manifest and `SHA256SUMS`
+among them, are all caught.
+
+**What this is not.** A frozen canary: the manifest is a candidate, and the
+freeze is Gridworkz's, on 2026-11-25. The band: no PTA run is in it, and the
+canary's run against these codes, and the band from it, come next. FC1's and
+FC2's engines: their tensors are the declared format, which a GRX930 NPU and a
+G100 have to give. The scale: no tensor carries one; it is fitted on the PTA's
+codes against `cal_fc3_codes_int8.bin`.
 
 ---
 
