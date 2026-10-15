@@ -1,89 +1,67 @@
-# wafer.space GF180MCU Submission Checklist
+# wafer.space GF180MCU submission — state of play
+
+> **Superseded as a status document, kept as the process checklist.** The September GDS in
+> `wafer_space_submission/` is **void** (see its `SUPERSEDED.md`: pre-fix RTL, SRAM
+> optimised away, no CTS). The replacement is a full LibreLane run of the wafer.space
+> project template with the core inside it — see
+> [`wafer_space_integration/README.md`](wafer_space_integration/README.md) and
+> `Claude outputs/tapeout_gds_plan.md`. This file lists what the *submission* has to
+> satisfy; the boxes stay empty until the pre-check has been run on the final GDS.
 
 ## Quick Reference
 
 | Item | Value |
 |------|-------|
 | **Slot** | 1×1 (full) |
-| **Die size** | 3.93mm × 5.12mm |
-| **Core area** | 12.92 mm² |
-| **I/O pads** | 56 default, up to 168 |
-| **Cost** | $8,000 (standard) / $7,000 (early bird) |
-| **Quantity** | 1,000 bare dies |
-| **Deadline** | 16 December 2026 |
+| **Die size** | 3932 × 5122 µm (`librelane/slots/slot_1x1.yaml`) |
+| **Core area** | 442 442 3490 4680 µm = 12.93 mm² |
+| **Pad ring** | template default: 18 power pads + 12 inputs + 40 bidir + 2 analog + clk + rst_n |
+| **Deadline** | 16 December 2026 (GDS submission) |
 
-## Files to Submit
+## What the pre-check actually enforces
 
-1. ✅ `grx930_test_chip_routed.gds` — Final GDS (with seal ring)
-2. ✅ `grx930_test_chip_routed.v` — Gate-level Verilog netlist
-3. ✅ `grx930_test_chip_routed.spef` — Parasitic extraction
-4. ✅ `pad_ring.cfg` — Pad ring configuration
-5. ✅ `drc.log` — DRC report (must be clean)
-6. ✅ `lvs.log` — LVS report (must be clean)
+From [gf180mcu-precheck](https://github.com/wafer-space/gf180mcu-precheck) (`precheck.py`):
 
-## Verification Requirements
+- [ ] one top-level cell in the GDS, matching `--top`
+- [ ] origin (0,0), dbu 0.001 µm
+- [ ] max metal layer **Metal5**
+- [ ] die dimensions match the selected slot
+- [ ] CoB cells (`gf180mcu_ws_ip__qrcode_id`, `__shuttle_id`, `__project_id`, `__marker`)
+      present exactly once, at the template's locations — *only with `--cob`*
+- [ ] pad openings match the slot's pad mask
+- [ ] density check
+- [ ] no zero-area polygons
+- [ ] KLayout antenna check
+- [ ] magic DRC
+- [ ] KLayout DRC
 
-- [ ] DRC clean (zero violations)
-- [ ] LVS clean (netlist matches layout)
-- [ ] Timing clean (setup/hold met at 50 MHz)
-- [ ] Area within budget (≤12.92 mm² core)
-- [ ] Seal ring included in GDS
-- [ ] Pad ring matches default (56 pads)
+Note the tool imports `librelane.steps.klayout`, so it needs a **LibreLane ≥ 3**
+environment (nix install per their README, or the LibreLane image) — not the OpenLane2
+2.3.10 image the OL2/core investigation uses.
 
-## Timeline
+## What the chip side already guarantees
 
-| Milestone | Date |
-|-----------|------|
-| Early bird deadline | 30 September 2026 |
-| Purchase deadline | 9 December 2026 |
-| GDS submission | 16 December 2026 |
-| Parts ship | Q2 2027 |
+- [x] **the part boots standalone**: boot ROM at `0x0001_0000` = `CORE_RESET_PC`,
+      `make sim SIM_PLUSARGS=+NO_PRELOAD` passes, `-DROM_DISABLE` control fails
+      (`README.md`, `PLAN_B_netlist_rework.md` §8)
+- [x] **pad ring compatibility by construction**: the template's `chip_top.sv` and
+      `slot_1x1.yaml` are used unmodified, so pad positions/count and the marker cells are
+      the standard 1×1 set (`wafer_space_integration/PAD_MAP.md`)
+- [x] **adapter checked**: `sh wafer_space_integration/run_adapter_lint.sh`
 
-## Cost Breakdown
+## Still to do (in order)
 
-| Item | Standard | Early Bird |
-|------|----------|------------|
-| 1×1 slot | $8,000 | $7,000 |
-| + Chip-on-board | +$1,500 | +$1,500 |
-| + Full wafer | +$2,000 | +$2,000 |
-| **Slot + COB** | **$9,500** | **$8,500** |
-| **Slot + Wafer** | **$10,000** | **$9,000** |
-
-## Per-Die Cost
-
-| Quantity | Standard | Early Bird |
-|----------|----------|------------|
-| 1,000 dies | $8.00/die | $7.00/die |
-| + COB (1,000) | $9.50/die | $8.50/die |
-
-## Design Fit Check
-
-| Component | Area | Budget |
-|-----------|------|--------|
-| Logic (30K cells) | 2.2–3.8 mm² | |
-| SRAM (64KB, 128 macros) | 2.94 mm² | |
-| Routing (30%) | 1.5–2.0 mm² | |
-| **Total** | **6.6–8.8 mm²** | **12.92 mm²** ✅ |
-
-## Commands
-
-```bash
-# Build the design
-cd c930/asic_gf180mcu
-make synth
-make pnr
-make signoff
-
-# Prepare submission
-make submit
-
-# Check results
-ls -la build/submission/
-```
+- [ ] settle the flow engine for the template run (OpenLane2 2.3.10 vs LibreLane 3 image),
+      then stage `wafer_space_integration/` into `ws/template/` on the flow box
+- [ ] pick the routing configuration from the OL2 fast-DRT arm (GRT adjustment / bottom
+      layer) and run the **full template flow from a fresh run tag** (a resumed tag reuses
+      its netlist; the RTL has changed since — caches, MMIO hold, boot ROM)
+- [ ] run the pre-check on the resulting `chip_top.gds` and fix findings
+- [ ] package for submission: GDS, gate-level netlist, SPEF, the DRC/LVS reports the
+      pre-check produced, and a README describing the part
 
 ## Contact
 
-- **wafer.space**: https://wafer.space
-- **Discord**: https://discord.gg/wafer-space
-- **Email**: info@wafer.space
-- **Address**: 143 Cecil Street, #17-04, GB Building, Singapore 069542
+- **wafer.space**: https://wafer.space · Discord: https://discord.gg/wafer-space
+- **Pre-check repo**: https://github.com/wafer-space/gf180mcu-precheck
+- **Project template**: https://github.com/wafer-space/gf180mcu-project-template

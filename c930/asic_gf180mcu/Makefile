@@ -22,7 +22,7 @@ RV_DIR    = ../rv64imac/RTL
 # GF180MCU PDK (set in environment)
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 
-.PHONY: all gates synth pnr signoff submit sim sim_gate fw clean
+.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom clean
 
 all: gates
 
@@ -115,12 +115,20 @@ submit: signoff
 # ============================================================
 # Chip-level simulation: does the chip boot?
 # ============================================================
-# The testbench (../tb/tb_grx930_test_chip.sv) preloads the 2 KB SRAM with
-# ../sw/test_chip_boot.hex -- the chip has no boot ROM, so that image is what a
-# ROM would supply in silicon -- then checks the UART banner "GRX930 OK", the
-# SRAM store/load-back pair, and the heartbeat counter. It reports
-# "RESULT: PASS" or "RESULT: FAIL" and exits non-zero on failure, which this
-# target propagates.
+# The chip boots from grx930_test_chip_rom (1 KB, base 0x0001_0000 -- the same
+# address CORE_RESET_PC holds), so the test needs no preload: it is a real
+# power-on boot, and the ROM image is generated from ../sw/test_chip_boot.hex by
+# tools/gen_bootrom.py (the `rom` target below).
+#
+# The testbench (../tb/tb_grx930_test_chip.sv) checks the UART banner
+# "GRX930 OK", the SRAM store/load-back pair, and the heartbeat counter. It
+# reports "RESULT: PASS" or "RESULT: FAIL" and exits non-zero on failure, which
+# this target propagates.
+#
+# The testbench can still preload the 2 KB SRAM image directly (dut.u_sram.mem)
+# as it did before the ROM existed; that image is now irrelevant to booting
+# (execution never reaches SRAM 0x0) but it is kept as an extra state: the
+# target passes both with and without it because the ROM is the boot source.
 #
 # The RTL used is the tapeout tree (openlane2_rtl/src, what the OL2 flow reads),
 # not ../rv64imac/RTL. The two now carry the same cache index/tag and MMIO-hold
@@ -133,9 +141,14 @@ SIM_IVERILOG  ?= iverilog
 SIM_VVP       ?= vvp
 SIM_RTL_DIR   ?= openlane2_rtl/src
 SIM_CLK_FREQ  ?= 2000000
-# Extra vvp plusargs, e.g. SIM_PLUSARGS=+NO_PRELOAD (the negative control: the
-# SRAM is left uninitialised and the target must fail) or SIM_PLUSARGS=+FW=...
+# Extra vvp plusargs, e.g. SIM_PLUSARGS=+NO_PRELOAD (skip the SRAM preload: the
+# chip must still boot from ROM) or SIM_PLUSARGS=+FW=...
 SIM_PLUSARGS  ?=
+# Extra iverilog defines. The ROM's negative control is
+#   make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE
+# which zeroes the constant ROM, so an empty SRAM has no code anywhere and the
+# target must FAIL (proving the PASS above comes from the ROM).
+SIM_DEFS      ?=
 # c930_bootrom.sv and bootrom_wrapper.sv are not in grx930_test_chip's hierarchy
 # (the OL2 run drops them as unused), but iverilog still elaborates an unused
 # module's initial block, and that $readmemh would report a missing boot.hex for
@@ -145,7 +158,7 @@ SIM_RTL        := $(filter-out $(SIM_UNUSED_ROM),$(wildcard $(SIM_RTL_DIR)/*.sv)
 
 sim: $(BUILD)
 	@echo "=== Boot test: $(TOP) with $(words $(SIM_RTL)) RTL files + ../tb/tb_grx930_test_chip.sv ==="
-	@$(SIM_IVERILOG) -g2012 -Ptb_grx930_test_chip.CLK_FREQ=$(SIM_CLK_FREQ) \
+	@$(SIM_IVERILOG) -g2012 $(SIM_DEFS) -Ptb_grx930_test_chip.CLK_FREQ=$(SIM_CLK_FREQ) \
 		-o $(BUILD)/$(TOP)_boot.vvp $(SIM_RTL) ../tb/tb_grx930_test_chip.sv || { \
 		echo "FAIL: compile error"; exit 1; }
 	@$(SIM_VVP) $(BUILD)/$(TOP)_boot.vvp $(SIM_PLUSARGS) > $(BUILD)/sim.log 2>&1 || { \
@@ -191,9 +204,38 @@ sim_gate:
 	@echo "=== Gate-level boot test PASSED ==="
 
 # Rebuild the boot firmware image from ../sw/test_chip_boot.S (needs a RISC-V
-# toolchain; the checked-in ../sw/test_chip_boot.hex is the current build).
+# toolchain; the checked-in ../sw/test_chip_boot.hex is the current build) and
+# then regenerate the ROM the chip actually boots from. Both steps belong
+# together: a hex newer than the generated ROM .sv is the exact failure mode
+# that would put stale firmware in silicon.
 fw:
 	sh ../sw/build_test_chip_fw.sh ../sw/test_chip_boot.hex
+	$(MAKE) rom
+
+# Regenerate grx930_test_chip_rom.sv from ../sw/test_chip_boot.hex (python only,
+# no toolchain). This is the ROM that ships in the layout; the module is pure
+# constant logic, so it synthesises like any other gate (see the file header for
+# why it is not a memory with initial contents).
+ROM_HEX ?= ../sw/test_chip_boot.hex
+ROM_SRC ?= $(SIM_RTL_DIR)/grx930_test_chip_rom.sv
+rom:
+	@test -f $(ROM_HEX) || { \
+		echo "FAIL: $(ROM_HEX) missing -- it is gitignored; 'make fw' builds it (needs a RISC-V toolchain)"; exit 1; }
+	python tools/gen_bootrom.py $(ROM_HEX) $(ROM_SRC)
+	@$(MAKE) --no-print-directory check_rom
+
+# Drift check: does the checked-in ROM match what the generator would emit from
+# the current hex? Catches a hand-edited ROM and a stale one, without needing
+# the RISC-V toolchain (`fw` does the update).
+check_rom:
+	@python tools/gen_bootrom.py $(ROM_HEX) $(BUILD)/rom_expect.sv >/dev/null || { \
+		echo "FAIL: generator could not read $(ROM_HEX)"; exit 1; }
+	@diff -q $(ROM_SRC) $(BUILD)/rom_expect.sv >/dev/null && \
+		echo "=== ROM in sync with $(ROM_HEX) ===" || { \
+		echo "FAIL: $(ROM_SRC) differs from a fresh generation -- run 'make rom'"; \
+		diff $(ROM_SRC) $(BUILD)/rom_expect.sv | head -20; exit 1; }
+
+
 
 # ============================================================
 # Clean

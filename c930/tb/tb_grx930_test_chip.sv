@@ -14,20 +14,31 @@
 //   4. the heartbeat counter is running (the clock is alive and the chip is not
 //      stuck in reset).
 //
-// HOW THE PROGRAM GETS IN, and why it matters for silicon: grx930_test_chip has
-// no boot ROM. Nothing in the tapeout tree instantiates c930_bootrom/
-// bootrom_wrapper, the chip's CORE_RESET_PC is 0x0, and grx930_sram_64kb has no
-// initial contents -- in silicon the core fetches whatever the SRAM powers up
-// with. This testbench therefore loads the image into the SRAM array directly
-// (dut.u_sram.mem), standing in for the ROM a tapeout needs. Without that
-// preload the same test fails: it is what `+NO_PRELOAD` runs to show, and it is
-// the negative control for this testbench.
+// HOW THE PROGRAM GETS IN: grx930_test_chip boots from grx930_test_chip_rom, a
+// 1 KB constant ROM based at 0x0001_0000 -- the address CORE_RESET_PC holds.
+// The ROM is generated from the same ../sw/test_chip_boot.hex this testbench
+// reads and holds the whole program, so the part needs nothing external at
+// power-on. Execution therefore never touches SRAM 0x0, and the SRAM image this
+// testbench preloads (dut.u_sram.mem) is an extra state rather than the boot
+// source: the test passes with and without it.
+//
+// `+NO_PRELOAD` skips that preload and is the run that matches silicon: an
+// untouched SRAM with the ROM as the only code. It must PASS -- if it does not,
+// the ROM (or its mux into the caches) is broken. The negative control is now
+// to zero the ROM instead: compile with -DROM_DISABLE (the generator emits a
+// zeroed table under that define) and run +NO_PRELOAD, which must FAIL because
+// then no code exists anywhere. That pair is what proves the PASS comes from
+// the ROM and not from some incidental execution path.
+//
+// The older c930_bootrom/bootrom_wrapper pair is still unused: the OL2 run
+// drops it as unreachable (see the Makefile's SIM_UNUSED_ROM note).
 //
 // Run:
 //   iverilog -g2012 -o vvp_out grx930_test_chip sources... ../tb/tb_grx930_test_chip.sv
-//   vvp vvp_out                                   # boots, expects RESULT: PASS
-//   vvp vvp_out +NO_PRELOAD                       # must report RESULT: FAIL
+//   vvp vvp_out                                   # boots (SRAM also preloaded), PASS
+//   vvp vvp_out +NO_PRELOAD                       # ROM-only boot, PASS
 //   vvp vvp_out +FW=<path>                        # firmware image override
+//   (compile with -DROM_DISABLE, then +NO_PRELOAD: must FAIL)
 //
 // FW_HEX default note: the file is opened relative to the working directory, so
 // both the Makefile's `../sw/...` and a repo-root `sw/...` invocation work.

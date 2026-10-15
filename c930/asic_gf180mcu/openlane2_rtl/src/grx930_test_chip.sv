@@ -2,16 +2,17 @@
 // grx930_test_chip.sv
 //
 // Stripped-down GRX930 test chip for wafer.space GF180MCU shuttle.
-// Targets the 0.5×1 slot (1.94mm × 5.12mm, 4.46 mm² core).
+// Targets the 1×1 slot (3.932mm × 5.122mm die, 12.92 mm² core).
 //
 // What's included:
 //   - 1× RV64IMAC core (5-stage in-order, compressed ISA)
-//   - 2KB I-cache + 2KB D-cache (tiny, BRAM-based)
-//   - 64KB on-chip SRAM (boot/data memory, replaces DDR)
+//   - 512 B I-cache + 512 B D-cache (INDEX_WIDTH 4; FF arrays)
+//   - 2 KB on-chip SRAM (data + stack; the RTL module keeps its old name)
+//   - 1 KB boot ROM at 0x0001_0000 — the reset PC; the chip's only code
+//     source at power-up, since the SRAM has no initial contents
 //   - Simple AXI4-Lite bus fabric (1 master, 3 slaves)
 //   - 16550-compatible UART (debug output)
-//   - 256-byte boot ROM
-//   - 56-pad ring (wafer.space default)
+//   - 74-pad wafer.space standard ring (placed outside this module)
 //
 // What's removed vs. full c930_soc_top:
 //   - No NPU (saves ~300K gates)
@@ -20,17 +21,17 @@
 //   - No L2 cache (not needed for single core)
 //   - No APLIC (simplified interrupt: just external)
 //   - No cache coherency fabric
-//   - Tiny caches (2KB vs 32KB each)
+//   - Tiny caches (512 B vs 32KB each)
 //
 // Memory map:
-//   0x0000_0000 – 0x0000_07FF : 2KB SRAM (boot + data; ≥2KB addresses alias)
-//   0x0001_0000 – 0x0001_00FF : Boot ROM (256 bytes, read-only)
+//   0x0000_0000 – 0x0000_07FF : 2 KB SRAM (≥2 KB addresses alias into it)
+//   0x0001_0000 – 0x0001_03FF : 1 KB boot ROM (read-only, reset vector)
 //   0x4000_1000 – 0x4000_100F : UART (16550, AXI4-Lite)
 //
-// Wafer.space slot: 0.5×1 (half width)
-//   Die: 1.94mm × 5.12mm (9.93 mm²)
-//   Core: 4.46 mm² (with default pad ring)
-//   I/O: 56 pads default, up to 122 with custom pad ring
+// Wafer.space slot: 1×1
+//   Die: 3.932mm × 5.122mm (20.1 mm²) — exact precheck size
+//   Core: 12.92 mm² (inside the default pad ring)
+//   I/O: 74-pad default ring (40 bidir, 13 input, 2 analog, 18 power)
 // ---------------------------------------------------------------------------
 module grx930_test_chip
 #(
@@ -99,7 +100,11 @@ module grx930_test_chip
   riscv_core_top #(
     .ICACHE_INDEX_WIDTH (4),    // Plan B shrink: 2^4 = 16 data-array sets × 32 B = 512 B I-cache data
     .DCACHE_INDEX_WIDTH (4),    // Plan B shrink: 512 B D-cache data
-    .CORE_RESET_PC      (64'h0_0000_0000)
+    // Reset into the boot ROM (0x0001_0000). The SRAM powers up uninitialised,
+    // so 0x0 is not a code source in silicon; the ROM holds the banner/self-test
+    // firmware (openlane2_rtl/src/grx930_test_chip_rom.sv, generated from
+    // sw/test_chip_boot.hex by tools/gen_bootrom.py).
+    .CORE_RESET_PC      (64'h0_0001_0000)
   ) u_cpu (
     .i_riscv_core_clk              (core_clk),
     .i_riscv_core_rst_n            (core_rst_n),
@@ -177,8 +182,45 @@ module grx930_test_chip
 
   assign dcache_rd_granted = ~icache_rd_req & dcache_rd_req;
 
-  assign sram_rd_req  = icache_rd_req | dcache_rd_granted;
+  // --- Boot ROM / SRAM address split ---------------------------------------
+  // Both memories present the same interface (256-bit line, 2-cycle latency),
+  // so which one serves an access is a pure address-range mux on the arbitrated
+  // address and the arbiter/owner pipeline above is untouched. ROM reads do not
+  // clock the SRAM (no wasted read, no spurious done pulse).
+  // Data loads from ROM space take the D-cache path and alias into the SRAM
+  // (documented limitation; the boot firmware reads only SRAM/UART data).
+  localparam logic [63:0] ROM_BASE = 64'h0000_0000_0001_0000;
+
+  logic [255:0] rom_rd_line;
+  logic         rom_rd_done;
+  wire rom_hit = (sram_rd_addr[63:10] == ROM_BASE[63:10]);
+
+  grx930_test_chip_rom #(.ROM_BASE(ROM_BASE)) u_rom (
+    .i_clk     (core_clk),
+    .i_rst_n   (core_rst_n),
+    .i_rd_addr (sram_rd_addr),
+    .o_rd_line (rom_rd_line),
+    .o_rd_done (rom_rd_done)
+  );
+
+  assign sram_rd_req  = (icache_rd_req | dcache_rd_granted) & ~rom_hit;
   assign sram_rd_addr = dcache_rd_granted ? dcache_rd_addr : icache_rd_addr;
+
+  // Which memory served the in-flight access, HELD for its whole lifetime.
+  // The live rom_hit cannot be used downstream: the I-cache controller drops
+  // its request (and address) at the done cycle, then writes the fill line ONE
+  // CYCLE LATER, so a live-address mux picks the wrong (idle) memory exactly
+  // when the line is consumed -- an undriven/older line, which is how the ROM
+  // boot silently stored X in the cache. Sampled while the request is
+  // presented, so it is valid from accept through the extra write-back cycle.
+  logic line_from_rom;
+
+  always_ff @(posedge core_clk or negedge core_rst_n) begin
+    if (!core_rst_n)
+      line_from_rom <= 1'b0;
+    else if (icache_rd_req | dcache_rd_granted)
+      line_from_rom <= rom_hit;
+  end
 
   // The SRAM reports completion two cycles after accepting a request
   // (rd_valid_p1 → rd_valid_p2), so the owner flag is pipelined in lockstep
@@ -193,17 +235,22 @@ module grx930_test_chip
     end
   end
 
-  // D-cache reads also go to SRAM (address 0x0000_0000 – 0x0000_1FFF; higher aliases)
-  // Done routing: whichever master owns the in-flight access sees completion.
-  assign icache_rd_done = sram_rd_done & ~rd_owner_p2;
-  assign dcache_rd_done = sram_rd_done &  rd_owner_p2;
+  // D-cache reads also go to SRAM (address 0x0000_0000 – 0x0000_07FF; higher
+  // aliases); addresses in the ROM window are served by the ROM instead.
+  // Done routing: whichever master owns the in-flight access sees completion,
+  // from whichever memory the (held) select names. Both memories register the
+  // done pulse from the request cycle, and the owner flag pipelines in lockstep.
+  assign icache_rd_done = (line_from_rom ? rom_rd_done : sram_rd_done) & ~rd_owner_p2;
+  assign dcache_rd_done = (line_from_rom ? rom_rd_done : sram_rd_done) &  rd_owner_p2;
 
-  // SRAM read data feeds both cache fill ports; the *_rd_done strobes above
-  // decide which side consumes a given line.  Left undriven before, which
-  // tripped Yosys' check pass (512 'used but has no driver' errors) and meant
-  // the CPU never received cache line data at all.
-  assign icache_rd_line = sram_rd_line;
-  assign dcache_rd_line = sram_rd_line;
+  // Read data feeds both cache fill ports; the *_rd_done strobes above decide
+  // which side consumes a given line.  Left undriven before, which tripped
+  // Yosys' check pass (512 'used but has no driver' errors) and meant the CPU
+  // never received cache line data at all.
+  // Both memories must HOLD their line past the done pulse for this to work:
+  // the SRAM's rd_word[] registers do, and the ROM's rd_line_r does.
+  assign icache_rd_line = line_from_rom ? rom_rd_line : sram_rd_line;
+  assign dcache_rd_line = line_from_rom ? rom_rd_line : sram_rd_line;
 
   // D-cache write-through to SRAM
   assign sram_wr_req   = dcache_wr_valid;

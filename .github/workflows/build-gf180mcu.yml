@@ -1,0 +1,131 @@
+# build-gf180mcu.yml — the chip gates in CI: one step, calling the one definition.
+#
+# WHAT THIS JOB IS
+#
+#   The environment -- a checkout, an `iverilog`, an artifact upload -- around
+#   c930/asic_gf180mcu/build/chip_gates.sh. That script is the only place the
+#   gates are written down, and it is the same file the box runs from
+#   .githooks/pre-push, so the two cannot disagree about what a gate is or how it
+#   is spelled. This workflow therefore names no gate command at all:
+#
+#     grep -nE 'make sim|check_rom|run_adapter_lint|run_cache_index_alias|run_tag_width_guard|run_cache_split_lockstep|dcache_mmio_hold|script_exec_bit' \
+#       .github/workflows/build-gf180mcu.yml | grep -vE '^[0-9]+:[[:space:]]*#'
+#     (no output: the only two hits it has are both comments -- the line above,
+#      and one about the Makefile calling `python`, not `python3`)
+#
+#   The gates themselves, and what each one is evidence of, are documented at the
+#   top of that script: the ROM boot and its -DROM_DISABLE control, the ROM/hex
+#   drift, the pad-ring adapter and pad map, the cache index/tag gates, the
+#   cache-copy lockstep and the MMIO read hold. To run them locally:
+#
+#     bash c930/asic_gf180mcu/build/chip_gates.sh
+#
+# WHY THERE ARE NO PATH FILTERS
+#
+#   The version of this file this replaces ran only when c930/rtl, c930/rv64imac
+#   or c930/asic_gf180mcu changed, and then spent three hours in a Docker image
+#   building a GDS that is not the submission path any more. A path filter is a
+#   way of not gating: the ROM is generated from c930/sw/test_chip_boot.hex, the
+#   gates live in c930/tb, and the adapter reads the tapeout tree, so a one-line
+#   firmware change that would put stale code in silicon is exactly the change a
+#   filter would skip. The whole job is seconds, so every push runs it.
+#
+# WHY THE RUNNER IS PINNED TO 24.04
+#
+#   Not `ubuntu-latest`: that label begins migrating to 26.04 in October 2026, so
+#   it would change the simulator under this gate without anyone choosing it.
+#   22.04 is the same problem from the other side -- past its deprecation, its
+#   jobs are subject to brownouts. 24.04 is supported, and the install step prints
+#   the `iverilog` it gets, so the version in the log is the version that ran.
+#   A simulator version is part of a gate: these checks were written and verified
+#   with Icarus 11.0, and oss-cad-suite's Icarus 14 refuses the tapeout tree at
+#   elaboration (`riscv_core_csr_unit.sv:436 error: Unable to bind wire/reg/memory
+#   'intr_trap_pc' in ... trap_setup_proc`). If a green here ever needs that
+#   fixed, it is the RTL that gets fixed, not the gate.
+#
+# WHEN NO RUNNER COMES
+#
+#   As of 2026-10-14 this repo's jobs do not get a hosted runner: a run is created
+#   and then sits queued (18m on 22.04, then 12m+ on 24.04), and so does a minimal
+#   `ubuntu-latest` job on a scratch branch, so it is not this file. The last real
+#   allocation was 2026-10-03T23:04Z. The repo is public, not disabled or
+#   archived, Actions is enabled with all actions allowed, and GitHub was
+#   operational, so it is account-side (billing/spending limit or a restriction)
+#   and needs Settings -> Billing -> Actions or Support. This workflow is left
+#   correct rather than worked around, and .githooks/pre-push is what covers the
+#   gap in the meantime -- same script, on the box.
+#
+# A NOTE ON THIS FILE'S OWN VALIDITY
+#
+#   A workflow that does not parse never runs any gate, and GitHub says only
+#   "Invalid workflow file" (with a line number, if you open the run). The trap is
+#   an unquoted `: ` inside a plain scalar -- a gate name like "one definition: the
+#   script" is enough. Every value in here that contains one is quoted, and the
+#   shape of the file is checked the way it can be checked locally:
+#
+#     python -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yml
+
+name: Silicon gates (GF180MCU)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silicon-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    # Quoted on purpose: an unquoted `: ` in a plain scalar is what makes GitHub
+    # report "Invalid workflow file", and a value like this one is exactly how it
+    # happens. See the note at the end of the header.
+    name: "Chip gates (one definition: build/chip_gates.sh)"
+    # Supported label, and not one that is mid-migration: see the header for why
+    # 22.04 (deprecated, brownouts) and ubuntu-latest (moving to 26.04) are both
+    # wrong pins here.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog
+          # The gate script's ROM targets call `python`, not `python3` (the
+          # Makefile's rom/check_rom), so guarantee that name resolves.
+          command -v python || sudo apt-get install -y -qq python-is-python3
+          iverilog -V | head -1
+          vvp -V | head -1
+          make --version | head -1
+          python --version
+
+      # One step, because there is one definition. It runs every gate even when an
+      # earlier one fails and reports each verdict, so this log is the whole
+      # picture rather than the first failure. With a missing toolchain it reports
+      # the affected gates BLOCKED -- which is a failure -- instead of quietly
+      # checking less, so the step runs even if the install above failed.
+      - name: Chip gates
+        if: always()
+        run: bash c930/asic_gf180mcu/build/chip_gates.sh
+
+      # The logs are the answer to "what did it actually say?", and the summary is
+      # the table the script also posts to the step summary.
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chip-gate-logs
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/chip_gates_summary.md
+            c930/asic_gf180mcu/build/*.log
+            c930/asic_gf180mcu/build/cache_alias_sim/*.log

@@ -10,6 +10,22 @@ and a second core using the MMIO bridge before the fill ended. On the four-core
 SoC the third is supplied by the parked cores, which poll their release
 registers through that bridge every eight hundred cycles or so each.
 
+**Ported to the ASIC tree** 2026-10-11
+(`c930/asic_gf180mcu/openlane2_rtl/src/riscv_core_dcache_top.sv`). That tree was
+copied before the fix of 2026-10-03, so the netlist going to the shuttle still
+fed the live bus input to a load waiting in `MMIO_RD_RETIRE`. The port is the
+same three pieces: the two `mmio_rd_data_r/held` declarations, the `MMIO_RD_DATA_REG`
+latch with the `i_mmio_read_done ? live : latched` assign, and `dcache_mux`'s
+third input moved from `i_mmio_read_data` to `mmio_rd_data_held`. Evidence: the
+gate below against the pre-port tree gives this doc's signature (`FATAL … 4
+checks`, vvp exit 1) and against the ported tree `[PASS] … every check` (exit 0);
+verilator lint is unchanged at 80 warnings over the same 7 types; yosys shows the
+port costs one 64-bit `$adff` and one `$mux`, with the cache arrays still mapped
+to `$mem_v2`. On the 1×1 single-core test chip the third precondition cannot
+arise (the UART is the only MMIO slave and its `s_axi_rdata` register holds the
+last read), so for that die this is a question removed rather than a measured
+failure; any multi-core part built from this tree needs it.
+
 ## 1. What was seen
 
 `sw/pta_test.c` records `PTA_ERR_FOUND` after a calibration. On PTM-B it

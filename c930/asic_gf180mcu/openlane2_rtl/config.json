@@ -9,7 +9,7 @@
     "PL_MAX_DISPLACEMENT_X": 1500,
     "PL_MAX_DISPLACEMENT_Y": 500,
     "GRT_ALLOW_CONGESTION": true,
-    "GRT_ADJUSTMENT": 0.0,
+    "GRT_ADJUSTMENT": 0.2,
     "RT_MIN_LAYER": "Metal1",
     "FP_SIZING": "absolute",
     "DIE_AREA": "0 0 3930 5120",
