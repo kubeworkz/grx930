@@ -1,0 +1,192 @@
+# fast-path-canary.yml — prove the push fast path end to end, on a schedule.
+#
+# WHY THIS EXISTS BESIDE THE WATCHDOG
+#
+#   The watchdog on the build machine answers two questions: is the listener
+#   process alive in the distro, and does GitHub call that runner online. Neither is
+#   the question that matters. A process can be alive while the
+#   runner is disconnected; the labels it registered with can stop matching the
+#   labels a workflow asks for; the simulator can go missing; the gate definition
+#   can be broken. Every one of those is invisible to a process check and obvious
+#   the moment a real job is scheduled.
+#
+#   So this is a real job. It asks for the same labels a push asks for, asserts
+#   that it was picked up promptly, checks the toolchain, and runs the same
+#   c930/asic_gf180mcu/build/chip_gates.sh a push runs. If any of that stops being
+#   true, this fails -- and a failed run is a notification, sent by GitHub, which
+#   does not require the build machine to be able to send anything at all.
+#
+# WHY A SEPARATE FILE
+#
+#   A `schedule:` on build-gf180mcu.yml would also schedule that file's hosted
+#   `gates` job -- the one that already waits hours for a runner. An hourly queue
+#   of those is noise, not evidence. This file only ever asks for the self-hosted
+#   labels, so what it queues for and what a push queues for are the same runner.
+#
+# THE TWO ASSERTIONS NOBODY ELSE CAN MAKE
+#
+#   * that the fast path is fast. The job reads its own job record and compares
+#     `started_at` with `created_at`: the same measurement the watchdog takes for
+#     pushes, taken from GitHub's timestamps rather than the runner's clock. A fast
+#     path that takes ten hours is not a fast path, and only a job can say so.
+#   * that the gates still pass on that machine. The gates step below is the same
+#     script a push runs, run by the same runner, so a green canary is evidence
+#     about pushes.
+#
+# WHY IT IS SCHEDULED AT :17
+#
+#   GitHub delays scheduled runs at the top of the hour under load. That delay
+#   lands in `created_at` as well, so it would not corrupt the measurement -- but a
+#   job that starts late for a reason nobody can see is a bad canary. :17 is an
+#   hour nobody's cron pile-up is at.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#
+#   It names no gate. The gates are c930/asic_gf180mcu/build/chip_gates.sh and stay
+#   there; this file decides when to ask and what counts as an answer.
+#
+# READING A FAILURE
+#
+#   "Was this picked up promptly?" failing means the fast path was slow or down, and
+#   the number in its log is how long a push would have waited. A failure in "Chip
+#   gates" is the machine, not the schedule. A run stuck in `queued` means the
+#   runner itself never came, which is exactly what that watchdog is for -- and its
+#   log will say whether the listener was running at the time.
+
+name: Fast path canary (self-hosted)
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:      # so a person can ask the same question on demand
+
+permissions:
+  contents: read
+  actions: read           # this job reads its own job record, below
+
+concurrency:
+  group: fast-path-canary
+  cancel-in-progress: false
+
+env:
+  # A push is picked up in single-digit seconds here (measured: 3-6s). Five minutes
+  # is generous on purpose: this is a canary for "the fast path stopped being fast",
+  # not a stopwatch on the good case.
+  CANARY_MAX_WAIT_MINUTES: '5'
+
+jobs:
+  canary:
+    name: "Canary: the fast path, end to end"
+    runs-on: [self-hosted, Linux, X64, grx930-gates]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The hosted image has `python-is-python3`; this one does not, and the ROM
+      # targets call `python`. Built under RUNNER_TEMP, so the machine is unchanged.
+      - name: Make `python` resolve
+        run: |
+          shim="$RUNNER_TEMP/python-shim"
+          mkdir -p "$shim"
+          ln -sf "$(command -v python3)" "$shim/python"
+          echo "$shim" >> "$GITHUB_PATH"
+
+      # continue-on-error so the gates below still run and report their own verdict:
+      # one broken thing here should not hide the others.
+      - name: Was this picked up promptly?
+        id: pickup
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, sys, urllib.error, urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          run = os.environ['GITHUB_RUN_ID']
+          limit = float(os.environ.get('CANARY_MAX_WAIT_MINUTES', '5'))
+
+          url = f'https://api.github.com/repos/{repo}/actions/runs/{run}/jobs?per_page=100'
+          req = urllib.request.Request(url, headers={
+              'Accept': 'application/vnd.github+json',
+              'User-Agent': 'grx930-fast-path-canary',
+          })
+          token = os.environ.get('GH_TOKEN')
+          if token:
+              req.add_header('Authorization', f'Bearer {token}')
+
+          # Everything below this line is the same whether the call worked or not:
+          # no answer is a failure, never a quiet pass. An empty token is not sent as
+          # a header, because a present-but-empty Authorization header is a 401 rather
+          # than the anonymous request it looks like.
+          try:
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  data = json.load(response)
+          except Exception as exc:
+              print(f'::error::could not read this run\'s own job record ({exc!r}), so '
+                    'the latency of this canary is unknown -- which is not the same as good')
+              sys.exit(1)
+
+          jobs = data.get('jobs') or []
+          if not jobs:
+              print('::error::GitHub returned no job record for this run, so the '
+                    'latency of this canary is unknown -- which is not the same as good')
+              sys.exit(1)
+
+          job = jobs[0]
+          started, created = job.get('started_at'), job.get('created_at')
+          if not started or not created:
+              print(f'::error::nothing to measure: created={created} started={started}')
+              sys.exit(1)
+
+          def at(stamp):
+              return datetime.datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(
+                  tzinfo=datetime.timezone.utc)
+
+          waited = (at(started) - at(created)).total_seconds() / 60.0
+          print(f"runner that served this job: {job.get('runner_name')!r}")
+          print(f"labels it matched: {job.get('labels')}")
+          print(f'queued for {waited:.1f} minutes (the limit here is {limit:.0f})')
+          if waited > limit:
+              print(f'::error::the fast path took {waited:.1f} minutes to pick this job '
+                    f'up, so a push would have waited at least that long')
+              sys.exit(1)
+          print('picked up promptly')
+          PY
+
+      - name: Report the toolchain that will run the gates
+        run: |
+          iverilog -V | head -1
+          vvp -V | head -1
+          make --version | head -1
+          python --version
+
+      - name: Chip gates
+        if: always()
+        run: bash c930/asic_gf180mcu/build/chip_gates.sh
+
+      # Failures only: a canary that uploads an artifact every hour is a directory
+      # nobody reads, and the log of a passing run is already in the run itself.
+      - name: Upload gate logs (only when something failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-gate-logs
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/chip_gates_summary.md
+            c930/asic_gf180mcu/build/*.log
+            c930/asic_gf180mcu/build/cache_alias_sim/*.log
+
+      # The one verdict, after both halves have had their say.
+      - name: Verdict
+        if: always()
+        run: |
+          if [ "${{ steps.pickup.outcome }}" != "success" ]; then
+            echo "::error::this canary was not picked up promptly -- see the step above for the number"
+            exit 1
+          fi
+          echo "the fast path answered: scheduled, picked up, toolchain present, gates run"
