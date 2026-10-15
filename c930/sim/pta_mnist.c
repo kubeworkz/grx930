@@ -85,6 +85,17 @@
  * and have --sumnoise on theirs.  The network is written with its N, and
  * eval runs it with that --host and no other.  At N of nought everything is
  * what it was: the file, the training and every line.
+ *
+ * And the first board's canary as a golden manifest has it (pta_mnist
+ * golden): a network of two hidden layers, both the host's, put through its
+ * declared format image by image and written as raw tensors.  FC1 and FC2
+ * are the host's, exactly, as eval --host runs them; FC2's operands become
+ * FC3's activation codes by the contract's quantiser; FC3's exact sum, in
+ * the codes' own units, is given, and the converter's code of it, which is
+ * the declared reference; and the class, the largest code at its step with
+ * its bias.  Beside them a double-precision pass of the network as trained,
+ * for the task's quality.  It runs the same images through the tile with
+ * its format alone and says how many codes differ: none, or it fails.
  * A light (--src, --srcline, --srcflat) is the tile's: with layers on the
  * host it lights the rest, and what a host does for its lines, read with
  * --levelprobe and applied with --levelfix, it does to the tile's layers'
@@ -111,6 +122,8 @@
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
  *                   [--sumnoise F] [--epochs N] [--host N]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
+ *   pta_mnist golden --data DIR --net NET --out DIR --abits B --adcbits B --rows R --cols C
+ *                   [--images N] [--cal M]
  */
 #include "pta_tile_model.h"
 
@@ -2530,6 +2543,327 @@ static int scale_fix(const probe *p, const host_net *ht, const host_net *hn, int
     return 0;
 }
 
+/*
+ * The canary's golden tensors (pta_mnist golden).  golden_image() puts one
+ * image through a network of two hidden layers, both the host's, in its
+ * declared format: each hidden layer's sums, bias, ReLU and rescale as the
+ * host runs them (tile_batch()'s host path), at the operands' full width;
+ * then the last layer's activation codes, q(x, abits) in units of its own
+ * step, and its weight codes the same at wbits; their exact sum in those
+ * units; and the converter's code of it, which is pta_element()'s with no
+ * impairment: the sum at the tile's own scale, floored at the step 2^S and
+ * rounded half up, and held to the converter's codes.  A code held is a
+ * range fault, and is counted.  The class is the largest of each code at
+ * its step with its bias, the first of them if two are.
+ */
+/* floor(v / 2^s), for v of either sign, as the tile's arithmetic shift has it. */
+static int64_t floor_shift(int64_t v, int s)
+{
+    return v >= 0 ? v >> s : ~((~v) >> s);
+}
+
+/* The class: the largest code at its step with its bias; of two the same,
+ * the first. */
+static int golden_class(const int8_t *codes, const int64_t *b, int S)
+{
+    int64_t best = 0;
+    int o, cls = 0;
+    for (o = 0; o < N_OUT; ++o) {
+        const int64_t v = (int64_t)codes[o] * ((int64_t)1 << S) + b[o];
+        if (o == 0 || v > best) {
+            best = v;
+            cls  = o;
+        }
+    }
+    return cls;
+}
+
+static int golden_image(const host_net *hn, int32_t *const *q, int abits, int wbits, int adc_bits, int S,
+                        const int32_t *a0, int32_t *a1, int32_t *a2, uint8_t *ca, int32_t *sums, int8_t *codes,
+                        long *clipped)
+{
+    const int D = hn->din, H = hn->hidden;
+    const int hA = abits > 0 && abits < D ? D - abits : 0, hW = wbits > 0 && wbits < D ? D - wbits : 0;
+    const int64_t amax = ((int64_t)1 << (D - 1)) - 1, lim = (int64_t)1 << (adc_bits - 1);
+    const int32_t *src = a0;
+    int32_t *dst;
+    int l, n, k, o;
+    for (l = 0; l < H; ++l) {
+        const int in = layer_in(l);
+        dst = l == 0 ? a1 : a2;
+        for (n = 0; n < N_HID; ++n) {
+            int64_t v = 0;
+            for (k = 0; k < in; ++k)
+                v += (int64_t)src[k] * q[l][n * in + k];
+            v += hn->b[l][n];
+            v = round_shift(v > 0 ? v : 0, hn->sh[l]);
+            dst[n] = (int32_t)(v > amax ? amax : v);
+        }
+        src = dst;
+    }
+    for (k = 0; k < N_HID; ++k)
+        ca[k] = (uint8_t)(contract_quant(a2[k], abits, D) >> hA);
+    for (o = 0; o < N_OUT; ++o) {
+        int64_t sum = 0, tq;
+        for (k = 0; k < N_HID; ++k)
+            sum += (int64_t)ca[k] * (q[H][o * N_HID + k] / ((int32_t)1 << hW));
+        sums[o] = (int32_t)sum;
+        tq = floor_shift(floor_shift(sum * ((int64_t)1 << (hA + hW)) * 256, S) + 128, 8);
+        if (tq > lim - 1) { tq = lim - 1; ++*clipped; }
+        if (tq < -lim)    { tq = -lim;    ++*clipped; }
+        codes[o] = (int8_t)tq;
+    }
+    return golden_class(codes, hn->b[H], S);
+}
+
+/* One image through the network as trained, in double precision: its weights
+ * and biases as they are, the pixels over 255, and no quantiser anywhere. */
+static void golden_float(const mlp *net, const uint8_t *px, double *logits)
+{
+    const int H = net->hidden;
+    double x[N_IN], h[2][N_HID];
+    int l, n, k;
+    for (k = 0; k < N_IN; ++k)
+        x[k] = px[k] / 255.0;
+    for (l = 0; l <= H; ++l) {
+        const int in = layer_in(l), out = layer_out(H, l);
+        const double *src = l == 0 ? x : h[(l - 1) & 1];
+        for (n = 0; n < out; ++n) {
+            double z = net->b[l][n];
+            for (k = 0; k < in; ++k)
+                z += (double)net->w[l][n * in + k] * src[k];
+            if (l < H)
+                h[l & 1][n] = z > 0.0 ? z : 0.0;
+            else
+                logits[n] = z;
+        }
+    }
+}
+
+static int write_raw(const char *dir, const char *name, const void *p, size_t bytes)
+{
+    char path[1024];
+    FILE *f;
+    int ok;
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    f = fopen(path, "wb");
+    ok = f && fwrite(p, 1, bytes, f) == bytes;
+    if (f && fclose(f) != 0)
+        ok = 0;
+    if (!ok)
+        fprintf(stderr, "pta_mnist: cannot write %s\n", path);
+    return ok ? 0 : -1;
+}
+
+/* Little-endian, whatever the host's order. */
+static void put_le32(uint8_t *b, uint32_t v)
+{
+    b[0] = (uint8_t)v;
+    b[1] = (uint8_t)(v >> 8);
+    b[2] = (uint8_t)(v >> 16);
+    b[3] = (uint8_t)(v >> 24);
+}
+
+static void put_le64(uint8_t *b, uint64_t v)
+{
+    put_le32(b, (uint32_t)v);
+    put_le32(b + 4, (uint32_t)(v >> 32));
+}
+
+static int cmd_golden(int argc, char **argv)
+{
+    static const char *const names[] = {"--data", "--net", "--out", "--abits", "--adcbits", "--rows", "--cols",
+        "--images", "--cal", NULL};
+    const char *data = opt(argc, argv, "--data", NULL), *path = opt(argc, argv, "--net", NULL);
+    const char *out = opt(argc, argv, "--out", NULL);
+    const int abits = atoi(opt(argc, argv, "--abits", "0")), adc_bits = atoi(opt(argc, argv, "--adcbits", "0"));
+    const int images = atoi(opt(argc, argv, "--images", "1000")), cal = atoi(opt(argc, argv, "--cal", "1000"));
+    mlp net_s, *net = &net_s;
+    host_net hn;
+    dataset tr, te;
+    int32_t *q[MAX_L], a1[N_HID], a2[N_HID];
+    int S[MAX_L];
+    int set, i, k, l, o, H, total;
+    long clipped = 0, differ = 0, act_differ = 0, right = 0, hp_right = 0, hp_agree = 0;
+    int32_t *a0 = (int32_t *)malloc((size_t)MAX_M * N_IN * sizeof(int32_t));
+    batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+    gemm_buf *g = NULL;
+    pta_cfg cfg[MAX_L];
+    pta_tile tile;
+    pta_device dev;
+
+    tile_rows = atoi(opt(argc, argv, "--rows", "0"));
+    tile_cols = atoi(opt(argc, argv, "--cols", "0"));
+    if (check_opts(argc, argv, names) != 0 || !data || !path || !out || abits < 1 || abits > 8 ||
+        adc_bits < 2 || adc_bits > 15 || tile_rows < N_HID || tile_cols < 1 || images < 1 || images > N_TEST ||
+        cal < 0 || cal > N_ALL - N_TRAIN) {
+        fprintf(stderr, "pta_mnist golden: --data DIR --net NET --out DIR --abits 1..8 --adcbits 2..15 --rows R "
+                        "--cols C [--images 1..%d] [--cal 0..%d]: R has to hold the last layer's %d inputs in "
+                        "one shot\n", N_TEST, N_ALL - N_TRAIN, N_HID);
+        return 2;
+    }
+    if (!a0 || !bw || load_net(path, net) != 0 || load_mnist(data, &tr, &te) != 0)
+        return 2;
+    H = net->hidden;
+    if (H != 2 || net->host != H || net->din != 8) {
+        fprintf(stderr, "pta_mnist: %s is not a canary: two hidden layers, both the host's, at 8 bits\n", path);
+        return 2;
+    }
+    /* the cut is a whole layer, as eval's is on any tile but the core's, and
+     * the buffers are the cut's */
+    gemm_k = tile_rows * ((N_IN + tile_rows - 1) / tile_rows);
+    gemm_n = tile_cols * ((N_HID + tile_cols - 1) / tile_cols);
+    if (!(g = gemm_alloc()) || host_setup(&hn, net, &tr) != 0)
+        return 2;
+    adc_setup(&hn, net, &tr, adc_bits, S);
+    for (l = 0; l <= H; ++l)
+        q[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+    quant_weights(&hn, net->wbits, q);
+
+    /* the network's integers */
+    {
+        int8_t w8[N_HID * N_IN];
+        uint8_t b32[4 * N_HID];
+        static const char *const wn[3] = {"fc1_weights_int8.bin", "fc2_weights_int8.bin", "fc3_weights_int8.bin"};
+        static const char *const bn[3] = {"fc1_bias_int32.bin", "fc2_bias_int32.bin", "fc3_bias_int32.bin"};
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l), hW = l < H ? 0 : hn.din - net->wbits;
+            for (i = 0; i < P; ++i)
+                w8[i] = (int8_t)(q[l][i] / ((int32_t)1 << hW));
+            for (i = 0; i < layer_out(H, l); ++i) {
+                if (hn.b[l][i] > INT32_MAX || hn.b[l][i] < INT32_MIN) {
+                    fprintf(stderr, "pta_mnist: a bias of layer %d is past 32 bits\n", l + 1);
+                    return 2;
+                }
+                put_le32(b32 + 4 * i, (uint32_t)(int32_t)hn.b[l][i]);
+            }
+            if (write_raw(out, wn[l], w8, (size_t)P) != 0 ||
+                write_raw(out, bn[l], b32, 4 * (size_t)layer_out(H, l)) != 0)
+                return 2;
+        }
+    }
+    /* the acceptance images and the calibration images, each through the
+     * declared format and through the tile with its format alone */
+    memset(cfg, 0, sizeof cfg);
+    cfg[0].impair   = PTA_QUANT;
+    cfg[0].w_bits   = (uint32_t)net->wbits;
+    cfg[0].act_bits = (uint32_t)abits;
+    cfg[0].adc_bits = (uint32_t)adc_bits;
+    for (l = 1; l <= H; ++l)
+        cfg[l] = cfg[0];
+    for (l = 0; l <= H; ++l)
+        cfg[l].adc_shift = (uint32_t)S[l];
+    for (l = 0; l < H; ++l)
+        cfg[l].w_bits = (uint32_t)net->din;
+    tile.rows  = tile_rows;
+    tile.cols  = tile_cols;
+    tile.din_w = net->din;
+    tile.acc_w = ACC_W;
+    if (pta_device_init(&dev, &tile) != 0)
+        return 2;
+    host_layers = H;
+    for (set = 0; set < 2; ++set) {
+        const int n = set == 0 ? images : cal, first = set == 0 ? 0 : N_TRAIN;
+        const uint8_t *x = set == 0 ? te.x : tr.x;
+        int8_t *in8 = (int8_t *)malloc((size_t)n * N_IN + 1), *f1 = (int8_t *)malloc((size_t)n * N_HID + 1);
+        uint8_t *px8 = (uint8_t *)malloc((size_t)n * N_IN + 1);
+        int8_t *f2 = (int8_t *)malloc((size_t)n * N_HID + 1), *oc = (int8_t *)malloc((size_t)n * N_OUT + 1);
+        uint8_t *cin = (uint8_t *)malloc((size_t)n * N_HID + 1), *cls = (uint8_t *)malloc((size_t)n + 1);
+        uint8_t *lab = (uint8_t *)malloc((size_t)n + 1), *s32 = (uint8_t *)malloc(4 * (size_t)n * N_OUT + 1);
+        uint8_t *hp = (uint8_t *)malloc(8 * (size_t)n * N_OUT + 1);
+        uint32_t gemm = 0;
+        int base, m;
+        if (!in8 || !px8 || !f1 || !f2 || !oc || !cin || !cls || !lab || !s32 || !hp)
+            return 2;
+        for (base = 0; base < n; base += MAX_M) {
+            const int M = (n - base < MAX_M) ? n - base : MAX_M;
+            for (m = 0; m < M; ++m)
+                for (k = 0; k < N_IN; ++k)
+                    a0[m * N_IN + k] = pixel_operand(x[(size_t)(first + base + m) * N_IN + k], net->din);
+            if (tile_batch(&hn, cfg, &tile, &dev, 1, &gemm, g, M, a0, bw) < 0)
+                return 2;
+            for (m = 0; m < M; ++m) {
+                const int img = base + m;
+                int32_t sums[N_OUT];
+                int8_t codes[N_OUT];
+                uint8_t ca[N_HID];
+                double lg[N_OUT];
+                int c, hc = 0;
+                c = golden_image(&hn, q, abits, net->wbits, adc_bits, S[H], a0 + m * N_IN, a1, a2, ca, sums, codes,
+                                 &clipped);
+                for (k = 0; k < N_IN; ++k) {
+                    in8[(size_t)img * N_IN + k] = (int8_t)a0[m * N_IN + k];
+                    px8[(size_t)img * N_IN + k] = x[(size_t)(first + img) * N_IN + k];
+                }
+                for (k = 0; k < N_HID; ++k) {
+                    f1[(size_t)img * N_HID + k] = (int8_t)a1[k];
+                    f2[(size_t)img * N_HID + k] = (int8_t)a2[k];
+                    cin[(size_t)img * N_HID + k] = ca[k];
+                    act_differ += bw->a[1][m * N_HID + k] != a1[k];
+                    act_differ += bw->a[2][m * N_HID + k] != a2[k];
+                }
+                golden_float(net, x + (size_t)(first + img) * N_IN, lg);
+                for (o = 0; o < N_OUT; ++o) {
+                    union { double d; uint64_t u; } bits;
+                    oc[(size_t)img * N_OUT + o] = codes[o];
+                    put_le32(s32 + 4 * ((size_t)img * N_OUT + o), (uint32_t)sums[o]);
+                    bits.d = lg[o];
+                    put_le64(hp + 8 * ((size_t)img * N_OUT + o), bits.u);
+                    differ += bw->y[H][m * N_OUT + o] != (int64_t)codes[o] * ((int64_t)1 << S[H]);
+                    if (lg[o] > lg[hc])
+                        hc = o;
+                }
+                cls[img] = (uint8_t)c;
+                lab[img] = set == 0 ? te.y[img] : tr.y[first + img];
+                if (set == 0) {
+                    right += c == lab[img];
+                    hp_right += hc == lab[img];
+                    hp_agree += hc == c;
+                }
+            }
+        }
+        {
+            const char *const pre = set == 0 ? "" : "cal_";
+            char nm[64];
+#define GOLD(NAME, PTR, BYTES) do { snprintf(nm, sizeof nm, "%s%s", pre, NAME); \
+                                    if (write_raw(out, nm, PTR, BYTES) != 0) return 2; } while (0)
+            if (n > 0) {
+                GOLD("pixels_u8.bin", px8, (size_t)n * N_IN);
+                GOLD("inputs_int8.bin", in8, (size_t)n * N_IN);
+                GOLD("labels_u8.bin", lab, (size_t)n);
+                GOLD("fc1_relu_int8.bin", f1, (size_t)n * N_HID);
+                GOLD("fc2_relu_int8.bin", f2, (size_t)n * N_HID);
+                GOLD("fc3_act_codes_u8.bin", cin, (size_t)n * N_HID);
+                GOLD("fc3_sums_int32.bin", s32, 4 * (size_t)n * N_OUT);
+                GOLD("fc3_codes_int8.bin", oc, (size_t)n * N_OUT);
+                GOLD("class_ids_u8.bin", cls, (size_t)n);
+                GOLD("highprec_logits_f64.bin", hp, 8 * (size_t)n * N_OUT);
+            }
+#undef GOLD
+        }
+        free(in8); free(px8); free(f1); free(f2); free(oc); free(cin); free(cls); free(lab); free(s32); free(hp);
+    }
+    host_layers = 0;
+    total = (images + cal) * N_OUT;
+    printf("golden: net_seed=%d net_wbits=%d net_host=%d images=%d cal=%d cal_first=%d abits=%d adcbits=%d "
+           "tile=%dx%d sh=%d,%d S=%d code_shift=%d clipped=%ld tile_differ=%ld of %d act_differ=%ld of %d "
+           "declared_right=%.2f highprec_right=%.2f highprec_agree=%.2f\n",
+           net->seed, net->wbits, net->host, images, cal, N_TRAIN, abits, adc_bits, tile_rows, tile_cols,
+           hn.sh[0], hn.sh[1], S[H], S[H] - (net->din - abits) - (net->din - net->wbits), clipped, differ, total,
+           act_differ, 2 * (images + cal) * N_HID, 100.0 * right / images, 100.0 * hp_right / images,
+           100.0 * hp_agree / images);
+    pta_device_free(&dev);
+    host_free(&hn);
+    for (l = 0; l <= H; ++l)
+        free(q[l]);
+    gemm_free(g);
+    free(bw);
+    free(a0);
+    mlp_free(net);
+    /* none past the range, and the tile's format alone the declared reference, code for code */
+    return clipped == 0 && differ == 0 && act_differ == 0 ? 0 : 1;
+}
+
 static int cmd_eval(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--net", "--images", "--seed", "--impair",
@@ -4271,6 +4605,96 @@ static int cmd_selftest(void)
                 errors += fail("one scale on the last layer's outputs is not the least-squares slope of its reference");
             free(a2);
         }
+        /* 5j. the golden pass.  The same network, its two hidden layers made
+         *     the host's: golden_image() gives, image for image, the operands
+         *     the tile's host gives its hidden layers, and the codes the tile
+         *     gives its last layer with the format alone, each code at its step
+         *     the tile's output; the class is the largest code at its step with
+         *     its bias, and of two the same the first, which four ties made
+         *     for it hold, as the canary's vectors have none; and two steps
+         *     under the fitted one, the codes held are the sums the tile says
+         *     are past its range, one for one. */
+        {
+            int32_t g1[N_HID], g2[N_HID], gs[N_OUT];
+            int8_t gc[N_OUT];
+            uint8_t gca[N_HID];
+            long same_act = 0, same_code = 0, held = 0, tile_held = 0, gcls_ok = 0;
+            int pass2, m2, k2, o2, ties_ok = 0;
+            int8_t tc[N_OUT];
+            int64_t tb[N_OUT];
+            hn.host = H;
+            quant_weights(&hn, WB, q);
+            light_free();
+            for (pass2 = 0; pass2 < 2; ++pass2) {
+                uint32_t gemm = 0;
+                long r;
+                memset(cfg, 0, sizeof cfg);
+                for (l = 0; l <= H; ++l) {
+                    cfg[l].impair    = PTA_QUANT;
+                    cfg[l].w_bits    = WB;
+                    cfg[l].act_bits  = AB;
+                    cfg[l].adc_bits  = BITS;
+                    cfg[l].adc_shift = (uint32_t)(s_fit - 2 * pass2);
+                }
+                for (l = 0; l < H; ++l)
+                    cfg[l].w_bits = D;
+                host_layers = H;
+                r = tile_batch(&hn, cfg, &tile, &dev, 9, &gemm, g, M, a1, bw);
+                host_layers = 0;
+                for (m2 = 0; m2 < M; ++m2) {
+                    long clip = 0;
+                    int64_t best = 0;
+                    int want = 0;
+                    const int c = golden_image(&hn, q, AB, WB, BITS, s_fit - 2 * pass2, a1 + m2 * N_IN, g1, g2, gca,
+                                               gs, gc, &clip);
+                    held += clip;
+                    for (k2 = 0; k2 < N_HID; ++k2)
+                        same_act += bw->a[1][m2 * N_HID + k2] == g1[k2] && bw->a[2][m2 * N_HID + k2] == g2[k2] &&
+                                    gca[k2] == (uint8_t)(contract_quant(g2[k2], AB, D) >> (D - AB));
+                    for (o2 = 0; o2 < N_OUT; ++o2) {
+                        const int64_t v = (int64_t)gc[o2] * ((int64_t)1 << (s_fit - 2 * pass2)) + hn.b[H][o2];
+                        same_code += bw->y[H][m2 * N_OUT + o2] == (int64_t)gc[o2] * ((int64_t)1 << (s_fit - 2 * pass2));
+                        if (o2 == 0 || v > best) {
+                            best = v;
+                            want = o2;
+                        }
+                    }
+                    gcls_ok += c == want;
+                }
+                if (pass2 == 1)
+                    tile_held = r;
+                else
+                    tile_held -= r;
+            }
+            hn.host = 0;
+            /* ties, which the canary's vectors do not have: all the same, the
+             * first; two the largest, the first of them; a bias parts them;
+             * a code one under with a bias one step over, the first again */
+            memset(tc, 0, sizeof tc);
+            memset(tb, 0, sizeof tb);
+            ties_ok += golden_class(tc, tb, 9) == 0;
+            tc[3] = tc[N_OUT - 1] = 5;
+            ties_ok += golden_class(tc, tb, 9) == 3;
+            tb[N_OUT - 1] = 1;
+            ties_ok += golden_class(tc, tb, 9) == N_OUT - 1;
+            tc[3] = 4;
+            tb[3] = 513;
+            ties_ok += golden_class(tc, tb, 9) == 3;
+            {
+                const int ok5j = same_act == 2L * M * N_HID && same_code == 2L * M * N_OUT && gcls_ok == 2L * M &&
+                                 ties_ok == 4 && tile_held > 0 && held == tile_held;
+                printf("selftest: the golden pass: of %d images, at the fitted step and two under it, the hidden "
+                       "operands and the last layer's activation codes are the tile's host's, and every code at "
+                       "its step is the tile's output with the format alone: %s; the class is the largest code "
+                       "at its step with its bias: %s, and of two the same the first: %s; and two steps under, "
+                       "%ld codes held, the sums the tile says are past its range: %s\n", M,
+                       same_act == 2L * M * N_HID && same_code == 2L * M * N_OUT ? "so" : "NOT SO",
+                       gcls_ok == 2L * M ? "so" : "NOT SO", ties_ok == 4 ? "so" : "NOT SO", held,
+                       held == tile_held && tile_held > 0 ? "so" : "NOT SO");
+                if (!ok5j)
+                    errors += fail("the golden pass is not the tile's format alone");
+            }
+        }
         pta_device_free(&dev);
         host_free(&hn);
         for (l = 0; l <= H; ++l)
@@ -5814,6 +6238,8 @@ static void help(void)
            "  --epochs N      run N epochs, in place of stopping when held-out accuracy stops rising\n"
            "  --host N        the first N layers are the host's: weights at the full D bits, and no\n"
            "                  --sumnoise on their sums (0); eval runs the network with --host N\n"
+           "pta_mnist golden --data DIR --net NET --out DIR --abits B --adcbits B --rows R --cols C\n"
+           "                 [--images N] [--cal M]   the canary's golden tensors, in its declared format\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
            "  --images N      first N test images (10000)\n"
            "  --seed S        model reset and per-GEMM seeds (1)\n"
@@ -5885,6 +6311,8 @@ int main(int argc, char **argv)
         return cmd_train(argc, argv);
     if (argc >= 2 && strcmp(argv[1], "eval") == 0)
         return cmd_eval(argc, argv);
+    if (argc >= 2 && strcmp(argv[1], "golden") == 0)
+        return cmd_golden(argc, argv);
     if (argc == 4 && strcmp(argv[1], "invert") == 0) {
         long len = 0, n;
         uint8_t *b = read_file(argv[2], &len);
