@@ -79,6 +79,12 @@
  * images would fit themselves, which no calibration knows and no scale
  * betters, with what it leaves.  The run's other figures are what they
  * were.
+ * train --host N trains a network whose first N layers are a digital
+ * engine's, as eval --host N runs them: their weights at the full D bits
+ * and their sums with no tile noise, where the layers after are at --wbits
+ * and have --sumnoise on theirs.  The network is written with its N, and
+ * eval runs it with that --host and no other.  At N of nought everything is
+ * what it was: the file, the training and every line.
  * A light (--src, --srcline, --srcflat) is the tile's: with layers on the
  * host it lights the rest, and what a host does for its lines, read with
  * --levelprobe and applied with --levelfix, it does to the tile's layers'
@@ -103,7 +109,7 @@
  *
  *   pta_mnist selftest
  *   pta_mnist train --data DIR --din D --wbits B --seed S --out NET [--from NET] [--hidden H]
- *                   [--sumnoise F] [--epochs N]
+ *                   [--sumnoise F] [--epochs N] [--host N]
  *   pta_mnist eval  --data DIR --net NET [options]        (pta_mnist help)
  */
 #include "pta_tile_model.h"
@@ -195,8 +201,9 @@ static double hid_clip[MAX_HID], w1_clip;
 #define TEST_HOURS  46.0
 #define PI          3.14159265358979323846
 
-/* PTAMLP2 is one hidden layer, laid out as it always was; PTAMLP3 says how many. */
-static const char MAGIC[8] = "PTAMLP2", MAGIC_DEEP[8] = "PTAMLP3";
+/* PTAMLP2 is one hidden layer, laid out as it always was; PTAMLP3 says how many;
+ * PTAMLP4 says how many and how many of the first are the host's (train --host). */
+static const char MAGIC[8] = "PTAMLP2", MAGIC_DEEP[8] = "PTAMLP3", MAGIC_HOST[8] = "PTAMLP4";
 
 typedef struct {
     int      n;
@@ -216,6 +223,7 @@ typedef struct {
     int      from_bits, from_epochs;  /* the network it started from, or 0 */
     double   val_acc, test_acc; /* digital, on the quantised weights */
     int      hidden;
+    int      host;              /* its first layers, trained as a digital engine's: 0 for none */
     float   *w[MAX_L];          /* layer l, row n: its output n's input weights */
     float   *b[MAX_L];
 } mlp;
@@ -223,6 +231,7 @@ typedef struct {
 /* The network as the host drives the tile. */
 typedef struct {
     int      din, hidden;
+    int      host;              /* the network's first layers trained as the host's, at D bits */
     int32_t *w[MAX_L];          /* weight operands, w * 2^(D-1) */
     int64_t *b[MAX_L];          /* biases in their layer's output units */
     int      sh[MAX_HID];       /* hidden layer l's rescale: a = round(h / 2^sh[l]) */
@@ -376,6 +385,13 @@ static int32_t pixel_operand(uint8_t p, int din)
 static int64_t round_shift(int64_t v, int s)
 {
     return s == 0 ? v : (v + ((int64_t)1 << (s - 1))) >> s;
+}
+
+/* The bits a layer's weights are trained and run at: a layer of the host's is a
+ * digital engine's, at the full D bits, and every other is at the network's. */
+static int layer_wbits(int host, int l, int din, int wbits)
+{
+    return l < host ? din : wbits;
 }
 
 static void quantise(const float *w, float *wq, int n, int din, int bits)
@@ -587,9 +603,15 @@ typedef struct {
  * no draw is made and the network is the one this always trained.
  *
  * epochs, if it is not zero, is how many to run, in place of stopping when the
- * held-out accuracy first fails to rise. */
-static void train(mlp *net, const dataset *tr, const dataset *te, int din, int wbits, int seed,
-                  const mlp *start, int verbose, double sumnoise, int epochs, train_report *rep)
+ * held-out accuracy first fails to rise.
+ *
+ * host, if it is not zero, is how many of the first layers are the host's: a
+ * digital engine's, as eval --host runs them.  Their weights are rounded at
+ * the full din bits and not at wbits, and their sums are given no noise.  At
+ * nought every layer is the tile's, as it always was. */
+static void train(mlp *net, const dataset *tr, const dataset *te, int din, int wbits, int host,
+                  int seed, const mlp *start, int verbose, double sumnoise, int epochs,
+                  train_report *rep)
 {
     const int H = net->hidden, L = H + 1;
     uint64_t ri = 0x243F6A8885A308D3ull ^ (uint64_t)(uint32_t)seed;                /* init */
@@ -613,9 +635,10 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
     memset(mb, 0, sizeof mb);
     memset(vb, 0, sizeof vb);
 
-    memcpy(net->magic, H == 1 ? MAGIC : MAGIC_DEEP, sizeof MAGIC);
+    memcpy(net->magic, host ? MAGIC_HOST : H == 1 ? MAGIC : MAGIC_DEEP, sizeof MAGIC);
     net->din   = din;
     net->wbits = wbits;
+    net->host  = host;
     net->seed  = seed;
     if (start) {
         for (l = 0; l < L; ++l) {
@@ -652,7 +675,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
             const int bs = (N_TRAIN - first < BATCH) ? N_TRAIN - first : BATCH;
             int j;
             for (l = 0; l < L; ++l) {
-                quantise(net->w[l], wq[l], layer_size(H, l), din, wbits);
+                quantise(net->w[l], wq[l], layer_size(H, l), din, layer_wbits(host, l, din, wbits));
                 memset(g[l], 0, (size_t)layer_size(H, l) * sizeof(float));
                 memset(gb[l], 0, sizeof gb[l]);
             }
@@ -673,7 +696,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                     float zz = net->b[0][n];
                     for (k = 0; k < cnt; ++k)
                         zz += row[nz[k]] * x[k];
-                    if (sumnoise > 0.0)
+                    if (sumnoise > 0.0 && host < 1)
                         zz += sum_noise(zz - net->b[0][n], sumnoise, ms[0], &rn, &bsq[0], &nsq[0]);
                     z[0][n] = zz;
                     h[0][n] = zz > 0.0f ? zz : 0.0f;
@@ -684,7 +707,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                         float zz = net->b[l][n];
                         for (k = 0; k < N_HID; ++k)
                             zz += row[k] * h[l - 1][k];
-                        if (sumnoise > 0.0)
+                        if (sumnoise > 0.0 && l >= host)
                             zz += sum_noise(zz - net->b[l][n], sumnoise, ms[l], &rn, &bsq[l], &nsq[l]);
                         z[l][n] = zz;
                         h[l][n] = zz > 0.0f ? zz : 0.0f;
@@ -694,7 +717,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
                     float zz = net->b[H][o];
                     for (n = 0; n < N_HID; ++n)
                         zz += wq[H][o * N_HID + n] * h[H - 1][n];
-                    if (sumnoise > 0.0)
+                    if (sumnoise > 0.0 && H >= host)
                         zz += sum_noise(zz - net->b[H][o], sumnoise, ms[H], &rn, &bsq[H], &nsq[H]);
                     z2[o] = zz;
                     if (zz > zmax)
@@ -755,7 +778,7 @@ static void train(mlp *net, const dataset *tr, const dataset *te, int din, int w
         for (l = 0; l < L; ++l)
             rep->got[l] = ssq[l] > 0.0 ? sqrt(nsq[l] / ssq[l]) : 0.0;
         for (l = 0; l < L; ++l)
-            quantise(net->w[l], wq[l], layer_size(H, l), din, wbits);
+            quantise(net->w[l], wq[l], layer_size(H, l), din, layer_wbits(host, l, din, wbits));
         net->val_acc = digital_accuracy(net, wq, tr, N_TRAIN, N_ALL - N_TRAIN);
         net->epochs  = epoch + 1;
         if (verbose)
@@ -788,7 +811,7 @@ static void quant_weights(const host_net *hn, int wbits, int32_t *const *q)
     for (l = 0; l <= hn->hidden; ++l) {
         const int P = layer_size(hn->hidden, l);
         for (i = 0; i < P; ++i)
-            q[l][i] = contract_quant(hn->w[l][i], wbits, hn->din);
+            q[l][i] = contract_quant(hn->w[l][i], layer_wbits(hn->host, l, hn->din, wbits), hn->din);
     }
 }
 
@@ -1939,6 +1962,7 @@ static int host_setup(host_net *hn, const mlp *net, const dataset *tr)
 
     if (!ws || host_alloc(hn, D, H) != 0)
         return -1;
+    hn->host = net->host;
     for (l = 0; l <= H; ++l) {
         const int P = layer_size(H, l);
         const double g = l == 0 ? ldexp(1.0, w1_gain) : 1.0;
@@ -2127,20 +2151,59 @@ static long net_bytes(int hidden)
     return n;
 }
 
-/* The header, then the depth if it is more than one, then w and b by layer. */
-static int save_net(const char *path, const mlp *net)
+/* The header, then the depth if it is more than one or any layer is the host's,
+ * then how many are the host's if any is, then w and b by layer.  The magic says
+ * which: written here from the depth and the host's layers, and so a network
+ * with none of the host's is the file it always was. */
+static int write_net(FILE *f, const mlp *net)
 {
-    FILE *f = fopen(path, "wb");
-    int l, ok = f && fwrite(net, HEAD_BYTES, 1, f) == 1;
-    if (net->hidden > 1)
+    mlp head = *net;
+    int l, ok;
+    memcpy(head.magic, net->host ? MAGIC_HOST : net->hidden == 1 ? MAGIC : MAGIC_DEEP, sizeof MAGIC);
+    ok = f && fwrite(&head, HEAD_BYTES, 1, f) == 1;
+    if (net->hidden > 1 || net->host)
         ok = ok && fwrite(&net->hidden, sizeof(int), 1, f) == 1;
+    if (net->host)
+        ok = ok && fwrite(&net->host, sizeof(int), 1, f) == 1;
     for (l = 0; ok && l <= net->hidden; ++l) {
         const size_t P = (size_t)layer_size(net->hidden, l), B = (size_t)layer_out(net->hidden, l);
         ok = fwrite(net->w[l], sizeof(float), P, f) == P &&
              fwrite(net->b[l], sizeof(float), B, f) == B;
     }
+    return ok ? 0 : -1;
+}
+
+static int save_net(const char *path, const mlp *net)
+{
+    FILE *f = fopen(path, "wb");
+    int ok = f && write_net(f, net) == 0;
     if (f && fclose(f) != 0)
         ok = 0;
+    return ok ? 0 : -1;
+}
+
+/* Reads a network to the end of f and allocates it.  Returns 0, or -1.  A
+ * network with layers of the host's has from one to all but its last. */
+static int read_net(FILE *f, mlp *net)
+{
+    int hidden = 1, host = 0, l, ok;
+    memset(net, 0, sizeof *net);
+    ok = f && fread(net, HEAD_BYTES, 1, f) == 1;
+    if (ok && memcmp(net->magic, MAGIC_HOST, sizeof MAGIC_HOST) == 0)
+        ok = fread(&hidden, sizeof(int), 1, f) == 1 && hidden >= 1 && hidden <= MAX_HID &&
+             fread(&host, sizeof(int), 1, f) == 1 && host >= 1 && host <= hidden;
+    else if (ok && memcmp(net->magic, MAGIC_DEEP, sizeof MAGIC_DEEP) == 0)
+        ok = fread(&hidden, sizeof(int), 1, f) == 1 && hidden > 1 && hidden <= MAX_HID;
+    else
+        ok = ok && memcmp(net->magic, MAGIC, sizeof MAGIC) == 0;
+    ok = ok && mlp_alloc(net, hidden) == 0;
+    net->host = ok ? host : 0;
+    for (l = 0; ok && l <= hidden; ++l) {
+        const size_t P = (size_t)layer_size(hidden, l), B = (size_t)layer_out(hidden, l);
+        ok = fread(net->w[l], sizeof(float), P, f) == P &&
+             fread(net->b[l], sizeof(float), B, f) == B;
+    }
+    ok = ok && fgetc(f) == EOF;
     return ok ? 0 : -1;
 }
 
@@ -2148,20 +2211,7 @@ static int save_net(const char *path, const mlp *net)
 static int load_net(const char *path, mlp *net)
 {
     FILE *f = fopen(path, "rb");
-    int hidden = 1, l, ok;
-    memset(net, 0, sizeof *net);
-    ok = f && fread(net, HEAD_BYTES, 1, f) == 1;
-    if (ok && memcmp(net->magic, MAGIC_DEEP, sizeof MAGIC_DEEP) == 0)
-        ok = fread(&hidden, sizeof(int), 1, f) == 1 && hidden > 1 && hidden <= MAX_HID;
-    else
-        ok = ok && memcmp(net->magic, MAGIC, sizeof MAGIC) == 0;
-    ok = ok && mlp_alloc(net, hidden) == 0;
-    for (l = 0; ok && l <= hidden; ++l) {
-        const size_t P = (size_t)layer_size(hidden, l), B = (size_t)layer_out(hidden, l);
-        ok = fread(net->w[l], sizeof(float), P, f) == P &&
-             fread(net->b[l], sizeof(float), B, f) == B;
-    }
-    ok = ok && fgetc(f) == EOF;
+    const int ok = f && read_net(f, net) == 0;
     if (f)
         fclose(f);
     if (!ok)
@@ -2204,12 +2254,13 @@ static int load_mnist(const char *dir, dataset *tr, dataset *te)
 static int cmd_train(int argc, char **argv)
 {
     static const char *const names[] = {"--data", "--din", "--wbits", "--seed", "--out", "--from",
-        "--verbose", "--hidden", "--sumnoise", "--epochs", NULL};
+        "--verbose", "--hidden", "--sumnoise", "--epochs", "--host", NULL};
     const char *data = opt(argc, argv, "--data", NULL), *out = opt(argc, argv, "--out", NULL);
     const char *from = opt(argc, argv, "--from", NULL);
     const int din = atoi(opt(argc, argv, "--din", "16")), wbits = atoi(opt(argc, argv, "--wbits", "0"));
     const int seed = atoi(opt(argc, argv, "--seed", "1"));
     const int hidden = atoi(opt(argc, argv, "--hidden", "1"));
+    const int host = atoi(opt(argc, argv, "--host", "0"));
     const char *noise_opt = opt(argc, argv, "--sumnoise", NULL), *epochs_opt = opt(argc, argv, "--epochs", NULL);
     const double sumnoise = noise_opt ? atof(noise_opt) : 0.0;
     const int epochs = epochs_opt ? atoi(epochs_opt) : 0;
@@ -2219,10 +2270,11 @@ static int cmd_train(int argc, char **argv)
     int l;
     if (check_opts(argc, argv, names) != 0 || !data || !out || (din != 8 && din != 16) ||
         wbits < 0 || wbits > din || hidden < 1 || hidden > MAX_HID ||
-        sumnoise < 0.0 || sumnoise > 1.0 || epochs < 0 || epochs > MAX_EPOCHS) {
+        sumnoise < 0.0 || sumnoise > 1.0 || epochs < 0 || epochs > MAX_EPOCHS || host < 0 ||
+        host > hidden) {
         fprintf(stderr, "pta_mnist train: --data DIR --din 8|16 --wbits 0..D --seed S --out NET "
-                        "[--from NET] [--hidden 1..%d] [--sumnoise 0..1] [--epochs 0..%d]\n",
-                MAX_HID, MAX_EPOCHS);
+                        "[--from NET] [--hidden 1..%d] [--sumnoise 0..1] [--epochs 0..%d] "
+                        "[--host 0..H]\n", MAX_HID, MAX_EPOCHS);
         return 2;
     }
     if (from) {
@@ -2240,8 +2292,8 @@ static int cmd_train(int argc, char **argv)
     memset(&net, 0, sizeof net);
     if (mlp_alloc(&net, hidden) != 0)
         return 2;
-    train(&net, &tr, &te, din, wbits, seed, start, atoi(opt(argc, argv, "--verbose", "0")), sumnoise,
-          epochs, &rep);
+    train(&net, &tr, &te, din, wbits, host, seed, start, atoi(opt(argc, argv, "--verbose", "0")),
+          sumnoise, epochs, &rep);
     if (save_net(out, &net) != 0) {
         fprintf(stderr, "pta_mnist: cannot write %s\n", out);
         return 2;
@@ -2250,6 +2302,8 @@ static int cmd_train(int argc, char **argv)
            din, wbits, seed, net.from_bits, net.from_epochs, net.epochs, net.val_acc, net.test_acc);
     if (hidden > 1)
         printf(" hidden=%d", hidden);
+    if (host)
+        printf(" host=%d", host);
     /* Said only when asked for, so that a line without them is the line it was. */
     if (noise_opt) {
         printf(" sumnoise=%g got=", sumnoise);
@@ -2619,6 +2673,13 @@ static int cmd_eval(int argc, char **argv)
     /* A line's noise as a laser fixes it, a correction told apart and the two
      * ways of putting a network on the tile are written for a network that is
      * all on it.  A light is the tile's layers' alone, whichever they are. */
+    /* A network trained with its first layers the host's runs with those on the
+     * host, and no others. */
+    if (net->host && host != net->host) {
+        fprintf(stderr, "pta_mnist: %s was trained with its first %d layer%s the host's, and runs "
+                        "with --host %d\n", path, net->host, net->host == 1 ? "" : "s", net->host);
+        return 2;
+    }
     if (host < 0 || host > H || (host && (thermalline || hidshift || w1gain || levelpart)) ||
         (gate && !probing)) {
         fprintf(stderr, "pta_mnist: --host is how many of the network's first layers the host runs, "
@@ -2695,6 +2756,9 @@ static int cmd_eval(int argc, char **argv)
         adc_setup(hn, net, &tr, (int)cfg[0].adc_bits, S);
     for (l = 1; l <= H; ++l)
         cfg[l] = cfg[0];
+    /* The layers a network was trained with as the host's are at its full width. */
+    for (l = 0; l < net->host; ++l)
+        cfg[l].w_bits = (uint32_t)net->din;
     /* The last layer's converter, where it has a width of its own: the step is
      * still the one adc_setup() gave the run's width, unless it is fitted. */
     if (gatebits)
@@ -2899,6 +2963,10 @@ static int cmd_eval(int argc, char **argv)
     /* And the layers the host ran, when it ran any. */
     if (host)
         printf(" host=%d", host);
+    /* And the network's own, when it was trained with layers of the host's, and
+     * the width the host ran those at. */
+    if (net->host)
+        printf(" net_host=%d host_wbits=%u", net->host, cfg[0].w_bits);
     /* And the light only when there is some. */
     if (lit)
         printf(" src=%g srcline=%g srcflat=%g buses=%d srcsign=%s", src_all, src_line, src_flat,
@@ -4214,6 +4282,214 @@ static int cmd_selftest(void)
         tile_cols = COLS;
         gemm_k = MAX_K;
         gemm_n = MAX_N;
+    }
+
+    /* 5i. a network trained with its first layers the host's (train --host).
+     *     Its file says how many are, and is read back as it was written; a
+     *     network with none of the host's is the file it always was, and a
+     *     file that says none of them, or every layer, is refused.  A layer
+     *     of the host's is at the full D bits, in training and on the host,
+     *     and every other at the network's, and the host's view of the
+     *     network says which.  Training puts its noise on the tile's sums
+     *     alone: an epoch on made-up images puts none on the host's layers
+     *     and some on the last, where with none of the host's it puts some on
+     *     every layer.  With no noise, at the width the host's are at, the
+     *     two train the same network weight for weight, and at the network's
+     *     they do not: the host's layers are trained at their own width.  What
+     *     training reports of a network is its accuracy at each layer's width.
+     *     And a network of one hidden layer, that one the host's, is written
+     *     and read back as it was. */
+    {
+        const int D = 8, H = 2, WB = 6, HOST = 2;
+        const float NOISE = 0.1f;
+        mlp net, back, a[6], one;
+        dataset tr, te;
+        host_net hn, hp;
+        train_report rep[6];
+        float *wq[MAX_L];
+        int32_t *q[MAX_L], *qp[MAX_L];
+        uint64_t r6 = 0x5115ull;
+        long len_host = -1, len_plain = -1, off_grid = 0, plain_off = 0;
+        int i, k, l, n, round_trip, plain_ok, refused = 1, widths, host_view, noise_ok, same, apart;
+        int trained_at, reported, one_ok;
+        FILE *f;
+
+        memset(&net, 0, sizeof net);
+        net.din   = D;
+        net.wbits = WB;
+        net.seed  = 1;
+        mlp_alloc(&net, H);
+        for (l = 0; l <= H; ++l) {
+            for (i = 0; i < layer_size(H, l); ++i)
+                net.w[l][i] = (float)((int)(splitmix64(&r6) % 255) - 127) / 128.0f;
+            for (n = 0; n < layer_out(H, l); ++n)
+                net.b[l][n] = (float)((int)(splitmix64(&r6) % 9) - 4) / 64.0f;
+        }
+        /* the file, with two of the host's and with none */
+        net.host = HOST;
+        f = tmpfile();
+        round_trip = f && write_net(f, &net) == 0;
+        len_host = f ? ftell(f) : -1;
+        if (f)
+            rewind(f);
+        round_trip = round_trip && read_net(f, &back) == 0 && memcmp(back.magic, MAGIC_HOST, sizeof MAGIC_HOST) == 0 &&
+                     back.host == HOST && back.hidden == H && back.din == D && back.wbits == WB &&
+                     len_host == net_bytes(H) + (long)sizeof(int);
+        for (l = 0; round_trip && l <= H; ++l)
+            round_trip = memcmp(back.w[l], net.w[l], (size_t)layer_size(H, l) * sizeof(float)) == 0 &&
+                         memcmp(back.b[l], net.b[l], (size_t)layer_out(H, l) * sizeof(float)) == 0;
+        if (round_trip)
+            mlp_free(&back);
+        /* a file that says none of the host's, or every layer, is refused */
+        for (k = 0; f && k < 2; ++k) {
+            const int bad = k == 0 ? 0 : H + 1;
+            fseek(f, (long)HEAD_BYTES + (long)sizeof(int), SEEK_SET);
+            fwrite(&bad, sizeof(int), 1, f);
+            rewind(f);
+            if (read_net(f, &back) == 0) {
+                refused = 0;
+                mlp_free(&back);
+            }
+        }
+        if (f)
+            fclose(f);
+        net.host = 0;
+        f = tmpfile();
+        plain_ok = f && write_net(f, &net) == 0;
+        len_plain = f ? ftell(f) : -1;
+        if (f)
+            rewind(f);
+        plain_ok = plain_ok && read_net(f, &back) == 0 && memcmp(back.magic, MAGIC_DEEP, sizeof MAGIC_DEEP) == 0 &&
+                   back.host == 0 && len_plain == net_bytes(H);
+        if (plain_ok)
+            mlp_free(&back);
+        if (f)
+            fclose(f);
+
+        /* the widths: a rule, the host's view and its weight operands */
+        widths = layer_wbits(HOST, 0, D, WB) == D && layer_wbits(HOST, 1, D, WB) == D &&
+                 layer_wbits(HOST, H, D, WB) == WB && layer_wbits(0, 0, D, WB) == WB;
+        memset(&tr, 0, sizeof tr);
+        memset(&te, 0, sizeof te);
+        tr.n = N_ALL;
+        te.n = N_TEST;
+        tr.x = (uint8_t *)calloc((size_t)N_ALL * N_IN, 1);
+        tr.y = (uint8_t *)malloc(N_ALL);
+        te.x = (uint8_t *)calloc((size_t)N_TEST * N_IN, 1);
+        te.y = (uint8_t *)malloc(N_TEST);
+        for (i = 0; i < N_ALL + N_TEST; ++i) {
+            uint8_t *x = i < N_ALL ? tr.x + (size_t)i * N_IN : te.x + (size_t)(i - N_ALL) * N_IN;
+            for (k = 0; k < 24; ++k)
+                x[splitmix64(&r6) % N_IN] = (uint8_t)(1 + splitmix64(&r6) % 255);
+            if (i < N_ALL)
+                tr.y[i] = (uint8_t)(splitmix64(&r6) % 10);
+            else
+                te.y[i - N_ALL] = (uint8_t)(splitmix64(&r6) % 10);
+        }
+        net.host = HOST;
+        host_view = host_setup(&hn, &net, &tr) == 0;
+        net.host = 0;
+        host_view = host_view && host_setup(&hp, &net, &tr) == 0 && hn.host == HOST && hp.host == 0;
+        for (l = 0; l <= H; ++l) {
+            q[l]  = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+            qp[l] = (int32_t *)malloc((size_t)layer_size(H, l) * sizeof(int32_t));
+        }
+        if (host_view) {
+            quant_weights(&hn, WB, q);
+            quant_weights(&hp, WB, qp);
+            for (l = 0; l <= H; ++l)
+                for (i = 0; i < layer_size(H, l); ++i) {
+                    const int32_t want = contract_quant(hn.w[l][i], l < HOST ? D : WB, D);
+                    host_view &= q[l][i] == want && qp[l][i] == contract_quant(hp.w[l][i], WB, D);
+                    if (l < HOST) {
+                        off_grid  += q[l][i] % 4 != 0;
+                        plain_off += qp[l][i] % 4 != 0;
+                    } else
+                        host_view &= q[l][i] % 4 == 0;
+                }
+            host_view &= off_grid > 0 && plain_off == 0;
+            host_free(&hn);
+            host_free(&hp);
+        }
+
+        /* an epoch of training: with noise, two of the host's and none; then with
+         * none at D bits, two and none; and with none at the network's, two and none */
+        for (k = 0; k < 6; ++k) {
+            memset(&a[k], 0, sizeof a[k]);
+            mlp_alloc(&a[k], H);
+            train(&a[k], &tr, &te, D, (k == 2 || k == 3) ? D : WB, (k & 1) ? 0 : HOST, 1, NULL, 0,
+                  k < 2 ? NOISE : 0.0, 1, &rep[k]);
+        }
+        trained_at = memcmp(a[4].w[0], a[5].w[0], (size_t)layer_size(H, 0) * sizeof(float)) != 0 &&
+                     memcmp(a[4].w[1], a[5].w[1], (size_t)layer_size(H, 1) * sizeof(float)) != 0;
+        for (l = 0; l <= H; ++l) {
+            wq[l] = (float *)malloc((size_t)layer_size(H, l) * sizeof(float));
+            quantise(a[4].w[l], wq[l], layer_size(H, l), D, layer_wbits(HOST, l, D, WB));
+        }
+        reported = digital_accuracy(&a[4], wq, &tr, N_TRAIN, N_ALL - N_TRAIN) == a[4].val_acc &&
+                   digital_accuracy(&a[4], wq, &te, 0, N_TEST) == a[4].test_acc;
+        for (l = 0; l <= H; ++l)
+            free(wq[l]);
+        /* one hidden layer, the host's */
+        memset(&one, 0, sizeof one);
+        one.din   = D;
+        one.wbits = WB;
+        one.seed  = 3;
+        mlp_alloc(&one, 1);
+        one.host = 1;
+        for (l = 0; l <= 1; ++l)
+            for (i = 0; i < layer_size(1, l); ++i)
+                one.w[l][i] = (float)((int)(splitmix64(&r6) % 255) - 127) / 128.0f;
+        f = tmpfile();
+        one_ok = f && write_net(f, &one) == 0 && ftell(f) == net_bytes(1) + 2L * (long)sizeof(int);
+        if (f)
+            rewind(f);
+        one_ok = one_ok && read_net(f, &back) == 0 && back.hidden == 1 && back.host == 1 &&
+                 memcmp(back.w[1], one.w[1], (size_t)layer_size(1, 1) * sizeof(float)) == 0;
+        if (one_ok)
+            mlp_free(&back);
+        if (f)
+            fclose(f);
+        mlp_free(&one);
+        noise_ok = rep[0].got[0] == 0.0 && rep[0].got[1] == 0.0 && fabs(rep[0].got[H] - NOISE) < 0.03 &&
+                   fabs(rep[1].got[0] - NOISE) < 0.03 && fabs(rep[1].got[1] - NOISE) < 0.03 &&
+                   fabs(rep[1].got[H] - NOISE) < 0.03 && a[0].host == HOST && a[1].host == 0 &&
+                   memcmp(a[0].magic, MAGIC_HOST, sizeof MAGIC_HOST) == 0 && memcmp(a[1].magic, MAGIC_DEEP, sizeof MAGIC_DEEP) == 0;
+        same = 1;
+        apart = 0;
+        for (l = 0; l <= H; ++l) {
+            same &= memcmp(a[2].w[l], a[3].w[l], (size_t)layer_size(H, l) * sizeof(float)) == 0 &&
+                    memcmp(a[2].b[l], a[3].b[l], (size_t)layer_out(H, l) * sizeof(float)) == 0;
+            apart += memcmp(a[0].w[l], a[1].w[l], (size_t)layer_size(H, l) * sizeof(float)) != 0;
+        }
+        same &= rep[2].got[0] == 0.0 && rep[3].got[H] == 0.0 && apart == H + 1;
+        printf("selftest: a network trained with its first %d layers the host's: its file says so and is "
+               "read back as written, %ld bytes where with none of the host's it is %ld, the file it "
+               "always was: %s; a file that says none or every layer is refused: %s; the host's layers "
+               "are at %d bits and the last at %d, in training and on the host, %ld of the host's first "
+               "weights off the %d-bit grid: %s; an epoch puts noise of %.3f, %.3f and %.3f on the "
+               "three layers' sums, where with none of the host's it puts %.3f, %.3f and %.3f: %s; and "
+               "with no noise at %d bits the two train the same network, and at %d bits they do not, "
+               "the host's at their own width: %s; what training reports is the accuracy at each layer's "
+               "width: %s; and a network of one hidden layer, the host's, is read back as written: %s\n",
+               HOST, len_host, len_plain, round_trip && plain_ok ? "so" : "NOT SO", refused ? "so" : "NOT SO",
+               D, WB, off_grid, WB, widths && host_view ? "so" : "NOT SO", rep[0].got[0], rep[0].got[1],
+               rep[0].got[H], rep[1].got[0], rep[1].got[1], rep[1].got[H], noise_ok ? "so" : "NOT SO", D,
+               WB, same && trained_at ? "so" : "NOT SO", reported ? "so" : "NOT SO", one_ok ? "so" : "NOT SO");
+        if (!round_trip || !plain_ok || !refused || !widths || !host_view || !noise_ok || !same || !trained_at ||
+            !reported || !one_ok)
+            errors += fail("a network with layers of the host's is not trained, written or run as the host's");
+        for (k = 0; k < 6; ++k)
+            mlp_free(&a[k]);
+        for (l = 0; l <= H; ++l) {
+            free(q[l]);
+            free(qp[l]);
+        }
+        mlp_free(&net);
+        free(tr.x);
+        free(tr.y);
+        free(te.x);
+        free(te.y);
     }
 
     /* The tests from here on are written to D3's shape: its layers' sizes, its
@@ -5536,6 +5812,8 @@ static void help(void)
            "                  another (1, which is D3; up to 8)\n"
            "  --sumnoise F    train with Gaussian noise on every layer's sums, F of their rms (0)\n"
            "  --epochs N      run N epochs, in place of stopping when held-out accuracy stops rising\n"
+           "  --host N        the first N layers are the host's: weights at the full D bits, and no\n"
+           "                  --sumnoise on their sums (0); eval runs the network with --host N\n"
            "pta_mnist eval  --data DIR --net NET [options]\n"
            "  --images N      first N test images (10000)\n"
            "  --seed S        model reset and per-GEMM seeds (1)\n"
