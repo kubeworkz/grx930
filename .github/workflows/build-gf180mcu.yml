@@ -45,15 +45,67 @@
 #
 # WHEN NO RUNNER COMES
 #
-#   As of 2026-10-14 this repo's jobs do not get a hosted runner: a run is created
-#   and then sits queued (18m on 22.04, then 12m+ on 24.04), and so does a minimal
-#   `ubuntu-latest` job on a scratch branch, so it is not this file. The last real
-#   allocation was 2026-10-03T23:04Z. The repo is public, not disabled or
-#   archived, Actions is enabled with all actions allowed, and GitHub was
-#   operational, so it is account-side (billing/spending limit or a restriction)
-#   and needs Settings -> Billing -> Actions or Support. This workflow is left
-#   correct rather than worked around, and .githooks/pre-push is what covers the
-#   gap in the meantime -- same script, on the box.
+#   A runner does come, and this section used to say otherwise. What varies is how
+#   long the job waits for one: the same gate that takes 23-39s to run has been
+#   measured waiting 0.0m, 13.4m, 74.4m, 344.9m and 592.8m (job `created_at` to
+#   `started_at`) -- all on this label, all in this repo. The 2026-10-14 note here
+#   read the same runs as "no runner comes"; they were allocated later, hours
+#   later, and passed.
+#
+#   It is not this file, this repo, or this label. In the same window two other
+#   repos on this account showed the same spread -- samen-erp waited 4.8m, 27.9m,
+#   223.9m, 301.6m and 328.7m, grxgpu 38.8m -- while a run of this repo's own
+#   earlier push waited 0.0m. That is shared allocation latency, not a property of
+#   anything under this repo's control.
+#
+#   Ruled out with evidence, so that the check is not repeated from memory:
+#     * billing -- the repo is public, and standard hosted runners are free and
+#       unmetered for public repositories; no run here ever failed with a spending
+#       or minutes error, which is the shape that cause takes;
+#     * Actions disabled/archived -- the API says enabled, allowed_actions=all;
+#     * a runner that does not exist -- each job's labels are exactly
+#       ["ubuntu-24.04"], a standard hosted label, and no self-hosted runner is
+#       registered to this repo, so nothing here asks for one that is absent;
+#     * environment approvals -- no `environment:` in this file at all;
+#     * the concurrency group -- it holds one run per ref and cancels the older one
+#       (`cancelled` runs are visible in the list, separately from waits), and the
+#       waits here outlast every group being free.
+#
+#   GitHub's status page is not the explanation either. The status API lists
+#   incidents on 2026-10-07 (a write outage), 2026-10-12 (Actions degraded,
+#   including "queueing new Actions runs") and 2026-10-13 (run logs delayed, with
+#   workflows normal) -- and nothing for 2026-10-14/15, which is when the longest
+#   waits happened. Nor does GitHub's own hosted-runner policy describe this: a
+#   queued run not processed in 45 minutes is documented as discarded, and these
+#   were not. So the honest state is "waiting on allocation, cause not visible from
+#   here", and the way to find out whether it is account-side is a Support ticket
+#   with run ids and both timestamps, not another pin or filter in this file.
+#
+#   Re-measure rather than remember:
+#
+#     gh api repos/kubeworkz/grx930/actions/runs?per_page=10 \
+#       --jq '.workflow_runs[].id' | while read r; do
+#         gh api repos/kubeworkz/grx930/actions/runs/$r/jobs \
+#           --jq '.jobs[] | "\(.created_at) -> \(.started_at) \(.conclusion) \(.labels)"';
+#       done
+#
+#   Two things cover the gap, and neither depends on the queue:
+#
+#     * .githooks/pre-push runs this same script on the box before the push leaves
+#       it -- 124s for all nine gates -- and it stops a bad push rather than
+#       reporting one late;
+#     * the `gates-push` job below is that same script on a runner this repo owns:
+#       self-hosted, in WSL on the build machine, whose Icarus is 12.0, the version
+#       the hosted image gets. The nine gates that take 124s on the box take about
+#       30s there, and start in seconds instead of whenever the queue moves. It
+#       exists because of this section: waiting ten hours for a thirty-second
+#       verdict is the problem, and no pin in this file can fix allocation latency.
+#
+#   `gates` (hosted) stays the authority and stays on every event, so a push still
+#   gets a hosted verdict and nothing here depends on the build machine being up;
+#   `gates-push` is the early answer. That is why both run on a push rather than the
+#   fast one replacing the hosted one -- if the fast path becomes the only path, an
+#   off machine turns a push into an indefinite wait with no verdict at all.
 #
 # A NOTE ON THIS FILE'S OWN VALIDITY
 #
@@ -63,7 +115,14 @@
 #   script" is enough. Every value in here that contains one is quoted, and the
 #   shape of the file is checked the way it can be checked locally:
 #
-#     python -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yml
+#     python -c "import yaml,sys; [yaml.safe_load(open(f,encoding='utf-8')) for f in sys.argv[1:]]" .github/workflows/*.yml
+#
+#   The `encoding` is not decoration. The first line of this file carries an em
+#   dash, and on Windows -- where .githooks/pre-push runs these gates -- Python's
+#   default codec is cp1252, so the command without it dies with
+#   UnicodeDecodeError before it has read any YAML, on a file that is perfectly
+#   valid. A check that cannot run must not read as a check that passed.
+#
 
 name: Silicon gates (GF180MCU)
 
@@ -123,6 +182,68 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chip-gate-logs
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/chip_gates_summary.md
+            c930/asic_gf180mcu/build/*.log
+            c930/asic_gf180mcu/build/cache_alias_sim/*.log
+
+  # The early answer, on a runner this repo owns. Pushes only -- never
+  # pull_request, and that is the rule rather than a detail: a self-hosted runner
+  # on a *public* repository must not be reachable by a fork's pull_request, or a
+  # stranger's code runs on the operator's machine. Someone pushing to a branch in
+  # this repo is already trusted with this repo; a fork is not. `workflow_dispatch`
+  # is included because only someone with write access can dispatch.
+  #
+  # Same definition as `gates`, not a copy of it: one step, calling
+  # c930/asic_gf180mcu/build/chip_gates.sh, which is the same file .githooks/pre-push
+  # calls. What differs between the two jobs is only the environment.
+  gates-push:
+    name: "Chip gates, push fast path (self-hosted: the build machine)"
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64, grx930-gates]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The hosted image has `python-is-python3`; a self-hosted Linux box need not,
+      # and this one does not -- and the ROM targets call `python`, not `python3`.
+      # Without a `python` on PATH the rom-drift gate reports BLOCKED, which is a
+      # failure but a misleading one, so the name is guaranteed here exactly as the
+      # install step above guarantees it there. The shim is built under RUNNER_TEMP
+      # and changes nothing about the machine.
+      - name: Make `python` resolve
+        run: |
+          shim="$RUNNER_TEMP/python-shim"
+          mkdir -p "$shim"
+          ln -sf "$(command -v python3)" "$shim/python"
+          echo "$shim" >> "$GITHUB_PATH"
+
+      # Checked, not installed: this is somebody's machine, not a fresh image. What
+      # it has is printed so the log says which simulator produced the verdict -- a
+      # simulator version is part of a gate, which is why `gates` pins its image.
+      - name: Report the toolchain that will run the gates
+        run: |
+          iverilog -V | head -1
+          vvp -V | head -1
+          make --version | head -1
+          python --version
+
+      - name: Chip gates
+        if: always()
+        run: bash c930/asic_gf180mcu/build/chip_gates.sh
+
+      # A distinct name on purpose: upload-artifact@v4 refuses two artifacts with
+      # the same name in one run, and both jobs run on a push, so the hosted job's
+      # `chip-gate-logs` would collide with a second one.
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chip-gate-logs-self-hosted
           retention-days: 14
           if-no-files-found: ignore
           path: |
