@@ -29,6 +29,14 @@
 #                         has core.filemode=false, so chmod +x here changes
 #                         nothing git records and only a checkout that reads the
 #                         mode finds the fault. (build/script_exec_bit.sh)
+#   drt-driver            the DRT runner hands OpenROAD the driver script it was
+#                         asked for, and both drivers are the ones their images
+#                         accept: the sweep arm's still passes the layer flags,
+#                         the pre-check image's still passes neither and states
+#                         the range with set_routing_layers (DRT-0509). A rename
+#                         here used to surface hours into a queued run as
+#                         `couldn't read file`; through a stub router it is
+#                         seconds. (build/drt_driver_check.sh)
 #   boot-from-rom         the chip powers up from its own ROM at 0x0001_0000 =
 #                         CORE_RESET_PC, with no SRAM preload, and reaches the
 #                         firmware's UART banner -- on the tree the OL2 flow reads
@@ -72,7 +80,7 @@
 #
 # USAGE
 #
-#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all nine
+#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all ten
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --list               # names only
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --only mmio-hold     # one of them
 #
@@ -108,6 +116,7 @@ LOGDIR="$ROOT/c930/asic_gf180mcu/build"
 # tb_dcache_mmio_hold` -- is the line itself and not a character class.
 GATES=$(cat <<'EOF'
 script-exec-bit|c930/asic_gf180mcu|bash build/script_exec_bit.sh|pass|OVERALL: PASS|bash git
+drt-driver|c930/asic_gf180mcu|bash build/drt_driver_check.sh|pass|OVERALL: PASS|bash
 boot-from-rom|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD|pass|RESULT: PASS|iverilog vvp make
 rom-disabled-control|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE|fail|RESULT: FAIL|iverilog vvp make
 rom-drift|c930/asic_gf180mcu|make check_rom|pass|ROM in sync|python
