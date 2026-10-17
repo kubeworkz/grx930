@@ -17,6 +17,14 @@ libs.tech/
 # Build artifacts (regenerable); the flow chain scripts in build/ are source
 build/*
 !build/*.sh
+# ... and build/lvs/ is source too: the LVS gate's committed verdict report and its
+# README. `!build/*.sh` does not reach into a subdirectory, and an ignored directory
+# is not descended into, so the directory itself has to be un-ignored.
+!build/lvs/
+# ... and build/lvs_fixtures.tsv is source: the manifest the refresh job, the fetcher and the
+# gate all read. Without this line it is silently untracked, so CI would check out no manifest
+# at all and the family evidence would describe a list nobody can see.
+!build/lvs_fixtures.tsv
 openlane2_rtl/runs/
 openlane2_design/runs/
 

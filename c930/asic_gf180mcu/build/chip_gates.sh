@@ -64,6 +64,22 @@
 #                         forking the others cannot pass.
 #   mmio-hold             an MMIO load's data survives a frozen pipeline
 #                         (doc/dcache_mmio_read_hold.md).
+#   lvs-fixture           the LVS harness still has a verdict, and the verdict still
+#                         says what a green means: the committed evidence -- a family of
+#                         51 PDK fixtures over six device families (MOSFETs, resistors,
+#                         MIM caps, BJTs, diodes, MOS caps; the list is
+#                         build/lvs_fixtures.tsv) -- must exist, every fixture in it
+#                         must say devices match and ports pass, and it must be about
+#                         the deck on disk when that deck is here. Three statuses, not
+#                         one -- 0 pass, 1 mismatch (including evidence about another
+#                         deck), 2 cannot-run (no evidence, unreadable evidence, a
+#                         fixture whose port check was skipped) -- because "no
+#                         verdict" and "bad verdict" must never look alike. Seconds,
+#                         no docker, no PDK needed in CI; the harness itself is
+#                         tools/klayout_lvs.sh, the refresh is
+#                         build/lvs_refresh_evidence.sh, and the chip run is
+#                         `build/lvs_check.sh --live` (build/lvs/README.md,
+#                         doc/lvs_plan.md §6).
 #
 # EVERY GATE RUNS, ALWAYS
 #
@@ -80,7 +96,7 @@
 #
 # USAGE
 #
-#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all ten
+#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all eleven
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --list               # names only
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --only mmio-hold     # one of them
 #
@@ -125,6 +141,7 @@ cache-index-alias|c930/tb|bash run_cache_index_alias.sh|pass|OVERALL: PASS|iveri
 cache-tag-guard|c930/tb|bash run_tag_width_guard.sh|pass|OVERALL: PASS|iverilog vvp
 cache-split-lockstep|c930/tb|bash run_cache_split_lockstep.sh|pass|OVERALL: PASS|bash git
 mmio-hold|c930|make dcache_mmio_hold|pass|[PASS] tb_dcache_mmio_hold|iverilog vvp make
+lvs-fixture|c930/asic_gf180mcu|bash build/lvs_check.sh|pass|LVS: PASS|bash python
 EOF
 )
 

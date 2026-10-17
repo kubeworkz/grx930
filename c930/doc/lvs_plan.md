@@ -1,0 +1,399 @@
+# Plan: a real LVS, starting from what we already own
+
+**Status: plan, a spike, and its first green.** Written 2026-10-17. §1 is
+inventory verified on this box; §6 records the spike, the deck defect it found,
+and the first matching LVS — the PDK's own device fixture. No GRX930 LVS has run
+yet; that is S2.
+
+## 0. The goal, stated so it cannot be fudged
+
+A green LVS line must mean: *a layout was extracted into devices, a schematic
+was read into devices, and the two netlists compared equal under the PDK's own
+rules.* Not "a script exited 0", not "netgen printed no ERROR", not "the flow's
+LVS step was skipped because `RUN_LVS` was unset".
+
+Today the answer to "did we do LVS on GRX930" is **no**; the answer to "do we own
+a working LVS" is yes, for the PDK's fixture only (§6). This plan closes the gap
+in stages that each fail loudly.
+
+## 1. What we already have (verified on this box, 2026-10-17)
+
+| what | path | state |
+|---|---|---|
+| Toolchain | `ghcr.io/efabless/openlane2:2.3.10` (local image, already the flow's pin) | `magic`, `netgen`, `klayout`, `openroad`, `yosys` all on PATH inside it |
+| PDK | `c930/asic_gf180mcu/pdk/share/pdk/gf180mcuA` (994 MB, open_pdks install) | std cells have `mag/`, `gds/`, `cdl/`, `spice/`, `verilog/` views; `gf180mcu_fd_io` and `gf180mcu_fd_ip_sram` present |
+| Tech files | `c930/asic_gf180mcu/libs.tech/{magic,netgen,klayout}` | `gf180mcuA.magicrc`, `gf180mcuA_setup.tcl` (netgen), KLayout LVS deck `klayout/tech/lvs/gf180mcu.lvs` + `run_lvs.py` |
+| Layout | `c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds` (77 MB, 2026-09-21) | top cell **`grx930_test_chip`** confirmed by scanning the GDS; **no** `gf180mcu_fd_io`, **no** `gf180mcu_fd_ip_sram`, **no** `sealring` strings — a core-only layout |
+| Netlist | `c930/asic_gf180mcu/build/grx930_test_chip_routed.v` (9.6 MB, 2026-09-20) | top module `grx930_test_chip`, 6 ports, **53,745 instances** over 34 distinct std cells; netgen parses it (verified: `netgen -batch lvs` read it and created placeholder cells for the 34 library modules) |
+
+Two facts that shape everything below:
+
+* **The pair may not be the same run.** The netlist is 2026-09-20 23:05, the GDS
+  2026-09-21 11:55, and the GDS is from the campaign that `SUPERSEDED.md` voids.
+  LVS is exactly the check that settles whether they agree; a mismatch on this
+  pair is a finding about *the pair*, and the pipeline is still proven.
+* **The layout is core-only.** No pads, no macro, no seal ring. That is the
+  easiest possible full-chip LVS: pure standard-cell logic. The IO/SRAM models
+  are not needed until the wrapper (`tpl02`) or the real die.
+
+## 2. Two engines, and why both
+
+| engine | what it gives | cost | used for |
+|---|---|---|---|
+| **KLayout LVS** (`gf180mcu.lvs`, or `run_lvs.py` around it) | the PDK's own deck, fast, parallel, identical silicon semantics (`variant=C` = 5LM stack); needs no device-model wiring | needs a **SPICE/CDL schematic**, not Verilog, so the netlist must be converted (yosys `write_spice` against the library CDL, or the flow's own export) | S1a (deck proof), S2, S3, S4 |
+| **magic + netgen** | the path LibreLane's `RUN_LVS` took on the OL2 runs; device-level extraction, comparison against the Verilog with the library CDL | full-chip extraction of 53 k instances is hours and RAM-bound; **blocked until the primitive models are wired** (§6) | S1b (cell proof), then S2/S3 as the independent second opinion |
+
+Order matters and it changed after the spike (§6): KLayout runs first because its
+extraction already works and it needs no device-model wiring; magic+netgen
+follows once S1b is green, as an engine that shares no code with the deck. A
+disagreement between the two is a bug in one of them and must be chased, not
+averaged.
+
+## 3. Stages
+
+### S0 — environment proof (minutes, cheap, no design)
+
+```sh
+# from the repo root; MSYS_NO_PATHCONV=1 only matters on Windows
+MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/work" -w /work/c930/asic_gf180mcu \
+  ghcr.io/efabless/openlane2:2.3.10 bash -lc '
+    magic --version; netgen -batch version 2>&1 | head -1; klayout -b -v | head -1'
+```
+
+**Acceptance:** three versions recorded in the report. If any tool is missing,
+stop — this is an environment finding, not an LVS failure.
+
+### S1 — prove the deck on a known-good pair (minutes)
+
+The single most important step: a standard cell whose layout and schematic both
+exist in the PDK. It isolates "deck + models + tech" from "our design". **Two
+halves, because the spike in §6 showed they fail differently:**
+
+**S1a — KLayout deck on the PDK's own fixture.** `libs.tech/klayout/tech/lvs/testing/unit/`
+ships matched `layout/*.gds.gz` + `netlist/*.cdl` pairs (e.g. `mos_devices/netlist/nfet_05v0.cdl`)
+with the expected verdicts. This is the cleanest proof that the deck runs and
+*discriminates*.
+
+```sh
+bash c930/asic_gf180mcu/tools/klayout_lvs.sh                     # nfet_05v0, ~20 s of deck time
+bash c930/asic_gf180mcu/tools/klayout_lvs_selftest.sh            # 16 assertions, four arms
+```
+
+**Acceptance:** `verdict.json` says `match`, and the selftest's three negative
+arms say `mismatch`/setup error. **S1a is green as of 2026-10-17** — evidence and the
+settled deck defect in §6 — so the deck is not the problem and every later failure
+is ours.
+
+**S1b — magic + netgen on a std cell.** A cell whose GDS, magic view and CDL all
+exist (`gf180mcu_fd_sc_mcu7t5v0__inv_1` is the spike's choice):
+
+```sh
+CELL=gf180mcu_fd_sc_mcu7t5v0__inv_1
+P=/work/c930/asic_gf180mcu/pdk/share/pdk/gf180mcuA/libs.ref/gf180mcu_fd_sc_mcu7t5v0
+
+MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/work" -w /work/c930/asic_gf180mcu \
+  ghcr.io/efabless/openlane2:2.3.10 bash -lc "
+    cd /tmp && printf '%s\n' \
+      'addpath $P/mag' \
+      'gds read $P/gds/$CELL.gds' \
+      'load $CELL' \
+      'extract' 'ext2spice lvs' 'ext2spice' 'quit' \
+      | magic -dnull -noconsole -rcfile libs.tech/magic/gf180mcuA.magicrc
+
+    netgen -batch lvs \"/tmp/$CELL.spice $CELL\" \"$P/cdl/gf180mcu_fd_sc_mcu7t5v0.cdl $CELL\" \
+      libs.tech/netgen/gf180mcuA_setup.tcl"
+```
+
+**Acceptance:** netgen prints *Circuits match uniquely*. **Failure triage:**
+if it says *placeholder cell* / *not found*, the library path or the CDL top
+name is wrong — fix that before touching our design, because every later
+failure would be ambiguous. **S1b is blocked today** — see §6: the extracted
+netlist instantiates `nfet_05v0`/`pfet_05v0`, and netgen has no definition for
+them, so it compares placeholders and reports a mismatch that says nothing about
+the layout.
+
+### S2 — our core (hours; the first real answer)
+
+**The netlist has to become SPICE first.** KLayout reads a CDL/SPICE schematic,
+and our artifact is Verilog; converting it is a step in its own right
+(`yosys read_verilog <netlist>; write_spice` leaves the 34 library cells as
+subcircuit calls, which the PDK's library CDL defines). Check the conversion
+before trusting it: the cell instance count must be 53,745 and the 34 cell types
+must all resolve. Then the deck:
+
+```sh
+klayout -b -r libs.tech/klayout/tech/lvs/gf180mcu.lvs \
+  -rd thr=<cores> -rd run_mode=deep -rd variant=C ... \
+  -rd input=<gds> -rd topcell=grx930_test_chip -rd schematic=<converted.cdl> \
+  -rd report=<out.lvsdb> -rd target_netlist=<out.cir>
+```
+
+bypassing `run_lvs.py` (it needs `docopt`, absent from the image) and with the
+`pmap` shim §6 calls for. The **second** run is magic+netgen on the same pair,
+and it is the one that gives an extraction-time and peak-memory number (KLayout's
+runtime is not a guide to magic's). It only counts once S1b is green:
+
+```sh
+CELL=grx930_test_chip
+GDS=/work/c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds
+V=/work/c930/asic_gf180mcu/build/grx930_test_chip_routed.v
+OUT=/work/c930/asic_gf180mcu/build/lvs   # mkdir first
+```
+
+1. **extract** — `magic -dnull -noconsole -rcfile libs.tech/magic/gf180mcuA.magicrc`
+   with `gds read $GDS`, `load $CELL`, `extract all`, `ext2spice lvs`,
+   `ext2spice hierarchy on`, writing `$OUT/$CELL.spice`. Record wall time and
+   peak RSS; on this box that is the difference between "workable" and "needs
+   the flow server".
+2. **compare** — `netgen -batch lvs "$OUT/$CELL.spice $CELL" "$V $CELL"
+   libs.tech/netgen/gf180mcuA_setup.tcl`, with the library CDL loaded so the
+   Verilog side is device-level too.
+3. **keep the report** — `$OUT/lvs.rpt` (netgen's own), the extracted SPICE, the
+   compare log, and the two file hashes, under
+   `Claude outputs/evidence_lvs/` so the claim survives the box.
+
+**Acceptance:** the deck's own report says the netlists match (and netgen prints
+*Circuits match uniquely* when the second engine runs), with device counts
+plausible against 53,745 instances and every cell type resolved. **Expected non-failures to triage, in
+order:** power/ground net naming (`VDD`/`VSS` vs `VPWR`/`VGND`), a `well`/substrate
+mismatch, and — if the GDS and netlist are from different revisions — real
+topology differences. Distinguish the third from the first two by checking a
+single module first: extract `u_core.u_alu` (or any small sub-block) and compare
+just that, which also gives an extraction-time estimate for the full chip.
+
+**If S2 matches:** we own a proven LVS pipeline and a stated fact about the
+September artifact. If it mismatches with a small diff, that is the most
+informative result available today (it is a stale-pair finding, and the
+pipeline is still proven). If it cannot even extract, the tech files are the
+problem and S3 is pointless until they are fixed.
+
+### S3 — the wrapper artifact (`tpl02`), once it is here
+
+The template GDS is the artifact the real submission inherits: pad ring, seal
+ring, ID cells, PDK filler. It needs the IO and SRAM models, and the seal ring
+will contribute dummy devices:
+
+* LVS the **core** hierarchical cell first, then the top.
+* Expect the seal ring's devices to appear on the layout side only; either
+  exclude its cells in the deck or record them as an accepted difference —
+  never by deleting geometry from the GDS.
+* This is the run that decides whether the submission's wrapper can pass LVS
+  at all, so it matters more than S2's answer about a void artifact.
+
+### S4 — the real die, and the gate
+
+1. In the flow: `KLAYOUT_LVS_SCRIPT` is already wired
+   (`libs.tech/librelane/config.tcl:177`), and the readiness note records
+   `ERROR_ON_KLAYOUT_LVS` true on the live run — so the first sign-off run will
+   produce an LVS verdict whether or not this plan runs. Keep its report.
+2. Independently: magic+netgen on the streamed GDS, as the second opinion.
+3. **The gate is built and wired** (`build/lvs_check.sh`, table row
+   `lvs-fixture`). It judges a verdict report with three statuses, not two —
+   **0** pass, **1** mismatch (devices, ports with the missing names printed, or
+   a report about *different* inputs than the ones on disk), **2** cannot-run (no
+   report, unreadable report, a missing field, or a port check that was skipped).
+   `chip_gates.sh` shows that status in its failure row and in the gate's own log,
+   so "no verdict" and "bad verdict" stay distinguishable in a summary somebody
+   reads months later. Default report: `build/lvs/lvs_fixtures_verdict.json`, the
+   committed **fixture family** (51 fixtures over MOSFETs, resistors, MIM caps, BJTs,
+   diodes and MOS caps,
+   the list is `build/lvs_fixtures.tsv`, §6), judged against the on-disk inputs by
+   sha256 whenever the PDK install is present. A chip run is the same gate in its live mode:
+   `bash build/lvs_check.sh --live --layout <gds> --netlist <cdl>`. Its own test
+   is `bash build/lvs_check_selftest.sh` (15 assertions, no docker, no PDK).
+
+## 4. Rules this plan holds itself to
+
+* **No green without a report.** The deliverable of every stage is a netgen
+  report or a KLayout database, kept in the repo's evidence directory.
+* **Extraction failure is not an LVS result.** If magic cannot read the GDS or
+  the models are not found, the stage is *blocked*, and says so.
+* **A mismatch is a finding.** It gets triaged and written down; it is not a
+  reason to change the netlist until the two sides agree.
+* **Pin the inputs, and keep re-checking the pin.** Record the GDS and netlist
+  hashes with every result; `grx930_test_chip_final.gds` is not reproducible from
+  the tree today, so the hash is the identity. The fixture evidence goes further,
+  because its inputs come from a repository this tree does not track: it names the
+  PDK commit it came from (`355b9ee6b6f6`, whose deck and fixture hash to exactly
+  what the report records), `build/lvs_fetch_pdk_subset.sh` re-fetches that commit
+  and refuses to continue on any disagreement, and the `LVS evidence` workflow
+  re-runs the harness against it -- weekly and whenever the LVS files change -- to
+  answer one question: *is the committed verdict still what the harness produces?*
+  A stale report fails that run instead of ageing quietly behind a green gate.
+
+## 5. Cost, honestly
+
+| stage | this box | notes |
+|---|---|---|
+| S0 | seconds | one container start |
+| S1 | minutes | small cell; proves the deck |
+| S2 extraction | hours, unmeasured | 77 MB GDS, 53 k instances; measure on a sub-block first |
+| S2 compare | minutes to an hour | netgen on ~1 M devices |
+| S3 | hours | plus IO/SRAM model wiring |
+| S4 | falls out of the flow | the gate is a day's work once S2/S3 are trustworthy |
+
+## 6. What the first spike already showed (2026-10-17)
+
+Run to test the plan's assumptions, not to claim a result. Everything below is a
+measured line from this box.
+
+**The engine works.**
+
+* **S0 passes.** The pinned image carries `magic`, `netgen` (1.5.278), `klayout`,
+  `openroad`, `yosys`; `libs.tech/magic` and `libs.tech/netgen` are where the
+  rcfile and setup expect them.
+* **Magic extraction works.** `gf180mcu_fd_sc_mcu7t5v0__inv_1.gds` → SPICE with
+  **2 devices** (`nfet_05v0` w=0.82u, `pfet_05v0` w=1.22u), 14 nets, so tech,
+  `addpath` and `ext2spice` all function.
+* **Netgen reads our design netlist.** On `build/grx930_test_chip_routed.v` it
+  parsed the top module and placeholdered the 34 library modules. The Verilog
+  path is not a blocker.
+* **The KLayout deck runs end to end**: it extracted, wrote a 40 KB layout
+  netlist and a 1.4 MB `.lvsdb` on the PDK's own device fixture, and now reports
+  a match on it (§ "S1a is green" below). It needs four things this environment
+  does not give it for free (below).
+
+**Four defects between the tooling and a verdict** — each one costs minutes to
+work around, and every one must be in the harness, not typed by hand:
+
+1. **`pmap` is absent from the image.** The deck's logger calls it for a memory
+   line, gets an empty string, and dies as `undefined method 'strip' for nil`
+   before reading any layout. A one-line `pmap` shim on `PATH` clears it.
+2. **The PDK copy under `pdk/share/pdk/.../lvs/testing` is binary-corrupted** —
+   `nfet_05v0.gds.gz` starts `1f ef bf bd` (UTF-8 replacement characters), not
+   `1f 8b`. The `libs.tech/...` copy is valid gzip. Use the `libs.tech` tree for
+   fixtures; the `pdk/` tree cannot be trusted for binary files.
+3. **The fixture's top cell is not the file name.** It is
+   `sample_nfet_05v0` in both the layout and the CDL; `-rd topcell=nfet_05v0`
+   fails with *cell name not found*. Read the top cell, do not assume it.
+4. **The deck's port check has never run, in any copy** (settled 2026-10-17; the
+   spike's first reading of this — "a version skew between deck and runner" — was
+   wrong, and so was its claim that the `check_ports=false` mismatch was caused by
+   ports).
+
+   The comparison section ends `result &= flag_missing_ports if CHECK_PORTS`, and
+   `flag_missing_ports` is assigned *nowhere*: not in this tree's deck
+   (sha256 `00019ed0…`), not in any `rule_decks/*.lvs` beside it, and not at upstream
+   `main` of `fossi-foundation/globalfoundries-pdk-libs-gf180mcu_fd_pv` — commits
+   9ba05b0 ("implement flag_missing_ports") and 355b9ee ("do not use shortcut logic
+   for flag_missing_ports", both 2026-07-17) add the reference without the
+   definition. The 13 GB `gf180mcu-pdk` image ships this exact deck (same sha256),
+   so there is no matching pair to go and find.
+
+   `CHECK_PORTS` defaults to **true**, and `run_lvs.py` has no `--check_ports`
+   (`grep -c check_ports run_lvs.py` → 0; `top_lvl_pins` appears five times), so the
+   PDK's documented path dies with `undefined local variable 'flag_missing_ports'`
+   on every design. The check has never executed; it is not a setting we got wrong.
+
+   The spike's old mismatch with `check_ports=false` had a different cause:
+   `combine` defaults to false, which leaves every MOSFET finger a separate device.
+   With `combine=true` — the PDK's own per-device setting for `nfet_05v0` in
+   `testing/unit/mos_devices/config/default.yaml` — the pair matches.
+
+**S1b's blocker, precisely.** The extracted inverter instantiates
+`nfet_05v0`/`pfet_05v0`; netgen has no definition for them (`Call to undefined
+subcircuit … Creating placeholder cell`, `Unable to permute model nfet_05v0 pins
+1, 3`), so the compare is placeholder-against-placeholder and its verdict is
+meaningless. This PDK install has no ngspice model directory
+(`libs.tech/` = `irsim klayout librelane magic netgen`) and
+`libs.ref/gf180mcu_fd_pr/` has only `gds mag maglef`. The primitive `.cdl`
+definitions live in the KLayout LVS fixtures
+(`lvs/testing/unit/mos_devices/netlist/*.cdl`), and OL2's own LVS step is
+`netgen -batch source` over a generated script (`openlane/steps/netgen.py`), not
+a bare `lvs` call.
+
+**So the order changes.** KLayout is the primary engine, not the second
+opinion: it needs no device-model wiring, its extraction already works, and the
+only thing between it and a trustworthy verdict is a matched deck/runner pair.
+Magic+netgen comes after S1a is green, using OL2's generated script as the
+reference implementation.
+
+**S1a is green (2026-10-17) — the first LVS verdict in this repo**
+
+`bash c930/asic_gf180mcu/tools/klayout_lvs.sh` on the PDK's own `nfet_05v0` fixture:
+
+| | |
+|---|---|
+| device comparison | **match** — `combine=true`; 99 extracted vs 104 schematic instances (combined fingers, not a discrepancy) |
+| port comparison | **pass** — 295 schematic ports, 295 layout pins, none missing (our check; the deck's is dead) |
+| deck runtime | 20.96 s |
+| verdict | **MATCH**, exit 0 |
+
+A second fixture, `pfet_05v0`, also matches (`--implicit-connect`, the switch its own PDK config
+asks for; with `combine` alone it does not, and that is a deck setting, not a layout defect).
+
+Evidence in `Claude outputs/evidence_lvs_fixture/` — `verdict.json`, the deck log with its
+`INFO : Congratulations! Netlists match.` line, the extracted netlist, the `.lvsdb`, and a
+README. The green is fenced by four arms of `tools/klayout_lvs_selftest.sh` (16 assertions):
+deleting one MOSFET makes it *mismatch*; renaming one top-level port makes the **ports** fail
+while the devices still match; a missing layout exits **2** and writes no verdict.
+
+What that green is *not*: it is the deck plus the tooling on a device fixture. It says nothing
+about the September GDS, the routed netlist or the wrapper, and the port check is ours — which is
+why `verdict.json` carries `"deck_variable_defined": false`. The report is committed as
+`build/lvs/lvs_fixtures_verdict.json` and judged on every gate run by `build/lvs_check.sh`
+(§ S4 item 3); a green there can only come from evidence whose hashes match the inputs on disk.
+
+**Widened to a family, then to six (same day).** One fixture proves the deck; it does not prove the
+other kinds of device the deck extracts. `build/lvs_fixtures.tsv` now names 51 fixtures over six
+families: four MOSFETs (including a deep-nwell one), seven resistors (diffusion, poly, well,
+top-metal, two non-default `poly_res`), three MIM capacitors (A/3LM, B/5LM, B/6LM), and the whole of
+`bjt_devices` (10), `diode_devices` (15) and `moscap_devices` (12) — for those three, every fixture
+the PDK ships, so a fixture added upstream is a diff rather than a silent omission. Each runs with
+the switches the PDK's own per-fixture config asks for, since `combine`, `implicit_connect`,
+`consider_dn_dw_features`, `poly_res`, `metal_top`, `metal_level` and `mim_cap` each decide a
+different family's extraction — and the three added families are where that stops being a formality:
+7 of the 15 diodes and 4 of the 12 MOS caps carry a non-default switch at all, and inside a family
+it is not uniform: four of the diodes and four of the MOS caps need `consider_dn_dw_features`
+(without it their DN/DW tubs are not part of the device), the two `pw2dw` diodes need
+`implicit_connect` (their anode wells never join otherwise), and the Schottky diode and the smallest
+NPN need `combine`. Every one of those 51 switch sets is what the pin's
+`testing/unit/<category>/config/default.yaml` says for that fixture, and that is now asserted rather
+than read by eye: `tools/lvs_switch_check.py` compares each line with the config by key and by
+value (51 of 51 equal today; 26 lines carry switches, 25 run on the harness defaults), and the
+refresh and the CI job run it before the first fixture. A line that disagrees stops the refresh at
+exit 1 with the fixture and key named, runs nothing, and survives neither `--update` (which accepts
+a stale family, not an unauthorized switch) nor `--only` (which narrows what runs, not what is
+checked). A config it cannot parse — a flow mapping, a third level, tab indentation — is
+CANNOT-RUN, never agreement, so an upstream dialect change cannot quietly turn the check into
+decoration.
+
+That the check can fail is its own test, not an assumption: `build/lvs_switch_check_selftest.sh`
+provokes each disagreement on a synthetic pin of the PDK's shape, removes one diode's
+`consider_dn_dw_features` from the real manifest (named, exit 1), and drives the refresh on a pin
+whose config disagrees — which stops before a fixture runs, creates no output directory, and still
+stops under `--update` and `--only`. 21 cases, all green, about a second, no docker. So a green
+cannot come from a switch somebody invented, a guard that never fires, or one a reader cannot see.
+
+All 51 come back green (“LVS: PASS family=51 match=51”, 2026-10-17), and the refresh job
+re-runs the whole set rather than the one device: `build/lvs_refresh_evidence.sh` runs each manifest
+line under docker, judges it with the gate's own judge, aggregates with `tools/lvs_family.py`, and
+compares field by field with the committed file — `CURRENT`, or `STALE` naming the fields that
+moved. The `pfet` and every resistor and MIM entry are in that loop, so a deck change that breaks
+an n-well or a top-metal resistor is caught by the same job that catches an nfet. Measured: a
+re-run reproduces the committed aggregate byte for byte, and moving one field
+(`fixtures[7].devices.instances_extracted`) makes the comparison answer
+`DIFF fixtures[7].devices.instances_extracted`, exit 1, with `--update` the only way to accept it.
+`build/lvs_fetch_pdk_subset.sh` ties the pin to all of it: 103 hashes — the deck plus two per
+fixture — before the first docker pull.
+
+`--only` is what made that widening affordable: it runs one family's lines and builds the aggregate
+from just those, so a family's switches can be worked out without re-running the other 40 fixtures
+(the manifest it builds from is kept beside the runs). Measured while adding the three families: one
+fixture in ~36 s, and the full 51 in 30 minutes of wall time (14:00:46 to 14:31:19 on this box), all
+green on the first full refresh.
+
+**Next actions, in order**
+
+1. S2 on `grx930_test_chip_final.gds` plus a SPICE conversion of
+   `build/grx930_test_chip_routed.v`, measuring extraction on a sub-block first.
+2. S1b (magic+netgen) stays blocked until this PDK install has device models; its
+   placeholder mismatch is not a layout finding.
+
+## 7. What this plan does not prove
+
+That the September artifact is submittable (it is void for reasons LVS cannot
+see), or that the real die will pass — only that the deck, the extraction and
+the comparison work on our own data, before the die that matters exists. The
+pre-check has no LVS stage, so a green LVS here is *our* evidence and has to be
+carried in the submission package as such.

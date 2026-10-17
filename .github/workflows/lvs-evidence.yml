@@ -1,0 +1,186 @@
+# LVS evidence -- re-run the LVS fixture family against a pinned PDK subset and check that the
+# committed verdict (c930/asic_gf180mcu/build/lvs/lvs_fixtures_verdict.json) is still what the
+# harness produces today.
+#
+#   The family is build/lvs_fixtures.tsv: 51 fixtures over mos_devices (nfet/pfet, one deep-nwell),
+#   res_devices (poly, diffusion, well, top-metal, two non-default poly_res), mimcap_devices
+#   (A/3LM, B/5LM, B/6LM), and the complete bjt_devices (10), diode_devices (15) and
+#   moscap_devices (12) families, each run with the switches that file names -- which are the
+#   PDK's own per-fixture config entries, not ours, and which are compared with that config at the
+#   pin before anything runs. Each fixture is one docker run of the deck (~36 s here), so this job
+#   is about half an hour of runner time, which is why it is not on every push and why the table's
+#   own gate stays cheap and docker-free.
+#
+# WHY THIS IS A SEPARATE WORKFLOW AND NOT A GATE
+#
+#   The gate table (c930/asic_gf180mcu/build/chip_gates.sh) is the authority, and it has to keep
+#   running on a bare runner: no docker, no network, seconds not minutes. Refreshing the evidence
+#   cannot: it needs the KLayout image and the PDK deck, neither of which is in a checkout. Keeping
+#   the two apart is what lets `lvs-fixture` stay on every push while the thing that *replaces* its
+#   evidence runs where it can. The gate's own row is unchanged by this workflow; what changes is
+#   that a stale report now has somewhere to be caught.
+#
+# WHEN IT RUNS
+#
+#   * push/pull_request, filtered to the files that can invalidate the evidence: the report, the
+#     gate and its scripts, the harness, the deck defect write-up. A change to the RTL cannot move
+#     this report, so it does not start a docker pull.
+#   * weekly, because the pin can go stale without a commit here: the deck belongs to the PDK
+#     upstream, and what is checked in is a *commit hash*, not the file.
+#   * workflow_dispatch, which is the only place `update` can be set -- see below.
+#
+# WHAT `update` DOES, AND WHY IT IS NOT THE DEFAULT
+#
+#   Without it the job is read-only: it fetches the pin, re-runs the harness, compares, and fails
+#   if the committed report is not what came out. The refreshed report goes up as an artifact
+#   either way, so a failed run hands over the file to commit.
+#
+#   With `update: true` (dispatch only, so a person asked for it) the job writes the refreshed
+#   report into the branch and pushes it. That needs `contents: write`, which is why this
+#   workflow's permissions say write while the gates workflow says read. It is deliberately not
+#   the default and not on a schedule: a bot commit that silently rewrites the evidence under a
+#   green gate is the failure mode the gate exists to prevent.
+#
+# A NOTE ON THIS FILE'S OWN VALIDITY
+#
+#   An unquoted `: ` in a plain scalar makes GitHub answer only "Invalid workflow file". Every
+#   value here that contains one is quoted, and the shape is checked the way the other workflow
+#   file's is:
+#
+#     python -c "import yaml,sys; [yaml.safe_load(open(f,encoding='utf-8')) for f in sys.argv[1:]]" .github/workflows/*.yml
+
+name: LVS evidence
+
+on:
+  push:
+    paths:
+      - 'c930/asic_gf180mcu/build/lvs*'
+      - 'c930/asic_gf180mcu/tools/klayout_lvs.*'
+      - 'c930/asic_gf180mcu/tools/lvs_verdict.py'
+      - 'c930/asic_gf180mcu/tools/lvs_family.py'
+      - 'c930/doc/lvs_plan.md'
+      - '.github/workflows/lvs-evidence.yml'
+  pull_request:
+    paths:
+      - 'c930/asic_gf180mcu/build/lvs*'
+      - 'c930/asic_gf180mcu/tools/klayout_lvs.*'
+      - 'c930/asic_gf180mcu/tools/lvs_verdict.py'
+      - 'c930/asic_gf180mcu/tools/lvs_family.py'
+      - 'c930/doc/lvs_plan.md'
+      - '.github/workflows/lvs-evidence.yml'
+  schedule:
+    # Monday, early, off the hour: the pin is upstream's, and a weekly answer is enough to notice
+    # it moving. (Cron here is UTC.)
+    - cron: '43 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      update:
+        description: "Commit the refreshed verdict to this branch (writes to the repository)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lvs-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    name: "LVS evidence refresh (docker + pinned PDK subset)"
+    runs-on: ubuntu-24.04
+    # 51 fixtures, one docker run each, plus a 1.5 GB image pull on a cold runner. 45 minutes was
+    # right for 14; 51 measured 30 minutes locally, and a cold runner adds the pull.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The deck, its rule_decks and all fifty-one fixtures' layouts and netlists, at the commit
+      # the committed family is about. This step fails if the pin's files do not hash to what the
+      # family recorded (103 hashes: one deck, two per fixture), so a wrong pin is caught before
+      # any docker pull: that is the difference between "the evidence is stale" and "somebody
+      # pinned the wrong revision", and the two need different answers.
+      - name: Fetch the pinned PDK subset
+        run: bash c930/asic_gf180mcu/build/lvs_fetch_pdk_subset.sh
+
+      # The manifest's switch column is a claim about this pin, so it is checked against this pin
+      # before a single fixture runs: each line must carry exactly the `test_switches` entry its
+      # category's config gives that fixture. A disagreement fails the job here, in seconds and
+      # without the image -- rather than after thirty minutes of docker, adding a green result
+      # about a device the manifest configured and the PDK did not. The refresh repeats the check
+      # (so a local run cannot skip it); this step is the one whose name says why the job stopped.
+      - name: Check the manifest's switches against the pin's config
+        run: |
+          python3 c930/asic_gf180mcu/tools/lvs_switch_check.py \
+            --pin c930/asic_gf180mcu/build/.lvs_pin \
+            --manifest c930/asic_gf180mcu/build/lvs_fixtures.tsv
+
+      # And that the check still fails when it should. A check that passes everything would make
+      # the step above decoration, so the disagreement cases are provoked here -- on a synthetic
+      # pin, on the real one, and through the refresh script, which must stop before any fixture
+      # runs. Seconds, no docker pull, and it keeps the negative case from rotting unnoticed.
+      - name: Prove the switch check fails on a disagreement
+        run: bash c930/asic_gf180mcu/build/lvs_switch_check_selftest.sh
+
+      # Docker is already on the hosted runner image; the harness needs nothing else but the image
+      # it pulls (about 1.5 GB, once per job -- runners keep no docker cache between jobs).
+      - name: Docker
+        run: docker version --format '{{.Server.Version}}'
+
+      # The refresh itself. Its three answers are CURRENT (0), STALE (1) and CANNOT-RUN (2), and
+      # the step succeeds only on the first unless `update` was asked for -- in which case the
+      # script writes the committed file itself and the step below commits it. `pipefail` is not
+      # decoration: without it `tee` would be the status of this step and a stale report would
+      # read as a pass.
+      - name: Re-run the harness and compare with the committed verdict
+        id: refresh
+        run: |
+          set -o pipefail
+          args=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.update }}" = "true" ]; then
+            args+=(--update)
+          fi
+          bash c930/asic_gf180mcu/build/lvs_refresh_evidence.sh ${args[@]+"${args[@]}"} \
+            2>&1 | tee c930/asic_gf180mcu/build/lvs_refresh.log
+
+      # What the gate says in this environment, on the file the job just looked at. On a checkout
+      # the PDK is absent, so the gate reports a pass that was not tied to inputs on disk -- and
+      # says so in its own log; after an --update run the refreshed file is the one it judges.
+      # Cheap, and it proves the evidence still satisfies the gate that runs on every push.
+      - name: The gate's own verdict on the committed report
+        if: always()
+        run: bash c930/asic_gf180mcu/build/chip_gates.sh --only lvs-fixture
+
+      - name: Upload the refreshed report and the harness log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lvs-evidence-refresh
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/lvs_refresh.log
+            c930/asic_gf180mcu/build/lvs_run/family/verdict.json
+            c930/asic_gf180mcu/build/lvs_run/family/runs/*/judge.txt
+            c930/asic_gf180mcu/build/lvs_run/family/runs/*/harness.out
+
+      # Only a dispatch can set `update`, so this only ever runs because a person asked for it.
+      - name: Commit the refreshed verdict
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add c930/asic_gf180mcu/build/lvs/lvs_fixtures_verdict.json
+          if git diff --cached --quiet; then
+            echo "nothing to commit: the committed report already matches the fresh run"
+          else
+            git commit -m "Refresh the LVS evidence against the pinned PDK subset
+
+            Re-run: c930/asic_gf180mcu/build/lvs_refresh_evidence.sh --update
+            Pin:    c930/asic_gf180mcu/build/.lvs_pin/PIN.txt (fetched in this run)"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
