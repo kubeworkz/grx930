@@ -1,0 +1,22 @@
+--- a/sim/rtlsim/processor.cpp	2026-09-03 00:56:11.943567646 +0000
++++ b/sim/rtlsim/processor.cpp	2026-09-03 01:32:25.162410854 +0000
+@@ -178,6 +178,19 @@
+     // never asserts busy, so the wait must not be unbounded.
+     constexpr uint32_t NO_WORK_TIMEOUT = 100000;
+ 
++    // Wait out the post-start transient before sampling busy.
++    //
++    // `busy` is HIGH on entry to every run() -- out of reset, and again at the
++    // end of every frame -- and dips LOW for one cycle immediately after the
++    // start pulse, before the new frame asserts it. Without this loop the
++    // "wait for device to go busy" loop below never runs (busy is already
++    // high) and the drain loop then exits on the dip after a single tick, so
++    // the frame is never executed. Bounded for the same reason the wait below
++    // is: a configuration whose busy does not dip must still proceed.
++    for (uint32_t i = 0; device_->busy && i < NO_WORK_TIMEOUT; ++i) {
++      this->tick();
++    }
++
+     // wait for device to go busy. A frame may legitimately have no work — e.g. a
+     // fully-culled graphics draw whose rasterizer emits zero fragment waves — and
+     // then busy never re-asserts after the start pulse. Bound the wait so such a

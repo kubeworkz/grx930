@@ -1,0 +1,580 @@
+{
+  "schema": "grx930.precheck-verdict/1",
+  "result": "fail",
+  "source": {
+    "log": "/home/kubew/submit/run2/precheck_ws.log",
+    "run_dir": "/home/kubew/submit/run2",
+    "generated_utc": "2026-10-16T15:38:09Z"
+  },
+  "run": {
+    "tag": "run2",
+    "pdk": "gf180mcuD",
+    "pdk_root": "/workspace/gf180mcu",
+    "top_cell": "chip_top",
+    "die_id": "GRX93001",
+    "cob": "True",
+    "slot": "1x1",
+    "threads": "4",
+    "workers": "4",
+    "date": "2026-10-15 23:43:00",
+    "clock_start": "23:38:15",
+    "clock_end": "11:12:25",
+    "wall_seconds": 41650,
+    "flow_progress": {
+      "stage_index": 17,
+      "stage": "Write the Layout",
+      "done": 17,
+      "total": 17,
+      "elapsed": "10:58:17"
+    },
+    "wrapped_lines_rejoined": 55
+  },
+  "artifact": {
+    "path": "/host/run1/chip_top.gds",
+    "sha256": "764c79babda6299b8ce9a7bf86662ca0c4459c6b404ffab4783e94840e068605"
+  },
+  "stages": [
+    {
+      "index": 1,
+      "name": "Read the Layout",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:38:15",
+      "elapsed_start_s": 0,
+      "steps": [
+        "KLayout.ReadLayout"
+      ],
+      "step_dirs": [
+        "runs/run2/01-klayout-readlayout"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 36
+    },
+    {
+      "index": 2,
+      "name": "Check Top-Level Name",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:38:51",
+      "elapsed_start_s": 36,
+      "steps": [
+        "KLayout.CheckTopLevel"
+      ],
+      "step_dirs": [
+        "runs/run2/02-klayout-checktoplevel"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 14
+    },
+    {
+      "index": 3,
+      "name": "Check Slot Size",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:39:05",
+      "elapsed_start_s": 50,
+      "steps": [
+        "KLayout.CheckSize"
+      ],
+      "step_dirs": [
+        "runs/run2/03-klayout-checksize"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 9
+    },
+    {
+      "index": 4,
+      "name": "Check Pad Mask",
+      "status": "skipped",
+      "skipped": true,
+      "started": null,
+      "elapsed_start_s": null,
+      "steps": [],
+      "step_dirs": [],
+      "verdicts": [
+        {
+          "level": "ERROR",
+          "gate": "density",
+          "text": "KLayout density",
+          "count": 2,
+          "deferred": true,
+          "clock": "00:02:03"
+        },
+        {
+          "level": "INFO",
+          "gate": "zero_area",
+          "text": "KLayout zero area polygons count",
+          "count": 0,
+          "deferred": false,
+          "clock": "00:04:19"
+        },
+        {
+          "level": "INFO",
+          "gate": "antenna",
+          "text": "KLayout antenna errors",
+          "count": 0,
+          "deferred": false,
+          "clock": "01:08:41"
+        },
+        {
+          "level": "WARNING",
+          "gate": "magic_drc",
+          "text": "Magic DRC",
+          "count": 12772,
+          "deferred": false,
+          "clock": "01:57:04"
+        },
+        {
+          "level": "ERROR",
+          "gate": "klayout_drc",
+          "text": "KLayout DRC",
+          "count": 83777,
+          "deferred": true,
+          "clock": "11:12:10"
+        }
+      ],
+      "failure": null,
+      "duration_s": null
+    },
+    {
+      "index": 5,
+      "name": "Generate ID",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:39:14",
+      "elapsed_start_s": 59,
+      "steps": [
+        "KLayout.GenerateID"
+      ],
+      "step_dirs": [
+        "runs/run2/04-klayout-generateid"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 17
+    },
+    {
+      "index": 6,
+      "name": "Render Image (w/ KLayout)",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:39:31",
+      "elapsed_start_s": 76,
+      "steps": [
+        "KLayout.Render"
+      ],
+      "step_dirs": [
+        "runs/run2/05-klayout-render"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 190
+    },
+    {
+      "index": 7,
+      "name": "Density Check",
+      "status": "pass",
+      "skipped": false,
+      "started": "23:42:41",
+      "elapsed_start_s": 266,
+      "steps": [
+        "KLayout.Density"
+      ],
+      "step_dirs": [
+        "runs/run2/06-klayout-density"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 1162
+    },
+    {
+      "index": 8,
+      "name": "KLayout Density Checker",
+      "status": "pass",
+      "skipped": false,
+      "started": "00:02:03",
+      "elapsed_start_s": 1428,
+      "steps": [
+        "Checker.KLayoutDensity"
+      ],
+      "step_dirs": [
+        "runs/run2/07-checker-klayoutdensity"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 0
+    },
+    {
+      "index": 9,
+      "name": "Find Zero Area Polygons",
+      "status": "pass",
+      "skipped": false,
+      "started": "00:02:03",
+      "elapsed_start_s": 1428,
+      "steps": [
+        "KLayout.ZeroAreaPolygons"
+      ],
+      "step_dirs": [
+        "runs/run2/08-klayout-zeroareapolygons"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 136
+    },
+    {
+      "index": 10,
+      "name": "KLayout Zero Area Polygons Checker",
+      "status": "pass",
+      "skipped": false,
+      "started": "00:04:19",
+      "elapsed_start_s": 1564,
+      "steps": [
+        "Checker.KLayoutZeroAreaPolygons"
+      ],
+      "step_dirs": [
+        "runs/run2/09-checker-klayoutzeroareapolygons"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 0
+    },
+    {
+      "index": 11,
+      "name": "Antenna Check",
+      "status": "pass",
+      "skipped": false,
+      "started": "00:04:19",
+      "elapsed_start_s": 1564,
+      "steps": [
+        "KLayout.Antenna"
+      ],
+      "step_dirs": [
+        "runs/run2/10-klayout-antenna"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 3862
+    },
+    {
+      "index": 12,
+      "name": "KLayout Antenna Checker",
+      "status": "pass",
+      "skipped": false,
+      "started": "01:08:41",
+      "elapsed_start_s": 5426,
+      "steps": [
+        "Checker.KLayoutAntenna"
+      ],
+      "step_dirs": [
+        "runs/run2/11-checker-klayoutantenna"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 0
+    },
+    {
+      "index": 13,
+      "name": "Design Rule Checks",
+      "status": "pass",
+      "skipped": false,
+      "started": "01:08:41",
+      "elapsed_start_s": 5426,
+      "steps": [
+        "Magic.DRC"
+      ],
+      "step_dirs": [
+        "runs/run2/12-magic-drc"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 2903
+    },
+    {
+      "index": 14,
+      "name": "Magic Design Rule Checker",
+      "status": "pass",
+      "skipped": false,
+      "started": "01:57:04",
+      "elapsed_start_s": 8329,
+      "steps": [
+        "Checker.MagicDRC"
+      ],
+      "step_dirs": [
+        "runs/run2/13-checker-magicdrc"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 0
+    },
+    {
+      "index": 15,
+      "name": "Design Rule Check (KLayout)",
+      "status": "pass",
+      "skipped": false,
+      "started": "01:57:04",
+      "elapsed_start_s": 8329,
+      "steps": [
+        "KLayout.DRC"
+      ],
+      "step_dirs": [
+        "runs/run2/14-klayout-drc"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 33306
+    },
+    {
+      "index": 16,
+      "name": "KLayout Design Rule Checker",
+      "status": "pass",
+      "skipped": false,
+      "started": "11:12:10",
+      "elapsed_start_s": 41635,
+      "steps": [
+        "Checker.KLayoutDRC"
+      ],
+      "step_dirs": [
+        "runs/run2/15-checker-klayoutdrc"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 0
+    },
+    {
+      "index": 17,
+      "name": "Write the Layout",
+      "status": "pass",
+      "skipped": false,
+      "started": "11:12:10",
+      "elapsed_start_s": 41635,
+      "steps": [
+        "KLayout.WriteLayout"
+      ],
+      "step_dirs": [
+        "runs/run2/16-klayout-writelayout"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": null
+    }
+  ],
+  "skipped_steps": [
+    "Check Pad Mask"
+  ],
+  "gates": [
+    {
+      "gate": "density",
+      "label": "KLayout density",
+      "blocking": true,
+      "status": "fail",
+      "count": 2,
+      "deferred": true,
+      "clock": "00:02:03",
+      "stage": "Check Pad Mask",
+      "evidence": "ERROR KLayout density",
+      "rules": {
+        "DCF.1b": 1,
+        "PL.8": 1
+      },
+      "rules_count": 2,
+      "rules_total": 2
+    },
+    {
+      "gate": "zero_area",
+      "label": "KLayout zero area polygons",
+      "blocking": true,
+      "status": "pass",
+      "count": 0,
+      "deferred": false,
+      "clock": "00:04:19",
+      "stage": "Check Pad Mask",
+      "evidence": "INFO KLayout zero area polygons count",
+      "rules": {
+        "34/0_zero_area": 0,
+        "112/1_zero_area": 0,
+        "55/0_zero_area": 0,
+        "32/0_zero_area": 0,
+        "22/0_zero_area": 0,
+        "30/0_zero_area": 0,
+        "33/0_zero_area": 0,
+        "21/0_zero_area": 0,
+        "31/0_zero_area": 0,
+        "36/0_zero_area": 0,
+        "35/0_zero_area": 0,
+        "42/0_zero_area": 0,
+        "38/0_zero_area": 0,
+        "204/0_zero_area": 0,
+        "166/5_zero_area": 0
+      },
+      "rules_count": 43,
+      "rules_total": 0
+    },
+    {
+      "gate": "antenna",
+      "label": "KLayout antenna",
+      "blocking": true,
+      "status": "pass",
+      "count": 0,
+      "deferred": false,
+      "clock": "01:08:41",
+      "stage": "Check Pad Mask",
+      "evidence": "INFO KLayout antenna errors",
+      "rules": {
+        "ANT.8": 0,
+        "ANT.16_i_ANT.2": 0,
+        "ANT.16_ii_ANT.2": 0,
+        "ANT.16_i_ANT.3": 0,
+        "ANT.16_ii_ANT.3": 0,
+        "ANT.1": 0,
+        "ANT.16_i_ANT.9": 0,
+        "ANT.16_ii_ANT.9": 0,
+        "ANT.16_i_ANT.4": 0,
+        "ANT.16_ii_ANT.4": 0,
+        "ANT.16_i_ANT.5": 0,
+        "ANT.16_ii_ANT.5": 0,
+        "ANT.16_iii_ANT.14_M4_MIMB": 0,
+        "ANT.16_i_ANT.6": 0,
+        "ANT.16_ii_ANT.6": 0
+      },
+      "rules_count": 24,
+      "rules_total": 0
+    },
+    {
+      "gate": "magic_drc",
+      "label": "Magic DRC",
+      "blocking": false,
+      "status": "warn",
+      "count": 12772,
+      "deferred": false,
+      "clock": "01:57:04",
+      "stage": "Check Pad Mask",
+      "evidence": "WARNING Magic DRC"
+    },
+    {
+      "gate": "klayout_drc",
+      "label": "KLayout DRC",
+      "blocking": true,
+      "status": "fail",
+      "count": 83777,
+      "deferred": true,
+      "clock": "11:12:10",
+      "stage": "Check Pad Mask",
+      "evidence": "ERROR KLayout DRC",
+      "rules": {
+        "metal1_OFFGRID": 22418,
+        "contact_OFFGRID": 22268,
+        "poly2_OFFGRID": 8361,
+        "comp_OFFGRID": 5520,
+        "pplus_OFFGRID": 2316,
+        "nplus_OFFGRID": 2313,
+        "lvpwell_OFFGRID": 2171,
+        "nwell_OFFGRID": 2138,
+        "dualgate_OFFGRID": 2050,
+        "v5_xtor_OFFGRID": 2020,
+        "M1.2a": 1265,
+        "CO.1": 558,
+        "PP.5dii": 552,
+        "CO.10": 546,
+        "CO.2a": 530
+      },
+      "rules_count": 737,
+      "rules_total": 83777
+    }
+  ],
+  "metrics": {
+    "klayout__density_error__count": 2,
+    "klayout__zero_area_polygons__count": 0,
+    "klayout__antenna_error__count": 0,
+    "magic__drc_error__count": 12772
+  },
+  "reports": [
+    {
+      "path": "wsrun/06-klayout-density/reports/density.klayout.json",
+      "gate": "density",
+      "total": 2
+    },
+    {
+      "path": "wsrun/08-klayout-zeroareapolygons/reports/density.klayout.json",
+      "gate": "zero_area",
+      "total": 0
+    },
+    {
+      "path": "wsrun/10-klayout-antenna/reports/antenna.klayout.json",
+      "gate": "antenna",
+      "total": 0
+    },
+    {
+      "path": "drc_peek/drc.klayout.json",
+      "gate": "klayout_drc",
+      "total": 83777
+    }
+  ],
+  "failure": {
+    "mode": "deferred",
+    "stage": null,
+    "rc": null,
+    "items": [
+      {
+        "count": 2,
+        "what": "KLayout density",
+        "gate": "density"
+      },
+      {
+        "count": 83777,
+        "what": "KLayout DRC",
+        "gate": "klayout_drc"
+      }
+    ],
+    "clock": "11:12:25",
+    "message": "The precheck failed with the following exception: One or more deferred errors were encountered: 2 KLayout density errors found. 83777 KLayout DRC errors found."
+  },
+  "summary": {
+    "result": "fail",
+    "completed": true,
+    "stages_run": 17,
+    "stages_expected": 17,
+    "stages_missing": [],
+    "blocking_failed": [
+      "density",
+      "klayout_drc"
+    ],
+    "non_blocking": [
+      "magic_drc: 12772 errors (not a gate)"
+    ],
+    "gates": {
+      "density": "fail",
+      "zero_area": "pass",
+      "antenna": "pass",
+      "magic_drc": "warn",
+      "klayout_drc": "fail"
+    },
+    "metrics": {
+      "klayout__density_error__count": 2,
+      "klayout__zero_area_polygons__count": 0,
+      "klayout__antenna_error__count": 0,
+      "magic__drc_error__count": 12772
+    },
+    "flow_steps_seen": [
+      "KLayout.ReadLayout",
+      "KLayout.CheckTopLevel",
+      "KLayout.CheckSize",
+      "KLayout.GenerateID",
+      "KLayout.Render",
+      "KLayout.Density",
+      "Checker.KLayoutDensity",
+      "KLayout.ZeroAreaPolygons",
+      "Checker.KLayoutZeroAreaPolygons",
+      "KLayout.Antenna",
+      "Checker.KLayoutAntenna",
+      "Magic.DRC",
+      "Checker.MagicDRC",
+      "KLayout.DRC"
+    ],
+    "flow_skips_seen": [
+      "Check Pad Mask"
+    ]
+  }
+}

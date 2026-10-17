@@ -16,8 +16,11 @@ export FAST_MAX_LAYER=${FAST_MAX_LAYER:-Metal5}
 printf 'RUN_START %(%Y-%m-%dT%H:%M:%SZ)T tag=%s odb=%s iter=%s layers=%s-%s threads=%s\n' \
     -1 "$FAST_TAG" "$FAST_ODB" "$FAST_END_ITER" "$FAST_MIN_LAYER" "$FAST_MAX_LAYER" "$FAST_THREADS"
 
+# FAST_TCL picks the driver script. Default is the sweep arm's drt_fast.tcl;
+# die_drt.tcl is the variant for the pre-check image's router build, which
+# refuses drt_fast.tcl's deprecated -bottom/-top_routing_layer flags (DRT-0509).
 OR=${FAST_OPENROAD:-/nix/store/zzypcxbrgw1qink1l7fwgwpbk7fvdwpg-openroad/bin/openroad}
-"$OR" -exit -no_splash "$D/drt_fast.tcl"
+"$OR" -exit -no_splash "${FAST_TCL:-$D/drt_fast.tcl}"
 rc=$?
 printf 'RUN_END %(%Y-%m-%dT%H:%M:%SZ)T rc=%s\n' -1 "$rc"
 exit $rc
