@@ -1,0 +1,205 @@
+{
+  "schema": "grx930.precheck-verdict/1",
+  "result": "incomplete",
+  "source": {
+    "log": "/home/kubew/submit/run1/precheck_ws.log",
+    "run_dir": null,
+    "generated_utc": "2026-10-16T15:38:09Z"
+  },
+  "run": {
+    "tag": "run1",
+    "pdk": "gf180mcuD",
+    "pdk_root": "/workspace/gf180mcu",
+    "top_cell": "chip_top",
+    "die_id": "GRX93001",
+    "cob": "True",
+    "slot": "1x1",
+    "threads": "4",
+    "workers": "4",
+    "date": null,
+    "clock_start": "22:45:31",
+    "clock_end": "22:46:00",
+    "wall_seconds": 29,
+    "flow_progress": {
+      "stage_index": 4,
+      "stage": "Check Pad Mask",
+      "done": 3,
+      "total": 17,
+      "elapsed": "0:00:28"
+    },
+    "wrapped_lines_rejoined": 29
+  },
+  "artifact": {
+    "path": "/host/run1/chip_top.gds",
+    "sha256": "764c79babda6299b8ce9a7bf86662ca0c4459c6b404ffab4783e94840e068605"
+  },
+  "stages": [
+    {
+      "index": 1,
+      "name": "Read the Layout",
+      "status": "not_run",
+      "skipped": false,
+      "started": "22:45:31",
+      "elapsed_start_s": 0,
+      "steps": [
+        "KLayout.ReadLayout"
+      ],
+      "step_dirs": [
+        "runs/run1/01-klayout-readlayout"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 16
+    },
+    {
+      "index": 2,
+      "name": "Check Top-Level Name",
+      "status": "not_run",
+      "skipped": false,
+      "started": "22:45:47",
+      "elapsed_start_s": 16,
+      "steps": [
+        "KLayout.CheckTopLevel"
+      ],
+      "step_dirs": [
+        "runs/run1/02-klayout-checktoplevel"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 5
+    },
+    {
+      "index": 3,
+      "name": "Check Slot Size",
+      "status": "not_run",
+      "skipped": false,
+      "started": "22:45:52",
+      "elapsed_start_s": 21,
+      "steps": [
+        "KLayout.CheckSize"
+      ],
+      "step_dirs": [
+        "runs/run1/03-klayout-checksize"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 3
+    },
+    {
+      "index": 4,
+      "name": "Check Pad Mask",
+      "status": "fail",
+      "skipped": false,
+      "started": "22:45:55",
+      "elapsed_start_s": 24,
+      "steps": [
+        "KLayout.CheckPadMask"
+      ],
+      "step_dirs": [
+        "runs/run1/04-klayout-checkpadmask"
+      ],
+      "verdicts": [],
+      "failure": {
+        "mode": "hard",
+        "rc": 1
+      },
+      "duration_s": null
+    }
+  ],
+  "skipped_steps": [],
+  "gates": [
+    {
+      "gate": "density",
+      "label": "KLayout density",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "zero_area",
+      "label": "KLayout zero area polygons",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "antenna",
+      "label": "KLayout antenna",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "magic_drc",
+      "label": "Magic DRC",
+      "blocking": false,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "klayout_drc",
+      "label": "KLayout DRC",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    }
+  ],
+  "metrics": {},
+  "reports": [],
+  "failure": {
+    "mode": "hard",
+    "stage": "Check Pad Mask",
+    "rc": 1,
+    "items": [],
+    "clock": "22:46:00",
+    "message": "The precheck failed with the following exception: Check Pad Mask: subprocess (1, ['klayout', '-b', '-zz', '-r', '/workspace/scripts/klayout/check_mask.drc', '-rd', 'input=/workspace/runs/run1/01-klayout-readl ayout/chip_top.gds', '-rd', 'mask=/workspace/assets/golden_masks/mask_1x 1.gds', '-rd', 'output=/workspace/runs/run1/04-klayout-chec kpadmask/masked.gds']) failed"
+  },
+  "summary": {
+    "result": "incomplete",
+    "completed": false,
+    "stages_run": 4,
+    "stages_expected": 17,
+    "stages_missing": [
+      "Generate ID",
+      "Render Image (w/ KLayout)",
+      "Density Check",
+      "KLayout Density Checker",
+      "Find Zero Area Polygons",
+      "KLayout Zero Area Polygons Checker",
+      "Antenna Check",
+      "KLayout Antenna Checker",
+      "Design Rule Checks",
+      "Magic Design Rule Checker",
+      "Design Rule Check (KLayout)",
+      "KLayout Design Rule Checker",
+      "Write the Layout"
+    ],
+    "blocking_failed": [],
+    "non_blocking": [],
+    "gates": {
+      "density": "unknown",
+      "zero_area": "unknown",
+      "antenna": "unknown",
+      "magic_drc": "unknown",
+      "klayout_drc": "unknown"
+    },
+    "metrics": {},
+    "flow_steps_seen": [],
+    "flow_skips_seen": []
+  }
+}

@@ -22,7 +22,7 @@ RV_DIR    = ../rv64imac/RTL
 # GF180MCU PDK (set in environment)
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 
-.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom clean
+.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom precheck_verdict clean
 
 all: gates
 
@@ -236,6 +236,42 @@ check_rom:
 		diff $(ROM_SRC) $(BUILD)/rom_expect.sv | head -20; exit 1; }
 
 
+
+# ============================================================
+# Clean
+# ============================================================
+# ============================================================
+# wafer.space pre-check verdict
+# ============================================================
+# The pre-check container exits 0 even when the flow fails, so its verdict has to be read out
+# of the log. tools/precheck_verdict.py does that and exits 0 = all blocking gates passed,
+# 1 = a blocking gate failed, 2 = the run aborted before the end, 3 = no verdict parseable.
+#
+#   make precheck_verdict PRECHECK_LOG=/path/precheck_ws.log
+#   make precheck_verdict PRECHECK_LOG=/path/precheck_ws.log PRECHECK_RUN=/path/runs/run2
+#   make precheck_verdict PRECHECK_LOG=... PRECHECK_EXPECT=pass   # assert the verdict
+#
+# PRECHECK_RUN adds the per-step metrics (state_in.json) and the per-check report tallies.
+# The JSON lands in $(PRECHECK_JSON) for CI and for the submission package.
+# Prefer python3, but take the first interpreter that actually runs Python 3: on Windows
+# `command -v python3` can resolve to a Microsoft Store stub that only prints a message.
+PRECHECK_PY     ?= $(shell for c in python3 python; do \
+		$$c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1 \
+		&& { echo $$c; break; }; done)
+PRECHECK_LOG    ?=
+PRECHECK_RUN    ?=
+PRECHECK_EXPECT ?=
+PRECHECK_JSON   ?= $(BUILD)/precheck_verdict.json
+
+precheck_verdict: $(BUILD)
+	@test -n "$(PRECHECK_LOG)" || { \
+		echo "FAIL: set PRECHECK_LOG=<precheck_ws.log> (optionally PRECHECK_RUN=<run dir>)"; \
+		echo "      the log is the only place the verdict exists -- the container exits 0"; \
+		exit 1; }
+	$(PRECHECK_PY) tools/precheck_verdict.py --log "$(PRECHECK_LOG)" \
+		$(if $(PRECHECK_RUN),--run-dir "$(PRECHECK_RUN)") \
+		--out "$(PRECHECK_JSON)" $(if $(PRECHECK_EXPECT),--expect $(PRECHECK_EXPECT))
+	@echo "verdict: $(PRECHECK_JSON)"
 
 # ============================================================
 # Clean

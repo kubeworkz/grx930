@@ -41,9 +41,28 @@ docker run -d --name ws_flow --user 0:0 -e HOME=/root \
   -v $ROOT:/work -e "WS_TAG=$TAG" -e "WS_LIMIT=${WS_LIMIT:-}" \
   $IMG /work/ws/ws_exec.sh >/dev/null
 say "WS_FLOW_LAUNCHED"
+
+# The routing verdict is written automatically from here on. watch_drt_curve.sh
+# waits for the detailed-routing step to appear (its deadline is IDLE hours, not
+# wall clock, so it survives the placement/CTS hours before the router starts),
+# rewrites logs/drt_verdict.md on every new iteration, and retires itself when
+# the container is gone. Flag-only by default: arming the kill is a deliberate
+# act (WATCH_KILL=1 in this chain's environment) and even then it only ever
+# SIGTERMs the OpenROAD whose command line names the routing script.
+if [ -x $WS/watch_drt_curve.sh ]; then
+  nohup env WATCH_KILL=${WATCH_KILL:-0} bash $WS/watch_drt_curve.sh --tag "$TAG" \
+      >> $WS/logs/drt_watch.nohup 2>&1 &
+  say "DRT_WATCHER_STARTED tag=$TAG kill=${WATCH_KILL:-0} pid=$!"
+else
+  say "DRT_WATCHER_MISSING (stage wafer_space_integration/watch_drt_curve.sh to $WS/)"
+fi
+
 while [ "$(ps_running ws_flow)" = "true" ]; do sleep 30; done
 docker logs ws_flow > $WS/logs/ws_flow.$TAG.log 2>&1
 say "WS_FLOW_EXIT rc=$(docker inspect -f '{{.State.ExitCode}}' ws_flow 2>/dev/null)"
+# The watcher's last verdict, if the run reached detailed routing at all.
+[ -f $WS/logs/drt_verdict.txt ] && say "DRT_VERDICT $(cat $WS/logs/drt_verdict.txt)" \
+  || say "DRT_VERDICT none (the flow never reached detailed routing)"
 say "WS_FLOW_LOG_MB $(stat -c %s $WS/logs/ws_flow.$TAG.log | awk '{printf "%.1f", $1/1048576}')"
 tail -6 $WS/logs/ws_flow.$TAG.log | tee -a $LOG
 grep -aE "ERROR|Fatal|error:" $WS/logs/ws_flow.$TAG.log | head -8 | tee -a $LOG

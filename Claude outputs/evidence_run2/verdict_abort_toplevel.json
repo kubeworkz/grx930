@@ -1,0 +1,172 @@
+{
+  "schema": "grx930.precheck-verdict/1",
+  "result": "incomplete",
+  "source": {
+    "log": "/home/kubew/submit/precheck_ws.log",
+    "run_dir": null,
+    "generated_utc": "2026-10-16T15:38:09Z"
+  },
+  "run": {
+    "tag": "RUN_2026-10-15_22-36-44",
+    "pdk": "gf180mcuD",
+    "pdk_root": "/workspace/gf180mcu",
+    "top_cell": "chip_top_template",
+    "die_id": "GRX93001",
+    "cob": "True",
+    "slot": "1x1",
+    "threads": "4",
+    "workers": "4",
+    "date": null,
+    "clock_start": "22:36:44",
+    "clock_end": "22:37:02",
+    "wall_seconds": 18,
+    "flow_progress": {
+      "stage_index": 2,
+      "stage": "Check Top-Level Name",
+      "done": 1,
+      "total": 17,
+      "elapsed": "0:00:17"
+    },
+    "wrapped_lines_rejoined": 23
+  },
+  "artifact": {
+    "path": "/host/chip_top_template.gds",
+    "sha256": "764c79babda6299b8ce9a7bf86662ca0c4459c6b404ffab4783e94840e068605"
+  },
+  "stages": [
+    {
+      "index": 1,
+      "name": "Read the Layout",
+      "status": "not_run",
+      "skipped": false,
+      "started": "22:36:44",
+      "elapsed_start_s": 0,
+      "steps": [
+        "KLayout.ReadLayout"
+      ],
+      "step_dirs": [
+        "runs/RUN_2026-10-15_22-36-44/01-klayout-readla yout"
+      ],
+      "verdicts": [],
+      "failure": null,
+      "duration_s": 15
+    },
+    {
+      "index": 2,
+      "name": "Check Top-Level Name",
+      "status": "fail",
+      "skipped": false,
+      "started": "22:36:59",
+      "elapsed_start_s": 15,
+      "steps": [
+        "KLayout.CheckTopLevel"
+      ],
+      "step_dirs": [
+        "runs/RUN_2026-10-15_22-36-44/02-klayout-checkt oplevel"
+      ],
+      "verdicts": [],
+      "failure": {
+        "mode": "hard",
+        "rc": 1
+      },
+      "duration_s": null
+    }
+  ],
+  "skipped_steps": [],
+  "gates": [
+    {
+      "gate": "density",
+      "label": "KLayout density",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "zero_area",
+      "label": "KLayout zero area polygons",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "antenna",
+      "label": "KLayout antenna",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "magic_drc",
+      "label": "Magic DRC",
+      "blocking": false,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    },
+    {
+      "gate": "klayout_drc",
+      "label": "KLayout DRC",
+      "blocking": true,
+      "status": "unknown",
+      "count": null,
+      "clock": null,
+      "stage": null,
+      "evidence": null
+    }
+  ],
+  "metrics": {},
+  "reports": [],
+  "failure": {
+    "mode": "hard",
+    "stage": "Check Top-Level Name",
+    "rc": 1,
+    "items": [],
+    "clock": "22:37:02",
+    "message": "The precheck failed with the following exception: Check Top-Level Name: subprocess (1, ['/nix/store/5pg1p37fxc5pyi40lfgay9s953yp3qd h-devshell-dir/bin/python3', '/workspace/scripts/klayout/check_top.py', '/workspace/runs/RUN_2026-10-15_22-36-44/01- klayout-readlayout/chip_top_template.gds', '--top', 'chip_top_template']) failed"
+  },
+  "summary": {
+    "result": "incomplete",
+    "completed": false,
+    "stages_run": 2,
+    "stages_expected": 16,
+    "stages_missing": [
+      "Check Slot Size",
+      "Generate ID",
+      "Render Image (w/ KLayout)",
+      "Density Check",
+      "KLayout Density Checker",
+      "Find Zero Area Polygons",
+      "KLayout Zero Area Polygons Checker",
+      "Antenna Check",
+      "KLayout Antenna Checker",
+      "Design Rule Checks",
+      "Magic Design Rule Checker",
+      "Design Rule Check (KLayout)",
+      "KLayout Design Rule Checker",
+      "Write the Layout"
+    ],
+    "blocking_failed": [],
+    "non_blocking": [],
+    "gates": {
+      "density": "unknown",
+      "zero_area": "unknown",
+      "antenna": "unknown",
+      "magic_drc": "unknown",
+      "klayout_drc": "unknown"
+    },
+    "metrics": {},
+    "flow_steps_seen": [],
+    "flow_skips_seen": []
+  }
+}

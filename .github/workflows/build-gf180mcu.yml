@@ -92,11 +92,11 @@
 #   Two things cover the gap, and neither depends on the queue:
 #
 #     * .githooks/pre-push runs this same script on the box before the push leaves
-#       it -- 124s for all nine gates -- and it stops a bad push rather than
+#       it -- the whole set, about 124s -- and it stops a bad push rather than
 #       reporting one late;
 #     * the `gates-push` job below is that same script on a runner this repo owns:
 #       self-hosted, in WSL on the build machine, whose Icarus is 12.0, the version
-#       the hosted image gets. The nine gates that take 124s on the box take about
+#       the hosted image gets. The same gates take about 124s on the box and about
 #       30s there, and start in seconds instead of whenever the queue moves. It
 #       exists because of this section: waiting ten hours for a thirty-second
 #       verdict is the problem, and no pin in this file can fix allocation latency.

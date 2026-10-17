@@ -29,15 +29,33 @@ From [gf180mcu-precheck](https://github.com/wafer-space/gf180mcu-precheck) (`pre
 - [ ] CoB cells (`gf180mcu_ws_ip__qrcode_id`, `__shuttle_id`, `__project_id`, `__marker`)
       present exactly once, at the template's locations — *only with `--cob`*
 - [ ] pad openings match the slot's pad mask
-- [ ] density check
+- [ ] density check (`DCF.1b` COMP+dummy COMP ≥ 25 %, `PL.8` Poly2 = 14 %, 6 metal bands)
+      — the PDK filler the flow runs today misses **both** active-layer floors on this die
+      (measured: COMP 20.18 %, Poly2 12.99 %), so `wafer_space_integration/fill/` replaces it
+      through `KLAYOUT_FILLER_SCRIPT`; that directory's `README.md` has the deck numbers
 - [ ] no zero-area polygons
 - [ ] KLayout antenna check
-- [ ] magic DRC
-- [ ] KLayout DRC
+- [ ] magic DRC — **a metric, not a gate**: the pre-check sets `ERROR_ON_MAGIC_DRC: False`
+- [ ] KLayout DRC (`all,-antenna,-density,-cup`, 737 rules)
+- (no LVS stage exists in the pre-check: its flow ends at `KLayout.WriteLayout`)
 
 Note the tool imports `librelane.steps.klayout`, so it needs a **LibreLane ≥ 3**
 environment (nix install per their README, or the LibreLane image) — not the OpenLane2
 2.3.10 image the OL2/core investigation uses.
+
+The pre-check container **exits 0 even when the flow fails**, so its verdict is not its exit
+code. Read it with `tools/precheck_verdict.py`, which turns the log (plus the run's step metrics
+and report JSONs) into one JSON object and a matching exit code:
+
+```sh
+python3 tools/precheck_verdict.py --log /path/precheck_ws.log --run-dir /path/runs/run2 \
+        --out verdict.json          # 0 = all gates passed, 1 = a gate failed, 2 = aborted, 3 = no verdict
+make precheck_verdict PRECHECK_LOG=/path/precheck_ws.log PRECHECK_RUN=/path/runs/run2
+```
+
+Its own test is `bash tools/precheck_verdict_selftest.sh` (fixture logs built from the real
+ones' line shapes: a clean run, the measured run2 outcome, both hard aborts, and an unparsable
+log).
 
 ## What the chip side already guarantees
 
@@ -56,7 +74,9 @@ environment (nix install per their README, or the LibreLane image) — not the O
 - [ ] pick the routing configuration from the OL2 fast-DRT arm (GRT adjustment / bottom
       layer) and run the **full template flow from a fresh run tag** (a resumed tag reuses
       its netlist; the RTL has changed since — caches, MMIO hold, boot ROM)
-- [ ] run the pre-check on the resulting `chip_top.gds` and fix findings
+- [ ] run the pre-check on the resulting `chip_top.gds` and fix findings; read the result with
+      `tools/precheck_verdict.py` rather than the container's exit code, and keep the JSON with
+      the submission (`Claude outputs/evidence_run2/verdict_*.json` are the template runs')
 - [ ] package for submission: GDS, gate-level netlist, SPEF, the DRC/LVS reports the
       pre-check produced, and a README describing the part
 
