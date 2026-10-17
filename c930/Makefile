@@ -901,6 +901,31 @@ shim_test:
 
 .PHONY: shim_test
 
+# ---------------------------------------------------------------------------
+# Gate C1(a)'s harness's own self-test (sim/pta_mnist.c), which needs no MNIST:
+# sim/pta_mnist.sh runs `pta_mnist selftest` before it trains anything, and this
+# is how to run it without the data.  Its check 3b is the seed sequence: every
+# issued tile command's PTA_SEED, in order, against the normative derivation of
+# grxcp's baseline section 7 (docs/designs/pta_fotonix_baseline.md), with the
+# calibration phase's base pinned -- so an index that restarts, a calibration
+# that stops numbering, or a base that moves is a red line and not a run whose
+# numbers quietly changed.
+#
+#   make pta_mnist_selftest   the self-test, check 3b included
+#   make pta_seed_seq_check   the four mutations that check 3b must catch
+# ---------------------------------------------------------------------------
+PTAM_DIR := build/pta_mnist_selftest
+
+.PHONY: pta_mnist_selftest pta_seed_seq_check
+pta_mnist_selftest:
+	@wsl.exe -e bash -c "mkdir -p $(PTAM_DIR) && \
+	  $(HOST_CC) -O2 -std=c99 -Wall -Wextra -pedantic -Isim \
+	    -o $(PTAM_DIR)/pta_mnist sim/pta_mnist.c sim/pta_tile_model.c -lm && \
+	  ./$(PTAM_DIR)/pta_mnist selftest"
+
+pta_seed_seq_check:
+	@wsl.exe -e bash -c "python3 sim/pta_seed_seq_mutants.py"
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(SW_ELF) $(SW_BIN) $(SW_HEX)
