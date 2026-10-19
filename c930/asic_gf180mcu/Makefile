@@ -22,7 +22,8 @@ RV_DIR    = ../rv64imac/RTL
 # GF180MCU PDK (set in environment)
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 
-.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom precheck_verdict clean
+.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom precheck_verdict \
+        lvs_chip_cells lvs_chip lvs_chip_pruned lvs_chip_collect clean
 
 all: gates
 
@@ -272,6 +273,28 @@ precheck_verdict: $(BUILD)
 		$(if $(PRECHECK_RUN),--run-dir "$(PRECHECK_RUN)") \
 		--out "$(PRECHECK_JSON)" $(if $(PRECHECK_EXPECT),--expect $(PRECHECK_EXPECT))
 	@echo "verdict: $(PRECHECK_JSON)"
+
+# ============================================================
+# Chip LVS on the artifact (doc/lvs_plan.md S2)
+# ============================================================
+# lvs_chip_cells is the fast half: three of the artifact's own cells through the deck, seconds.
+# lvs_chip is the whole die through the deck, which is hours on one core -- run it detached and
+# collect with lvs_chip_collect (see the header of build/lvs_chip_check.sh).
+# lvs_chip_pruned is the same die through the deck copy from build/lvs_chip_prune_deck.sh, which
+# skips device classes whose body region is empty: on the 5LM die that is 223 minutes of poly
+# resistor extraction that cannot produce a device (build/lvs_chip_prune_deck.sh measures it).
+lvs_chip_cells:
+	bash build/lvs_chip_cell_check.sh
+
+lvs_chip:
+	bash build/lvs_chip_check.sh
+
+lvs_chip_pruned:
+	bash build/lvs_chip_prune_deck.sh
+	bash build/lvs_chip_check.sh --deck build/lvs_chip/deck_pruned/gf180mcu.lvs
+
+lvs_chip_collect:
+	bash build/lvs_chip_collect.sh --now
 
 # ============================================================
 # Clean
