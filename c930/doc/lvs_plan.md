@@ -161,6 +161,62 @@ topology differences. Distinguish the third from the first two by checking a
 single module first: extract `u_core.u_alu` (or any small sub-block) and compare
 just that, which also gives an extraction-time estimate for the full chip.
 
+**S2 status (2026-10-18): the artifact has been rebuilt; its cells now LVS.**
+`wafer_space_submission/grx930_test_chip_final.gds` is left exactly as it was submitted — it is
+the evidence — and `tools/lvs_chip/stream_out.py` writes the file the flow should have written:
+`build/lvs_chip/stream_out.gds`, 59.5 MB, built from the DEF's 53,745 `COMPONENTS` (all on the
+row grid, all inside the die), the PDK library's 34 used cells, the routing the die already had,
+and the PDK's layer numbers. `tools/lvs_chip/stream_check.py` measures it: device layers 5/5,
+metal 9/9, labels 2/2, 34/34 cells carrying the library's device layers, 53,745/53,745 placements
+at the DEF position with the DEF orientation, and every routing layer identical to the artifact's
+(34/0 32,814; 36/0 354,166; 42/0 100,761; 46/0 12,279; 81/0 1,302 — all top-cell-owned, because
+the library cells legitimately add metal of their own).
+
+`build/lvs_chip_cell_check.sh` is the fast half of S2 and it runs in seconds: it cuts a cell out of
+the file and runs the same deck against the same library netlist. On the repaired stream the
+`clkinv_1`, `nand2_1` and `dffq_1` layouts extract 2, 4 and 24 transistors — exactly the counts in
+the CDL, with the library's W/L (pfet 1.22/0.5, nfet 0.48/0.6 on the inverter). With `--old` the
+same command on the shipped artifact extracts **no transistor cards at all** from all three. The
+port comparison is skipped in that check (`--no-port-check`) and the reason is measured rather than
+assumed: a standard cell drawn alone has no body-terminal labels, so the deck lists layout
+`VSS VDD I ZN SUB` against schematic `I ZN VDD VNW VPW VSS`; the chip CDL binds `VNW`/`VPW` to the
+rails, and the chip run is where that binding is judged.
+
+The chip run itself is `build/lvs_chip_check.sh` → `build/lvs_chip_collect.sh`, deck switches
+`run_mode=tiling metal_level=5LM`, output in `build/lvs_chip/run_chip_stream/`. `deep` was killed
+at 158 min (exit 137) at 3.6 of 5.8 GiB before it reached device extraction; tiling measures
+2.3–4.6 GiB and gets through it, at the cost of walking 500 µm tiles for every device class —
+hours, one core. Evidence lands in `Claude outputs/evidence_lvs_chip/chip_stream/`.
+
+**S2 status until 2026-10-17: the artifact could not be LVS'd at all, and the reason was in the file.**
+`grx930_test_chip_final.gds` carries no device geometry: its standard cells are LEF abstracts
+(pin rectangles, wells, a `SIZE` boundary — `clkinv_1` has the LEF's six Metal1 pin shapes and
+nothing on comp, poly2, contact, nplus, pplus or dualgate, where the PDK library GDS for the same
+cell has all of them), and its layer numbers are a LEF/DEF index scheme (`Metal1 = 5/0` …
+`Metal5 = 13/0`, Pwell 1, Nwell 2) rather than the PDK's (comp 22/0, poly2 30/0, contact 33/0,
+metal1 34/0, via1 35/0 … metal5 81/0). The deck therefore reads
+`Total no. of polygons in the design is 0` from it — see `Claude outputs/evidence_lvs_chip/`,
+where the die's numbering is derived from the DEF's own `VIAS` definitions (the via cells' cut
+arrays of 9 and 8 are the DEF's `ROWCOL 3 3` and `4 2`) instead of being taken from
+`wafer_space_submission/verify_layers.py`, which asserts a map that is off by one from Metal1
+onward. That paragraph is kept because it is what the tree believed until the stream-out was
+rebuilt; `tools/lvs_chip/reconstruct_die.py` reproduced the artifact's placements, which are the
+ones that are wrong (30,130 of 53,745, and every `FS` cell one row high), so it is superseded by
+`tools/lvs_chip/stream_out.py`.
+
+**S2 status (2026-10-18), the deck run:** the chip run stopped twice inside the deck's resistor
+classes, and the reason is in the deck's own load report — `res_mk` 0, `resistor` 0, `sab` 0,
+`cap_mk` 0, `mos_cap_mk` 0, `efuse_mk` 0 polygons on this die. A class whose body region is empty
+cannot produce a device, yet in `run_mode=tiling` each one still walks the contacts of all 88
+tiles: measured gaps of 6, **223** and **61** minutes between one call and the next in
+`build/lvs_chip/run_chip_stream_attempt1/klayout.log`, and **6 h 04 min** in
+`PPOLYF_U_DW_1K_6p0_dw` in the run that was stopped at 21:16 (6 h CPU, one core, 4.7 GiB).
+`build/lvs_chip_prune_deck.sh` generates a deck copy whose extractions return early when the body
+has no polygons and log the zero; on this die that skips 34 of 151 calls (all resistor classes plus
+the eFuse, no MOS), and extraction then finishes in **12 minutes**. `build/lvs_chip_check.sh
+--deck build/lvs_chip/deck_pruned/gf180mcu.lvs` is the run to use; the unmodified deck is not a
+ten-minute job on this die and is not a hang.
+
 **If S2 matches:** we own a proven LVS pipeline and a stated fact about the
 September artifact. If it mismatches with a small diff, that is the most
 informative result available today (it is a stale-pair finding, and the
@@ -385,8 +441,10 @@ green on the first full refresh.
 
 **Next actions, in order**
 
-1. S2 on `grx930_test_chip_final.gds` plus a SPICE conversion of
-   `build/grx930_test_chip_routed.v`, measuring extraction on a sub-block first.
+1. S2's verdict on the rebuilt stream-out (`bash build/lvs_chip_check.sh`, then
+`bash build/lvs_chip_collect.sh`), which is the closest
+   thing to a chip LVS available until the flow streams out real cells; the artifact itself is
+   not LVS-able (see the S2 status above).
 2. S1b (magic+netgen) stays blocked until this PDK install has device models; its
    placeholder mismatch is not a layout finding.
 

@@ -1,0 +1,6 @@
+Sat Oct 17 23:48:05 UTC 2026
+image   ghcr.io/efabless/openlane2:2.3.10
+deck    c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs
+layout  c930/asic_gf180mcu/build/lvs_chip/reconstructed.gds
+netlist c930/asic_gf180mcu/build/lvs_chip/grx930_test_chip.cdl
+out     c930/asic_gf180mcu/build/lvs_chip/run_chip

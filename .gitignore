@@ -70,3 +70,7 @@ vivado.log
 
 # KLayout LVS runs (fixture reports, extracted netlists, lvsdb)
 c930/asic_gf180mcu/lvs_runs/
+
+# Python bytecode from the tools/ scripts
+__pycache__/
+*.pyc

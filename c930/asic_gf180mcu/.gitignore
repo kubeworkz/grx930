@@ -25,6 +25,17 @@ build/*
 # gate all read. Without this line it is silently untracked, so CI would check out no manifest
 # at all and the family evidence would describe a list nobody can see.
 !build/lvs_fixtures.tsv
+# ... and the die's LVS probes are source too: the crop that brackets the deck's `align`, the
+# deck DSL probe that answers whether `threads` exists, and the per-cell probes. They are what
+# doc/lvs_plan.md and the stream-out report cite, and they are small. What the runs write beside
+# them -- layouts, netlists, logs -- stays ignored.
+!build/lvs_chip/
+build/lvs_chip/*
+!build/lvs_chip/probe/
+build/lvs_chip/probe/*
+!build/lvs_chip/probe/*.py
+!build/lvs_chip/probe/*.lvs
+!build/lvs_chip/probe/*.rb
 openlane2_rtl/runs/
 openlane2_design/runs/
 
