@@ -363,6 +363,28 @@ What it does not say: nothing about geometry. The router's own database agreeing
 is not the same as the streamed GDS carrying that routing -- that is `stream_check.py`'s job, and
 the deck's. So S2 now reads: **cells 34/34 MATCH (deck, real extraction); top-level connectivity
 MATCH (DEF vs CDL, 5 s); the deck's own flat/hierarchical verdict on the streamed layout is still
-outstanding, and the netter is the reason, measured at 9 h 13 min without returning.** The next
-thing to try is not patience: it is the netter's `max_vertex_count` (16) and per-layer polygon
-counts, because a netter that is quadratic in substrate-sized polygons would look exactly like this.
+outstanding, and the netter is the reason, measured at 9 h 13 min without returning.**
+
+The obvious explanation was a netter that is quadratic in a few giant substrate polygons, and it is
+wrong: `build/lvs_chip/probe/layer_shape_stats.py` counts every shape the top cell carries
+recursively, and the largest polygon in the file has **32 vertices** (metal1), with none over 64 on
+any layer. What the netter actually faces is breadth:
+
+| layer | shapes | max vertices |
+|---|---|---|
+| `34/0` metal1 | 742,140 | 32 |
+| `36/0` metal2 | 743,275 | — |
+| `40/0` via3 | 615,819 | — |
+| `42/0` metal3 | 319,973 | — |
+| `33/0` contact | 1,166,857 | — |
+| `41/0` via4 | 1,353,041 | — |
+| `30/0` poly2 | 368,897 | 24 |
+| `22/0` comp | 167,771 | 18 |
+
+The tiled netlist is flat, so those 7.4 M shapes become one connectivity graph with no hierarchy to
+reuse -- which is the same reason the tiler was introduced for extraction. The lever that is left is
+therefore `deep`, where the netting is 34 cells plus a top level, and it has only ever been given 30
+minutes after its 27 minutes of extraction. That run is detached as
+`docker run -d --name lvs_deep_net ... --switch run_mode=deep --switch net_only=true --switch
+threads=4` and its netlist, when it lands in `build/lvs_chip/run_deep_net/extracted.cir`, is what the
+aligner then gets to see.
