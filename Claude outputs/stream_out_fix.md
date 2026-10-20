@@ -388,3 +388,24 @@ minutes after its 27 minutes of extraction. That run is detached as
 `docker run -d --name lvs_deep_net ... --switch run_mode=deep --switch net_only=true --switch
 threads=4` and its netlist, when it lands in `build/lvs_chip/run_deep_net/extracted.cir`, is what the
 aligner then gets to see.
+
+**The deep run, measured (2026-10-20).** Extraction is what four threads fixed: 36.1 min for every
+device class in `deep`, against 27 min on one core, then 27 s of `connect` statements, and the
+comparison banner at 12:43:40 UTC. The netter has been in it since, and the answer so far is neither
+of the two outcomes -- no `extracted.cir`, no death (`OOMKilled=false`), one core at 93-117 %, for
+**3 h 08 min** at the time of writing. What it is doing is visible in its footprint:
+
+| netter elapsed | resident |
+|---|---|
+| 5 min | 1.1 GiB |
+| 40 min | 1.8 GiB |
+| 58 min | 3.1 GiB |
+| 68 min | 4.2 GiB |
+| 90 min - 188 min | **4.1-4.7 GiB, oscillating, no trend** |
+
+That is a different curve from the tiled run, which was flat at 4.5 GiB from its first hour, and the
+same outcome so far: state built for about an hour, then a plateau under the 5.79 GiB the container
+may use. Either it finishes, and the netlist goes to `align_bench.rb`, or it hits the ceiling and the
+finding becomes "deep does not fit this box either" -- both are answers, and neither had been measured
+before this run. `build/lvs_chip/run_deep_net/watch.log` is the one-line-a-minute record (a watcher
+container writes it, so it survives the polling stopping).
