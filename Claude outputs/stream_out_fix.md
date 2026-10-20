@@ -409,3 +409,88 @@ may use. Either it finishes, and the netlist goes to `align_bench.rb`, or it hit
 finding becomes "deep does not fit this box either" -- both are answers, and neither had been measured
 before this run. `build/lvs_chip/run_deep_net/watch.log` is the one-line-a-minute record (a watcher
 container writes it, so it survives the polling stopping).
+
+### 4f. The wall is `netlist`, not `align` -- and the comparer is not the cost
+
+Two measurements taken while that run was still netting, and together they move the lever.
+
+**1. `align` is never entered in this run.** `docker inspect lvs_deep_net --format '{{json .Config.Cmd}}'`
+ends `--switch run_mode=deep --switch net_only=true --switch threads=4`. The probe deck's comparison
+section, read from `build/lvs_chip/deck_probe/gf180mcu.lvs:482`, is
+
+```ruby
+logger.info('Starting GF180 LVS comparison section')
+probe('comparison section')
+if $net_only
+  netlist
+  probe('netlist written before align')
+  return
+end
+probe('before align')
+```
+
+so with `net_only` set the deck calls `netlist` and returns. `probe.log`'s last line is
+`12:43:40 comparison section` and there is no `before align` after it -- not because a probe was lost,
+but because that statement was not reached. The **3 h 55 min is inside `netlist`**, the netter that
+turns 7.4 M polygons and 644,699 via placements into one connectivity graph.
+
+That agrees with `doc/lvs_plan.md` §S2's 2026-10-20 entry, which had already concluded "it is the
+netter, not the comparer", and it supersedes the 2026-10-19 entry's "the wall is `align`": in this run
+the aligner was never entered at all, so the older statement rests on source order rather than a
+record. A normal (non-`net_only`) run shows the same wall because `align` invokes the same netter
+first -- but the phase to attack is the netter, and the deck's comparison-section probe fires before
+it, not after.
+
+**2. The comparer handles this design's instance count in a minute.** `probe/align_bench.rb` on the
+chip CDL against itself, capped at 700 MB (`--memory 700m --memory-swap 1400m`, so it could not have
+pushed the running netter out of memory):
+
+```
+read layout    grx930_test_chip.cdl      11.2 s
+read schematic grx930_test_chip.cdl       5.9 s
+layout    circuits=35 devices=370 subcircuits=53745
+common circuits 35   only in layout 0   only in schematic 0
+RESULT MATCH in 50.5 s        wall 104 s
+```
+
+Two things fall out of that line. The schematic side is **hierarchical**: 370 primitive devices in 34
+cell subcircuits plus a top with 53,745 `X` instances -- not 300 k flattened devices. And the comparer
+solves 53,745 instances in **50.5 s**. So `max_branch_complexity` and `max_depth`, which bound the
+comparer (`netlist_api.rb`/`align_bench.rb`), cannot be what is costing hours here; those knobs were
+aimed at the wrong phase. The same bench on a real extracted cell netlist
+(`cell_lvs_stream/run_clkinv_1/extracted.cir` vs `probe/gf180mcu_fd_sc_mcu7t5v0__clkinv_1.cdl`)
+returns `RESULT MATCH`, 2 devices, 0.0 s -- so the instrument itself is sound before it is pointed at
+the die.
+
+**What that leaves as the lever** is the breadth the netter unions, which is the table above: 1.35 M
+`41/0`, 1.17 M `33/0`, 742 k `34/0`, 744 k `36/0` shapes. Merging touching shapes per layer before
+netting is electrically neutral (connectivity is overlap, not shape identity) and is the next
+experiment; it cannot be run beside the live netter, which is why it was queued rather than started.
+
+**The wait now has a clock.** `build/lvs_chip/run_deep_net/deadline_watch.sh` runs detached and stops
+(never deletes) `lvs_deep_net` at 18:30 UTC if `extracted.cir` has not appeared -- just past the
+5 h 45 min after which this deck has never returned in this tree. It appends why it ended to
+`build/lvs_chip/run_deep_net/deadline.log`, whether the reason is the netlist arriving, the container
+dying on its own (with `exit=` and `oom=` from `docker inspect`), or the deadline.
+
+**The clock ran out, and the result is a negative one.**
+
+```
+2026-10-20T18:30:39Z DEADLINE reached -- stopping lvs_deep_net
+lvs_deep_net
+2026-10-20T18:30:39Z stop rc=0
+```
+
+`extracted.cir` never appeared, `docker inspect` reads `status=exited exit=137 oom=false` (137 is the
+`SIGKILL` from `docker stop`, not a kill by the host), and the run therefore ends **5 h 46 min inside
+`netlist`** (comparison section `12:43:40Z`, stop `18:30:39Z`) with the aligner still never entered.
+Deep net-only does not fit this box either: every die-sized netting configuration this tree has tried
+-- 30 min, 3 h 08 min, 5 h 46 min, 9 h 13 min -- now ends the same way, and none of them was killed
+by memory pressure, so the bound is time in the netter's union, not capacity.
+
+One correction to the instrument, since `deadline.log` looks like a footprint curve and is not: its
+`mem=` field is populated from `docker inspect -f '{{.State.Pid}}'`, so `mem=64312` is the container's
+PID and is constant by construction. Neither that log nor `watch.log` records resident memory at all
+(`watch.sh` writes `cir_bytes`, `cir_lines` and the last line of two logs), so the footprint here comes
+from live `docker stats` polls -- 3.50 GiB of 5.787 GiB late in this run, 4.1-4.7 GiB in the earlier
+one-core run -- and a run that wants a curve has to log it.

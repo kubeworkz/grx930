@@ -267,6 +267,24 @@ streamed layout still CANNOT-RUN -- the netter, measured at 9 h 13 min without r
 lever is not patience: it is the netter's `max_vertex_count` (16) and the per-layer polygon counts,
 because quadratic behaviour in substrate-sized polygons would look exactly like this.
 
+**Two measurements since then close off that guess and name a different lever (2026-10-20).**
+`build/lvs_chip/probe/align_bench.rb` compares the chip CDL against itself -- 35 circuits, 370
+primitive devices, 53,745 subcircuits -- in **50.5 s**, capped at 700 MB so it could not disturb the
+live run. The comparer is therefore not the cost, and neither can be its bounds:
+`max_branch_complexity` and `max_depth` only bound the comparer. Nor is any polygon substrate-sized --
+the worst vertex count anywhere in `stream_out.gds` is **32** (`Claude outputs/stream_out_fix.md` §4e),
+so `max_vertex_count` = 16 has little left to bound. What remains is breadth: 1.35 M shapes on `41/0`,
+1.17 M on `33/0`, 742 k on `34/0`, 744 k on `36/0`, all of which the netter must union into one graph.
+Per-layer `merge` before netting is the lever that reduces that without changing connectivity, since
+connectivity is overlap, not shape identity. The argv evidence that the aligner is never reached in a
+`net_only` run, and these two numbers, are recorded in `Claude outputs/stream_out_fix.md` §4f.
+
+The deep run has since closed that line negatively: it reached the comparison section at 12:43:40Z,
+was stopped by its own deadline at 18:30:39Z, wrote no netlist, and exited 137 with `oom=false` -- so
+`deep` is another configuration that does not return, and the netter is the bound rather than the
+box. The `merge`-before-netting experiment is what is left to run, and it is the one that changes the
+work the netter does rather than the patch of wall clock it is given.
+
 **If S2 matches:** we own a proven LVS pipeline and a stated fact about the
 September artifact. If it mismatches with a small diff, that is the most
 informative result available today (it is a stale-pair finding, and the
