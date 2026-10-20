@@ -205,12 +205,60 @@ not the difference (4.7 GiB peak at 4 threads against 4.5 GiB at 1, in a 5.79 Gi
 in the deck reads the thread count except that one line. What is established is that the phase the
 first two runs died in is three orders of magnitude cheaper with the tiling engine's threads set.
 
-Where the runs now sit is the comparison prologue itself: `align`, the first statement after the
-banner. Tiling entered it at 15:05:46Z and was stopped after 45 min; the deep run entered it at
-16:19:29Z and was still in it 48 min later, when this was written, at ~100 % of one core, memory
-between 1.0 and 1.6 GiB.
-`align` is the engine's netlist alignment step, not a tiled operation, so the thread count that
-broke the earlier wall does not reach it.
+**Correction (2026-10-19): the marker that was supposed to bound this phase did not reach the file.**
+The paragraph below used to read "`align` is where the runs sit" on the strength of source order:
+`logger.info('PROBE: before align')` is the line after the banner, so a log that stops at the banner
+was read as a run that had entered `align`. It is not what the log says. The logger's own writes
+stop at the banner -- in `build/lvs_chip/run_chip_stream/klayout.silent_6h.log` and in
+`klayout.align_default_13min.log`, the last line is `Starting GF180 LVS comparison section` and the
+`PROBE: before align` that follows it in the source is absent, although the only statement between
+them is `connect_implicit('*') if IMPLICIT_CONNECT` and the same log prints
+`Selected IMPLICIT_CONNECT option: false`. A marker that can be missing cannot bound anything, so
+`build/lvs_chip_probe_deck.sh` was rebuilt to stop using the logger: it inserts a `probe()` helper
+that opens its own file, sets `sync`, and flushes every line. A `before X` with no `after X` in
+that file means X had not returned when the run stopped.
+
+With that sink the phase is named for the first time, in a deep run of the pruned deck (probe deck,
+`--threads 4`):
+
+```
+21:38:15  deck start
+22:46:09  after connect_implicit 0.0 s
+22:46:09  comparison section
+22:46:09  before align
+          (no `after align`; stopped at 22:59:30, 13 min later)
+```
+
+Extraction is the 67 min 54 s before the banner, `connect_implicit` is skipped, and `align` is
+the statement the run stops in. The run that was left alone at the vendor defaults
+(`klayout.silent_6h.log`, 15:58:22Z start, banner 16:19:29Z, killed 22:00Z) spent **5 h 40 min**
+in it without returning. So the earlier conclusion was right about *which* statement, and it was
+right by accident; the instrument that now says so is the flushed sink, and the numbers above are
+where the claim comes from.
+
+**What the engine exposes, measured in the image (KLayout 0.29.4).** The deck's context is
+`LVS::LVSEngine`, and `build/lvs_chip/probe/align_api.rb` plus a cell run of the same deck answer
+what it has: `align` and `compare` (both varargs, documented `Usage: align` / `Usage: compare`),
+`threads` / `threads=`, `max_vertex_count` (reads back **16**), and setters `max_branch_complexity(n)`
+and `max_depth(n)` -- KLayout's own reference calls those "maximum branch complexity for ambiguous
+net matching" and "maximum search depth for net match deduction". Two facts matter for the deck and
+were not obvious:
+
+* the tiling directive the pruned deck already carries, `threads(($threads || 1).to_i)`, does **not**
+  set the engine's property: a cell run that executes it still reads `threads` as `nil`, while
+  `self.threads = 4` reads back as 4. Both are now set in the deck, so `--threads N` reaches the
+  comparison as well as the tiler;
+* the deck's own `NET_ONLY` return sits **after** `align` (`netlist if NET_ONLY; return if
+  NET_ONLY`), so `lvs_chip_check.sh --net-only` on this deck waits for the aligner before writing a
+  netlist -- it waits for exactly the statement under measurement. The probe deck now dumps the
+  netlist at the comparison banner and returns there when `net_only` is set, which is what makes the
+  offline bench below possible.
+
+**The other half of S2 is now complete and does not depend on any of this: every cell in the die
+matches.** `build/lvs_chip_cell_check.sh --cells "$(all 34)"` on `stream_out.gds` returns
+`LVS-CELL: PASS`, 34 of 34 `verdict MATCH` (`build/lvs_chip/all_cells_check.log`), each cell cut out
+of the streamed file and compared against its library CDL subcircuit. That is the same deck, the same
+file and the same netlist the chip run uses; what is left is the top-level connectivity between them.
 
 **Bracketing `align` was attempted, and the attempt failed in a way worth recording.**
 `build/lvs_chip/probe/crop.py` clips the die to a 400, 800 or 1600 um window so the same deck can be
@@ -239,13 +287,82 @@ There is no larger VM to give it. The host is **8.29 GB of physical RAM in total
 twice under the earlier runs -- 23:52:18Z (19:52 local) and 03:13:20Z -- each time as
 `error waiting for container: unexpected EOF`, i.e. the daemon going away, not the deck returning.
 
+The bracket above is superseded as an instrument by the netlist bench, not by a better crop: once
+the extracted netlist is on disk, the comparer can be timed on it directly, with no extraction in
+front of each data point. `build/lvs_chip/probe/align_bench.rb` reads the two netlists and prints
+what the aligner is facing -- circuits in common, circuits only on one side -- and then times
+`RBA::NetlistComparer` at the bounds it is given; `build/lvs_chip/probe/align_sweep.sh` runs a grid
+of them, one process per point under `timeout`, so "did not return" is distinguishable from
+"mismatch". The crop's remaining value is that it measured the deck end to end; the bench's is that
+it can afford to measure ten points.
+
 ### 4d. What this document does not yet say
 
-The chip verdict is not here: the comparison has now been reached in both modes, but it has not
-returned. What changed with the probe run is where the wall is. It was never the size of the layout
-(extraction is 13 min) and never the substrate section (under a second); it is `align` at the top of
-the comparison prologue, which this box can start and has not yet watched finish -- 45 min in tiling
-(stopped) and 48 min and counting in deep. The artifact-level result stands
+The chip verdict is not here yet, but the shape of what is missing has changed. Every cell in the
+die matches (34 of 34, `LVS-CELL: PASS`, this section above); what is not answered is the top-level
+comparison, and the statement it is stuck in is `align`, measured rather than inferred (13 min in a
+deliberately stopped run, 5 h 40 min in the run that was left alone at the vendor defaults). The
+engine's ambiguity bounds and its own thread count are reachable from the deck now, and the
+extracted netlist can be dumped before `align` and benchmarked offline, which is the work in
+progress at the time of writing. The artifact-level result stands
 unchanged: the shipped GDS could not have been LVS'd, the reason is not one thing but four (layer
 map, abstracts, the 195 invented instances, the 30,130 row- or x-shifted cells), and the
 replacement file extracts the library's transistors with the library's dimensions.
+
+### 4e. The netter, measured, and the top level answered without it
+
+`align` is the netter and the aligner in one statement, and the netter is what does not return. Two
+runs were left alive long enough to say so, and the container they ran in was sampled while they
+were in it:
+
+| run | deck | mode | reached the comparison banner | then, in `align` |
+|---|---|---|---|---|
+| 1 | pruned + probe | `deep` | yes | killed at 30 min (no line after `before align`) |
+| 2 | pruned + probe, `net_only` | `tiling`, 4 threads | yes, 10 min | **9 h 13 min**, one core at 1.13 CPU, 4.5 GiB resident, no output |
+
+Run 2 is the measurement, not an impression: `/sys/fs/cgroup/cpu.stat` advanced 17.29 s of CPU per
+15.3 s of wall clock, `VmRSS` sat at 4.5 GB of the 5.8 GB the container is given, and the probe file
+last changed at the banner. The tiled netlist is flat -- 53,751 nets, 203,400 pins -- and a flat
+netter that needs nine hours for that is not a thing to wait on, so the run was stopped (it was also
+starving the box: a second `docker run` failed inside CPython's import machinery with `OSError:
+[Errno 12] Cannot allocate memory`).
+
+**The top level does not need the netter to be answered.** A flat LVS comparison, once the cells are
+proven (34 of 34, §4a), is a statement about how pins are grouped into nets. Both groupings are
+already on disk: the DEF the flow routed, and the CDL the deck reads. `tools/lvs_chip/net_compare.py`
+compares them as multisets of pin sets, so it cannot pass by comparing names -- and it does not have
+to know any, because the DEF's nets are `_00000_` and the CDL's are
+`u_cpu.u_riscv_core_pipe_alu_result_ex_mem.o_pipe_out[0]`:
+
+```
+$ python3 tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def \
+      --cdl build/lvs_chip/grx930_test_chip.cdl              # 5.0 s, 83 MB of input
+   top grx930_test_chip: DEF 53745 components / 53758 nets / 9 ports;
+                         CDL 53745 instances / 35 subcircuits / 9 ports
+   instances: same set; cells: 34 kinds, 53745 placements
+== signal partition: DEF 53751 nets / 203400 pins; CDL 53751 nets / 203400 pins
+   pins per instance: 53745 of 53745 complete
+== power: DEF SPECIALNETS ['VDD', 'VSS', 'one_', 'zero_'] (wildcards {'VDD': ['VDD'], 'VSS': ['VSS']});
+          CDL binds {'VDD->VDD': 53745, 'VNW->VNW': 53745, 'VPW->SUB': 53745, 'VSS->VSS': 53745}
+NET-COMPARE: MATCH the routed database and the schematic group the same pins
+```
+
+That is the die's top level, matched, in five seconds. Three things make it an answer rather than a
+tautology. Its first two runs were **wrong**, and the reasons were caught by the tool's own
+cross-check rather than by inspection: a DEF this large wraps each net's pin list onto following
+`(` lines, so reading only the `- name ...` line lost 61,562 pins and 43,869 instances looked
+short; and every port appeared twice because DEF spells `i_clk` where the CDL's pin comparison
+upper-cases. Then a mutation: one pin moved off the CDL's 14,496-pin clock net, nothing else
+changed, and the tool reports exactly that pin, `exit=1` (`evidence_lvs_chip/chip_stream/
+net_compare.txt`). `build/lvs_chip_net_compare_selftest.sh` keeps the same properties on ten
+fixtures with no docker, no PDK and no layout -- including a DEF whose pin lists wrap, a DEF whose
+`ROUTED`/`NEW` coordinates look like pins, a merged net, a dangling port and a missing power
+wildcard, each of which must fail and does.
+
+What it does not say: nothing about geometry. The router's own database agreeing with the schematic
+is not the same as the streamed GDS carrying that routing -- that is `stream_check.py`'s job, and
+the deck's. So S2 now reads: **cells 34/34 MATCH (deck, real extraction); top-level connectivity
+MATCH (DEF vs CDL, 5 s); the deck's own flat/hierarchical verdict on the streamed layout is still
+outstanding, and the netter is the reason, measured at 9 h 13 min without returning.** The next
+thing to try is not patience: it is the netter's `max_vertex_count` (16) and per-layer polygon
+counts, because a netter that is quadratic in substrate-sized polygons would look exactly like this.

@@ -1,50 +1,48 @@
 #!/usr/bin/env bash
-# lvs_chip_probe_deck.sh -- a copy of the pruned deck with a log line in front of every phase
-# boundary, so the silent part of the chip run stops being silent.
+# lvs_chip_probe_deck.sh -- a copy of the pruned deck whose phase boundaries write to their own file.
 #
-# WHY THIS EXISTS
+# WHY THIS EXISTS, AND WHY IT CHANGED
 #
-#   Two full chip runs have now spent hours in a phase that prints nothing. Measured, from the
-#   runs' own logs:
+#   A chip run reaches the comparison section and then prints nothing for hours. The first version
+#   of this script put `logger.info('PROBE: before X')` in front of each statement of the
+#   comparison prologue and read the answer off the deck's own log. That answer does not exist:
+#   in build/lvs_chip/run_chip_stream/klayout.log the last line is
 #
-#     build/lvs_chip/pruned_tiling_attempt1.klayout.log   tiling
-#         00:06:20  Starting GF180MCU LVS runset
-#         00:21:42  SKIP device extraction (efuse -- the last extraction include)
-#         (nothing for 2 h 52 min, ~100 % CPU, 4.5 of 5.8 GiB, until Docker Desktop died)
-#     build/lvs_chip/run_chip_stream/klayout.log          deep
-#         03:43:58  the same line, the same silence after it
+#     2026-10-19 16:19:29 +0000: ... : Starting GF180 LVS comparison section
 #
-#   The next line the deck itself would print is 'Starting GF180 LVS comparison section'. It never
-#   appeared, so the time is spent between the last `%include` and that banner -- that is,
-#   in substrate_connections.lvs and in the deck's own comparison prologue (`align`,
-#   make_top_level_pins, simplify, combine_devices, purge_nets, purge, max_res, min_caps), none of
-#   which logs anything. Which of those statements it is cannot be read off the source; it has to
-#   be measured. This script makes the copy that measures it.
+#   and the very next marker the deck writes -- `PROBE: before align` -- never appeared, although
+#   the only statement between them is `connect_implicit('*') if IMPLICIT_CONNECT` and the same
+#   log says `Selected IMPLICIT_CONNECT option: false`. Either the statement was skipped and the
+#   marker after it went missing, or the log's writes are not reaching the file. A marker that can
+#   be lost cannot bound a phase, and "the wall is align" was read off the source order, not off a
+#   measurement. This version stops depending on the logger.
 #
-# WHAT IT MEASURED (2026-10-19, tiling, --threads 4)
-#
-#   Not the substrate section. All ten of its statements finish in under a second (worst:
-#   sub.andnot(isosub) 0.8 s), and the banner is printed 4 s after the efuse skip, 13 min 28 s into
-#   the run -- against two 1-thread runs that never printed it in 2 h 51 min and 1 h 46 min. The
-#   run then sits in `align`, the first statement after the banner, which is where it was still
-#   working when the measurement was written down. See Claude outputs/stream_out_fix.md §4c.
+#   probe() below opens its own file, sets sync, writes one line and flushes. A marker that is
+#   absent from that file means the statement before it had not returned when the run stopped, and
+#   the last line present names that statement. The path is -rd probe_log=<file> if given, else
+#   probe.log in the report's directory, else ./lvs_probe.log.
 #
 # WHAT IT WRITES
 #
-#   build/lvs_chip/deck_probe/   deck_pruned plus one `logger.info('PROBE: ...')` line before each
-#                                of the statements named above, and one after substrate_connections
-#                                and after each of them, so a phase is bounded by the markers that
-#                                surround it. Nothing else changes: the markers only print.
+#   build/lvs_chip/deck_probe/   deck_pruned plus, around every statement of the comparison
+#                                prologue and every statement of substrate_connections.lvs, a
+#                                flushed `before`/`after <elapsed> s` pair -- and one marker on
+#                                the comparison banner itself, and one around connect_implicit.
+#                                Under -rd net_only=true the banner also dumps the extracted
+#                                netlist and returns, because the deck's own NET_ONLY return is
+#                                after `align` and would wait for the aligner. Nothing else
+#                                changes: the markers only write.
 #
 #   Run it the same way as the pruned deck:
 #     bash build/lvs_chip_probe_deck.sh
-#     bash build/lvs_chip_check.sh --no-reconstruct --mode deep \
+#     bash build/lvs_chip_check.sh --no-reconstruct --mode deep --threads 4 \
 #          --deck build/lvs_chip/deck_probe/gf180mcu.lvs
+#   then read build/lvs_chip/run_chip_stream/probe.log while it runs, not only after.
 #
 #   This copy is for diagnosis, not for a verdict: it is not the vendor deck and not the pruned
 #   one. A run through it answers "where did the hours go", and its netlist still has to be
-#   checked -- a deck that only prints cannot change a verdict, but the rule file it runs is
-#   nevertheless one more thing that has been edited, so a PASS from it is not the chip's PASS.
+#   checked -- a deck that only writes markers cannot change a verdict, but the rule file it runs
+#   is nevertheless one more thing that has been edited, so a PASS from it is not the chip's PASS.
 set -u
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -70,16 +68,42 @@ cp "$SRC/gf180mcu.lvs" "$DST/gf180mcu.lvs" || exit 2
 cp "$SRC"/rule_decks/*.lvs "$DST/rule_decks/" || exit 2
 
 "$PY" - "$DST" <<'PY' || exit 2
-"""Insert PROBE markers as their own lines around each named statement."""
+"""Insert the flushed-probe helper and its markers as their own lines."""
 import os
 import sys
 
 dst = sys.argv[1]
 
+SINK = r'''
+
+#=== PROBE SINK (inserted by build/lvs_chip_probe_deck.sh) =====================================
+# The deck's own logger is not trusted to bound a phase: a marker written through it was the one
+# line missing from the last chip run's log. This file is opened by the deck, synced and flushed
+# per line, so `before X` with no `after X` means X had not returned.
+$plog_path = if $probe_log && !$probe_log.to_s.empty?
+  $probe_log.to_s
+elsif $report && !$report.to_s.empty?
+  File.join(File.dirname($report.to_s), 'probe.log')
+else
+  File.expand_path('lvs_probe.log')
+end
+$plog_io = File.open($plog_path, 'a')
+$plog_io.sync = true
+def probe(msg)
+  $plog_io.puts("#{Time.now.utc.strftime('%Y-%m-%dT%H:%M:%S')} #{msg}")
+  $plog_io.flush
+end
+probe("deck start input=#{$input} topcell=#{$topcell} report=#{$report}")
+#=== end of probe sink ==========================================================================
+'''
+
 # (file, the statement's own line, label). The line is matched on its stripped text and must
-# appear exactly once: a marker that lands inside a comment (which is what happened when this was
-# a substring insert) or next to two calls would make the probe lie about what it measured.
+# appear exactly once: a marker that lands inside a comment or next to two calls would make the
+# probe lie about what it measured.
 plan = [
+    # The one statement between the comparison banner and the first named step, and the reason
+    # this version exists.
+    ('gf180mcu.lvs', "connect_implicit('*') if IMPLICIT_CONNECT", 'connect_implicit'),
     # substrate_connections.lvs: the whole file, statement by statement.
     ('rule_decks/substrate_connections.lvs', '(sub_iso, sub_regular) = sub.andnot(isosub)', 'sub.andnot(isosub)'),
     ('rule_decks/substrate_connections.lvs', 'connect(sub, sub_iso)', 'connect(sub, sub_iso)'),
@@ -107,47 +131,89 @@ plan = [
 ]
 
 files = {}
-for path, stmt, label in plan:
-    full = os.path.join(dst, path)
+
+
+def lines_of(rel):
+    full = os.path.join(dst, rel)
     if full not in files:
         with open(full, encoding='utf-8') as fh:
             files[full] = fh.read().split('\n')
-    lines = files[full]
+    return full, files[full]
+
+
+def insert_after(rel, anchor, text, what):
+    full, lines = lines_of(rel)
+    hits = [i for i, line in enumerate(lines) if line.strip() == anchor]
+    if len(hits) != 1:
+        sys.exit(f"probe: CANNOT-RUN {what} anchor {anchor!r} matches {len(hits)} lines in {rel}, expected 1")
+    lines[hits[0] + 1:hits[0] + 1] = text
+
+
+# The helper, immediately after the runset's own "starting" line so it is defined before any
+# marker and before source() reads the layout.
+insert_after('gf180mcu.lvs',
+             'logger.info("Starting running GF180MCU Klayout LVS runset on #{$input}")',
+             SINK.split('\n'), 'the probe sink')
+
+# One marker on the banner, so the last silent stretch before the prologue is bounded too -- and,
+# with -rd net_only=true, the netlist dump the offline bench needs. The deck's own NET_ONLY return
+# sits after `align`, so --net-only on the pruned deck waits for the aligner to return before it
+# writes a netlist, i.e. it waits for exactly the thing under measurement. This block writes it
+# before that, and only under the switch, so a normal run's behaviour is unchanged.
+insert_after('gf180mcu.lvs',
+             "logger.info('Starting GF180 LVS comparison section')",
+             ["probe('comparison section')",
+              "if $net_only",
+              "  netlist",
+              "  probe('netlist written before align')",
+              "  return",
+              "end"], 'the comparison banner')
+
+for rel, stmt, label in plan:
+    full, lines = lines_of(rel)
     hits = [i for i, line in enumerate(lines) if line.strip() == stmt]
     if len(hits) != 1:
-        sys.exit(f"probe: CANNOT-RUN {stmt!r} matches {len(hits)} lines in {path}, expected 1")
+        sys.exit(f"probe: CANNOT-RUN {stmt!r} matches {len(hits)} lines in {rel}, expected 1")
     i = hits[0]
     indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-    marker = [
-        f"{indent}logger.info('PROBE: before {label}')",
+    before = [
+        f"{indent}probe('before {label}')",
         f"{indent}$probe_t0 = Time.now",
     ]
-    done = [
-        f"{indent}logger.info(\"PROBE: after {label} #{{(Time.now - $probe_t0).round(1)}} s\")",
+    after = [
+        f"{indent}probe(\"after {label} #{{(Time.now - $probe_t0).round(1)}} s\")",
     ]
-    lines[i:i] = marker
-    # the statement is now at i + len(marker)
-    after = i + len(marker) + 1
-    lines[after:after] = done
+    lines[i:i] = before
+    at = i + len(before) + 1
+    lines[at:at] = after
     files[full] = lines
 
-counted = {}
 for full, lines in files.items():
+    # Only the deck itself gets the end marker: substrate_connections.lvs is included mid-run, so
+    # an end marker in it would claim the deck had finished while extraction was still going.
+    if os.path.basename(full) == 'gf180mcu.lvs':
+        if lines and lines[-1] != '':
+            lines.append('')
+        lines.append("probe('deck end')")
     with open(full, 'w', encoding='utf-8', newline='') as fh:
         fh.write('\n'.join(lines))
-    counted[os.path.relpath(full, dst)] = sum(1 for line in lines if "logger.info('PROBE: before" in line)
 
-print(f"deck_probe: {sum(counted.values())} markers inserted")
-for path in sorted(counted):
-    print(f"deck_probe:   {path}  {counted[path]}")
+print(f"deck_probe: {len(plan)} statements bounded by flushed markers")
 PY
 
-# A probe whose markers are not in the file would look exactly like a fast run.
-markers=$(grep -c "logger.info('PROBE: before" "$DST/gf180mcu.lvs" "$DST"/rule_decks/substrate_connections.lvs | awk -F: '{s+=$2} END {print s+0}')
-if [ "$markers" != 22 ]; then
-    echo "probe: FAIL $markers markers in the copy, expected 22 (12 in the deck, 10 in substrate_connections)" >&2
+# A probe whose markers are not in the file would look exactly like a fast run, and a sink that is
+# missing would make every marker a NameError inside the deck instead of a measurement.
+markers=$(grep -ho "probe('before " "$DST/gf180mcu.lvs" "$DST"/rule_decks/substrate_connections.lvs | wc -l | tr -d ' ')
+[ "$markers" = 23 ] || {
+    echo "probe: FAIL $markers 'before' markers in the copy, expected 23 (13 in the deck, 10 in substrate_connections)" >&2
     exit 1
-fi
+}
+grep -q '^def probe(msg)' "$DST/gf180mcu.lvs" || {
+    echo "probe: FAIL the probe sink is not in the deck" >&2; exit 1; }
+grep -q '^probe(.comparison section.)$' "$DST/gf180mcu.lvs" || {
+    echo "probe: FAIL the comparison-banner marker is not in the deck" >&2; exit 1; }
 
 echo "deck_probe: $DST/gf180mcu.lvs"
-echo "  run: bash build/lvs_chip_check.sh --no-reconstruct --mode deep --deck build/lvs_chip/deck_probe/gf180mcu.lvs"
+echo "  markers: 23 statements + the comparison banner, written to <report dir>/probe.log"
+echo "  run: bash build/lvs_chip_check.sh --no-reconstruct --mode deep --threads 4 \\"
+echo "         --deck build/lvs_chip/deck_probe/gf180mcu.lvs"

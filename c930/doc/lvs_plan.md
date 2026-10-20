@@ -217,6 +217,56 @@ the eFuse, no MOS), and extraction then finishes in **12 minutes**. `build/lvs_c
 --deck build/lvs_chip/deck_pruned/gf180mcu.lvs` is the run to use; the unmodified deck is not a
 ten-minute job on this die and is not a hang.
 
+**S2 status (2026-10-19), the cells: 34 of 34 match.** `build/lvs_chip_cell_check.sh` with every
+cell the netlist uses (`--cells "$(cat build/lvs_chip/all_cells.txt)"`) cuts each one out of
+`build/lvs_chip/stream_out.gds` and compares it against its library CDL subcircuit through the same
+deck: `LVS-CELL: PASS`, 34 `verdict MATCH` (`build/lvs_chip/all_cells_check.log`). Three of them were
+the first evidence; all of them are the die's whole standard-cell population, so what the chip run
+owes is the top-level connectivity between them and nothing inside them.
+
+**S2 status (2026-10-19), the top level: the wall is `align`, and it is now bounded rather than
+inferred.** Two earlier runs were reported as "stuck in align" from source order, because the marker
+the probe deck printed through the deck's logger never reached the log — the last line in both was
+the comparison banner. `build/lvs_chip_probe_deck.sh` now inserts a `probe()` that writes and flushes
+its own file, and in a deep run of the pruned deck the record reads `22:46:09 comparison section`,
+`22:46:09 before align`, then nothing for the 13 minutes the run was left alive; the run that was
+left alone at the vendor defaults spent **5 h 40 min** in that statement. The engine's own knobs are
+reachable (KLayout 0.29.4, `LVS::LVSEngine`): `max_vertex_count` = 16, setters
+`max_branch_complexity(n)` and `max_depth(n)`, and `threads=`, which is a *different* property from
+the tiler's `threads(n)` — the pruned deck now sets both. Two consequences are already wired:
+`build/lvs_chip_check.sh --threads N` reaches the comparison, and the probe deck dumps the extracted
+netlist at the comparison banner and returns there when `net_only` is set, because the deck's own
+`NET_ONLY` return sits after `align`. `build/lvs_chip/probe/align_bench.rb` and `align_sweep.sh` time
+the comparer on that netlist pair offline, which is where the bounds are being measured.
+
+**S2 status (2026-10-20), the top level: answered, and the deck's own verdict is the part still open.**
+The netter was given a leash long enough to settle the question: a `tiling` net-only run of the pruned
+probe deck reached the comparison banner in 10 min and then spent **9 h 13 min** in `netlist` with the
+cgroup's `usage_usec` advancing 17.29 s per 15.3 s of wall and `VmRSS` flat at 4.5 GiB of the 5.8 GiB
+the container is allowed -- computing, one core, not deadlocked, not finishing. It was stopped, and a
+second container could not even start (`OSError: [Errno 12] Cannot allocate memory` from CPython's
+import machinery) while it held the box. So `deep` (30 min, no line after `before align`) and `tiling`
+(9 h 13 min) both fail on the same statement, and it is the netter, not the comparer.
+
+`tools/lvs_chip/net_compare.py` answers what the netter was being asked, from the two netlists that
+already exist: **the routed DEF and the CDL, compared as a multiset of pin sets.** Names cannot make it
+pass -- the DEF's nets are `_00000_`, the CDL's are `u_cpu....o_pipe_out[0]` -- and the outcome is
+`NET-COMPARE: MATCH`: 53,745 instances on both sides, 34 cell kinds, 53,751 signal nets and **203,400
+pins** each, every instance's pins complete against its cell's declared ports, in **5.0 s** for 83 MB
+of input. Power travels beside it: the DEF wildcards VDD/VSS over all 53,745 instances and leaves the
+wells unrouted, the CDL binds VNW/VPW the way the deck's `connect_global` expects. Evidence:
+`Claude outputs/evidence_lvs_chip/chip_stream/net_compare.{json,txt}`. It is not vacuous: its first two
+runs were wrong (a wrapped pin list cost 61,562 pins; port case doubled every port) and its own
+completeness check caught both; on a CDL with one pin moved off the 14,496-pin clock net it names that
+pin and returns 1; and `bash build/lvs_chip_net_compare_selftest.sh` holds ten fixtures -- wrapping,
+`ROUTED` coordinates that look like pins, a merged net, a dangling port, a missing power wildcard --
+with no docker, no PDK and no layout. What it does not cover is geometry: whether the streamed GDS
+carries that routing is `stream_check.py`'s and the deck's question, so **S2 now reads: cells 34/34
+MATCH by the deck, top-level connectivity MATCH by the DEF, and the deck's own flat verdict on the
+streamed layout still CANNOT-RUN -- the netter, measured at 9 h 13 min without returning.** The next
+lever is not patience: it is the netter's `max_vertex_count` (16) and the per-layer polygon counts,
+because quadratic behaviour in substrate-sized polygons would look exactly like this.
+
 **If S2 matches:** we own a proven LVS pipeline and a stated fact about the
 September artifact. If it mismatches with a small diff, that is the most
 informative result available today (it is a stale-pair finding, and the

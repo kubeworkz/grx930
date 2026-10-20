@@ -79,6 +79,63 @@ def parse_def_components(path):
     return comps
 
 
+# DEF routing layer -> the label layer the deck reads for that metal. The deck's own labels live on
+# metal+10 (34/10 is metal1's text layer, see REMAP), and KLayout names a net from a text that sits
+# on one of its shapes, so a label must be written on the same metal as the wire it names.
+LABEL_LAYER = {"Metal1": (34, 10), "Metal2": (36, 10), "Metal3": (42, 10),
+               "Metal4": (46, 10), "Metal5": (81, 10)}
+
+
+def parse_def_net_labels(path):
+    """[(name, layer, x, y)] -- one label per routed net, at the first point of its first wire.
+
+    Why this exists: the comparer resolves ambiguous net matches from net names when it has them
+    (`consider_net_names`, on by default, and KLayout's own reference calls labels "the preferred
+    solution" over raising the branch complexity). The die carries 27 distinct metal1 labels for
+    ~100k nets, so on this file the comparer is doing topology-only matching, which is the
+    expensive path. The DEF already has every net's name; this is where they come from.
+
+    The point chosen is the first vertex of the net's first `ROUTED` statement, which by
+    construction lies on that net's wire. Coordinates are DEF distance units; the caller rescales.
+    """
+    labels = []
+    net = None
+    layer = None
+    in_section = False
+    want_point = False
+    point_re = re.compile(r"\(\s*(\d+)\s+(\d+)\s*\)")
+    for line in open(path, errors="replace"):
+        s = line.strip()
+        if s.startswith("NETS") or s.startswith("SPECIALNETS"):
+            in_section = True
+            net = layer = None
+            continue
+        if s.startswith("END NETS") or s.startswith("END SPECIALNETS"):
+            in_section = False
+            net = None
+            continue
+        if not in_section:
+            continue
+        if s.startswith("-"):
+            net = s.split()[1]
+            layer = None
+            want_point = False
+            continue
+        if net is None:
+            continue
+        if "ROUTED" in s:
+            rest = s.split("ROUTED", 1)[1].split()
+            layer = LABEL_LAYER.get(rest[0]) if rest else None
+            want_point = layer is not None
+        if want_point:
+            m = point_re.search(s)
+            if m:
+                labels.append((net, layer, int(m.group(1)), int(m.group(2))))
+                net, layer = None, None
+                want_point = False
+    return labels
+
+
 def copy_shapes(src_layout, src_cell, dst_layout, dst_cell, keep_only_routing):
     moved = 0
     for li in src_layout.layer_indexes():
@@ -176,6 +233,21 @@ def main():
     top = out.create_cell("grx930_test_chip")
     moved = copy_shapes(art, art_top, out, top, keep_only_routing=True)
     print(f"top cell: {moved} routed shapes and labels moved to PDK numbers")
+
+    # Net-name labels. Names are hints for the comparer, not connectivity: the deck extracts what
+    # the geometry connects, and a label can only name a net the layout already has. The DEF's
+    # names are sanitised exactly as mk_chip_cdl.py sanitises them, so the two sides agree.
+    labels = parse_def_net_labels(DEF)
+    written = 0
+    for name, layer, x, y in labels:
+        text = name.lstrip("\\").replace(" ", "")
+        if not text:
+            continue
+        top.shapes(out.layer(*layer)).insert(
+            db.Text(text, db.Trans(int(round(x / scale)), int(round(y / scale)))))
+        written += 1
+    print(f"net labels: {written} texts over {len({l for _n, l, _x, _y in labels})} label layers "
+          f"({len({n for n, _l, _x, _y in labels})} distinct nets in the DEF)")
 
     via_cells = {}
     via_count = 0

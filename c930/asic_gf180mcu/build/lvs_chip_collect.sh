@@ -36,6 +36,7 @@ RUN=$WORK/run_chip_stream
 EVID=$ROOT/Claude\ outputs/evidence_lvs_chip/chip_stream
 LAYOUT=$WORK/stream_out.gds
 CDL=$WORK/grx930_test_chip.cdl
+DEF=$HERE/grx930_test_chip.def
 
 NOW=0
 CONTAINER=""
@@ -84,6 +85,25 @@ fi
 
 cp -f "$RUN/verdict.json" "$EVID/verdict.json"
 cp -f "$RUN/klayout.log" "$EVID/klayout.log"
+# The connectivity answer travels with the deck's verdict: it is the one result that does not
+# depend on the netter returning, and a reader of this directory should not have to run anything
+# to see it.
+if [ -f "$WORK/net_compare.json" ]; then
+    cp -f "$WORK/net_compare.json" "$EVID/net_compare.json"
+fi
+if [ -f "$DEF" ] && [ -f "$CDL" ] && command -v docker >/dev/null 2>&1; then
+    mount=$ROOT
+    command -v cygpath >/dev/null 2>&1 && mount=$(cygpath -m "$ROOT")
+    {   echo "\$ python3 tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def \\"
+        echo "      --cdl build/lvs_chip/grx930_test_chip.cdl"
+        MSYS_NO_PATHCONV=1 docker run --rm -v "$mount:/work" -w /work \
+            "${LVS_IMAGE:-ghcr.io/efabless/openlane2:2.3.10}" python3 \
+            /work/c930/asic_gf180mcu/tools/lvs_chip/net_compare.py \
+            --def /work/c930/asic_gf180mcu/build/grx930_test_chip.def \
+            --cdl /work/c930/asic_gf180mcu/build/lvs_chip/grx930_test_chip.cdl
+        echo "exit=$?"
+    } > "$EVID/net_compare.txt" 2>&1
+fi
 [ -f "$RUN/harness.out" ] && cp -f "$RUN/harness.out" "$EVID/harness.out"
 # The extracted netlist can be very large; keep it only when it is a sane size.
 if [ -f "$RUN/extracted.cir" ] && [ "$(stat -c %s "$RUN/extracted.cir" 2>/dev/null || echo 0)" -lt 50000000 ]; then

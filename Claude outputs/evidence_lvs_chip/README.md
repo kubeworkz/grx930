@@ -167,3 +167,21 @@ unmeasured" acquires a number.
 - `verify_layers.py` passing is not evidence of either: it checks a map it also asserts.
 - `doc/lvs_plan.md` §7's "the September artifact is void for reasons LVS cannot see" is wrong in
   one direction: LVS sees this one first, as an empty extraction.
+
+## 7. The top level, matched without the deck's netter
+
+`chip_stream/net_compare.{json,txt}`. The deck's own flat comparison of this die does not return
+(`doc/lvs_plan.md` S2, 2026-10-20: 9 h 13 min in `align`'s netter at one core and 4.5 GiB, on top of
+30 min in `deep`), so the top level was answered from the two netlists that already exist: the routed
+DEF and the CDL, compared as a multiset of pin sets by `tools/lvs_chip/net_compare.py`.
+
+```
+53,745 instances on both sides, 34 cell kinds, 53,751 signal nets, 203,400 pins each
+pins per instance: 53,745 of 53,745 complete
+NET-COMPARE: MATCH                     # 5.0 s for 83 MB of input
+```
+
+The same file carries the mutation that keeps it honest: one pin moved off the CDL's 14,496-pin
+clock net is reported by name and returns 1. What this does **not** establish is geometry -- that the
+streamed GDS carries this routing is `stream_check.py`'s and the deck's question, and that is the
+piece still outstanding.

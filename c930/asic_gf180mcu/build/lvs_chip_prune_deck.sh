@@ -118,16 +118,30 @@ text = text.replace(anchor, guard.rstrip() + "\n\n" + anchor, 1)
 open(path, 'w', encoding='utf-8', newline='').write(text)
 PY
 
-# Threads. The deck never says how many threads to use, so the engine uses one; this is a
-# performance setting, so with no switch it stays 1. The call goes after the run_mode `case` so it
-# applies to `deep` and `flat` too: the tiling runs are where it was measured (13 min to the
-# comparison instead of >3 h, Claude outputs/stream_out_fix.md section 4c), and deep mode is the
-# mode where a hierarchical netlist might make `align` tractable, so it must not be the one mode
-# the switch cannot reach.
+# Threads and the comparer's ambiguity bounds. The deck never says how many threads to use, so the
+# engine uses one; this is a performance setting, so with no switch it stays 1. The call goes after
+# the run_mode `case` so it applies to `deep` and `flat` too: the tiling runs are where it was
+# measured (13 min to the comparison instead of >3 h, Claude outputs/stream_out_fix.md section 4c),
+# and deep mode is the mode where a hierarchical netlist might make `align` tractable, so it must
+# not be the one mode the switch cannot reach.
+#
+# Two different thread properties exist, and only one of them was reachable before. Measured in the
+# image (build/lvs_chip/probe/align_api.rb, and a cell run of the same deck): `threads(1)` leaves
+# `threads` nil, while `self.threads = 4` reads back as 4. The first is the tiler's, the second the
+# LVS engine's -- the one that matters for the comparison. Both are set here so `--threads N` is
+# one switch for the whole run.
+#
+# max_branch_complexity and max_depth are the netlist comparer's documented bounds on ambiguous net
+# matching (KLayout LVS reference: "maximum branch complexity for ambiguous net matching",
+# "maximum search depth for net match deduction"). They are only touched when named, so an
+# unswitched run is still the vendor deck's behaviour plus the threads line.
 THREADS_BLOCK='
-#=== LVS THREADS (inserted by build/lvs_chip_prune_deck.sh) =======================================
+#=== LVS THREADS AND COMPARISON BOUNDS (inserted by build/lvs_chip_prune_deck.sh) =================
 threads(($threads || 1).to_i) if respond_to?(:threads)
-#=== end of LVS threads ==========================================================================
+self.threads = ($lvs_threads || $threads || 1).to_i if respond_to?(:threads=)
+max_branch_complexity($max_branch_complexity.to_i) if $max_branch_complexity && respond_to?(:max_branch_complexity)
+max_depth($max_depth.to_i) if $max_depth && respond_to?(:max_depth)
+#=== end of LVS threads and comparison bounds ====================================================
 '
 "$PY" - "$DST/gf180mcu.lvs" "$THREADS_BLOCK" <<'PY' || exit 2
 import sys
@@ -169,8 +183,15 @@ grep -q 'def guarded_extract_devices' "$DST/gf180mcu.lvs" || {
     echo "prune: FAIL the guard is not in the deck" >&2; exit 1; }
 grep -q '^threads(($threads || 1).to_i)' "$DST/gf180mcu.lvs" || {
     echo "prune: FAIL the threads line is not in the deck" >&2; exit 1; }
+grep -q '^self.threads = ' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL the engine's threads line is not in the deck" >&2; exit 1; }
+grep -q '^max_branch_complexity(' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL the branch-complexity line is not in the deck" >&2; exit 1; }
+grep -q '^max_depth(' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL the depth line is not in the deck" >&2; exit 1; }
 
 echo "deck_pruned: $calls extraction call sites guarded, 0 left bare"
 echo "deck_pruned: threads from -rd threads=<n> for every run mode (default 1)"
+echo "deck_pruned: comparison bounds from -rd max_branch_complexity=<n> -rd max_depth=<n>"
 echo "deck_pruned: $DST/gf180mcu.lvs"
 echo "  run: bash build/lvs_chip_check.sh --no-reconstruct --deck build/lvs_chip/deck_pruned/gf180mcu.lvs"

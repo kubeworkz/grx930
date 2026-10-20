@@ -119,11 +119,19 @@ done
 [ -n "$PY" ] || { echo "LVS-CHIP: CANNOT-RUN no python3/python on PATH" >&2; exit 2; }
 
 # The generators run inside the image (klayout.db, and /work paths), like every other tool here.
+# The script's own path is translated from the host's to the mount's: `$TOOLS` is a host path, and
+# passing it through (`MSYS_NO_PATHCONV=1` keeps MSYS from rewriting it) names a file the container
+# does not have. Its arguments are already container paths, which is why only argv[0] is mapped.
 run_in_image() {
-    local mount=$ROOT
+    local mount=$ROOT script inside
     command -v cygpath >/dev/null 2>&1 && mount=$(cygpath -m "$ROOT")
+    script=$1; shift
+    case $script in
+        "$ROOT"/*) inside=/work${script#"$ROOT"} ;;
+        *)         inside=$script ;;
+    esac
     MSYS_NO_PATHCONV=1 docker run --rm -v "$mount:/work" -w /work \
-        "${LVS_IMAGE:-ghcr.io/efabless/openlane2:2.3.10}" python3 "$@"
+        "${LVS_IMAGE:-ghcr.io/efabless/openlane2:2.3.10}" python3 "$inside" "$@"
 }
 
 if [ "$RECONSTRUCT" = 1 ]; then
@@ -144,6 +152,19 @@ fi
 
 [ -f "$STREAM" ] || { echo "LVS-CHIP: CANNOT-RUN no $STREAM" >&2; exit 2; }
 [ -f "$CDL" ]   || { echo "LVS-CHIP: CANNOT-RUN no $CDL" >&2; exit 2; }
+
+# The deck's answer for the whole die needs its netter, and on this design that has not returned
+# (see doc/lvs_plan.md S2: 9 h in `tiling`, 30 min in `deep`, one core busy, 4.5 GiB resident).
+# This is the check that does not need it: the routed DEF and the CDL, compared as a partition of
+# pins, in seconds. It is not a substitute for the deck -- it says nothing about geometry, and the
+# deck is what reads the GDS -- but it is the top level's connectivity answered, and it is run
+# before the deck so that a connectivity defect is visible while the deck is still thinking.
+echo "== connectivity: routed DEF vs the CDL the deck reads (tools/lvs_chip/net_compare.py)"
+run_in_image "$TOOLS/lvs_chip/net_compare.py" \
+    --def "$C/build/grx930_test_chip.def" --cdl "$C/build/lvs_chip/grx930_test_chip.cdl" \
+    --json "$C/build/lvs_chip/net_compare.json"
+CONN_RC=$?
+echo "   net_compare exit=$CONN_RC (0 MATCH, 1 MISMATCH, 2 CANNOT-RUN); this does not decide the run"
 
 echo "== deck: running the chip through tools/klayout_lvs.sh (this is the long part)"
 # See RUN MODE in the header: tiling bounds memory but compares flat; deep keeps the hierarchy

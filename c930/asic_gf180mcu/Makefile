@@ -23,7 +23,8 @@ RV_DIR    = ../rv64imac/RTL
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 
 .PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom precheck_verdict \
-        lvs_chip_cells lvs_chip lvs_chip_pruned lvs_chip_collect clean
+        lvs_chip_cells lvs_chip_conn lvs_chip_conn_selftest lvs_chip lvs_chip_pruned \
+        lvs_chip_collect clean
 
 all: gates
 
@@ -285,6 +286,20 @@ precheck_verdict: $(BUILD)
 # resistor extraction that cannot produce a device (build/lvs_chip_prune_deck.sh measures it).
 lvs_chip_cells:
 	bash build/lvs_chip_cell_check.sh
+
+# The top level's connectivity without the deck's netter: the routed DEF against the CDL, as a
+# partition of pins, in seconds (tools/lvs_chip/net_compare.py). Its own test writes both sides.
+# Same interpreter rule as PRECHECK_PY: the Store `python3` on Windows is a stub.
+NC_PY ?= $(shell for c in python3 python; do \
+		$$c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1 \
+		&& { echo $$c; break; }; done)
+
+lvs_chip_conn:
+	$(NC_PY) tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def \
+	    --cdl build/lvs_chip/grx930_test_chip.cdl --json build/lvs_chip/net_compare.json
+
+lvs_chip_conn_selftest:
+	bash build/lvs_chip_net_compare_selftest.sh
 
 lvs_chip:
 	bash build/lvs_chip_check.sh
