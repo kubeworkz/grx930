@@ -494,3 +494,147 @@ PID and is constant by construction. Neither that log nor `watch.log` records re
 (`watch.sh` writes `cir_bytes`, `cir_lines` and the last line of two logs), so the footprint here comes
 from live `docker stats` polls -- 3.50 GiB of 5.787 GiB late in this run, 4.1-4.7 GiB in the earlier
 one-core run -- and a run that wants a curve has to log it.
+
+### 4g. The merge experiment, and the bug it found first
+
+§4f left one lever open -- merge each layer's shapes once, so the netter unions fewer objects. The
+first run said the lever was dead: **the merge did not complete on a single via layer**. That was
+true of the file it was given, and the file was wrong. Chasing the hang found a units bug in
+`stream_out.py` that had put every via of the die into a 3 x 5 um corner, which also means **every
+netlist-phase timing in §4d-4f was measured on a layout with no via connectivity at all** (device
+extraction, which is what §4a-4c report, does not depend on where the vias are).
+
+**The bug.** `db.CellInstArray(cell_index, dcplx_trans)` binds to the constructor that takes an
+`ICplxTrans` -- integer database units -- and the micrometre numbers are read as dbu. Re-inserting one
+real via instance from the artifact proves it: its `dcplx_trans.disp` is `(1960.08, 5107.76)` um, and
+after the insert the instance reports `(1.96, 5.108)` um. The unit conversion needs doing explicitly:
+`db.ICplxTrans(inst.dcplx_trans, out.dbu)`.
+
+The damage is systematic, not marginal -- all 644,699 via placements, all four via layers:
+
+| layer | artifact extent (um) | streamed extent before the fix (um) |
+|---|---|---|
+| `(8,0)` -> `38/0` via2 | 1254.6 - 3901.9 | 1.1 - 4.0 |
+| `(12,0)` -> `41/0` via4 | 24.6 - 3921.0 | 0.0 - 4.4 |
+| `(10,0)` -> `40/0` via3 | 24.4 - 3921.0 | 0.0 - 4.6 |
+| `(6,0)` -> `35/0` via1 | 0.2 - 3011.5 | 0.0 - 3.1 |
+
+Rectangles at one tenth of the die's height are not a rounding problem: 132,753 via2 boxes in a
+2.9 x 4.9 um patch is a pile, and a pile is exactly what a boolean engine cannot scan.
+
+**Why it looked like a KLayout pathology.** The via *cells* are not bare cuts -- `via4_5` carries its
+metal4 and metal5 plates -- and 169,130 of them were stacked into 4 um. So `46/0` and `81/0` were not
+267,869 and 170,433 ordinary polygons either; they were ordinary polygons plus a million coincident
+plates. The "edge coincidence" hypothesis in the previous version of this section was right about the
+mechanism and wrong about the cause: the coincident edges were manufactured, not inherent. The
+tell was there and was read as a control -- a synthetic 132,753 boxes over the same extent merged in
+2.29 s, which should have said "the geometry is different from what you think it is" rather than
+"coincident edges are hard".
+
+**Fix and gate.** `stream_out.py` now converts through the dbu, and refuses to write a layout whose
+via placements span less than half the die (`REFUSED ... a unit error, not a design`). The gate is the
+part that matters: the old file passed every check the tool had, because nothing anywhere compared a
+via's position with the die it was supposed to be inside. The re-stream took 237 s and reports
+`vias: 644699 placements, 7 via cell types rebuilt, span x 280..3920840 dbu, y 11760..5107760 dbu`.
+
+**With the fix, the merge is cheap and finishes.** Every layer, one global `Region#merged()` each,
+no bucketing: **6,681,399 -> 4,346,840 polygons (0.651), 31,045,334 -> 22,565,752 vertices, in 140 s**
+(`build/lvs_chip/merge_all.log`, `merge_layers.json`). The layers that carry routing shrink by an
+order of magnitude -- `46/0` 267,869 -> 9,328 in 6.1 s, `81/0` 170,433 -> 1,302, `36/0` 743,275 ->
+162,774, `34/0` 742,140 -> 228,934, `42/0` 319,973 -> 64,302 -- and the layers that cannot shrink stay
+put, because their shapes are disjoint by construction: `41/0` 1,353,041 -> 1,353,041, `40/0`
+615,819 -> 615,819, `33/0` 1,166,857 -> 1,096,381, `35/0` 256,356, `38/0` 132,753. `38/0`, the layer
+that "would never merge", now merges in 1.8 s and returns the same count -- which is the correct
+answer for disjoint vias, and the reason the hang was never about that layer's own complexity.
+
+The output is flat (one top cell, 392 MB), so a merged-vs-unmerged timing differs in file size and
+hierarchy as well as in polygon count; §4h says what that did to the netter.
+
+**The neutrality proof, and the bug in it.** [`tools/lvs_chip/merge_layers.py`](../c930/asic_gf180mcu/tools/lvs_chip/merge_layers.py)
+builds the region per layer, counts it, merges it, and only writes the file if the merge is proven
+neutral: `merged XOR unmerged` is empty. That is the proof §4f asked for, and it holds on the two
+sides of real geometry -- a PDK cell and a die layer:
+
+```
+gf180mcu_fd_sc_mcu7t5v0__inv_2   25 polygons -> 25   11/15 layers XOR empty, 4 empty layers
+stream_out.gds  --only 21/0   53,745 -> 12,859   274,228 -> 160,266 verts   xor=0
+MERGE: PASS -- 1/1 layers XOR empty against the unmerged coverage (identical silicon)
+```
+
+Logs: `build/lvs_chip/merge_probe/merge_inv.log`, `merge_nwell.log`; JSON beside them. The `21/0` run
+is the one that means something -- nwell, a layer the deck reads, 4.2x fewer polygons, and the XOR
+still empty, so the merged file covers the same silicon to the database unit.
+
+**The proof was wrong once, and that is the part worth keeping.** The first version tested
+`area() == area()` instead. A `Region` with `merged_semantics = False` -- the only way to get a
+"before" count at all, since inserting into a merged-semantics region unions the layer and the count
+becomes the "after" count -- reports area as the **sum over its polygons**, double counting overlap.
+On `21/0` that sum is 10.6 % above the union (1,300,547,810,575 vs 1,163,060,418,675 dbu^2), so a
+merge that was exactly neutral reported `MERGE: FAIL`. The check is now the one-sided bound that
+survives this (`union > sum` is impossible and is a real failure) plus the XOR as the pass criterion,
+and the XOR is only claimed where it ran: layers over `--xor-budget` (200k polygons) are recorded as
+`proof: "area-bound"` and named in the verdict as unproven, never counted as proven. On the die that
+is every routing layer -- the ones this section is about -- so the correctness of the merge stays
+demonstrated on two layers and *assumed* on the rest.
+
+**What this says about §4f's lever.** The 140 s pre-pass is affordable; whether it buys netter time is
+a separate measurement, and the baseline it has to be compared with was never a baseline -- the
+netter was timed, in §4d-4f, on a die whose vias were in a corner. §4h runs the comparison on the
+fixed layout, merged against unmerged, same deck, same switches, same threads.
+
+### 4h. Merged against unmerged, through the deck: the netter does not notice
+
+`build/lvs_chip/net_arm.sh` runs one layout through the deck's netlist phase with a hard cap and
+records what happened (`net_arms/<label>/arm.json`, `klayout.log`, `probe.log`, `run_deck.sh`). The
+deck is `deck_probe/gf180mcu.lvs`, `run_mode=deep`, `net_only=true`, `threads=4` -- the configuration
+that was measured at 5 h 46 min without returning in §4f. The cap is enforced by stopping the
+container, not the client, so a run still computing at the cap is the result.
+
+**One control was needed that §4g did not plan for.** The merged file is flat, and flatness alone
+changes the read/extract phase, so `merged` against the *hierarchical* stream would have confounded
+two variables. `merge_layers.py --no-merge` therefore writes the same file flattened and unmerged
+(`stream_out_flat.gds`, 6,681,399 polygons, 509 MB), and that is the control:
+
+| arm | layout | polygons the deck derives | read + extract to `netlist` | inside `netlist` | netlist written |
+|---|---|---|---|---|---|
+| merged | flat + merged, 4,346,840 | 5,840,359 | **10.2 min** | **78.6 min**, then stopped by the cap | no |
+| control | flat, unmerged, 6,681,399 | 7,466,637 | 26.5 min | 32.9 min, then the Docker VM died | no |
+
+The two netter numbers are not the same measurement and are not presented as one: 78.6 min is a cap
+(`arm.json` `verdict: CAP`, `elapsed_seconds: 5435`), and 32.9 min is a truncation -- the container was
+lost at 03:02:42Z with `error waiting for container: unexpected EOF` (`container_exit: 125`,
+`stopped_by_cap: "no"`), which is the 5.787 GiB VM giving up under a 4.76 GiB KLayout, the same ceiling
+that killed §4f's neighbours. What they agree on is the only thing needed here: **neither returned a
+netlist, and the arm with 23 % fewer polygons in the netter was not faster in any way that showed.**
+
+**What the merge did buy.** The pre-netlist half of the run: 26.5 min -> 10.2 min, 16.3 min saved, on
+the same geometry, same deck, same box. That is real and it is the whole of the win.
+
+**What the netter is actually given**, from the deck's own per-layer counts (`has N polygons`), control
+-> merged: `metal1_drawn` 1,084,327 -> 1,077,179 (0.99), `metal2_drawn` 743,275 -> 256,835 (0.35),
+`metal3_drawn` 319,973 -> 68,285 (0.21), `metal4_drawn` 267,869 -> 9,562 (**0.04**), `metal5_drawn`
+170,433 -> 1,302 (**0.008**), `contact` 1,166,857 -> 1,096,397, and `via1..via4` 256,356 / 132,753 /
+615,819 / 1,353,041 unchanged. Summing the non-label layers: 7,102,061 -> 5,475,783, **0.77**
+(the design's own total, labels included, is 7,466,637 -> 5,840,359, 0.78).
+
+**Why a 4-130x cut on the metal layers moves nothing.** Two measured reasons, and neither is a matter
+of taste:
+
+* *The objects that dominate are the ones merge cannot touch.* Vias and contacts are 3,454,366 of
+  the 5,475,783 derived polygons left in the merged run -- **63 %**, up from 50 % in the control --
+  and they are disjoint by construction, which is exactly why `38/0` merges 132,753 -> 132,753.
+  Halving the metals cannot halve the work when two thirds of the objects are untouched.
+* *The shapes that set a scanline's cost were already there, and merging keeps them.* Measured on both
+  files: `81/0` metal5 carries **1,301 polygons wider than 1 mm** (max 3,909,920 dbu = 3.9 mm, the die
+  width) *before* merging, and `46/0` metal4 carries **261 taller than 1 mm** (max 5,099,200 dbu =
+  5.1 mm, the die height). After merging, metal5 is 1,302 polygons and 1,301 of them are still those
+  same die-spanning rails; metal4 is 9,328 and still holds the same 261. The merge removed small
+  shapes -- the ones a sweep could dispatch cheaply -- and left the bboxes that every tile of a sweep
+  has to visit.
+
+**Verdict on the lever.** Merge-before-netting is proven neutral (§4g), cheap (149 s for 6.68 M
+polygons) and **does not drop the netter's wall time**; it drops the read/extract phase by 62 %. The
+hypothesis it was proposed to test -- "the netter unions 1.35 M metal5 shapes, so give it fewer" -- is
+answered negatively, and the two mechanisms above say why. What this experiment cannot rule out is a
+slowdown-then-return beyond 78 minutes; what it does rule out is the large multiple the lever was
+sold on, since a 4-130x reduction on the layers named produced no visible movement at all.

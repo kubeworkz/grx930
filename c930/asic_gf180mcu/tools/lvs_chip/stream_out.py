@@ -251,17 +251,38 @@ def main():
 
     via_cells = {}
     via_count = 0
+    via_xs, via_ys = [], []
     for inst in art_top.each_inst():
         name = inst.cell.name
-        if name.startswith("VIA"):
-            target = via_cells.get(name)
-            if target is None:
-                target = out.create_cell(name)
-                copy_shapes(art, inst.cell, out, target, keep_only_routing=False)
-                via_cells[name] = target
-            top.insert(db.CellInstArray(target.cell_index(), inst.dcplx_trans))
-            via_count += 1
-    print(f"vias: {via_count} placements, {len(via_cells)} via cell types rebuilt")
+        if not name.startswith("VIA"):
+            continue
+        target = via_cells.get(name)
+        if target is None:
+            target = out.create_cell(name)
+            copy_shapes(art, inst.cell, out, target, keep_only_routing=False)
+            via_cells[name] = target
+        # `CellInstArray(cell, dcplx_trans)` binds to the **integer** overload: the micrometre
+        # numbers become database units, so a via at 1960.08 um lands at 1960 dbu = 1.96 um. That
+        # is not a subtle shift -- it piles every via of the die into a 3 x 5 um corner, and a
+        # pile of 132,753 coincident boxes is also what made `Region#merged()` look like it could
+        # never finish (Claude outputs/stream_out_fix.md 4g). Convert through the layout's dbu
+        # explicitly, and let the gate below refuse a file whose vias do not span the die.
+        trans = db.ICplxTrans(inst.dcplx_trans, out.dbu)
+        top.insert(db.CellInstArray(target.cell_index(), trans))
+        via_count += 1
+        via_xs.append(trans.disp.x)
+        via_ys.append(trans.disp.y)
+    print(f"vias: {via_count} placements, {len(via_cells)} via cell types rebuilt, "
+          f"span x {min(via_xs, default=0)}..{max(via_xs, default=0)} dbu, "
+          f"y {min(via_ys, default=0)}..{max(via_ys, default=0)} dbu")
+    if via_count:
+        die = art_top.bbox()
+        span_x = max(via_xs) - min(via_xs)
+        span_y = max(via_ys) - min(via_ys)
+        if span_x < die.width() // 2 or span_y < die.height() // 2:
+            print(f"REFUSED  the via placements span {span_x} x {span_y} dbu, but the die is "
+                  f"{die.width()} x {die.height()}: a unit error, not a design")
+            return 2
 
     used = Counter()
     for _inst, cell, x, y, orient in comps:

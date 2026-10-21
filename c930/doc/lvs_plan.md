@@ -282,8 +282,25 @@ connectivity is overlap, not shape identity. The argv evidence that the aligner 
 The deep run has since closed that line negatively: it reached the comparison section at 12:43:40Z,
 was stopped by its own deadline at 18:30:39Z, wrote no netlist, and exited 137 with `oom=false` -- so
 `deep` is another configuration that does not return, and the netter is the bound rather than the
-box. The `merge`-before-netting experiment is what is left to run, and it is the one that changes the
-work the netter does rather than the patch of wall clock it is given.
+box.
+
+**The merge-before-netting experiment ran, and the answer is no (2026-10-21).** It also found a real
+bug on the way: `stream_out.py` was inserting via instances through the integer `CellInstArray`
+overload, so all 644,699 via placements landed at 1/1000 of their coordinates -- every via layer of
+the streamed die was a 3 x 5 um pile. That pile is what made `Region#merged()` appear unable to finish
+(§4g of `Claude outputs/stream_out_fix.md`). With the transform converted through the dbu, the merge
+is cheap and provable: 6,681,399 -> 4,346,840 polygons and 31.0 M -> 22.6 M vertices in **149 s**,
+XOR-identical on 18 of 27 layers and area-bounded on the 9 routing layers.
+
+The netter does not care. Two flat layouts, same deck, same switches, same thread count, 90-minute
+cap: merged (5,840,359 polygons as the deck derives them) spent **78.6 min inside `netlist`** and was
+stopped with no netlist; the flat unmerged control (7,466,637) was still inside `netlist` at 32.9 min
+when the Docker VM died. What the merge does buy is the read/extract half: **26.5 min -> 10.2 min**.
+The reason the netter does not move is measured: 63 % of what it is given is vias and contacts, which
+are disjoint and merge cannot touch, and the polygons that dominate a sweep are the die-spanning
+rails, which were already there before merging (1,301 shapes wider than 1 mm on `81/0`, 261 taller
+than 1 mm on `46/0`) and remain after it. The lever is closed; `build/lvs_chip/net_arm.sh` is the
+harness that closes it, and §4h of `Claude outputs/stream_out_fix.md` carries the numbers.
 
 **If S2 matches:** we own a proven LVS pipeline and a stated fact about the
 September artifact. If it mismatches with a small diff, that is the most
