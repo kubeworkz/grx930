@@ -638,3 +638,148 @@ hypothesis it was proposed to test -- "the netter unions 1.35 M metal5 shapes, s
 answered negatively, and the two mechanisms above say why. What this experiment cannot rule out is a
 slowdown-then-return beyond 78 minutes; what it does rule out is the large multiple the lever was
 sold on, since a 4-130x reduction on the layers named produced no visible movement at all.
+
+### 4i. The same question on a tile the netter can finish: 1.29x inside 1 mm, nothing at 1.5 mm
+
+§4h could only compare two horizons. A window small enough for `netlist` to return turns that into a
+wall time. `tools/lvs_chip/crop_tile.py` cuts one: for every layer it intersects that layer's coverage
+with the window and writes a single-cell layout with the same dbu, the same layer/datatype table and
+the same cell name. It refuses a hierarchical input on purpose -- `Layout#clip_into` is the trap
+`build/lvs_chip/probe/crop.py` documents, and a crop that loses the top level measures nothing.
+
+Both windows are centred on the die (3,929.8 x 5,119.9 um) and cut from the same pair of files §4h
+compares, so the merge is the only variable:
+
+| window | area | merged polygons | flat polygons | XOR merged vs flat |
+|---|---|---|---|---|
+| 1000 um | 5.0 % | 879,989 (79 MB) | 1,507,354 (109 MB) | empty on all 23 layers |
+| 1500 um | 11.2 % | 1,725,389 (154 MB) | 2,946,988 (212 MB) | empty on all 23 layers |
+
+The XOR deserves its own sentence: on the die, §4g could prove 18 of 27 layers by XOR and had to bound
+the nine routing layers by area. Inside the window every layer the crop carries -- 23 entries, 19 of
+them with shapes -- is XOR-identical, routing included, so the two files compared below cover exactly
+the same silicon.
+
+The deck runs as in §4h (`run_mode=deep`, `net_only=true`, `threads=4`), with two harness changes the
+tile forced, both off by default so the die arms stay reproducible:
+
+* `STOP_AT_NETLIST=1` stops the container when the probe records "netlist written before align". A bare
+  `return` under `net_only` does not end the runset: the first attempt printed that marker 43 s into the
+  netlist section, went on into `align`, and was still computing 4.5 minutes later when it was stopped
+  by hand. Without the stop, a tile run that already has its netlist spends the rest of the cap on the
+  comparer.
+* `NETLIST_SINK=discard` points `target_netlist` at `/dev/null`: the deck wants 3.96 GB of SPICE for the
+  1 mm window, which is bind-mount writing with nothing to do with the netter.
+
+Each tile arm was run twice, and every time quoted below for a tile is the probe's own timestamp, not the poll loop's.
+
+| arm | objects the netter is given | read + extract | `netlist` |
+|---|---|---|---|
+| 1000 merged | 1,049,143 | 137 s / 124 s | **41 s / 41 s** |
+| 1000 flat | 1,322,795 | 141 s / 147 s | **54 s / 52 s** |
+| 1500 merged | 2,052,787 | 439 s / 314 s | **207 s / 150 s** |
+| 1500 flat | 2,590,845 | 406 s / 456 s | **178 s / 197 s** |
+| die merged (§4h) | 4,867,529 | 10.2 min | > 78.6 min, cap |
+| die flat (§4h) | 6,110,703 | 26.5 min | > 32.9 min, VM lost |
+
+"Objects" is the deck's own `metal1..5_drawn`, `contact` and `via1..4` counts summed -- the same ten
+layers on every row, which is why the die totals here are 4,867,529 / 6,110,703 and not §4h's wider
+5,475,783 / 7,102,061 sum.
+
+**The answer on this tile is 1.29x, and it does not survive the next size up.** At 1 mm the merge buys
+41 s against 54 s and 52 s: a 22-24 % saving, and the two merged runs are 41 s and 41 s, so the
+difference is larger than the arm-to-arm spread by an order of magnitude. At 1.5 mm it is gone -- merged
+ran 150 s and 207 s, flat 178 s and 197 s, the ranges overlap, and the ordering of the four runs gives
+no direction. The read/extract phase, which the die showed a 62 % win on, shows nothing reproducible at
+either window size (137 vs 141 s, and 439/314 vs 406/456 s): that win is a die-scale effect, not a
+property of the merge.
+
+**What a tile cannot do, measured instead of assumed.** Fitting the two merged points gives
+`t ~ n^2.2` (41 s at 1.05 M objects, 178 s at 2.05 M); at the die's 4.87 M that law predicts about
+1,200 s = 20 min, against the > 4,680 s actually measured -- which is what §4i first reported as "the
+die is not a bigger tile, by a factor of four". §4j refines that: two more windows put a 1.28 mm
+square at 68-92 s, above the two-point fit, and the exponent estimated from different pairs of points
+spans 1.9 to 4.1, which at the die's count means a prediction anywhere from 13 min to well past the
+measured 78. **The exponent is not determined by these points**, so a tile cannot calibrate the die's
+netter cost in either direction -- neither "the die is 4x worse than its area" nor "the die is just a
+big tile" is supported. The one mechanism §4i proposed (chip-wide connectivity, the die's 5.1 mm and
+3.9 mm rails) was tested directly in §4j and does not hold.
+
+**Verdict.** The netter returns on a tile -- 41 s to 207 s instead of 78 minutes -- and the merge is
+worth 1.29x inside 1 mm and nothing detectable at 1.5 mm. The lever stays closed, now with wall times
+on both sides instead of two horizons. What the tiles do not give is a way to price the die: see §4j
+for the strip that kills the obvious explanation of why.
+
+Two caveats that stay with these numbers. The discard sink is not clean: writing to `/dev/null` raises
+`RuntimeError: Write error on file: /dev/null (errno=28)` in `Netlist::write` at cleanup, after the
+probe's marker. It does not flatter the measurement -- at 1 mm the file-sink arm took 43 s in `netlist`
+against the discard arm's 41 s, so a real 3.96 GB write costs about 2 s here and the phase being
+measured is the netter's own work. And the 1.5 mm arms varied 30-40 % between repeats in both phases,
+against 0-5 % at 1 mm, so the 1.5 mm point reads as "no difference detectable", not as "merged is 5 %
+different". Evidence: `build/lvs_chip/tiles/` -- `arms_summary.json`, `xor_1000.log`, `xor_1500.log`,
+the two `tile*_*.json` crop records, and one `net_arms/<label>/` per row.
+
+### 4j. A full-height strip: the die's 5.1 mm rails are not what the netter pays for
+
+§4i ended with a hypothesis rather than a result: that the die's netter cost comes from chip-wide
+connectivity, because a window cuts every rail at its edge and so hands the netter many small nets
+instead of one huge one. That is testable in one window. A strip 320 um wide and 5,119.885 um tall --
+the die's full height, at x 1804.9 -- keeps the vertical rails at exactly the length they have on the
+die. A square of the same area (1131.36 um) is the control, and the 1 mm and 1.5 mm squares from §4i
+bracket both. All six are merged, all cut from `stream_out_merged.gds`, and each is XOR-clean against
+its flat twin on every layer the crop carries -- 23 entries (19 with shapes) in the square and
+vertical-strip windows, 24 in the horizontal ones, the extra being `81/10`, metal5's label layer, which
+has no shapes here (`xor_strip_sq.log`, `xor_hstrips.log`).
+
+"Extent" is measured, not assumed: for the rails that matter in each window I take the longest polygon
+and the count of polygons longer than 1 mm -- `46/0` (metal4) for the vertical rails, `81/0` (metal5) for
+the horizontal ones.
+
+| window | area | objects | `46/0` max height | `81/0` max width | `netlist` |
+|---|---|---|---|---|---|
+| 1000 square | 1.00 mm2 | 1,049,143 | 1.00 mm, cut | 1.00 mm, cut | 41 s, 41 s |
+| strip 320 x 5120 | 1.64 mm2 | 1,001,035 | **5.10 mm**, die height | 0.32 mm, cut | 45 s, 36 s |
+| strip 3930 x 650 | 2.55 mm2 | 991,731 | 0.65 mm, cut | **3.91 mm**, die width | 41 s, 62 s |
+| strip 3930 x 790 | 3.10 mm2 | 1,226,154 | 0.79 mm, cut | **3.91 mm** | 67 s, 48 s |
+| square 1131 | 1.28 mm2 | 1,279,848 | 1.13 mm, cut | 1.13 mm, cut | 92 s, 68 s |
+| 1500 square | 2.25 mm2 | 2,052,787 | 1.50 mm, cut | 1.50 mm, cut | 207 s, 150 s |
+| die | 20.12 mm2 | 4,867,529 | 5.10 mm | 3.92 mm | > 78.6 min |
+
+Shapes longer than 1 mm, which is where extent is countable: 0 on the 1 mm square, 22 on the vertical
+strip (`46/0`), 166 and 202 on the two horizontal strips (`81/0`), 290 and 383 on the 1.28 and 1.5 mm
+squares (those are only their own cut length, not die length), 261 `46/0` and 1,301 `81/0` on the die.
+
+**The strip is the answer, and it is negative.** It holds 22 polygons that are 5.1 mm tall -- the same
+rails, at the same length, that the die has -- over 64 % more area than the 1 mm square, with 4.6 %
+fewer objects. It nets in 45 s and 36 s against the square's 41 s and 41 s. Twenty-two die-length rails
+cost four seconds in one run and minus five in the other: nothing that survives the spread. Whatever
+makes the die expensive, it is not the length of the metal4 rails, and the "one huge net instead of
+many small ones" explanation loses the measurement it was resting on.
+
+**The mirror says the same thing about the other axis.** The vertical strip cuts metal5 to 0.32 mm, so
+it cannot speak for the horizontal straps -- and those are the more numerous rails on this die. A strip
+cut full-width (3,929.8 um) and 650 um tall keeps `81/0` at **3.910 mm**, which is the die's own maximum,
+and carries 166 of them. It has 991,731 derived objects, 1 % fewer than the vertical strip, over 55 %
+more area, and it nets in **41 s and 62 s** against the vertical strip's 45 s and 36 s: the ranges
+overlap and no reading of the pair shows an extent penalty. The 790 um tall cut (1,226,154 objects, 23 %
+more than the 650) ran 67 s and 48 s, which is the object curve rather than a step.
+
+**Both axes are closed, with the resolution this data has.** Run-to-run spread at these sizes is 25-50 %
+(41/62 on one window, 36/45 on another), so these strips can exclude a jump of the size the hypothesis
+needed -- the die is two orders of magnitude slower than a 1 M-object tile, and a window holding its
+rails shows no such step -- but they cannot resolve a 30 % effect. What they do not disturb is the
+object-count curve, which is where every window still falls.
+
+**What the six windows do say about the die.** Cost tracks object count, and steeply, but the spread
+grows with the window -- 0-2 % at 1 mm, 25-50 % on the strips, 35 % at 1.28 mm, 38 % at 1.5 mm -- so the
+exponent is not identified: the pairs give 4.1 (1.05 M -> 1.28 M, 41 -> 92 s), 2.5 (41 -> 68 s),
+2.4 (1.05 M -> 2.05 M, 41 -> 207 s) and 1.9 (41 -> 150 s). At the die's 4.87 M objects that fan runs
+from 13 min to several hours, with the measured > 78 min inside it. So §4i's "the die is 4x worse than
+its area predicts" does not stand as stated, and neither does its converse: these windows price the
+die's netlist phase no better than they priced the merge.
+
+**Where that leaves S2.** The netter is not slayed by geometry that is cheap to change: merging is
+worth 1.29x at 1 mm and nothing at 1.5 mm (§4i), and trimming the rails is worth nothing at all (§4j).
+The cost that keeps the deck's own verdict out of reach is a superlinear function of how much
+connectivity there is, and every lever available at the layout level -- fewer polygons, shorter
+polygons -- has now been measured and does not move it.

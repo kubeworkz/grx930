@@ -302,6 +302,25 @@ rails, which were already there before merging (1,301 shapes wider than 1 mm on 
 than 1 mm on `46/0`) and remain after it. The lever is closed; `build/lvs_chip/net_arm.sh` is the
 harness that closes it, and §4h of `Claude outputs/stream_out_fix.md` carries the numbers.
 
+The two horizons became wall times on a tile (2026-10-21). `tools/lvs_chip/crop_tile.py` cuts a window
+out of a flat layout while keeping the layer table and the top-level shapes (not `clip_into`, which
+drops both), and the netter returns on it: **41 s** of `netlist` on a 1 mm window (1,049,143 objects),
+**150-207 s** on 1.5 mm (2,052,787), against 78.6 min that never returned on the die. The ratio is
+**1.29x at 1 mm** -- merged 41 s twice, flat 54 s and 52 s -- and **nothing detectable at 1.5 mm**,
+where merged ran 150/207 s and flat 178/197 s. The tile also settles a question the die could not
+answer: its XOR is empty on every layer the crop carries (23 entries, 19 with shapes), routing
+included, where the die could only prove 18. And it prices the one explanation left standing. A strip 320 um wide and the die's full height
+(5,119.885 um) keeps the vertical rails at **5.099 mm**, the same length they have on the die -- 22 of
+them, over 64 % more area than the 1 mm square -- and nets in **36-45 s** against that square's
+41 s/41 s. The mirror window is cut full-width (3,929.8 um) and 650 um tall so `81/0` keeps its die
+length -- **3.910 mm**, 166 of them, 991,731 objects, 1 % fewer than the vertical strip -- and nets in
+**41-62 s**: no extent penalty in either direction. So net *extent* is not what the die pays for, and
+the neighbouring idea that chip-wide nets
+are the cost has no measurement left. What the four windows do show is a steep cost in object count
+with an exponent the spread does not identify (1.9 to 4.1 depending on the pair of points), which
+places the die's >78 min inside the range a tile can produce rather than 4x above it. §4i and §4j of
+`Claude outputs/stream_out_fix.md`.
+
 **If S2 matches:** we own a proven LVS pipeline and a stated fact about the
 September artifact. If it mismatches with a small diff, that is the most
 informative result available today (it is a stale-pair finding, and the

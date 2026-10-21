@@ -26,6 +26,21 @@ set -u
 LABEL=${1:?label, e.g. merged}
 IN=${2:?layout, repo-relative}
 CAP=${3:-2400}
+# Two knobs for the small-tile experiment, both off by default so the die runs above stay reproducible.
+#
+#   STOP_AT_NETLIST=1   stop the container as soon as the probe records "netlist written before align",
+#                       instead of waiting out the cap. The deck's own `return` under `net_only` does
+#                       not end the script -- a run whose netlist was already written was still
+#                       computing 4.5 minutes later -- so without this it goes on into `align` and
+#                       burns the whole cap on the comparer.
+#   NETLIST_SINK=discard  point `target_netlist` at /dev/null. The deck writes 3.96 GB of SPICE for a
+#                       1 mm tile and far more as the window grows, all of it bind-mount writing the
+#                       netlist phase is then paying for; discarding it separates the two, and the
+#                       completion marker is the probe line, not the file. The write to /dev/null does
+#                       raise errno=28 at cleanup -- after the marker, and 2 s of a 41 s phase is all
+#                       the file sink costs, so it is not what is being measured.
+STOP_AT_NETLIST=${STOP_AT_NETLIST:-0}
+SINK=${NETLIST_SINK:-file}
 
 cd "$(dirname "$0")/../../../.." || exit 2   # lvs_chip -> build -> asic_gf180mcu -> c930 -> repo root
 ROOT=$(cygpath -m "$PWD" 2>/dev/null || pwd)
@@ -36,6 +51,8 @@ NAME="lvs_net_$LABEL"
 docker rm -f "$NAME" >/dev/null 2>&1
 
 [ -f "$IN" ] || { echo "net_arm: no such layout: $IN" >&2; exit 2; }
+TARGET=/work/$OUT/extracted.cir
+[ "$SINK" = discard ] && TARGET=/dev/null
 
 printf '#!/bin/sh\necho "1234567 000"\n' > "$OUT/bin/pmap"
 chmod +x "$OUT/bin/pmap"
@@ -51,7 +68,7 @@ exec klayout -b -r /work/c930/asic_gf180mcu/build/lvs_chip/deck_probe/gf180mcu.l
     -rd schematic=/work/c930/asic_gf180mcu/build/lvs_chip/grx930_test_chip.cdl \\
     -rd topcell=grx930_test_chip \\
     -rd report=/work/$OUT/report.lvsdb \\
-    -rd target_netlist=/work/$OUT/extracted.cir
+    -rd target_netlist=$TARGET
 EOF
 chmod +x "$OUT/run_deck.sh"
 
@@ -63,6 +80,13 @@ pid=$!
 stopped=no
 while kill -0 "$pid" 2>/dev/null; do
     now=$(date +%s)
+    if [ "$STOP_AT_NETLIST" = 1 ] && grep -q "netlist written before align" "$OUT/probe.log" 2>/dev/null; then
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) netlist on disk -- stopping $NAME before align" | tee -a "$OUT/arm.log"
+        docker stop -t 20 "$NAME" >/dev/null 2>&1
+        stopped=netlist
+        sleep 3
+        break
+    fi
     if [ $((now - start)) -ge "$CAP" ]; then
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CAP ${CAP}s reached -- stopping $NAME" | tee -a "$OUT/arm.log"
         docker stop -t 20 "$NAME" >/dev/null 2>&1
@@ -70,7 +94,7 @@ while kill -0 "$pid" 2>/dev/null; do
         sleep 3
         break
     fi
-    sleep 15
+    if [ "$STOP_AT_NETLIST" = 1 ]; then sleep 5; else sleep 15; fi
 done
 wait "$pid" 2>/dev/null
 rc=$?
@@ -80,8 +104,17 @@ netlist=no
 [ -s "$OUT/extracted.cir" ] && netlist=yes
 verdict=PASS
 if [ "$netlist" = no ]; then
-    if [ "$stopped" = yes ]; then verdict=CAP; else verdict=FAILED; fi
+    if [ "$stopped" = netlist ]; then verdict=NETLIST-DISCARDED
+    elif [ "$stopped" = yes ]; then verdict=CAP
+    else verdict=FAILED; fi
 fi
+
+# The probe's own timestamps, so the phases are read off the deck rather than off this poll loop.
+stamp() { grep -m1 -- "$1" "$OUT/probe.log" 2>/dev/null | cut -d' ' -f1; }
+secs() { if [ -n "$1" ] && [ -n "$2" ]; then echo $(( $(date -d "$2" +%s) - $(date -d "$1" +%s) )); else echo null; fi; }
+T_START=$(stamp "deck start")
+T_CMP=$(stamp "comparison section")
+T_NET=$(stamp "netlist written before align")
 
 cat > "$OUT/arm.json" <<EOF
 {
@@ -93,11 +126,19 @@ cat > "$OUT/arm.json" <<EOF
   "netlist": "$netlist",
   "netlist_bytes": $([ "$netlist" = yes ] && stat -c%s "$OUT/extracted.cir" || echo 0),
   "container_exit": $rc,
-  "stopped_by_cap": "$stopped",
+  "stopped_by": "$stopped",
+  "stopped_by_cap": "$([ "$stopped" = yes ] && echo yes || echo no)",
+  "netlist_sink": "$SINK",
+  "probe_deck_start": "$T_START",
+  "probe_comparison_section": "$T_CMP",
+  "probe_netlist_written": "$T_NET",
+  "read_extract_seconds": $(secs "$T_START" "$T_CMP"),
+  "netlist_seconds": $(secs "$T_CMP" "$T_NET"),
   "verdict": "$verdict"
 }
 EOF
 cat "$OUT/arm.json"
 [ "$verdict" = PASS ] && exit 0
+[ "$verdict" = NETLIST-DISCARDED ] && exit 0
 [ "$verdict" = CAP ] && exit 1
 exit 2
