@@ -61,7 +61,10 @@
 #
 #   c930/asic_gf180mcu/build/chain_selftests/<test>.log, so "what did it actually
 #   say?" has the same answer on the box and in the uploaded CI artifact, and
-#   chain_selftests_summary.md beside them for the table the step summary also gets.
+#   c930/asic_gf180mcu/build/chain_selftests_summary.md -- beside that directory, not
+#   in it, the way chip_gates_summary.md sits beside its logs -- for the table the
+#   step summary also gets. The upload paths in the workflow name that file, so its
+#   location is part of the contract, not a detail.
 #
 # A BOX RUN IS THE SAME RUN
 #
@@ -85,6 +88,7 @@ set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/../../.." && pwd)          # c930/asic_gf180mcu/build -> repo root
 LOGDIR="$ROOT/c930/asic_gf180mcu/build/chain_selftests"
+SUMMARY="$ROOT/c930/asic_gf180mcu/build/chain_selftests_summary.md"
 CST_TIMEOUT=${CHAIN_SELFTEST_TIMEOUT:-300}
 
 # name | working dir | command | evidence regex | tools
@@ -240,10 +244,10 @@ echo "CHAIN SELFTESTS: $verdict -- $pass passed, $((ran - pass - blocked)) faile
   echo
   echo 'Not run here: `drt_db_compare_selftest.sh` (its fixtures are the campaign'\''s'
   echo 'own databases under ws/, which no checkout contains).'
-} > "$LOGDIR/chain_selftests_summary.md"
+} > "$SUMMARY"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  cat "$LOGDIR/chain_selftests_summary.md" >> "$GITHUB_STEP_SUMMARY"
+  cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 fi
-echo "SUMMARY   $LOGDIR/chain_selftests_summary.md"
+echo "SUMMARY   $SUMMARY"
 
 exit $fail
