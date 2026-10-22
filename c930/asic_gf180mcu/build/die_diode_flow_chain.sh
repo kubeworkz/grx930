@@ -252,10 +252,25 @@ if [ "$HARVEST" != 1 ]; then
             if grep -aqE "^LAUNCHED tag=$TAG( |$)" "$MARK" 2>/dev/null; then
                 launched=1; break
             fi
+            # Absence has to be seen twice before it means anything. Between the
+            # `&` above and its exec, the child still carries the launching shell's
+            # cmdline, so pgrep cannot see it yet -- and on a contended machine that
+            # window is wide enough to be sampled. CI, 2026-10-22: a 50 s arm was
+            # declared missing on the first poll, relaunched, and the run logged two
+            # launches for one arm, which is the exact failure this loop exists to
+            # prevent. A child that exited stays exited; a child that is starting
+            # appears. The marker is re-read while the confirmation waits, because
+            # the child can decide and exit inside those two seconds.
             if ! pgrep -f "$CHILD\$" >/dev/null 2>&1; then
-                LAST=$(tail -1 "$MARK" 2>/dev/null)
-                say "ARM_RETRY attempt=$attempt -- the pre-DRT chain exited without launching (marker: ${LAST:-none}; see $CHAINLOG)"
-                break
+                sleep 2
+                if grep -aqE "^LAUNCHED tag=$TAG( |$)" "$MARK" 2>/dev/null; then
+                    launched=1; break
+                fi
+                if ! pgrep -f "$CHILD\$" >/dev/null 2>&1; then
+                    LAST=$(tail -1 "$MARK" 2>/dev/null)
+                    say "ARM_RETRY attempt=$attempt -- the pre-DRT chain exited without launching (marker: ${LAST:-none}; see $CHAINLOG)"
+                    break
+                fi
             fi
             if [ $(( $(date -u +%s) - L0 )) -ge "$LAUNCH_WAIT" ]; then
                 say "ARM_ABORT launch_wait_timeout_${LAUNCH_WAIT}s attempt=$attempt -- the chain is alive and has not launched; refusing to start a second arm over it (marker: $(tail -1 "$MARK" 2>/dev/null || echo none); see $CHAINLOG)"
