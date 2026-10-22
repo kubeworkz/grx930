@@ -194,6 +194,16 @@ on the armed verdict by sending SIGTERM to the OpenROAD process whose command li
 routing script: flag-only by default, and it cannot touch a run that is not in detailed
 routing. `build/ws_chain.sh` starts a watcher with every flow run.
 
+A log path does **not** identify its run: a resumed run tree can hold the previous arm's step
+directory, log included, and the counts carry no tag — on 2026-10-21 that made `died26q4`'s
+watcher report `diejmp01`'s curve under the new tag. So the log is identified by the step's own
+`state_in.json`, which names the run that produced the database the step routed: a log owned by
+another run is refused (`LOG_FOREIGN_REFUSED`, one event, then it waits for this run's own log)
+instead of being reported, a log with no `state_in.json` beside it is flagged
+`LOG_OWNER_UNVERIFIED` rather than trusted, and every report carries a `Log identity:` line. The
+state file is per run for the same reason (`ws/logs/drt_state_<tag>.tsv`); a shared one let one
+arm's iteration stamps be read back as another's.
+
 When the step ends — LibreLane writes its `runtime.txt` at the end, pass or fail — the watcher
 writes `ws/logs/drt_cap_cost.md` and retires. That report prices the `DRT_OPT_ITERS` cap on the
 die it actually ran on: the per-pass curve, the count standing at the cap, the measured

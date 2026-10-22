@@ -128,6 +128,22 @@ chk() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$2', got '$3')
 # and not as a grep option.
 has() { if grep -aqF -e "$2" "$1" 2>/dev/null; then ok "$3"; else bad "$3 (no '$2' in $1)"; fi; }
 hasnt() { if grep -aqF -e "$2" "$1" 2>/dev/null; then bad "$3 ('$2' is in $1)"; else ok "$3"; fi; }
+# The extension is launched DETACHED -- that is what it is for, so it outlives the
+# watcher -- so its first act under the stub (writing its argv) is asynchronous to
+# the watcher exiting. Asserting on that file the instant the watcher returns is a
+# race, and it was lost on a cold machine: six assertions read "the runner was
+# never started" while the report said it had been queued. Detached is not the
+# same as unsynchronised, so the stub marks its own completion and the test waits
+# for that mark, bounded.
+wait_marker() { # $1 path, $2 seconds (default 10) -> 0 when it appears
+    local i=0 tries=$(( ${2:-10} * 20 ))
+    while [ "$i" -lt "$tries" ]; do
+        [ -f "$1" ] && return 0
+        i=$((i + 1))
+        sleep 0.05
+    done
+    return 1
+}
 
 # The real line shape the router writes, with \r-overwritten progress, one count per
 # optimization iteration.
@@ -318,10 +334,13 @@ echo "0:00:00" > "$STEP/runtime.txt"
 printf '{\n    "odb": "%s",\n    "nl": "/work/x.v"\n}\n' "$ODB_C" > "$STEP/state_in.json"
 make_log "$STEP/openroad-detailedrouting.log" $FLOW
 
+# The marker is the stub's contract with the test: argv is only complete once
+# `runner.done` exists, and only then can anything be asserted about it.
 cat > "$TMP/stub_runner.sh" <<'STUB'
 #!/bin/bash
-rm -f "$STUB_STATE/runner.argv"
+rm -f "$STUB_STATE/runner.argv" "$STUB_STATE/runner.done"
 printf '%s\n' "$@" >> "$STUB_STATE/runner.argv"
+: > "$STUB_STATE/runner.done"
 STUB
 
 watch_case() { # $1 = out dir, rest = extra env assignments
@@ -332,14 +351,14 @@ watch_case() { # $1 = out dir, rest = extra env assignments
 }
 
 next_case
-rm -f "$TMP/state/runner.argv"
+rm -f "$TMP/state/runner.argv" "$TMP/state/runner.done"
 watch_case "$OUT"
 rc=$?
 chk "watcher: a finished step finalizes cleanly" 0 "$rc"
 has "$OUT/drt_cap_cost.md" "## Closing the loop (automatic)" "watcher: the report carries the extension decision"
 has "$OUT/drt_cap_cost.md" "Queued now (pid " "watcher: the extension was queued"
 has "$OUT/drt_watch.log" "EXTEND_LAUNCHED" "watcher: recorded in the event log"
-chk "watcher: the runner was actually started" 0 "$([ -f "$TMP/state/runner.argv" ] && echo 0 || echo 1)"
+chk "watcher: the detached runner was actually started" 0 "$(wait_marker "$TMP/state/runner.done" 10 && echo 0 || echo 1)"
 has "$TMP/state/runner.argv" "--odb" "watcher: with the pre-DRT database"
 has "$TMP/state/runner.argv" "$ODB_C" "watcher: the step's own database path"
 has "$TMP/state/runner.argv" "--end-iter" "watcher: and the iteration count"
@@ -350,19 +369,21 @@ has "$TMP/state/runner.argv" "--cap" "watcher: and the cap the flow used"
 # report has to say it out loud rather than look like it forgot.
 next_case
 make_log "$STEP/openroad-detailedrouting.log" 278169 266147 261189 258601 256296 254306
-rm -f "$TMP/state/runner.argv"
+rm -f "$TMP/state/runner.argv" "$TMP/state/runner.done"
 watch_case "$OUT"
 has "$OUT/drt_cap_cost.md" "Not launched:" "watcher: a plateau is not extended"
 has "$OUT/drt_cap_cost.md" "calls a plateau" "watcher: and the reason is the classifier's own threshold"
-chk "watcher: and nothing was launched" 1 "$([ -f "$TMP/state/runner.argv" ] && echo 0 || echo 1)"
+# "Nothing was launched" has to mean nothing appeared while the detached launch
+# could still have happened, so give it a second before reading the absence.
+chk "watcher: and nothing was launched" 1 "$(wait_marker "$TMP/state/runner.done" 1; [ -f "$TMP/state/runner.argv" ] && echo 0 || echo 1)"
 
 # The switch, for a run whose operator wants the report and nothing else.
 next_case
 make_log "$STEP/openroad-detailedrouting.log" $FLOW
-rm -f "$TMP/state/runner.argv"
+rm -f "$TMP/state/runner.argv" "$TMP/state/runner.done"
 watch_case "$OUT" WATCH_EXTEND=0
 has "$OUT/drt_cap_cost.md" "Not launched: WATCH_EXTEND=0" "watcher: WATCH_EXTEND=0 is honoured"
-chk "watcher: and launches nothing" 1 "$([ -f "$TMP/state/runner.argv" ] && echo 0 || echo 1)"
+chk "watcher: and launches nothing" 1 "$(wait_marker "$TMP/state/runner.done" 1; [ -f "$TMP/state/runner.argv" ] && echo 0 || echo 1)"
 
 echo
 echo "extend_selftest: $pass passed, $fail failed"

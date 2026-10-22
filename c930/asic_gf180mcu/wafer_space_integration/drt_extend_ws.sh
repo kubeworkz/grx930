@@ -53,7 +53,7 @@
 #
 # USAGE
 #   drt_extend_ws.sh --odb /work/ws/template/librelane/runs/ws_v3/43-.../chip_top.odb \
-#                    --tag ws_v3 --flow-state ws/logs/drt_state.tsv
+#                    --tag ws_v3 --flow-state ws/logs/drt_state_ws_v3.tsv
 #   drt_extend_ws.sh --help
 set -u
 
@@ -90,8 +90,9 @@ Options:
   --odb PATH        the pre-DRT database to route (inside-container form
                     /work/... or the host path; both are accepted)
   --tag NAME        flow run tag this extension belongs to (names the outputs)
-  --flow-state FILE the watcher's drt_state.tsv, for the instrument check
-                    (default: $OUT/drt_state.tsv)
+  --flow-state FILE the watcher's drt_state_<tag>.tsv, for the instrument check
+                    (default: $OUT/drt_state_<tag>.tsv -- one file per run, so a
+                    default can never read another run's stamps)
   --end-iter N      -droute_end_iter for the extension (default 16 = 2x the cap);
                     the extension re-runs iterations 0..N-1, the flow ran 0..cap-1
   --cap N           the cap the flow used, for the report (default: read from the
@@ -133,7 +134,9 @@ EXT_LOG=$OUT/drt_extend.$EXTAG.log
 EXT_INC=$OUT/.drt_extend.$EXTAG.inc
 EXT_OUTDIR=$OUT/$EXTAG
 REPORT=$OUT/drt_cap_cost_measured.md
-[ -n "$FLOW_STATE" ] || FLOW_STATE=$OUT/drt_state.tsv
+# Per run, like the watcher's own state file: a shared name would let a hand-run
+# instrument check compare this arm against whatever run last wrote it.
+[ -n "$FLOW_STATE" ] || FLOW_STATE=$OUT/drt_state_${TAG}.tsv
 
 say() { echo "[$(date -u '+%F %T')] $*" >> "$EVENTS"; }
 now() { date -u +%s; }
