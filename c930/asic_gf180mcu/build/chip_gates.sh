@@ -14,6 +14,16 @@
 #                                            plus the toolchain and the log upload
 #     .githooks/pre-push                     runs this same file, on the pushes that can break a gate
 #
+#   There is a second definition beside this one, build/chain_selftests.sh: the
+#   *_selftest.sh harnesses that pin the chains' own behaviour (the shared gate is
+#   called, the refusal names a reason, the die arm's launch marker is the line its
+#   parent waits for). It is not a longer version of this file and its rows are not
+#   here on purpose: those harnesses need a Linux checkout -- a pgrep, a coreutils
+#   timeout, a stub `docker` on PATH -- while this file also runs from
+#   .githooks/pre-push, which on this checkout is Git Bash. The split is by platform,
+#   not by importance: the `chain-selftests` job in the workflow below runs it on
+#   every push.
+#
 #   That property is checkable rather than asserted -- the workflow names no gate
 #   command at all:
 #
@@ -29,6 +39,14 @@
 #                         has core.filemode=false, so chmod +x here changes
 #                         nothing git records and only a checkout that reads the
 #                         mode finds the fault. (build/script_exec_bit.sh)
+#   drt-driver            the DRT runner hands OpenROAD the driver script it was
+#                         asked for, and both drivers are the ones their images
+#                         accept: the sweep arm's still passes the layer flags,
+#                         the pre-check image's still passes neither and states
+#                         the range with set_routing_layers (DRT-0509). A rename
+#                         here used to surface hours into a queued run as
+#                         `couldn't read file`; through a stub router it is
+#                         seconds. (build/drt_driver_check.sh)
 #   boot-from-rom         the chip powers up from its own ROM at 0x0001_0000 =
 #                         CORE_RESET_PC, with no SRAM preload, and reaches the
 #                         firmware's UART banner -- on the tree the OL2 flow reads
@@ -56,6 +74,22 @@
 #                         forking the others cannot pass.
 #   mmio-hold             an MMIO load's data survives a frozen pipeline
 #                         (doc/dcache_mmio_read_hold.md).
+#   lvs-fixture           the LVS harness still has a verdict, and the verdict still
+#                         says what a green means: the committed evidence -- a family of
+#                         51 PDK fixtures over six device families (MOSFETs, resistors,
+#                         MIM caps, BJTs, diodes, MOS caps; the list is
+#                         build/lvs_fixtures.tsv) -- must exist, every fixture in it
+#                         must say devices match and ports pass, and it must be about
+#                         the deck on disk when that deck is here. Three statuses, not
+#                         one -- 0 pass, 1 mismatch (including evidence about another
+#                         deck), 2 cannot-run (no evidence, unreadable evidence, a
+#                         fixture whose port check was skipped) -- because "no
+#                         verdict" and "bad verdict" must never look alike. Seconds,
+#                         no docker, no PDK needed in CI; the harness itself is
+#                         tools/klayout_lvs.sh, the refresh is
+#                         build/lvs_refresh_evidence.sh, and the chip run is
+#                         `build/lvs_check.sh --live` (build/lvs/README.md,
+#                         doc/lvs_plan.md §6).
 #
 # EVERY GATE RUNS, ALWAYS
 #
@@ -72,7 +106,7 @@
 #
 # USAGE
 #
-#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all nine
+#   bash c930/asic_gf180mcu/build/chip_gates.sh                     # all eleven
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --list               # names only
 #   bash c930/asic_gf180mcu/build/chip_gates.sh --only mmio-hold     # one of them
 #
@@ -108,6 +142,7 @@ LOGDIR="$ROOT/c930/asic_gf180mcu/build"
 # tb_dcache_mmio_hold` -- is the line itself and not a character class.
 GATES=$(cat <<'EOF'
 script-exec-bit|c930/asic_gf180mcu|bash build/script_exec_bit.sh|pass|OVERALL: PASS|bash git
+drt-driver|c930/asic_gf180mcu|bash build/drt_driver_check.sh|pass|OVERALL: PASS|bash
 boot-from-rom|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD|pass|RESULT: PASS|iverilog vvp make
 rom-disabled-control|c930/asic_gf180mcu|make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE|fail|RESULT: FAIL|iverilog vvp make
 rom-drift|c930/asic_gf180mcu|make check_rom|pass|ROM in sync|python
@@ -116,6 +151,7 @@ cache-index-alias|c930/tb|bash run_cache_index_alias.sh|pass|OVERALL: PASS|iveri
 cache-tag-guard|c930/tb|bash run_tag_width_guard.sh|pass|OVERALL: PASS|iverilog vvp
 cache-split-lockstep|c930/tb|bash run_cache_split_lockstep.sh|pass|OVERALL: PASS|bash git
 mmio-hold|c930|make dcache_mmio_hold|pass|[PASS] tb_dcache_mmio_hold|iverilog vvp make
+lvs-fixture|c930/asic_gf180mcu|bash build/lvs_check.sh|pass|LVS: PASS|bash python
 EOF
 )
 

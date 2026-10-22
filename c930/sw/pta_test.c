@@ -129,11 +129,18 @@ static int run_gemm(int m, int n, int k)
  *
  * PTA_CAL_CFG.amp is an absolute bit position: the engine takes it only in
  * [DIN_W - B_a, DIN_W - 2], because the activation quantiser has to leave the
- * probe alone.  Nothing in the register map tells firmware what DIN_W is, so a
- * value that is right for one build is refused by another -- amp 6 is right for
- * tb_c930_npu's 8-bit tile and refused by this SoC's 16-bit one.  A driver
- * therefore has to find one, which it can: the refusal is visible in CAL_ERR,
- * a refused attempt ends in two cycles, and MODEL_RST is what clears it.
+ * probe alone.  PTA_CAPS0[25:20] reports that width -- PTA_CAPS0_DIN_W in
+ * c930_npu_driver.h, with both bounds derived from it -- so firmware sets the
+ * amplitude from one register read and gets it right on the first try: 6 on
+ * tb_c930_npu's 8-bit tile, 14 on this SoC's 16-bit one.  (Nothing in the map
+ * used to say so, which is what this search was written for; that gap is closed
+ * and recorded in doc/pta_error_model_design_note.md section 7 item 5.)
+ *
+ * The search stays, deliberately, as the cross-check: T8 requires the amplitude
+ * it accepts to equal PTA_CAL_AMP_MAX(caps0), which is what holds CAPS0's
+ * ceiling and the engine's boundary together.  An amplitude outside the range
+ * is refused in two cycles with CAL_ERR set and CAL_CT unmoved, and MODEL_RST
+ * is what clears the refusal.
  *
  * Called before the impairments are set up, because MODEL_RST resets the model
  * with the correction and would throw away the drift the test accumulates. */

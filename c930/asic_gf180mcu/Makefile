@@ -22,7 +22,9 @@ RV_DIR    = ../rv64imac/RTL
 # GF180MCU PDK (set in environment)
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 
-.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom clean
+.PHONY: all gates synth pnr signoff submit sim sim_gate fw rom check_rom precheck_verdict \
+        lvs_chip_cells lvs_chip_conn lvs_chip_conn_selftest lvs_chip lvs_chip_pruned \
+        lvs_chip_collect clean
 
 all: gates
 
@@ -236,6 +238,78 @@ check_rom:
 		diff $(ROM_SRC) $(BUILD)/rom_expect.sv | head -20; exit 1; }
 
 
+
+# ============================================================
+# Clean
+# ============================================================
+# ============================================================
+# wafer.space pre-check verdict
+# ============================================================
+# The pre-check container exits 0 even when the flow fails, so its verdict has to be read out
+# of the log. tools/precheck_verdict.py does that and exits 0 = all blocking gates passed,
+# 1 = a blocking gate failed, 2 = the run aborted before the end, 3 = no verdict parseable.
+#
+#   make precheck_verdict PRECHECK_LOG=/path/precheck_ws.log
+#   make precheck_verdict PRECHECK_LOG=/path/precheck_ws.log PRECHECK_RUN=/path/runs/run2
+#   make precheck_verdict PRECHECK_LOG=... PRECHECK_EXPECT=pass   # assert the verdict
+#
+# PRECHECK_RUN adds the per-step metrics (state_in.json) and the per-check report tallies.
+# The JSON lands in $(PRECHECK_JSON) for CI and for the submission package.
+# Prefer python3, but take the first interpreter that actually runs Python 3: on Windows
+# `command -v python3` can resolve to a Microsoft Store stub that only prints a message.
+PRECHECK_PY     ?= $(shell for c in python3 python; do \
+		$$c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1 \
+		&& { echo $$c; break; }; done)
+PRECHECK_LOG    ?=
+PRECHECK_RUN    ?=
+PRECHECK_EXPECT ?=
+PRECHECK_JSON   ?= $(BUILD)/precheck_verdict.json
+
+precheck_verdict: $(BUILD)
+	@test -n "$(PRECHECK_LOG)" || { \
+		echo "FAIL: set PRECHECK_LOG=<precheck_ws.log> (optionally PRECHECK_RUN=<run dir>)"; \
+		echo "      the log is the only place the verdict exists -- the container exits 0"; \
+		exit 1; }
+	$(PRECHECK_PY) tools/precheck_verdict.py --log "$(PRECHECK_LOG)" \
+		$(if $(PRECHECK_RUN),--run-dir "$(PRECHECK_RUN)") \
+		--out "$(PRECHECK_JSON)" $(if $(PRECHECK_EXPECT),--expect $(PRECHECK_EXPECT))
+	@echo "verdict: $(PRECHECK_JSON)"
+
+# ============================================================
+# Chip LVS on the artifact (doc/lvs_plan.md S2)
+# ============================================================
+# lvs_chip_cells is the fast half: three of the artifact's own cells through the deck, seconds.
+# lvs_chip is the whole die through the deck, which is hours on one core -- run it detached and
+# collect with lvs_chip_collect (see the header of build/lvs_chip_check.sh).
+# lvs_chip_pruned is the same die through the deck copy from build/lvs_chip_prune_deck.sh, which
+# skips device classes whose body region is empty: on the 5LM die that is 223 minutes of poly
+# resistor extraction that cannot produce a device (build/lvs_chip_prune_deck.sh measures it).
+lvs_chip_cells:
+	bash build/lvs_chip_cell_check.sh
+
+# The top level's connectivity without the deck's netter: the routed DEF against the CDL, as a
+# partition of pins, in seconds (tools/lvs_chip/net_compare.py). Its own test writes both sides.
+# Same interpreter rule as PRECHECK_PY: the Store `python3` on Windows is a stub.
+NC_PY ?= $(shell for c in python3 python; do \
+		$$c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1 \
+		&& { echo $$c; break; }; done)
+
+lvs_chip_conn:
+	$(NC_PY) tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def \
+	    --cdl build/lvs_chip/grx930_test_chip.cdl --json build/lvs_chip/net_compare.json
+
+lvs_chip_conn_selftest:
+	bash build/lvs_chip_net_compare_selftest.sh
+
+lvs_chip:
+	bash build/lvs_chip_check.sh
+
+lvs_chip_pruned:
+	bash build/lvs_chip_prune_deck.sh
+	bash build/lvs_chip_check.sh --deck build/lvs_chip/deck_pruned/gf180mcu.lvs
+
+lvs_chip_collect:
+	bash build/lvs_chip_collect.sh --now
 
 # ============================================================
 # Clean

@@ -1,0 +1,1694 @@
+{
+  "deck": {
+    "sha256": "00019ed0a7f434fc9ead466be75c07cbaed4bf5de698446d6e3fafd43ac7cc59"
+  },
+  "fixtures": [
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 3,
+        "instances_schematic": 10,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_00p54x02p00",
+      "inputs": {
+        "layout": "01150e79c3d64353c46ab9b62a7b55f6b7ea5ee7979ce6ede98d9b9e9c73cdd7",
+        "netlist": "634027834e3b1b8a3fb80c23ca0356cf4612cf559ac27c8dfe3a83876478e750"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 7,
+        "missing_in_layout": [],
+        "schematic_count": 7,
+        "schematic_sha256_16": "0b6ab8fb4c4b573f",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_00p54x04p00",
+      "inputs": {
+        "layout": "a9b0aae5ba367fca4b272fd070c77470ce677bd7061ec0baa5c83a838128818a",
+        "netlist": "e2bf8f35124ec5f755231e8c84ab661c288a0a328513d203437f947e83b7e517"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 4,
+        "missing_in_layout": [],
+        "schematic_count": 4,
+        "schematic_sha256_16": "9f32599dd4e22924",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_00p54x08p00",
+      "inputs": {
+        "layout": "f07e725d36f1ceb2e76aea8f72d2c425a5e80cd537bbf77d66f36cd172be9f20",
+        "netlist": "3d8e63b0e9a565d24d64be072ae008cf48012c7bf534e4b3bcf13adffbdfd714"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 4,
+        "missing_in_layout": [],
+        "schematic_count": 4,
+        "schematic_sha256_16": "9f32599dd4e22924",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_00p54x16p00",
+      "inputs": {
+        "layout": "a57bda73b9a9b6f81939923b0cc64025a6c78808a32757c6aa368746b908570c",
+        "netlist": "e39733a89e92ec9e63e295a8362bbf61e7c9017ebae76081198082664251644b"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 4,
+        "missing_in_layout": [],
+        "schematic_count": 4,
+        "schematic_sha256_16": "9f32599dd4e22924",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_05p00x05p00",
+      "inputs": {
+        "layout": "149236a941769ba3689e615fbf25bb907c026e0f06283ac3bfed610b16792d76",
+        "netlist": "e3d4174a7f255e3ae9a45a4e72b36d4ee2e5b790dad77af83db8b316fff702a7"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 4,
+        "missing_in_layout": [],
+        "schematic_count": 4,
+        "schematic_sha256_16": "9f32599dd4e22924",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/npn_10p00x10p00",
+      "inputs": {
+        "layout": "3966aaeb2df6cec1c7b1360dfb649d2ef49ed6cd13e845fd2bf267d8a2fd5302",
+        "netlist": "c61e9060f52bfaf9e8b24ca950661a4293a08030a1e58900bc04583307604dad"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 4,
+        "missing_in_layout": [],
+        "schematic_count": 4,
+        "schematic_sha256_16": "9f32599dd4e22924",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/pnp_05p00x00p42",
+      "inputs": {
+        "layout": "9809578ac77f7bde35b86acea913830f492bdce32deecca10e466cc12331ce5a",
+        "netlist": "15e72825ad87c2bc69c7eefdbc39306d80c632fffb36669f058a056d653e1db7"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 3,
+        "missing_in_layout": [],
+        "schematic_count": 3,
+        "schematic_sha256_16": "1d85a58fbe9a2195",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/pnp_05p00x05p00",
+      "inputs": {
+        "layout": "9f4287685a7d0403d005e30139e7d9664055b4e50b624cee1c532b61785361af",
+        "netlist": "ae92bf98f1e8115f90436f2cae381a91b8c1426c448977e5a4be07c274f3938e"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 3,
+        "missing_in_layout": [],
+        "schematic_count": 3,
+        "schematic_sha256_16": "1d85a58fbe9a2195",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/pnp_10p00x00p42",
+      "inputs": {
+        "layout": "83d250d005c442f53ba0b7fbcff0e3c5f9113e778e7a0ff3b86551e645df80d7",
+        "netlist": "bb75555d3bfc7ae613c7c56821314a78a186dbdf8d626936d4b96e5424631477"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 3,
+        "missing_in_layout": [],
+        "schematic_count": 3,
+        "schematic_sha256_16": "1d85a58fbe9a2195",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 2,
+        "instances_schematic": 7,
+        "verdict": "match"
+      },
+      "fixture": "bjt_devices/pnp_10p00x10p00",
+      "inputs": {
+        "layout": "d2fb01baf24b6220ad59cf6d143ec6b0a7b3f97a1168728b6af758ad08d7ac1e",
+        "netlist": "7040eb40b052f8ea419dd5696f99c2330284666fa10193a370159d31493c2599"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 3,
+        "missing_in_layout": [],
+        "schematic_count": 3,
+        "schematic_sha256_16": "1d85a58fbe9a2195",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_dw2ps_03v3",
+      "inputs": {
+        "layout": "cfee0101ef530351f87d11cb178bc40d4e13f99c74c89d6c2ad28823f618a86d",
+        "netlist": "b414f907c9c924604fdf647f9ec63c5e1aba328709c3c5c6286e1cc21f1f7124"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "f7f3a01bd494fa84",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_dw2ps_06v0",
+      "inputs": {
+        "layout": "44098f9625b27de4d112b04514dd9a55ff0f43dc47df3ac4379f3e499d398606",
+        "netlist": "a8302664e8c089210fb2f40f2fb77d4e63ef25b2ed825feff5e28212cc3e4994"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "f7f3a01bd494fa84",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nd2ps_03v3",
+      "inputs": {
+        "layout": "91cb179af26f046238ae5b069a7a74cad5ad839a4e612c24491ac3df130fc587",
+        "netlist": "f5d9a306ced76b48eab1deeaf3762dc99d3fba7a7d0557c8047c5dd1dddd68b5"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 18,
+        "missing_in_layout": [],
+        "schematic_count": 18,
+        "schematic_sha256_16": "44a1a0b463505a6a",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nd2ps_03v3_dn",
+      "inputs": {
+        "layout": "08b2021cefc4601ec285f3eb8a570cfa546610f83e55f8dce1363aef82a6c3ca",
+        "netlist": "7ab04f90f88617ea5f1b188062620ebbbc3746be832985d7eca539a6cd65e287"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nd2ps_06v0",
+      "inputs": {
+        "layout": "60f777a9b7b892f52d072d3fdab596faf62d412bc0fca39e1072db1abc1fdc58",
+        "netlist": "667e6e1fcd66463d53ab896280adc18f4e4d28e9d52be1aa3428556f24ada9d2"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 18,
+        "missing_in_layout": [],
+        "schematic_count": 18,
+        "schematic_sha256_16": "44a1a0b463505a6a",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nd2ps_06v0_dn",
+      "inputs": {
+        "layout": "22fd5118fcde2f9d2a1a2c2a969fda690134442cdeb79a9f7173eb986de0a5d7",
+        "netlist": "b04bb10aa79149dff9874b692286bbb2b0d9a50622d899da8f30133f540003fe"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nw2ps_03v3",
+      "inputs": {
+        "layout": "873d4b0e3b2aeca82a8cd9a89fd4aa391b5a47a3c389e13e3572e7eb5518febc",
+        "netlist": "b5355d7a92f750a592a010dd10fc8ae9089c934e88d91723d89b520b211e7a81"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 18,
+        "missing_in_layout": [],
+        "schematic_count": 18,
+        "schematic_sha256_16": "44a1a0b463505a6a",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_nw2ps_06v0",
+      "inputs": {
+        "layout": "25e300d4f501a3978564640b546bc88be240359a7f8c5402aa981eceda13bd08",
+        "netlist": "08960246f943fb490989a8b2eb807ed5c88c6fa9003d337f47554e60174b2fd1"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 18,
+        "missing_in_layout": [],
+        "schematic_count": 18,
+        "schematic_sha256_16": "44a1a0b463505a6a",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pd2nw_03v3",
+      "inputs": {
+        "layout": "df68a38da61a916a6c452a5878c73c8a30939a25221876f1465c012fb8dea94d",
+        "netlist": "ca2e5972e727ad92e7987dea22e003054852631048aba4587d502375dbb5c745"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pd2nw_03v3_dn",
+      "inputs": {
+        "layout": "a55c9c562505bdb110b973796d1c1cddb72241dfb7d5cef803e0ff09063b189a",
+        "netlist": "ed7fca56681cac949a37f0ee285bbdfb735ffe7cae64c691d33f9139c270ac1b"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pd2nw_06v0",
+      "inputs": {
+        "layout": "772e56bd8b6ead5510c1bbf399ee007cee77c92164027edd9ac50b7e31e21acd",
+        "netlist": "67ef821091279fbdab2e97d4cf28d22260418e258de4b0a5be7f05f3f294ee1c"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 18,
+        "instances_schematic": 23,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pd2nw_06v0_dn",
+      "inputs": {
+        "layout": "5e6fc4d3eb231d066723e58bbf1273fe17d14dd33f94472ee3a3917b970ebc72",
+        "netlist": "a1633ff71864830b6dcef60aaf0882c4e289c25eaf80ae5ee55fcf4251571521"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 34,
+        "missing_in_layout": [],
+        "schematic_count": 34,
+        "schematic_sha256_16": "ed1e38dd71ef4c1b",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pw2dw_03v3",
+      "inputs": {
+        "layout": "61c062beb0888a366d5674c09864be82a336871c3103bdabaaecc46217bf7b03",
+        "netlist": "847449a3d49088fc45cd7451634b08e3afbca30be3cbaa47b4ca997827a5657a"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "fb941c1f2c1431db",
+        "verdict": "pass"
+      },
+      "switches": "implicit_connect=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/diode_pw2dw_06v0",
+      "inputs": {
+        "layout": "af6b566a1bbb4b7752b73d1b0288e178ec02209cec1a26a918cf1dbb6d949ba5",
+        "netlist": "b4c6b78cf7bffe1c4c85e680b70dc82a49a472ab1f9683fc03f7e6f91c055a86"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "55f6e39ce680abf8",
+        "verdict": "pass"
+      },
+      "switches": "implicit_connect=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "diode_devices/sc_diode",
+      "inputs": {
+        "layout": "b012bae6936ef4a3b3b01f4f14fd5eb19f605616642208a4a1caf107a0c8f51d",
+        "netlist": "d849b5cf434d1d980371e349d7c45a5d9c736a8b65ac808de9637d36213ecb84"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "34c523610cd1133e",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "metal_level": "6LM",
+        "mim_cap": "1",
+        "mim_option": "B",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "mimcap_devices/cap_mim_1f0fF_B_6LM_1p0",
+      "inputs": {
+        "layout": "921b61f5bb6dc9b661df3802debd276d3c16fdb2b416a9ed1b8c1c934b140601",
+        "netlist": "350e443cf70398c6159d662b3eb22e6b404cc59e41f038358cb4c55e82ed9084"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "6fcf47f33c9d406c",
+        "verdict": "pass"
+      },
+      "switches": "mim_option=B,metal_level=6LM,mim_cap=1",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "metal_level": "3LM",
+        "mim_cap": "1.5",
+        "mim_option": "A",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "mimcap_devices/cap_mim_1f5fF_A_1p5",
+      "inputs": {
+        "layout": "a1bed73bab415fa92010f8195797a5e6fa3caceeb2347a0743820e32f5473b32",
+        "netlist": "d33d206a01f6d914c441e2d12842dc1e1855e8589d3abc7a7286e2ea9c4efc8e"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "6fcf47f33c9d406c",
+        "verdict": "pass"
+      },
+      "switches": "mim_option=A,metal_level=3LM,mim_cap=1.5",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "metal_level": "5LM",
+        "mim_cap": "2",
+        "mim_option": "B",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "mimcap_devices/cap_mim_2f0fF_B_5LM_2p0",
+      "inputs": {
+        "layout": "df6fe6127e3a4e6cb391fd11d63b2bf4f10fccf98e5d73452d3fc45352188a48",
+        "netlist": "da7a7b47a0ff4e3931ef230a6e028288c4108659b3188432c4816ac9e12b83c6"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "6fcf47f33c9d406c",
+        "verdict": "pass"
+      },
+      "switches": "mim_option=B,metal_level=5LM,mim_cap=2",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 99,
+        "instances_schematic": 104,
+        "verdict": "match"
+      },
+      "fixture": "mos_devices/nfet_03v3_dn",
+      "inputs": {
+        "layout": "39f2b978e0dc9a7ba719a8d85fc8d34e0d66eb7192267dc413e236946311e1f9",
+        "netlist": "6a03ebba5ab6b9ba7f2b9fe63394af51940f8133123066c6a8f86aeb84aef472"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 295,
+        "missing_in_layout": [],
+        "schematic_count": 295,
+        "schematic_sha256_16": "91867441f06a6fbf",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,implicit_connect=true,consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 99,
+        "instances_schematic": 104,
+        "verdict": "match"
+      },
+      "fixture": "mos_devices/nfet_05v0",
+      "inputs": {
+        "layout": "2a7ebfbba7fa4cf7d8d7b6278453111d7841b238ea9a04fca52589dd24517409",
+        "netlist": "3a6b37a2f9956d7cfe282b1fc5c46aded04b3f954839edb5366196cb62785b93"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 295,
+        "missing_in_layout": [],
+        "schematic_count": 295,
+        "schematic_sha256_16": "91867441f06a6fbf",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 100,
+        "instances_schematic": 105,
+        "verdict": "match"
+      },
+      "fixture": "mos_devices/pfet_05v0",
+      "inputs": {
+        "layout": "72beb92e4b8f38c622c8c62225b1fddd7a96b0d1504092a9aa476200bcc22a95",
+        "netlist": "9f46fdbe2d1801248a5ea90b8467f230644a5bf02ff0dde8281cf065c38ee1a2"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 298,
+        "missing_in_layout": [],
+        "schematic_count": 298,
+        "schematic_sha256_16": "0c5d7e7292e48b2e",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,implicit_connect=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 96,
+        "instances_schematic": 101,
+        "verdict": "match"
+      },
+      "fixture": "mos_devices/pfet_06v0",
+      "inputs": {
+        "layout": "b842924f2d542377154f5be3d5406aa075afe2bb53aafe0053a2f7389931b116",
+        "netlist": "1e8c63fbbd4111aa943c0607a15f21fa58825747a2575319e219c271cc7c4067"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 286,
+        "missing_in_layout": [],
+        "schematic_count": 286,
+        "schematic_sha256_16": "c0e8f4be0d0a3e8d",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,implicit_connect=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_03v3",
+      "inputs": {
+        "layout": "9a01ffcefe2898c20c91ef8b93dee6bdde157661388674a085d3f5c4704ebc7a",
+        "netlist": "0adbbda887419d3268b135e4d918cf51558c3bda653fd403c789fc55ae1501bd"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_03v3_b",
+      "inputs": {
+        "layout": "de87f70ec5d5e32bbc856779dd489c53cb93c4d9456ad0797e98fa61e5cb3eeb",
+        "netlist": "dc8de8825733799595e156bddeafa248501cf2fd09319a326fa627031a156d76"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_03v3_dn",
+      "inputs": {
+        "layout": "d28c8b849dd05c111f050c8ac4f403b6c4673aa74c920d0d691f980f3a2c2e3f",
+        "netlist": "e145b1ca9a4089448f527b697d7777cc1604ed6fb5564b0363c386cc253f63f2"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_06v0",
+      "inputs": {
+        "layout": "cbced5a532705c65527b13c97f4f11d6fdf026cb2c49b8efacf169e82e61dc06",
+        "netlist": "9506e20c74f5172c0cfd3f88162352c8ad2b96f01aba13d6e8caa9135c6973cc"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_06v0_b",
+      "inputs": {
+        "layout": "1cc347c6c6d1f6c59cbb60ba395246165a252456d485256391d7b7e0b718eb23",
+        "netlist": "807a242eacb3007c167f20e0321f764dd5f583359a61be35c193de3a6f9451e2"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_nmos_06v0_dn",
+      "inputs": {
+        "layout": "bcb280c2008e9f629d7c0970ee41c78de01bc8638d35f556684efd19fb55bb03",
+        "netlist": "c061715d59c4924228224c24544ba7c267eeb2f4d17d90325dd31ad6c3f46dff"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_03v3",
+      "inputs": {
+        "layout": "177c0727f19e7ca8c4c79dbfb357b2da3a21937010e921c07a16f7c06a2d109a",
+        "netlist": "642eed0751c11604512eee24fd3ac188fb750493829835feeba48d9f454db764"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_03v3_b",
+      "inputs": {
+        "layout": "68c35b34fb722636bca844301245777e290ff7b2bce579e528df1900b3390349",
+        "netlist": "855090f22c77d86ec06a3a9ed86b488e644003e62cea8297f7343917d4c772a9"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "51da62a171cbbac6",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_03v3_dn",
+      "inputs": {
+        "layout": "e5765916a6baa86b0d9e05d1e3e5605f1182728aecea61b3f7bc536c333954dd",
+        "netlist": "ae11e947f538857cb135ee6199fa4a2eb3cb204f9ecd238a554fcb9e363d6efb"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_06v0",
+      "inputs": {
+        "layout": "0a2f8657401c05bad4fb5bee3f60f90c22ccb3f0cd301a6c9f274994b8506b06",
+        "netlist": "1b5e879d44ed29482f03caaf190985178050cf85c509d3e8522963a59fb3095a"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_06v0_b",
+      "inputs": {
+        "layout": "9afe33f05cdb983f88f025af65b685e06b3774fdb85b0c3505485c90b58bfb8f",
+        "netlist": "11f48f127cd28a9a61e101c9ac7c41f1c86e10c5fe7f10151661fe91f1c1af22"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 11,
+        "missing_in_layout": [],
+        "schematic_count": 11,
+        "schematic_sha256_16": "51da62a171cbbac6",
+        "verdict": "pass"
+      },
+      "switches": "",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "consider_dn_dw_features": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "moscap_devices/cap_pmos_06v0_dn",
+      "inputs": {
+        "layout": "24327986a270067aebb29c164f653735f1b57f470025067f0bfd585df22fece5",
+        "netlist": "b21f4a5c647c41048ae3eb4c06b19d3fe984dae678f1cd22a69ab3126db0a618"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 20,
+        "schematic_sha256_16": "0e4e98ad62773522",
+        "verdict": "pass"
+      },
+      "switches": "consider_dn_dw_features=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/nplus_u",
+      "inputs": {
+        "layout": "238c339ca5bb0a43d2029b061952b51c0e7ab0a29205dc56a89f2a0e91c5a7d5",
+        "netlist": "a7c6eaedd1c130760824652ccaa044d458718006dff5753b4576b5777467cf7a"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "f36d2ec26dca584b",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/npolyf_s",
+      "inputs": {
+        "layout": "9a600e54dfffbc462f8a2ef4402a5b11537490816b714760d547dc544f6ab241",
+        "netlist": "93d69d2474d4b239c9435e773363175aa1fce5950bcfb1c6f21f520646204e8c"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "3972d52c53fa8f24",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/nwell",
+      "inputs": {
+        "layout": "13383a5050228fd4a103f4bc4c295706017240b12ff3d5d07b0f7fb9355e87fb",
+        "netlist": "72fba64b183061b10c0bfacbc48f707dfe4b6c2e97132dba1b424bf581974bdf"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "3972d52c53fa8f24",
+        "verdict": "pass"
+      },
+      "switches": "combine=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "implicit_connect": "true",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/pplus_u",
+      "inputs": {
+        "layout": "946774d9b24f34cfb0fd7c4973ef578f35f8acccb7d6c047bc9b07fd0f8ce2c7",
+        "netlist": "86065eab6eb63c106b8be752a3de19c6f53a2d38aff1af9f1d071f7f8f90d9c5"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "f36d2ec26dca584b",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,implicit_connect=true",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "poly_res": "2k",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/ppolyf_u_2k",
+      "inputs": {
+        "layout": "3f86801f83bd530b20149286b82e15d8c0d1f16c758f0a85b4d5307f164d808b",
+        "netlist": "446da0e4329dd76931553adee5fa0c8ffeb73aa684f59782ad479f35a78294c2"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "3972d52c53fa8f24",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,poly_res=2k",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "poly_res": "3k",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 56,
+        "instances_schematic": 61,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/ppolyf_u_3k_6p0",
+      "inputs": {
+        "layout": "8ddec18a1f9fc32d9356d63737017fca252468263c05ad919e5a0132d820aa57",
+        "netlist": "24331b1c67096696098ca621148db46f536a5c7ba64c4144d3cf43b7a798e8f1"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [],
+        "layout_pin_count": 111,
+        "missing_in_layout": [],
+        "schematic_count": 111,
+        "schematic_sha256_16": "3972d52c53fa8f24",
+        "verdict": "pass"
+      },
+      "switches": "combine=true,poly_res=3k",
+      "verdict": "match"
+    },
+    {
+      "deck_switches": {
+        "check_ports": "false",
+        "combine": "true",
+        "metal_top": "11K",
+        "run_mode": "deep",
+        "top_lvl_pins": "true",
+        "verbose": "false"
+      },
+      "devices": {
+        "instances_extracted": 11,
+        "instances_schematic": 16,
+        "verdict": "match"
+      },
+      "fixture": "res_devices/tm11k",
+      "inputs": {
+        "layout": "6a95d29ef61c91edd05bb339cebb487a98d503db5dc5c8231e4e03409c579247",
+        "netlist": "e988048a29b9310d89bae3f4a2786c4d2a2b2cb0f79ab2eb6c522281f0f99007"
+      },
+      "ports": {
+        "checked": true,
+        "checked_by": "klayout_lvs.py",
+        "deck_variable_defined": false,
+        "layout_only": [
+          "net1",
+          "net10",
+          "net11",
+          "net12",
+          "net13",
+          "net14",
+          "net15",
+          "net16",
+          "net17",
+          "net18",
+          "net19",
+          "net2",
+          "net20",
+          "net3",
+          "net4",
+          "net5",
+          "net6",
+          "net7",
+          "net8",
+          "net9"
+        ],
+        "layout_pin_count": 20,
+        "missing_in_layout": [],
+        "schematic_count": 0,
+        "schematic_sha256_16": "e3b0c44298fc1c14",
+        "verdict": "pass"
+      },
+      "switches": "metal_top=11K",
+      "verdict": "match"
+    }
+  ],
+  "kind": "family",
+  "pin": "fossi-foundation/globalfoundries-pdk-libs-gf180mcu_fd_pv@355b9ee6b6f64327c8d5ac879dee597fe1e9c4b2",
+  "summary": {
+    "match": 51,
+    "mismatch": 0,
+    "total": 51
+  }
+}

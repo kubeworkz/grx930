@@ -1,0 +1,58 @@
+{
+  "artifacts": {
+    "extracted_netlist": "c930/asic_gf180mcu/build/lvs_chip/run_die_as_is/extracted.cir",
+    "log": "c930/asic_gf180mcu/build/lvs_chip/run_die_as_is/klayout.log",
+    "lvsdb": "c930/asic_gf180mcu/build/lvs_chip/run_die_as_is/report.lvsdb"
+  },
+  "deck_error_text": "ERROR",
+  "deck_switches": {
+    "check_ports": "false",
+    "combine": "true",
+    "metal_level": "5LM",
+    "run_mode": "deep",
+    "top_lvl_pins": "true",
+    "verbose": "false"
+  },
+  "devices": {
+    "instances_extracted": 35,
+    "instances_schematic": 371,
+    "verdict": "mismatch"
+  },
+  "inputs": {
+    "deck": {
+      "path": "c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs",
+      "sha256": "00019ed0a7f434fc9ead466be75c07cbaed4bf5de698446d6e3fafd43ac7cc59"
+    },
+    "layout": {
+      "path": "c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds",
+      "sha256": "ade20508299f6f6436f1fbc18b888e2b1df63373c55769146cdd50ed460b584e"
+    },
+    "netlist": {
+      "path": "c930/asic_gf180mcu/build/lvs_chip/grx930_test_chip.cdl",
+      "sha256": "50fd3a7c0d4d60de2e67848f619695749ae2d92b65140362e9f4780d158b2990"
+    }
+  },
+  "paths_relative_to": "repository root",
+  "ports": {
+    "checked": true,
+    "checked_by": "klayout_lvs.py",
+    "deck_variable_defined": false,
+    "layout_only": [],
+    "layout_pin_count": 0,
+    "missing_in_layout": [],
+    "schematic": [
+      "i_clk",
+      "i_ext_irq",
+      "i_rst_n",
+      "i_uart_rxd",
+      "o_gpio[0]",
+      "o_gpio[1]",
+      "o_gpio[2]",
+      "o_gpio[3]",
+      "o_uart_txd"
+    ],
+    "verdict": "pass"
+  },
+  "topcell": "grx930_test_chip",
+  "verdict": "mismatch"
+}

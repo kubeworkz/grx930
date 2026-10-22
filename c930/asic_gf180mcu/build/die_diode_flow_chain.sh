@@ -51,8 +51,24 @@
 #   simply race for whichever moment the box empties first. DIE_DIO_WAIT=0 refuses
 #   instead of waiting.
 #
+# THE ARM IS NOT RE-LAUNCHED ON A CLOCK
+#
+#   The arm is started detached (it has to be: it waits for the box and then runs
+#   for days), so the only safe way to tell whether it started is the arm's own
+#   decision. `die_drt_chain.sh` records `LAUNCHED tag=...` in `DIE_ARM_STATE` at
+#   the moment its container is up, and this chain waits for that line -- not for a
+#   fixed sleep and a grep of the chain log, which is how it used to work: at 45 s a
+#   slow gate looked like a refusal, and the retry then ran `docker rm -f
+#   die_predrt` out from under an arm that was already routing. A retry is now
+#   started only when the previous arm is GONE without the line. If it is alive and
+#   has not decided within DIE_DIO_LAUNCH_WAIT (2700 s), the chain aborts rather
+#   than race it -- no second copy, ever, over a live arm.
+#
 #   nohup bash build/die_diode_flow_chain.sh > /dev/null 2>&1 &
 #   tail -f ws/logs/die_diode_flow_chain.log
+#
+#   bash build/die_launch_selftest.sh   -- the handshake above, pinned from both
+#   ends against stub arms and a stub docker; run it after touching either chain.
 #
 #   DIE_DIO_PLAN=1     ... launch nothing, print the resolved arm and its checks
 #   DIE_DIO_HARVEST=1  ... re-harvest the logs on disk and rewrite the report,
@@ -76,11 +92,22 @@ STOP=${DIE_DIO_STOP:-OpenROAD.DetailedRouting}
 WAIT=${DIE_DIO_WAIT:-1}
 MAX_WAIT_H=${DIE_DIO_MAX_WAIT_H:-36}
 ATTEMPTS=${DIE_DIO_ATTEMPTS:-6}
+# How long one attempt may stay alive without a decision before the chain gives up
+# instead of starting a second arm over it, and how long to wait between attempts
+# that DID exit without launching.
+LAUNCH_WAIT=${DIE_DIO_LAUNCH_WAIT:-2700}
+RETRY_WAIT=${DIE_DIO_RETRY_WAIT:-300}
 PLAN=${DIE_DIO_PLAN:-0}
 HARVEST=${DIE_DIO_HARVEST:-0}
 WATCH_EXTEND=${DIE_DIO_WATCH_EXTEND:-0}
 LOG=$WS/logs/die_diode_flow_chain.log
 CHAINLOG=$WS/logs/die_drt_chain.log
+# The arm's decision marker: cleared per attempt, appended by the child
+# (`arm_state` in die_drt_chain.sh) with `LAUNCHED tag=...` or, at exit, `EXIT rc=..`.
+MARK=$WS/logs/die_drt_chain.$TAG.launch
+# The arm script. Overridable only so the wait below can be exercised against a
+# stub child (a real arm takes days); nothing in normal use sets it.
+CHILD=${DIE_DIO_CHILD:-$B/die_drt_chain.sh}
 RUN=$WS/template/librelane/runs/$TAG
 STEPDIR=$RUN/06-openroad-detailedrouting
 REPAIR=$RUN/04-openroad-repairantennas
@@ -171,6 +198,14 @@ fi
 
 # ---- wait for the box, and for the chain that is ahead of this one -------------
 if [ "$HARVEST" != 1 ]; then
+    # The shared gate, before the wait and the launch. The arm gates itself for its
+    # phase A (die_drt_chain.sh: 9000 MB against a 12 GB floor), but a refusal there
+    # arrives after this chain has launched it, and arrives in the ARM's log -- this
+    # chain would see "exited without launching", retry, and report the retries as if
+    # the arm had failed. Asking first costs one memwatch call and names the reason
+    # in this chain's own log. Every other *_chain.sh in build/ does the same, and
+    # gate_selftest.sh checks that it still does.
+    gate 9000 die_diode_flow 12 / || { say "ARM_ABORT_$GATE_REASON"; exit 1; }
     W0=$(date -u +%s); WAITED=0
     while :; do
         RUNNING=$(docker ps --format '{{.Names}}' | tr '\n' ' ')
@@ -193,22 +228,62 @@ if [ "$HARVEST" != 1 ]; then
 
     # Launch through the project's own pre-DRT chain (its GRT gate, its pre-DRT
     # database discovery and its repair evidence are all reused, not reimplemented)
-    # and retry only if that chain refused before starting a container.
+    # and retry only when it EXITED without starting a container.
+    #
+    # The decision comes from the arm itself: `arm_state` writes `LAUNCHED tag=...`
+    # into $MARK at the moment its container is up. Waiting on a clock instead (the
+    # previous 45 s + grep) cannot distinguish "slow gate" from "refused", and its
+    # retry would `docker rm -f die_predrt` a healthy arm. So the rule is: while the
+    # child is alive, wait; retry only when it is gone with no LAUNCHED line; and if
+    # it is alive without a decision past LAUNCH_WAIT, abort rather than race it.
     attempt=0; launched=0
     while [ "$attempt" -lt "$ATTEMPTS" ]; do
         attempt=$((attempt+1))
-        OFF=$(stat -c %s "$CHAINLOG" 2>/dev/null || echo 0)
+        : > "$MARK"
         A0=$(date -u +%s)
         DIE_TAG="$TAG" DIE_PREDRT_OVERRIDE="$OVERRIDE" PREDRT_OR="$OR26" PREDRT_PATCH_LLN=1023 \
-            PREDRT_STOP="$STOP" DIE_PHASE_A_ONLY=1 \
-            nohup setsid bash "$B/die_drt_chain.sh" >/dev/null 2>&1 </dev/null &
-        say "ARM_LAUNCHED attempt=$attempt tag=$TAG via=$B/die_drt_chain.sh engine=$OR26 patch=1023 stop=$STOP override='${OVERRIDE:-none}'"
-        sleep 45
-        if tail -c +$((OFF+1)) "$CHAINLOG" 2>/dev/null | grep -aq "PREDRT_LAUNCHED tag=$TAG"; then
-            launched=1; break
-        fi
-        say "ARM_RETRY attempt=$attempt -- the pre-DRT chain did not launch (see $CHAINLOG)"
-        sleep 300
+            PREDRT_STOP="$STOP" DIE_PHASE_A_ONLY=1 DIE_ARM_STATE="$MARK" \
+            nohup setsid bash "$CHILD" >/dev/null 2>&1 </dev/null &
+        say "ARM_LAUNCHED attempt=$attempt tag=$TAG via=$CHILD engine=$OR26 patch=1023 stop=$STOP override='${OVERRIDE:-none}'"
+        L0=$(date -u +%s)
+        while :; do
+            # The child's line is `LAUNCHED tag=<tag> container=die_predrt`, so match the
+            # tag as a token, not the whole line: an exact-line test here never fires.
+            if grep -aqE "^LAUNCHED tag=$TAG( |$)" "$MARK" 2>/dev/null; then
+                launched=1; break
+            fi
+            # Absence has to be seen twice before it means anything. Between the
+            # `&` above and its exec, the child still carries the launching shell's
+            # cmdline, so pgrep cannot see it yet -- and on a contended machine that
+            # window is wide enough to be sampled. CI, 2026-10-22: a 50 s arm was
+            # declared missing on the first poll, relaunched, and the run logged two
+            # launches for one arm, which is the exact failure this loop exists to
+            # prevent. A child that exited stays exited; a child that is starting
+            # appears. The marker is re-read while the confirmation waits, because
+            # the child can decide and exit inside those two seconds.
+            if ! pgrep -f "$CHILD\$" >/dev/null 2>&1; then
+                sleep 2
+                if grep -aqE "^LAUNCHED tag=$TAG( |$)" "$MARK" 2>/dev/null; then
+                    launched=1; break
+                fi
+                if ! pgrep -f "$CHILD\$" >/dev/null 2>&1; then
+                    LAST=$(tail -1 "$MARK" 2>/dev/null)
+                    say "ARM_RETRY attempt=$attempt -- the pre-DRT chain exited without launching (marker: ${LAST:-none}; see $CHAINLOG)"
+                    break
+                fi
+            fi
+            if [ $(( $(date -u +%s) - L0 )) -ge "$LAUNCH_WAIT" ]; then
+                say "ARM_ABORT launch_wait_timeout_${LAUNCH_WAIT}s attempt=$attempt -- the chain is alive and has not launched; refusing to start a second arm over it (marker: $(tail -1 "$MARK" 2>/dev/null || echo none); see $CHAINLOG)"
+                exit 1
+            fi
+            sleep 10
+        done
+        [ "$launched" = 1 ] && break
+        # No backoff after the last attempt: the abort below is the answer, and a
+        # five-minute sleep in front of it is five minutes nobody asked for.
+        [ "$attempt" -ge "$ATTEMPTS" ] && break
+        say "ARM_RETRY_BACKOFF ${RETRY_WAIT}s before attempt $((attempt+1))"
+        sleep "$RETRY_WAIT"
     done
     if [ "$launched" != 1 ]; then
         say "ARM_ABORT not_launched after $ATTEMPTS attempts"; exit 1

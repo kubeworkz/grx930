@@ -367,6 +367,39 @@ static uint32_t gemm_seed(uint32_t base, uint32_t index)
 }
 
 /*
+ * The calibration commands' seed base.  C3's probe is a separate phase of a run
+ * -- zero weights, one-hot activations -- so its seeds come from the run's seed
+ * mixed with this, and they share the run's index counter with the GEMMs: it is
+ * one sequence of issued tile commands, not one per phase.  One definition,
+ * read by the evaluate path and by the selftest's check 3b.
+ */
+#define PTA_CAL_SEED_XOR 0xCA11Bu
+
+/*
+ * The one place a run forms a seed.  seed_take() advances the run's index and
+ * returns gemm_seed() of it, so the count of issued commands and the seed each
+ * one gets are the same fact rather than two that can drift apart.  A check
+ * that wants the sequence, in order, arms `seed_observe`; a run leaves it NULL
+ * and pays one test.  seed_peek() is the same derivation without the run's
+ * counter: a caller that numbers its own shots, or that wants one fixed seed
+ * twice, still cannot form a seed the derivation does not.
+ */
+static void (*seed_observe)(uint32_t base, uint32_t index, uint32_t seed);
+
+static uint32_t seed_peek(uint32_t base, uint32_t index)
+{
+    const uint32_t s = gemm_seed(base, index);
+    if (seed_observe != NULL)
+        seed_observe(base, index, s);
+    return s;
+}
+
+static uint32_t seed_take(uint32_t base, uint32_t *index)
+{
+    return seed_peek(base, (*index)++);
+}
+
+/*
  * The contract's q(x, B) (design note section 4), kept apart from pta_quant()
  * so that training rounds as the contract does even when the model is built
  * ablated; selftest holds the two equal.
@@ -1217,7 +1250,7 @@ static long tile_batch(const host_net *hn, const pta_cfg *cfg, const pta_tile *t
                         for (n = 0; n < N; ++n)
                             g->B[k * N + n] = hn->w[l][(n0 + n) * in + k0 + k];
                     c      = cfg[l];
-                    c.seed = gemm_seed(seed, (*gemm)++);
+                    c.seed = seed_take(seed, gemm);
                     if ((r = pta_gemm(&c, tile, dev, l & 1, M, N, K, g->A, g->B, g->C)) < 0)
                         return -1;
                     sats += r;
@@ -1659,7 +1692,7 @@ static int calibrate_bank(pta_device *dev, const pta_cfg *cfg, const pta_tile *t
             memset(g->A, 0, (size_t)k * k * sizeof g->A[0]);
             for (r = 0; r < k; ++r)
                 g->A[r * k + r] = probe;                            /* one-hot rows */
-            c.seed = gemm_seed(seed, (*gemm)++);
+            c.seed = seed_take(seed, gemm);
             if (pta_gemm(&c, tile, dev, bank, k, n, k, g->A, g->B, g->C) < 0) {
                 free(sum);
                 free(total);
@@ -1761,7 +1794,7 @@ static int level_probe(pta_device *dev, const pta_cfg *cfg, const pta_tile *tile
         for (shot = 0; shot < rows; ++shot)
             g->A[shot * k + parity + 2 * shot] = full;  /* one row a shot */
         for (rep = 0; rep < repeats; ++rep) {
-            c.seed = gemm_seed(own, count);
+            c.seed = seed_peek(own, count);
             if (pta_gemm(&c, tile, dev, 0, rows, n, k, g->A, g->B, g->C) < 0) {
                 free(sum);
                 return -1;
@@ -3293,8 +3326,8 @@ static int cmd_eval(int argc, char **argv)
     if (cfg[0].impair & PTA_DRIFT)
         pta_drift_age(&dev, &cfg[0], steps);
     if (calibrate > 0 &&
-        (calibrate_bank(&dev, &cfg[0], &tile, 0, seed ^ 0xCA11B, &gemm, calibrate, g) != 0 ||
-         calibrate_bank(&dev, &cfg[1], &tile, 1, seed ^ 0xCA11B, &gemm, calibrate, g) != 0)) {
+        (calibrate_bank(&dev, &cfg[0], &tile, 0, seed ^ PTA_CAL_SEED_XOR, &gemm, calibrate, g) != 0 ||
+         calibrate_bank(&dev, &cfg[1], &tile, 1, seed ^ PTA_CAL_SEED_XOR, &gemm, calibrate, g) != 0)) {
         fprintf(stderr, "pta_mnist: the calibration could not run\n");
         return 2;
     }
@@ -3528,6 +3561,54 @@ static int fail(const char *what)
     return 1;
 }
 
+/*
+ * The seed derivation as grxcp's baseline states it
+ * (docs/designs/pta_fotonix_baseline.md section 7, v0.3): splitmix64 seeded
+ * with (base << 32) | index, whose high 32 bits are the issued command's
+ * PTA_SEED.  A second implementation on purpose -- this is the normative
+ * text, and check 3b below is that the harness agrees with it command by
+ * command.  If this ever has to change, the map changed with it.
+ */
+static uint32_t normative_seed(uint32_t base, uint32_t index)
+{
+    uint64_t z = ((uint64_t)base << 32) | index;
+    z += 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (uint32_t)((z ^ (z >> 31)) >> 32);
+}
+
+/* The derivation at commit b1a6e1b, at words no run reaches by accident.  A
+ * change to either side of check 3b has to face these numbers, so a renumbered
+ * sequence cannot pass as a rename. */
+static const struct { uint32_t base, index, seed; } seed_pins[5] = {
+    {7u,            0u,  0xBCDA4680u},
+    {7u,            53u, 0x1D2F1B83u},
+    {7u ^ 0xCA11Bu, 0u,  0xDE5D6D61u},
+    {7u ^ 0xCA11Bu, 47u, 0xBA30AB33u},
+    {12345u,        54u, 0xF3444374u},
+};
+
+/* Check 3b's transcript of what the issue path asked for, in order. */
+#define SEED_TRACE_MAX 1024
+static uint32_t seed_tr_base[SEED_TRACE_MAX];
+static uint32_t seed_tr_index[SEED_TRACE_MAX];
+static uint32_t seed_tr_seed[SEED_TRACE_MAX];
+static int      seed_tr_n;
+static int      seed_tr_over;
+
+static void seed_record(uint32_t base, uint32_t index, uint32_t seed)
+{
+    if (seed_tr_n < SEED_TRACE_MAX) {
+        seed_tr_base[seed_tr_n]  = base;
+        seed_tr_index[seed_tr_n] = index;
+        seed_tr_seed[seed_tr_n]  = seed;
+    } else {
+        seed_tr_over = 1;
+    }
+    ++seed_tr_n;
+}
+
 /* selftest's: is d[i] one fraction of y[i] for every i of n, to the rounding
  * of a sum and of the fraction itself?  *frac is that fraction. */
 static int same_fraction(const int64_t *d, const int64_t *y, int n, double *frac)
@@ -3759,6 +3840,104 @@ static int cmd_selftest(void)
         gemm_free(g);
         free(bw);
         free(ws);
+        free(a1);
+    }
+
+    /* 3b. the issued tile commands' seed sequence.  The walk is check 3's --
+     *     both banks calibrated, then two batches of images -- and every seed
+     *     the tile is given is recorded in order and held to the derivation
+     *     grxcp's baseline section 7 pins, at this run's own index.  What it
+     *     pins is the harness's numbering, the C1 model's: the tile's
+     *     calibration seeds are not these, they are the engine's, whose streams
+     *     load from PTA_CAL_SEED ^ (j * 0x9E3779B1) (rtl/pta/c930_pta_cal.sv),
+     *     and this model has no engine to imitate.  What the check catches is
+     *     the numbering, not the arithmetic: an index that restarts, a
+     *     calibration that stops taking indices, or a base that changes all
+     *     leave the accuracy green and nothing but the numbers different. */
+    for (di = 0; di < 2; ++di) {
+        const int D = dins[di];
+        const int H = 1;
+        const pta_tile tile = {tile_rows, tile_cols, D, ACC_W};
+        const uint32_t run_seed = 7;             /* as check 3's walk */
+        const uint32_t cal_seed = run_seed ^ PTA_CAL_SEED_XOR;
+        const int repeats  = 16;                 /* the calib gate's --calibrate 16 */
+        const int nb       = 2;                  /* batches */
+        const int M        = 37;
+        const int per_cal  = 3 * repeats;         /* quantised, so PASSES is 3 */
+        const int cal_cmds = 2 * per_cal;         /* both banks' probes, in one counter */
+        host_net hn;
+        gemm_buf *g = gemm_alloc();
+        batch_ws *bw = (batch_ws *)malloc(sizeof *bw);
+        int32_t *a1 = (int32_t *)malloc(MAX_M * N_IN * sizeof(int32_t));
+        pta_cfg cfg[MAX_L];
+        pta_device dev;
+        uint32_t gemm = 0;
+        uint64_t rsv = 0x5EED5EED5EED1234ull;   /* this check's own: the later ones keep rs */
+        int b, i, l, per_walk = 0, first = -1, bads = 0;
+
+        for (l = 0; l <= H; ++l)
+            per_walk += ((layer_out(H, l) + gemm_n - 1) / gemm_n)
+                      * ((layer_in(l) + gemm_k - 1) / gemm_k);
+        pta_device_init(&dev, &tile);
+        host_alloc(&hn, D, H);
+        for (l = 0; l <= H; ++l) {
+            const int P = layer_size(H, l);
+            for (i = 0; i < P; ++i)
+                hn.w[l][i] = (int32_t)(splitmix64(&rsv) % (uint64_t)(1 << D)) - (1 << (D - 1));
+        }
+        for (l = 0; l < H; ++l)
+            hn.sh[l] = D + 3 - l;
+        memset(cfg, 0, sizeof cfg);
+        cfg[0].impair    = PTA_QUANT;
+        cfg[0].w_bits    = 3;
+        cfg[0].act_bits  = (uint32_t)D - 3;
+        cfg[0].adc_bits  = 7;
+        cfg[0].trim_step = 64;
+        cfg[0].trim_max  = 128;
+        for (l = 1; l <= H; ++l)
+            cfg[l] = cfg[0];
+        for (i = 0; i < M * N_IN; ++i)
+            a1[i] = (int32_t)(splitmix64(&rsv) % (uint64_t)(1 << (D - 1)));
+
+        pta_model_reset(&dev, run_seed);
+        seed_tr_n    = 0;
+        seed_tr_over = 0;
+        seed_observe = seed_record;
+        for (b = 0; b < 2; ++b)
+            bads += calibrate_bank(&dev, &cfg[b], &tile, b, cal_seed, &gemm, repeats, g) != 0;
+        for (b = 0; b < nb; ++b)
+            bads += tile_batch(&hn, cfg, &tile, &dev, run_seed, &gemm, g, M, a1, bw) < 0;
+        seed_observe = NULL;
+
+        for (i = 0; i < seed_tr_n && first < 0; ++i) {
+            const uint32_t want_base = (i < cal_cmds) ? cal_seed : run_seed;
+            if (seed_tr_base[i] != want_base || seed_tr_index[i] != (uint32_t)i ||
+                seed_tr_seed[i] != normative_seed(seed_tr_base[i], seed_tr_index[i]))
+                first = i;
+        }
+        for (i = 0; i < 5; ++i)
+            bads += normative_seed(seed_pins[i].base, seed_pins[i].index) != seed_pins[i].seed ||
+                    gemm_seed(seed_pins[i].base, seed_pins[i].index) != seed_pins[i].seed;
+        /* two words of the transcript itself: the first calibration command, and
+         * the first command of the first batch, `cal_cmds` indices later.
+         * Between them they pin the calibration base and that calibration
+         * consumed the GEMMs' counter, which is the one thing the map's own
+         * GEMM count would not. */
+        bads += seed_tr_n < cal_cmds + 1 || seed_tr_seed[0] != 0xDE5D6D61u ||
+                seed_tr_seed[cal_cmds] != 0x76078299u;
+        bads += seed_tr_over || seed_tr_n != cal_cmds + nb * per_walk;
+
+        printf("selftest: D=%d issued %d tile commands, %d expected (2 x %d calibrated, "
+               "%d x %d in %d batches), first divergence at %d, pinned words %s\n",
+               D, seed_tr_n, cal_cmds + nb * per_walk, per_cal, nb, per_walk, nb, first,
+               bads ? "DIFFER" : "match");
+        if (bads)
+            errors += fail("an issued tile command's seed is not the normative derivation "
+                            "at its own index");
+        pta_device_free(&dev);
+        host_free(&hn);
+        gemm_free(g);
+        free(bw);
         free(a1);
     }
 
@@ -5426,7 +5605,7 @@ static int cmd_selftest(void)
             memset(g->A, 0, (size_t)tile_rows * tile_rows * sizeof g->A[0]);
             for (r = 0; r < tile_rows; ++r)
                 g->A[r * tile_rows + r] = (1 << (D - 1)) - 1;
-            cfg.seed = gemm_seed(5, gemm++);
+            cfg.seed = seed_take(5, &gemm);
             if (pta_gemm(&cfg, &tile, &dev, 0, tile_rows, tile_cols, tile_rows, g->A, g->B, g->C) < 0)
                 rc = -1;
             for (r = 0; r < tile_rows; ++r)
@@ -5587,7 +5766,7 @@ static int cmd_selftest(void)
                     for (c = 0; c < tile_cols; ++c)
                         g->B[r * tile_cols + c] = (r * 7 + c * 3) % 31 - 15;
                 }
-                cfg[0].seed = gemm_seed(5, 0);
+                cfg[0].seed = seed_peek(5, 0);
                 ran &= pta_gemm(&cfg[0], &tile, &dev, 0, tile_rows, tile_cols, tile_rows, g->A, g->B,
                                 g->C) >= 0;
                 for (i = 0; i < tile_rows * tile_cols; ++i) {

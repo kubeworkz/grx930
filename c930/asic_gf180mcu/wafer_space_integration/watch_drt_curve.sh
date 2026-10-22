@@ -44,6 +44,33 @@
 # by an in-flight write is simply re-read on the next poll, which is why the
 # parser is run over the whole file and not over a byte-offset delta.
 #
+# Which run's curve is this
+# -------------------------
+# A log path does not identify its run. The die arms resume from one another's
+# trees, so `runs/<new tag>/06-openroad-detailedrouting/` can exist, log and all,
+# holding a step the PREVIOUS arm produced. That is what happened on 2026-10-21:
+# `died26q4`'s watcher found `diejmp01`'s log inside its own run tree and reported
+# that arm's nine pass-0 rows (best 27,758) as `died26q4`'s first verdict. Nothing
+# in the counts says whose they are, and the state file's keys (`pass`,
+# `iteration`) carry no run either, so the misread curve was then stamped as this
+# run's -- which is why the timestamps in `drt_state.tsv` belonged to `diejmp01`
+# while the report claimed `died26q4`.
+#
+# The one thing on disk that does state it is the step's own `state_in.json`:
+# LibreLane writes it from the state the step was handed, so its `"odb"` path
+# names the run and the step that produced the database this step routed. That is
+# the identity test used here. `log_tag` reads it; `find_log` refuses a candidate
+# whose producing run is not the run being watched (one LOG_FOREIGN_REFUSED event,
+# then it waits for this run's own log instead of analysing that one); every report
+# carries the answer on its `Log identity:` line. A log with no `state_in.json`
+# beside it (a fixture, an old tree) is still analysed, but it is tagged
+# LOG_OWNER_UNVERIFIED rather than assumed to belong to the watched tag.
+#
+# The state file follows the same rule: `drt_state_<tag>.tsv`, one per run. A
+# shared `drt_state.tsv` is what let one run's rows be read back as another's.
+# The reports and the event log stay shared (`drt_verdict.md` is the newest run's
+# verdict, `drt_watch.log` the box's journal) because they name their run inside.
+#
 # The rules, and where they come from
 # -----------------------------------
 # The only full-length curve this design has is v8 (fat core, GRT 0.0,
@@ -95,7 +122,9 @@
 #                     gate, and what is left unmeasured.
 #   drt_verdict.txt   one line, machine-readable, for a chain script to pick up.
 #   drt_watch.log     append-only event log.
-#   drt_state.tsv     per-iteration first-seen timestamps (the wall-clock measure).
+#   drt_state_<tag>.tsv  per-iteration first-seen timestamps (the wall-clock
+#                     measure), one file per run -- see "Which run's curve is
+#                     this" below for why it is not shared.
 #   drt_cap_cost.md   written when the step finishes (runtime.txt appears) or with
 #                     `--finalize`: the per-pass curve, the measured per-iteration
 #                     wall clock on this die against the core-only baseline, the count
@@ -190,7 +219,11 @@ done
 EVENTS=$OUT/drt_watch.log
 REPORT=$OUT/drt_verdict.md
 STATUS=$OUT/drt_verdict.txt
+# One state file per run (see "Which run's curve is this"). The real name is set
+# in main, once the tag and the log are resolved; this is the fallback for a start
+# with neither.
 STATE=$OUT/drt_state.tsv
+FOREIGN_SAID=""
 
 say() { echo "[$(date -u '+%F %T')] $*" >> "$EVENTS"; }
 now() { date -u +%s; }
@@ -216,9 +249,25 @@ parse_curve() {
 # Which step log to read: the newest run tree's detailed-routing step log. The
 # file is named after the step (`openroad-detailedrouting.log`), but the search
 # does not depend on that: it takes any *.log under a `*-openroad-detailedrouting`
-# dir that actually carries DRT-0199 lines, newest first.
-find_log() {
-    local run step f
+# dir that actually carries DRT-0199 lines, newest first -- and, when a tag is
+# being watched, only one whose step's state_in.json names that same run
+# (`log_tag`, below). A candidate produced elsewhere is recorded in LOG_FOREIGN
+# and one LOG_FOREIGN_REFUSED event is written for it; the search keeps going,
+# because a resumed run tree can hold both the stale copy and this run's own log.
+# A candidate that carries DRT-0199 but no state_in.json is accepted and said so
+# once (LOG_OWNER_UNVERIFIED): refusing it would break old trees and fixtures, and
+# silently trusting it would hide exactly the case this gate exists for.
+LOG_FOREIGN=""
+UNVERIFIED_SAID=""
+FOUND_LOG=""
+
+# Called without command substitution, on purpose: `$(find_log)` runs in a subshell
+# and the refusal recorded in LOG_FOREIGN would be thrown away with it, so the
+# caller would print "no log yet" while the event log said LOG_FOREIGN_REFUSED.
+find_log() {  # sets FOUND_LOG and returns 0/1
+    local run step f owner
+    LOG_FOREIGN=""
+    FOUND_LOG=""
     if [ -n "$TAG" ]; then
         run=$RUNS/$TAG
     else
@@ -229,15 +278,53 @@ find_log() {
     for step in $(ls -dt "$run"/*-openroad-detailedrouting/ 2>/dev/null); do
         for f in "$step"openroad-detailedrouting.log "$step"*.log; do
             [ -f "$f" ] || continue
-            grep -aq 'DRT-0199' "$f" 2>/dev/null && { printf '%s\n' "$f"; return 0; }
+            grep -aq 'DRT-0199' "$f" 2>/dev/null || continue
+            if [ -n "$TAG" ]; then
+                if ! owner=$(log_tag "$f"); then
+                    if [ "$UNVERIFIED_SAID" != "$f" ]; then
+                        UNVERIFIED_SAID=$f
+                        say "LOG_OWNER_UNVERIFIED $f (no state_in.json beside it -- producing run not stated on disk)"
+                    fi
+                elif [ "$owner" != "$TAG" ]; then
+                    LOG_FOREIGN="$f owner=$owner"
+                    if [ "$FOREIGN_SAID" != "$LOG_FOREIGN" ]; then
+                        FOREIGN_SAID=$LOG_FOREIGN
+                        say "LOG_FOREIGN_REFUSED $f: state_in.json names run $owner, watching $TAG -- not this run's curve"
+                    fi
+                    continue
+                fi
+            fi
+            FOUND_LOG=$f
+            return 0
         done
     done
     return 1
 }
 
+# --------------------------------------------------------------- identity ---
+# The run that produced a detailed-routing step, from the step's own state_in.json
+# (falling back to state_out.json): its "odb" names `runs/<tag>/<step>/...`, and
+# that tag is the answer. Prints the tag and returns 0, or prints nothing and
+# returns 1 when the file is absent or does not name a run.
+log_tag() {  # $1 log path
+    local d odb t
+    d=$(dirname -- "$1")
+    for f in "$d/state_in.json" "$d/state_out.json"; do
+        [ -f "$f" ] || continue
+        odb=$(grep -o '"odb": "[^"]*"' "$f" 2>/dev/null | head -1 | cut -d'"' -f4)
+        case "${odb:-}" in
+            */runs/*/*)
+                t=${odb#*/runs/}
+                printf '%s\n' "${t%%/*}"
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # ------------------------------------------------------------------ state ---
-# drt_state.tsv: pass<TAB>iter<TAB>count<TAB>first_seen_epoch. Only ever grows;
-# a re-read of an old log does not restamp rows it already knows.
+# drt_state_<tag>.tsv: pass<TAB>iter<TAB>count<TAB>first_seen_epoch. Only ever
+# grows; a re-read of an old log does not restamp rows it already knows.
 state_get() {  # $1 pass, $2 iter -> count or empty
     awk -F'\t' -v p="$1" -v i="$2" '$1==p && $2==i {print $3; exit}' "$STATE" 2>/dev/null
 }
@@ -318,11 +405,25 @@ write_report() {  # $1 verdict, $2 pass, $3 best, $4 last, $5 n, $6 lastgain, $7
         cap="DRT_OPT_ITERS=${cap:-?} (this run's cap; each pass in the step gets a fresh budget of it)"
     fi
     local gate="ERROR_ON_TR_DRC is True with threshold 0 (see Claude outputs/slew_violation_sources.md)"
+    # Who this curve belongs to, on the report itself. The tag in the line below is
+    # what was ASKED for; this is what the step's own state file says produced it,
+    # and the two are allowed to differ (that is the 2026-10-21 misread).
+    local owner identity
+    if owner=$(log_tag "$log"); then
+        if [ -z "$tag" ] || [ "$owner" = "$tag" ]; then
+            identity="the step's \`state_in.json\` names run \`$owner\`"
+        else
+            identity="**the step's \`state_in.json\` names run \`$owner\`, not \`$tag\`** -- this curve is \`$owner\`'s"
+        fi
+    else
+        identity="no \`state_in.json\` beside the log, so the producing run is not stated on disk"
+    fi
     {
         echo "# DRT iteration curve — verdict: $verdict"
         echo
         echo "Watched by \`wafer_space_integration/watch_drt_curve.sh\` ($(date -u '+%F %T') UTC)."
         echo "Run tag \`$tag\`; log \`$log\`; iteration budget $cap; gate: $gate."
+        echo "Log identity: $identity."
         [ -n "$killnote" ] && echo && echo "**Action taken:** $killnote"
         echo
         echo "| pass | iteration | violations | change vs prev (%) | first seen (UTC) | wall since prev |"
@@ -888,6 +989,80 @@ selftest() {
     fi
     rm -f "$fix"
 
+    # Which run's curve is this -- and whose wall clock. The die arms resume from
+    # one another's trees, so a run directory can hold a step directory another run
+    # produced, log and all. That is the 2026-10-21 case: died26q4's watcher found
+    # diejmp01's log inside its own tree and reported that arm's nine pass-0 rows
+    # (best 27,758) as died26q4's first verdict. The counts do not say whose they
+    # are, and the shared drt_state.tsv then kept them as died26q4's for good.
+    local idir=$OUT/.selftest_runs
+    rm -rf "$idir"
+    mkdir -p "$idir/diejmp01/06-openroad-detailedrouting" "$idir/died26q4/06-openroad-detailedrouting" "$idir/out"
+    local src=$idir/diejmp01/06-openroad-detailedrouting
+    printf '{\n    "odb": "/work/ws/template/librelane/runs/diejmp01/04-openroad-repairantennas/1-openroad-diodeinsertion/chip_top.odb",\n    "nl": "/work/x.v"\n}\n' > "$src/state_in.json"
+    printf '[INFO DRT-0199]   Number of violations = 446541.\n[INFO DRT-0199]   Number of violations = 27758.\n' > "$src/openroad-detailedrouting.log"
+    # The resume copy: the same step, log included, sitting in the new run's tree.
+    cp "$src/state_in.json" "$src/openroad-detailedrouting.log" "$idir/died26q4/06-openroad-detailedrouting/"
+
+    local saved_runs=$RUNS saved_tag=$TAG
+    RUNS=$idir; TAG=died26q4
+    cases=$((cases + 1))
+    local idtag
+    idtag=$(log_tag "$idir/died26q4/06-openroad-detailedrouting/openroad-detailedrouting.log")
+    if [ "$idtag" = "diejmp01" ]; then
+        echo "PASS identity: state_in.json names the run that produced the step ($idtag)"
+    else
+        echo "FAIL identity: log_tag -> '$idtag', expected diejmp01"
+        fails=$((fails + 1))
+    fi
+    cases=$((cases + 1))
+    if find_log; then
+        echo "FAIL identity: a step copied from diejmp01 was accepted for died26q4 -> $FOUND_LOG"
+        fails=$((fails + 1))
+    else
+        echo "PASS identity: a step copied from diejmp01 is refused for died26q4 (${LOG_FOREIGN:-no candidate})"
+    fi
+    # The same step once this run has actually routed there: state_in.json names it.
+    printf '{\n    "odb": "/work/ws/template/librelane/runs/died26q4/04-openroad-repairantennas/1-openroad-diodeinsertion/chip_top.odb"\n}\n' > "$idir/died26q4/06-openroad-detailedrouting/state_in.json"
+    cases=$((cases + 1))
+    if find_log && [ "$FOUND_LOG" = "$idir/died26q4/06-openroad-detailedrouting/openroad-detailedrouting.log" ]; then
+        echo "PASS identity: this run's own log is accepted"
+    else
+        echo "FAIL identity: this run's own log was not found"
+        fails=$((fails + 1))
+    fi
+    # One state file per run: two watched tags must land in two files, and each
+    # report must name the run its own state_in.json states.
+    local sstr=0 wt
+    for wt in died26q4 died26q6; do
+        mkdir -p "$idir/$wt/06-openroad-detailedrouting"
+        printf '{\n    "odb": "/work/ws/template/librelane/runs/%s/04-openroad-repairantennas/1-openroad-diodeinsertion/chip_top.odb"\n}\n' "$wt" \
+            > "$idir/$wt/06-openroad-detailedrouting/state_in.json"
+        cp "$src/openroad-detailedrouting.log" "$idir/$wt/06-openroad-detailedrouting/"
+        WATCH_RUNS=$idir WATCH_OUT=$idir/out WATCH_CONTAINER=selftest_no_container \
+            bash "$SELFDIR/watch_drt_curve.sh" --tag "$wt" --once > /dev/null 2>&1 || sstr=1
+        [ -f "$idir/out/drt_state_$wt.tsv" ] || sstr=1
+    done
+    cases=$((cases + 1))
+    if [ "$sstr" = 0 ]; then
+        echo "PASS per-run state: drt_state_died26q4.tsv and drt_state_died26q6.tsv are separate files"
+    else
+        echo "FAIL per-run state: a state file is missing, so two runs share one staging"
+        fails=$((fails + 1))
+    fi
+    cases=$((cases + 1))
+    if [ -f "$idir/out/drt_state.tsv" ]; then
+        echo "FAIL per-run state: a tagless shared drt_state.tsv was written by a tagged run"
+        fails=$((fails + 1))
+    elif grep -q 'names run `died26q6`' "$idir/out/drt_verdict.md" 2>/dev/null; then
+        echo "PASS per-run state: the report's log identity names the run it watched"
+    else
+        echo "FAIL per-run state: the report does not name its run"
+        fails=$((fails + 1))
+    fi
+    RUNS=$saved_runs; TAG=$saved_tag
+    rm -rf "$idir"
+
     echo
     echo "selftest: $((cases - fails))/$cases passed"
     [ "$fails" -eq 0 ]
@@ -931,18 +1106,42 @@ fi
 if [ -n "$LOGFILE" ] && [ "$TAG_GIVEN" = 0 ]; then
     TAG=""
 fi
+# An explicit --log is analysed even when its step was another run's -- that is the
+# documented `--log <file> --once` use -- but then it is not "run <--tag>", so the
+# tag is dropped and the report names the log. Same rule as find_log's gate, one
+# level removed: naming a run the curve did not come from is the failure.
+if [ -n "$LOGFILE" ] && [ "$TAG_GIVEN" = 1 ]; then
+    if owner=$(log_tag "$LOGFILE") && [ "$owner" != "$TAG" ]; then
+        say "LOG_TAG_MISMATCH $LOGFILE is run $owner's step, not $TAG's -- the report names the log, not the tag"
+        TAG=""
+    fi
+fi
 
 if [ -n "$LOGFILE" ]; then
     LOG=$LOGFILE
 else
-    if ! LOG=$(find_log); then
-        echo "$(date -u '+%F %T') no detailed-routing log under $RUNS/${TAG:-*}/ yet" | tee -a "$EVENTS"
+    if find_log; then
+        LOG=$FOUND_LOG
+    else
+        if [ -n "${LOG_FOREIGN:-}" ]; then
+            echo "$(date -u '+%F %T') refusing $LOG_FOREIGN -- not ${TAG:-this run}'s curve; waiting for ${TAG:-its} own step log (see $EVENTS)"
+        else
+            echo "$(date -u '+%F %T') no detailed-routing log under $RUNS/${TAG:-*}/ yet" | tee -a "$EVENTS"
+        fi
         [ "$ONCE" = 1 ] && exit 1
         LOG=""
     fi
 fi
 
-say "WATCH_START tag=${TAG:-?} log=${LOG:-pending} poll=${POLL}s spike_x=$SPIKE_X stall_k=$STALL_K/$STALL_PCT% kill=$KILL on=$KILL_ON"
+# Per run, not per box: the wall clock this file carries is only meaningful beside
+# the curve whose rows it stamps (see "Which run's curve is this").
+if [ -n "$TAG" ]; then
+    STATE=$OUT/drt_state_$TAG.tsv
+else
+    STATE=$OUT/drt_state_$(basename "${LOG:-log}" .log).tsv
+fi
+
+say "WATCH_START tag=${TAG:-?} log=${LOG:-pending} state=$(basename "$STATE") poll=${POLL}s spike_x=$SPIKE_X stall_k=$STALL_K/$STALL_PCT% kill=$KILL on=$KILL_ON"
 
 # The deadline is an IDLE timeout, not a wall clock: it counts the hours since the
 # last new count, so a watcher started with the flow (hours before the router
@@ -951,7 +1150,8 @@ lastact=0
 final=NONE
 while :; do
     if [ -z "${LOG:-}" ] || [ ! -f "$LOG" ]; then
-        if LOG=$(find_log); then
+        if find_log; then
+            LOG=$FOUND_LOG
             STEPDIR=$(dirname "$LOG")
             say "LOG_FOUND $LOG"
         else

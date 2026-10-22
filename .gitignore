@@ -67,3 +67,10 @@ vivado.log
 # testbench preloads (../tb/tb_grx930_test_chip.sv); rebuilding needs the
 # RISC-V toolchain, so this one hex is kept in the tree.
 !c930/sw/test_chip_boot.hex
+
+# KLayout LVS runs (fixture reports, extracted netlists, lvsdb)
+c930/asic_gf180mcu/lvs_runs/
+
+# Python bytecode from the tools/ scripts
+__pycache__/
+*.pyc

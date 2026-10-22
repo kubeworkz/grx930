@@ -33,6 +33,7 @@ how we find a configuration that routes; they are not the submission artifact.
 | `probe_grt.sh` | reruns only `OpenROAD.GlobalRouting` against a frozen run's own pre-GRT state with one knob changed (~7 min instead of a 3 h flow). This is how the `GRT-0183` abort in `ws_v3` was measured (§ "Pre-flighting the global router") |
 | `drt_extend_ws.sh` | measures what the `DRT_OPT_ITERS` cap withheld: the fast loop on the step's own pre-DRT ODB, launched only when the flow container has left the box and `build/gate.sh` passes, writing `ws/logs/drt_cap_cost_measured.md`. Queued automatically by the watcher at step end |
 | `extend_selftest.sh` | the end-to-end test of that pair with docker and memwatch stubbed (over 50 checks; launches no container and routes nothing) |
+| `fill/` | the active-layer fill the flow's `KLayout.Filler` step runs (dummy COMP + dummy Poly2). `fill_active.rb` is a drop-in replacement for the PDK's `fill_all.rb`; `README.md` there records the deck evidence, the measurements and the wiring |
 
 Check the adapter before any flow run — it already caught two real defects (reversed part
 selects in the testbench, and, in the adapter, bit-wise continuous assignments that
@@ -72,6 +73,7 @@ ws/template/src/chip_core.sv   <- chip_core_grx930.sv
 ws/template/src/generated_defines.svh   <- `define SLOT_1X1 / SRAM_gf180mcu_fd_ip_sram
 ws/template/librelane/grx930_overrides.yaml
 ws/template/asic_core/*.sv      <- c930/asic_gf180mcu/openlane2_rtl/src minus c930_bootrom.sv, bootrom_wrapper.sv
+ws/template/fill/*.rb   <- wafer_space_integration/fill/*.rb   (KLAYOUT_FILLER_SCRIPT points here)
 ```
 
 Run (container side), once the version question above is settled:
@@ -84,6 +86,12 @@ openlane --run-tag ws_v1 --pdk gf180mcuD --manual-pdk \
     librelane/grx930_overrides.yaml
 ```
 
+That staging list's last line is not optional: `grx930_overrides.yaml` sets `KLAYOUT_FILLER_SCRIPT` to
+`dir::../fill/fill_active.rb`, so the flow's `KLayout.Filler` step reads the staged copy. Skip the
+staging and the step fails at `klayout -r` with a missing file — which is the loud failure, but
+only if the step is reached. See `fill/README.md` for what that fill does to the two global
+density rules and why [this section below](#global-active-layer-density-dcf1b-and-pl8) exists.
+
 Pre-check (LibreLane ≥ 3 environment):
 
 ```
@@ -94,6 +102,20 @@ python3 precheck.py --slot 1x1 --cob --input chip_top.gds --id <id> --workers ma
 `--cob` is the right flag while the CoB option is open: the template's `chip_top.sv`
 already instantiates the four `gf180mcu_ws_ip__*` marker/ID cells the CoB check looks for,
 so the flag costs nothing and keeps the chip-on-board option alive.
+
+## Global active-layer density (DCF.1b and PL.8)
+
+The pre-check measures two global floors over the whole die, and neither cares where the shapes
+are: COMP + dummy COMP ≥ 25 % (DCF.1b, ≤ 70 % by DCF.1d) and Poly2 + dummy Poly2 ≥ 14 % (PL.8, no
+upper bound). The template flow's `KLayout.Filler` step produces the active-layer fill, and the
+PDK default it runs (`fill_all.rb`) **misses both floors on this die**: on the artifact the flow
+produces today (`tpl02/92-klayout-filler/chip_top.gds`, i.e. `submit/run1/chip_top.gds`) the
+gf180mcuD deck reports COMP **20.182 %** and Poly2 **12.992 %**. That is the pre-check's own "2
+KLayout density errors found". The replacement in `fill/` reaches **31.274 %** and **26.254 %** with
+the same deck, and `DRC RESULT: SUCCESS (0 violations)` on the `dummy_comp` and `dummy_poly2`
+decks. `fill/README.md` has the details, including the two rules the fill *deliberately* does not
+honour (the deck comments them out), the DCF.2b stagger trap that the first version fell into, and
+what re-enabling either costs.
 
 ## Pre-flighting the global router
 
@@ -171,6 +193,16 @@ count. `--kill` (or `WATCH_KILL=1`, with `WATCH_KILL_ON=diverged|stalled|both`) 
 on the armed verdict by sending SIGTERM to the OpenROAD process whose command line names the
 routing script: flag-only by default, and it cannot touch a run that is not in detailed
 routing. `build/ws_chain.sh` starts a watcher with every flow run.
+
+A log path does **not** identify its run: a resumed run tree can hold the previous arm's step
+directory, log included, and the counts carry no tag — on 2026-10-21 that made `died26q4`'s
+watcher report `diejmp01`'s curve under the new tag. So the log is identified by the step's own
+`state_in.json`, which names the run that produced the database the step routed: a log owned by
+another run is refused (`LOG_FOREIGN_REFUSED`, one event, then it waits for this run's own log)
+instead of being reported, a log with no `state_in.json` beside it is flagged
+`LOG_OWNER_UNVERIFIED` rather than trusted, and every report carries a `Log identity:` line. The
+state file is per run for the same reason (`ws/logs/drt_state_<tag>.tsv`); a shared one let one
+arm's iteration stamps be read back as another's.
 
 When the step ends — LibreLane writes its `runtime.txt` at the end, pass or fail — the watcher
 writes `ws/logs/drt_cap_cost.md` and retires. That report prices the `DRT_OPT_ITERS` cap on the

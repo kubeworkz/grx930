@@ -58,6 +58,23 @@ OUT=$D/verdict/die_drt_at01.md
 WATCH_OUTDIR=$D/verdict/${TAG}_watch
 say() { echo "[$(date -u)] $*" | tee -a "$LOG"; }
 ps_running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null; }
+
+# The arm's own decision point, for a chain that launched it detached. The line is
+# written the moment the container is up (below) and `EXIT rc=..` at exit, so a
+# parent can tell "not launched yet" from "refused" without reading this log against
+# a clock -- that difference is what decides whether a second arm may be started.
+# Unset when the chain is run by hand; then this writes nothing.
+ARM_STATE=${DIE_ARM_STATE:-}
+arm_state() {  # $1 = one line, e.g. "LAUNCHED tag=died26q4"
+    [ -n "$ARM_STATE" ] || return 0
+    # Append to the marker itself, never through a temp-and-mv: the move consumes
+    # the temp, so the second call (the EXIT trap) would replace the file and drop
+    # the LAUNCHED line the parent is waiting for. A short append is one write; a
+    # half-written line simply does not match until the next poll.
+    printf '%s\n' "$1" >> "$ARM_STATE" 2>/dev/null || true
+}
+[ -n "$ARM_STATE" ] && trap 'arm_state "EXIT rc=$?"' EXIT
+
 . "$B/gate.sh"   # free_gb + the disk/memory gate, defined once for every chain
 
 # The same readings the sweep chain harvests with, so the numbers are the same
@@ -126,6 +143,7 @@ if [ "$(ps_running die_predrt)" != "true" ]; then
 fi
 A0=$(date -u +%s)
 say "PREDRT_LAUNCHED tag=$TAG"
+arm_state "LAUNCHED tag=$TAG container=die_predrt"
 while [ "$(ps_running die_predrt)" = "true" ]; do sleep 60; done
 A1=$(date -u +%s)
 RC=$(docker inspect -f '{{.State.ExitCode}}' die_predrt 2>/dev/null)

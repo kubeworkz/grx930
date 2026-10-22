@@ -92,11 +92,11 @@
 #   Two things cover the gap, and neither depends on the queue:
 #
 #     * .githooks/pre-push runs this same script on the box before the push leaves
-#       it -- 124s for all nine gates -- and it stops a bad push rather than
+#       it -- the whole set, about 124s -- and it stops a bad push rather than
 #       reporting one late;
 #     * the `gates-push` job below is that same script on a runner this repo owns:
 #       self-hosted, in WSL on the build machine, whose Icarus is 12.0, the version
-#       the hosted image gets. The nine gates that take 124s on the box take about
+#       the hosted image gets. The same gates take about 124s on the box and about
 #       30s there, and start in seconds instead of whenever the queue moves. It
 #       exists because of this section: waiting ten hours for a thirty-second
 #       verdict is the problem, and no pin in this file can fix allocation latency.
@@ -106,6 +106,24 @@
 #   `gates-push` is the early answer. That is why both run on a push rather than the
 #   fast one replacing the hosted one -- if the fast path becomes the only path, an
 #   off machine turns a push into an indefinite wait with no verdict at all.
+#
+# THE THIRD JOB: THE HARNESSES BEHIND THE CHAINS
+#
+#   `chain-selftests` is a different set from the chip gates, not a longer version of
+#   them: the *_selftest.sh harnesses that pin the chains' side of a run -- that every
+#   chain still calls the shared gate and refuses with a reason when the box cannot
+#   carry the job, that the die arm announces its own launch with the line its parent
+#   waits for, that the staged reports are rewritten from the logs actually on disk.
+#   They stub docker and memwatch through PATH, and one of them asks `pgrep` whether a
+#   process is alive, so they need a Linux checkout and cannot go into
+#   .githooks/pre-push (Git Bash here, no pgrep, a `timeout.exe` that is not
+#   coreutils'). That is the whole reason they are a separate job with a separate
+#   definition, c930/asic_gf180mcu/build/chain_selftests.sh, and not rows in
+#   chip_gates.sh: the split is by platform, not by importance.
+#
+#   The failure they catch is not a wrong number. On 2026-10-22 `die_launch_selftest`
+#   found the die arm's marker being written in a form its parent never matched -- a
+#   launch that would have been waited out and then aborted, hours in, on the box.
 #
 # A NOTE ON THIS FILE'S OWN VALIDITY
 #
@@ -250,3 +268,47 @@ jobs:
             c930/asic_gf180mcu/build/chip_gates_summary.md
             c930/asic_gf180mcu/build/*.log
             c930/asic_gf180mcu/build/cache_alias_sim/*.log
+
+  # Hosted, like `gates`, and for the same reason: this is the verdict a push gets
+  # whether or not the build machine is up. The selftests are the definition in
+  # c930/asic_gf180mcu/build/chain_selftests.sh -- one step, no test command named
+  # here -- and about three minutes, two of which are die_launch_selftest.sh's
+  # deliberate 50 s slow-arm case.
+  chain-selftests:
+    name: "Chain selftests (one definition: build/chain_selftests.sh)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Nothing to build -- these are bash harnesses, and `bash` is the image's.
+      # python3 is the one interpreter they need that a bare image may not carry
+      # (the LVS harnesses exercise the gate's own python), and procps is where
+      # `pgrep` comes from: die_launch_selftest.sh uses it to ask whether an arm is
+      # still alive, which is the difference between a slow launch and a refusal.
+      - name: Install the tools the harnesses use
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3 procps
+          bash --version | head -1
+          python3 --version
+          command -v pgrep timeout diff
+
+      # Every test runs even when an earlier one fails, and each verdict is in the
+      # report, so this log is the whole picture rather than the first failure.
+      - name: Chain selftests
+        if: always()
+        run: bash c930/asic_gf180mcu/build/chain_selftests.sh
+
+      - name: Upload selftest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-selftest-logs
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            c930/asic_gf180mcu/build/chain_selftests_summary.md
+            c930/asic_gf180mcu/build/chain_selftests/*.log

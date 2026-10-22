@@ -471,3 +471,60 @@ DRT_ANTENNA_REPAIR_MARGIN: 10
 #     fast loop, whose FAST_END_ITER is independent of this file. Raise or remove
 #     this key only for a deliberate full-length FLOW DRT.
 DRT_OPT_ITERS: 8
+
+# ---------------------------------------------------------------------------------------------
+# Global active-layer density (dummy COMP + dummy Poly2).
+#
+# The deck's two global floors are DCF.1b (COMP + dummy COMP >= 25 %, with DCF.1d's <= 70 % cap)
+# and PL.8 (Poly2 + dummy Poly2 >= 14 %, no upper bound). The flow has a step for them --
+# KLayout.Filler, between the seal ring and the density measurement -- and it is generic: it
+# shells out to
+#
+#   klayout -b -zz -r $KLAYOUT_FILLER_SCRIPT -rd input=<gds> -rd output=<gds> [-rd k=v ...]
+#
+# (librelane/steps/klayout.py, class Filler, run_generic: every KLAYOUT_FILLER_OPTIONS entry
+# becomes one -rd). So which fill runs, and how, is a config decision, and both keys are that
+# step's own config vars.
+#
+# The PDK's default script (KLAYOUT_FILLER_SCRIPT -> fill_all.rb) misses BOTH floors on this die,
+# measured with the deck itself (decks=dummy_comp,dummy_poly2,density, run_mode=deep) on the
+# artifact the flow produces today, tpl02/92-klayout-filler/chip_top.gds =
+# /home/kubew/submit/run1/chip_top.gds: COMP + dummy COMP 20.182 % against the 25 % floor, Poly2 +
+# dummy Poly2 12.992 % against the 14 % floor. Those are the pre-check's own "2 KLayout density
+# errors found" (runs/run2/flow.log). Its dummy COMP pattern is 5x5 um on 3.0 um inside a 10 um
+# COMP halo, and the halo is what misses DCF.1b: it leaves dummy COMP at 3.036 % of the die where
+# the same pattern with halo 0 leaves 11.898 %, 8.9 points of COMP, all of it inside the empty
+# margins the core does not reach.
+#
+# wafer_space_integration/fill/fill_active.rb is the measured replacement. It keeps the foundry
+# metal fill (it requires the PDK's own fill_metal.rb) and replaces the active-layer half:
+#
+#   comp_halo_um   0     the checked DCF.4 halo is 3.5 um; the foundry's extra 10 um is the
+#                        manual's DCF.1a guideline, which the deck does not check, and it is
+#                        what keeps the foundry pattern out of the whole core
+#   fill_um        6.0   \
+#   line_space_um  2.0   / the fill cell and its space: 56.5 % coverage of its region against the
+#                        foundry pattern's 40.7 %. 2.0 because DCF.2b's minimum is 1.9 and the
+#                        pattern's diagonal pair is (line_space - 0.5) * sqrt(2) apart -- 1.9 on a
+#                        1.6 stagger gives 0.42 um and the deck reports it as 42,688 DCF.2b
+#                        violations. See fill/README.md; the script now prints and checks this
+#   pair_metal_um  0     DPF.12/DPF.13 (dummy Poly2 to Metal1/Metal2, 2 um) are commented out of
+#                        the gf180mcuD deck -- dummy_poly2.rb lines 97-114, behind a
+#                        DUMMY_SUB_PREV that is defined nowhere in the deck or the pre-check.
+#                        Honouring them anyway drops ~80 % of the Poly2 pairs (Metal1's halo
+#                        alone is 13.644 % of the die), and that is what held PL.8 at 13.09 %
+#                        while every rule it was paid for went unchecked. 2.0 restores them.
+#
+# Metal2_ignore_active is the PDK's own filler option and is kept: it reaches the unchanged
+# foundry metal fill, and dropping it would change the metal pattern the flow ships today.
+#
+# dir:: resolves against THIS file's directory, so the staging step must copy
+# wafer_space_integration/fill/ to ws/template/fill/ (see the stage list in
+# wafer_space_integration/README.md).
+KLAYOUT_FILLER_SCRIPT: dir::../fill/fill_active.rb
+KLAYOUT_FILLER_OPTIONS:
+  Metal2_ignore_active: true
+  comp_halo_um: 0.0
+  fill_um: 6.0
+  line_space_um: 2.0
+  pair_metal_um: 0.0

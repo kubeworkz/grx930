@@ -7416,18 +7416,34 @@ the band says nothing of how often a board's source would be refused.
    per-column multiplier and addend, drawn once at a model reset, which is what a
    real receiver has — or the column loop stays a path with no measurement behind
    it. grxcp's `pta_chiplet_calibration.md` §2 says the same from the other side.
-5. **The probe amplitude is an absolute bit position.** `PTA_CAL_CFG.amp` is a
-   shift, and the engine takes it only in `[DIN_W - B_a, DIN_W - 2]`, because the
-   activation quantiser has to leave the probe alone. Nothing in the register map
-   reports `DIN_W`, so the same value is right on one build and refused on
-   another: 6 is right for `tb_c930_npu`'s eight-bit tile and refused by the
-   SoC's sixteen-bit one, which ends the calibration in two cycles with
-   `CAL_ERR` set and `CAL_CT` unmoved. `sw/pta_test.c` finds one the tile accepts
-   the way a driver would have to — the refusal is observable and `MODEL_RST`
-   clears it — but firmware should not have to search for a number the hardware
-   knows. Either the map gains a read-only field for the datapath width, or
-   `amp` is specified relative to it and the tile does the arithmetic. grxcp's
-   `pta_chiplet_regmap.md` §4 records it against the map.
+5. ~~**The probe amplitude is an absolute bit position.**~~ *Answered 2026-10-16*:
+   `PTA_CAL_CFG.amp` is a shift, and the engine takes it only in
+   `[DIN_W - B_a, DIN_W - 2]`, because the activation quantiser has to leave the
+   probe alone. That made the same value
+   right on one build and refused on another: 6 is right for `tb_c930_npu`'s
+   eight-bit tile and refused by the SoC's sixteen-bit one, which ends the
+   calibration in two cycles with `CAL_ERR` set and `CAL_CT` unmoved. The
+   refusal is observable and `MODEL_RST` clears it, so `sw/pta_test.c` found one
+   the way a driver would have had to.
+
+   **Closed 2026-10-16: the map does report the width.** `PTA_CAPS0[25:20]` is
+   `DIN_W` (`rtl/c930_npu_core.sv:522`; the twin reports its own,
+   `sim/npu_dpi_shim.c:94`), and the driver has decoded it since the map was
+   written — `PTA_CAPS0_DIN_W` (`sw/c930_npu_driver.h:119`) with both bounds
+   derived from it, `PTA_CAL_AMP_MAX = DIN_W - 2` and
+   `PTA_CAL_AMP_MIN = DIN_W - B_a` (`:141-142`). So firmware reads the range
+   instead of searching for it; the search is retired, and `sw/pta_test.c` keeps
+   it only as the cross-check. Nothing here needs a new field or relative
+   encoding.
+
+   This is pinned from both sides, so the question cannot reopen quietly:
+   `sw/pta_test.c`'s T8 requires the amplitude that test's search accepts to
+   equal `PTA_CAL_AMP_MAX(caps0)` — the engine's boundary and `CAPS0`'s ceiling
+   are the same number on the SoC's sixteen-bit tile — while at `DIN_W` 8 the
+   bench in §5 shows the engine refusing `2^(DIN_W - 1)` with the error bit set
+   and `PTA_CAL_CT` unmoved. grxcp's `pta_chiplet_regmap.md` §4 and
+   `pta_fotonix_baseline.md` §7 asked whether `CAPS0.DIN_W` is this width: the
+   answer is yes, with `B_a` from `PTA_BITS[3:0]` as the floor.
 6. **A line the CPU has written is outside the L2's directory.** Not this
    contract's problem, but it decides what firmware driving this block may do.
    `c930_l2.sv` records a sharer on a read fill and is write-through with no

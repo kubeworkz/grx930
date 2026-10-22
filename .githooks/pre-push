@@ -78,6 +78,29 @@ if [ $unknown -eq 0 ] && ! printf '%s\n' "$paths" | grep -Eq "$relevant"; then
   exit 0
 fi
 
+# The push fast path -- the `gates-push` job in .github/workflows/build-gf180mcu.yml,
+# on the self-hosted runner -- is one machine, so it goes away: a reboot, a closed
+# WSL, a stopped runner. When it does, pushes are still gated, but by the hosted job,
+# hours later, and nothing says so; the delay just looks like CI being slow again.
+# Say so, here, at the moment it is true.
+#
+# Best effort by design. No gh, no network, a slow API, an outage: every one of
+# those must leave the push exactly as it was, so this only ever adds a line to
+# stderr. It cannot fail the push, and it cannot skip a gate.
+warn_if_fast_path_is_down() {
+  command -v gh >/dev/null 2>&1 || return 0
+  local remote repo status
+  remote=$(git -C "$ROOT" remote get-url origin 2>/dev/null) || return 0
+  # git@github.com:owner/repo.git and https://github.com/owner/repo.git alike.
+  repo=$(printf '%s\n' "$remote" | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#\.git$##')
+  case "$repo" in */*) ;; *) return 0 ;; esac
+  status=$(timeout 8 gh api "repos/$repo/actions/runners" \
+    --jq "[.runners[] | select(.name==\"${FAST_PATH_RUNNER_NAME:-grx930-wsl-runner}\") | .status] | first // \"absent\"" 2>/dev/null) || return 0
+  [ "$status" = online ] && return 0
+  echo "pre-push: the fast-path runner reads '$status', so this push's CI verdict will wait on the hosted queue (hours, recently). The gates below still run here, on the box -- and there is a watchdog for that runner: c930/asic_gf180mcu/build/fast_path_runner_watchdog.sh" >&2
+}
+warn_if_fast_path_is_down
+
 echo "pre-push: running the chip gates (same file CI runs: c930/asic_gf180mcu/build/chip_gates.sh)"
 start=$(date +%s)
 if bash "$GATES"; then

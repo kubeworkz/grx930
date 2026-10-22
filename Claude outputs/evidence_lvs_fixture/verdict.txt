@@ -1,0 +1,11 @@
+image   ghcr.io/efabless/openlane2:2.3.10
+deck    c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs
+layout  c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/testing/unit/mos_devices/layout/nfet_05v0.gds.gz
+netlist c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/testing/unit/mos_devices/netlist/nfet_05v0.cdl
+out     c930/asic_gf180mcu/lvs_runs/evidence_nfet_05v0
+topcell  sample_nfet_05v0
+deck     gf180mcu.lvs  sha256 00019ed0a7f434fc
+note     deck references `flag_missing_ports` without defining it; port check is done here
+devices  MATCH    extracted 99 instances, schematic 104
+ports    PASS     schematic 295 ports, layout 295 pins, missing none
+verdict  MATCH   (c930/asic_gf180mcu/lvs_runs/evidence_nfet_05v0/)

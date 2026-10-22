@@ -1,0 +1,41 @@
+# raw antenna lines: died26q4 detailed-routing step
+# source 49.13.6.8:/home/ubuntu/grx930_ol2/ws/template/librelane/runs/died26q4/06-openroad-detailedrouting/openroad-detailedrouting.log
+# captured 2026-10-22T14:09:41Z  size=74028  bytes  sha256=97969633c93626f4...  mtime=2026-10-22 13:43:26.058559501 +0000
+
+## pass boundaries and antenna rounds (log line: text)
+662:[INFO DRT-0198] Complete detail routing.
+687:[INFO ANT-0002] Found 1055 net violations.
+688:[INFO ANT-0001] Found 1341 pin violations.
+689:[INFO] Running antenna repair iteration 1…
+697:[INFO GRT-0012] Found 1269 antenna violations.
+701:[INFO GRT-0015] Inserted 1710 diodes.
+1292:[INFO DRT-0198] Complete detail routing.
+1317:[INFO ANT-0002] Found 319 net violations.
+1318:[INFO ANT-0001] Found 369 pin violations.
+1319:[INFO] Running antenna repair iteration 2…
+1324:[INFO GRT-0012] Found 406 antenna violations.
+1328:[INFO GRT-0015] Inserted 489 diodes.
+
+## last count of every pass (DRT-0199 at the 8th iteration of each)
+252:[INFO DRT-0199]   Number of violations = 493072.
+300:[INFO DRT-0199]   Number of violations = 273018.
+347:[INFO DRT-0199]   Number of violations = 251238.
+395:[INFO DRT-0199]   Number of violations = 145610.
+443:[INFO DRT-0199]   Number of violations = 115794.
+491:[INFO DRT-0199]   Number of violations = 100323.
+539:[INFO DRT-0199]   Number of violations = 89865.
+587:[INFO DRT-0199]   Number of violations = 83375.
+635:[INFO DRT-0199]   Number of violations = 75459.
+881:[INFO DRT-0199]   Number of violations = 577541.
+929:[INFO DRT-0199]   Number of violations = 297670.
+977:[INFO DRT-0199]   Number of violations = 275717.
+1025:[INFO DRT-0199]   Number of violations = 258713.
+1073:[INFO DRT-0199]   Number of violations = 252020.
+1121:[INFO DRT-0199]   Number of violations = 246719.
+1169:[INFO DRT-0199]   Number of violations = 242753.
+1217:[INFO DRT-0199]   Number of violations = 239227.
+1265:[INFO DRT-0199]   Number of violations = 236580.
+
+## repair loop setting (resolved.json)
+"DRT_ANTENNA_REPAIR_ITERS": 10
+"DRT_ANTENNA_REPAIR_MARGIN": 10

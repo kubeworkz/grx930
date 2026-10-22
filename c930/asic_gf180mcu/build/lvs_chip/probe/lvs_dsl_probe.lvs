@@ -1,0 +1,9 @@
+source($input)
+report_lvs
+
+puts "PROBE threads? #{respond_to?(:threads).inspect}"
+puts "PROBE tiles? #{respond_to?(:tiles).inspect}"
+puts "PROBE tile_borders? #{respond_to?(:tile_borders).inspect}"
+puts "PROBE dsl methods: #{methods.grep(/thread|tile|tiling/).sort.inspect}"
+puts "PROBE TilingProcessor methods: #{RBA::TilingProcessor.instance_methods.grep(/thread/).sort.inspect}"
+puts "PROBE processor exists? #{respond_to?(:processor).inspect}"

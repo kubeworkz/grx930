@@ -1,0 +1,100 @@
+# The LVS fixture family: which PDK fixtures the committed evidence covers, and the deck switches
+# each one needs.
+#
+# Format:  <category>/<fixture><TAB><switch=value>[,<switch=value>...]
+#
+# WHERE THE SWITCHES COME FROM
+#
+#   Not from taste and not from what happened to pass: they are the per-fixture entries of the
+#   PDK's own regression config, `testing/unit/<category>/config/default.yaml` at the pin
+#   (355b9ee6b6f6), with `combine:` / `implicit_connect:` shorthand written out as
+#   `combine=true` / `implicit_connect=true`. The PDK's pytest runner starts from
+#   `combine=false, check_ports=true, top_lvl_pins=true, run_mode=deep` and overlays those entries;
+#   the harness here does the same, except that `check_ports` is ours (the deck's own port check
+#   cannot run -- see tools/klayout_lvs.py), so it is never passed. A fixture with no entry in that
+#   config has no switches here either, and runs on the harness defaults.
+#
+#   This column is checked, not trusted: tools/lvs_switch_check.py compares every line with that
+#   config at the pin, and the refresh and the evidence job run it before the first fixture. A line
+#   that disagrees stops the run with SWITCHES (exit 1) and is not something --update accepts; a
+#   config the reader cannot parse is CANNOT-RUN, never agreement. The negative cases are in
+#   build/lvs_switch_check_selftest.sh.
+#
+#   Which switch decides what, all of them measured on this family: every MOSFET fixture needs
+#   combine (a finger is its own device otherwise), the pfet/pplus fixtures need implicit_connect
+#   (their fingers never join up without it), a MIM cap is only extractable on the metal stack its
+#   name names (metal_level + mim_option + mim_cap), a deep-nwell device needs
+#   consider_dn_dw_features for its DN/DW tubs to be part of the device, a poly resistor needs
+#   poly_res, and a top-metal one needs metal_top.
+#
+# WHAT ONE LINE BUYS
+#
+#   Every device kind the deck extracts except e-fuse, MOS-SAB, pads and the isolated substrate:
+#   nfet/pfet including deep-nwell ones, poly/diffusion/well/top-metal resistors (two non-default
+#   poly_res), MIM capacitors on A/3LM, B/5LM and B/6LM, NPN and PNP bipolar transistors, the nine
+#   diode junctions (including the deep-nwell ones and the Schottky), and the MOS capacitors
+#   (nmos/pmos, 3.3 V and 6 V, with and without the `_b` variant and DN tubs).
+#
+#   Three families are complete here -- all 10 bjt_devices, all 15 diode_devices and all 12
+#   moscap_devices -- so for those, "the family" means the whole of what the PDK ships, and a
+#   fixture the PDK adds later is a diff rather than a silent omission. Adding a line is a claim
+#   the refresh job then has to reproduce, every week.
+#
+#   Fixtures the PDK ships but this list leaves out are left out for cost, not for verdicts: each
+#   line is a docker run of the deck (~36 s here), and the families that remain
+#   (efuse_devices, mos_sab_devices, pads, isosub) have their own switches and would each need the
+#   same treatment.
+#
+# Durations, measured 2026-10-17 on this box: 25-40 s per fixture; 8-10 minutes for the first 14,
+# and 30 minutes of wall time for the 51 now named (14:00:46 to 14:31:19).
+mos_devices/nfet_05v0	combine=true
+mos_devices/pfet_05v0	combine=true,implicit_connect=true
+mos_devices/nfet_03v3_dn	combine=true,implicit_connect=true,consider_dn_dw_features=true
+mos_devices/pfet_06v0	combine=true,implicit_connect=true
+res_devices/nplus_u	combine=true
+res_devices/npolyf_s	combine=true
+res_devices/pplus_u	combine=true,implicit_connect=true
+res_devices/nwell	combine=true
+res_devices/ppolyf_u_2k	combine=true,poly_res=2k
+res_devices/ppolyf_u_3k_6p0	combine=true,poly_res=3k
+res_devices/tm11k	metal_top=11K
+mimcap_devices/cap_mim_2f0fF_B_5LM_2p0	mim_option=B,metal_level=5LM,mim_cap=2
+mimcap_devices/cap_mim_1f5fF_A_1p5	mim_option=A,metal_level=3LM,mim_cap=1.5
+mimcap_devices/cap_mim_1f0fF_B_6LM_1p0	mim_option=B,metal_level=6LM,mim_cap=1
+bjt_devices/npn_00p54x02p00	combine=true
+bjt_devices/npn_00p54x04p00
+bjt_devices/npn_00p54x08p00
+bjt_devices/npn_00p54x16p00
+bjt_devices/npn_05p00x05p00
+bjt_devices/npn_10p00x10p00
+bjt_devices/pnp_05p00x00p42
+bjt_devices/pnp_05p00x05p00
+bjt_devices/pnp_10p00x00p42
+bjt_devices/pnp_10p00x10p00
+diode_devices/diode_dw2ps_03v3
+diode_devices/diode_dw2ps_06v0
+diode_devices/diode_nd2ps_03v3
+diode_devices/diode_nd2ps_03v3_dn	consider_dn_dw_features=true
+diode_devices/diode_nd2ps_06v0
+diode_devices/diode_nd2ps_06v0_dn	consider_dn_dw_features=true
+diode_devices/diode_nw2ps_03v3
+diode_devices/diode_nw2ps_06v0
+diode_devices/diode_pd2nw_03v3
+diode_devices/diode_pd2nw_03v3_dn	consider_dn_dw_features=true
+diode_devices/diode_pd2nw_06v0
+diode_devices/diode_pd2nw_06v0_dn	consider_dn_dw_features=true
+diode_devices/diode_pw2dw_03v3	implicit_connect=true
+diode_devices/diode_pw2dw_06v0	implicit_connect=true
+diode_devices/sc_diode	combine=true
+moscap_devices/cap_nmos_03v3
+moscap_devices/cap_nmos_03v3_b
+moscap_devices/cap_nmos_03v3_dn	consider_dn_dw_features=true
+moscap_devices/cap_nmos_06v0
+moscap_devices/cap_nmos_06v0_b
+moscap_devices/cap_nmos_06v0_dn	consider_dn_dw_features=true
+moscap_devices/cap_pmos_03v3
+moscap_devices/cap_pmos_03v3_b
+moscap_devices/cap_pmos_03v3_dn	consider_dn_dw_features=true
+moscap_devices/cap_pmos_06v0
+moscap_devices/cap_pmos_06v0_b
+moscap_devices/cap_pmos_06v0_dn	consider_dn_dw_features=true

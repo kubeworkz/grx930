@@ -1,0 +1,33 @@
+$ python3 tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def \
+      --cdl build/lvs_chip/grx930_test_chip.cdl --json build/lvs_chip/net_compare.json
+== inputs: grx930_test_chip.def 74,868,268 B, grx930_test_chip.cdl 7,909,775 B
+   top grx930_test_chip: DEF 53745 components / 53758 nets / 9 ports; CDL 53745 instances / 35 subcircuits / 9 ports
+   instances: same set; cells: 34 kinds, 53745 placements
+== signal partition: DEF 53751 nets / 203400 pins; CDL 53751 nets / 203400 pins
+   pins per instance: 53745 of 53745 complete
+== power: DEF SPECIALNETS ['VDD', 'VSS', 'one_', 'zero_'] (wildcards {'VDD': ['VDD'], 'VSS': ['VSS']}); CDL binds {'VDD->VDD': 53745, 'VNW->VNW': 53745, 'VPW->SUB': 53745, 'VSS->VSS': 53745}
+   VDD: every instance's VDD pin, 53745 instances
+   VSS: every instance's VSS pin, 53745 instances
+   wells ['VBN', 'VBP', 'VNW', 'VPW']: unrouted in the DEF (tapped), bound by the CDL and by the deck's connect_global
+NET-COMPARE: MATCH the routed database and the schematic group the same pins
+   report: build/lvs_chip/net_compare.json
+exit=0
+
+# and the same tool on a CDL with one pin moved off the 14,496-pin clock net:
+# it must not say MATCH.
+$ python3 tools/lvs_chip/net_compare.py --def build/grx930_test_chip.def --cdl build/lvs_chip/ncmut/mut.cdl
+== inputs: grx930_test_chip.def 74,868,268 B, mut.cdl 7,909,782 B
+   top grx930_test_chip: DEF 53745 components / 53758 nets / 9 ports; CDL 53745 instances / 35 subcircuits / 9 ports
+   instances: same set; cells: 34 kinds, 53745 placements
+== signal partition: DEF 53751 nets / 203400 pins; CDL 53752 nets / 203400 pins
+   pins per instance: 53745 of 53745 complete
+   DEF only x1: 14495 pins: PORT.I_CLK, _63080_.CLK, _63081_.CLK, +14492
+   CDL only x1: 1 pins: _63080_.CLK
+   CDL only x1: 14494 pins: PORT.I_CLK, _63081_.CLK, _63082_.CLK, +14491
+== power: DEF SPECIALNETS ['VDD', 'VSS', 'one_', 'zero_'] (wildcards {'VDD': ['VDD'], 'VSS': ['VSS']}); CDL binds {'VDD->VDD': 53745, 'VNW->VNW': 53745, 'VPW->SUB': 53745, 'VSS->VSS': 53745}
+   VDD: every instance's VDD pin, 53745 instances
+   VSS: every instance's VSS pin, 53745 instances
+   wells ['VBN', 'VBP', 'VNW', 'VPW']: unrouted in the DEF (tapped), bound by the CDL and by the deck's connect_global
+NET-COMPARE: MISMATCH
+   - 3 net(s) have no counterpart: 1 only in the DEF, 2 only in the CDL
+exit=1

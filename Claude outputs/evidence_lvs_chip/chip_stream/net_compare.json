@@ -1,0 +1,44 @@
+{
+  "cdl": {
+    "instances": 53745,
+    "ports": 9,
+    "power_binding": {
+      "VDD->VDD": 53745,
+      "VNW->VNW": 53745,
+      "VPW->SUB": 53745,
+      "VSS->VSS": 53745
+    },
+    "signal_nets": 53751,
+    "signal_pins": 203400,
+    "subcircuits": 35
+  },
+  "def": {
+    "components": 53745,
+    "nets": 53758,
+    "ports": 9,
+    "power_specials": {
+      "VDD": [
+        "VDD"
+      ],
+      "VSS": [
+        "VSS"
+      ],
+      "one_": [],
+      "zero_": []
+    },
+    "signal_nets": 53751,
+    "signal_pins": 203400
+  },
+  "inputs": {
+    "grx930_test_chip.cdl": 7909775,
+    "grx930_test_chip.def": 74868268
+  },
+  "problems": [],
+  "top": "grx930_test_chip",
+  "unmatched": {
+    "cdl_only": 0,
+    "def_only": 0,
+    "examples": []
+  },
+  "verdict": "MATCH"
+}
