@@ -14,6 +14,16 @@
 #                                            plus the toolchain and the log upload
 #     .githooks/pre-push                     runs this same file, on the pushes that can break a gate
 #
+#   There is a second definition beside this one, build/chain_selftests.sh: the
+#   *_selftest.sh harnesses that pin the chains' own behaviour (the shared gate is
+#   called, the refusal names a reason, the die arm's launch marker is the line its
+#   parent waits for). It is not a longer version of this file and its rows are not
+#   here on purpose: those harnesses need a Linux checkout -- a pgrep, a coreutils
+#   timeout, a stub `docker` on PATH -- while this file also runs from
+#   .githooks/pre-push, which on this checkout is Git Bash. The split is by platform,
+#   not by importance: the `chain-selftests` job in the workflow below runs it on
+#   every push.
+#
 #   That property is checkable rather than asserted -- the workflow names no gate
 #   command at all:
 #

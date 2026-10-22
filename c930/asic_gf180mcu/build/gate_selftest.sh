@@ -253,24 +253,46 @@ for f in "$BUILD"/*_chain.sh; do
 
   while IFS=: read -r ln line; do
     sites=$((sites+1))
+    # The variables a site names are the ones its chain has already set by that
+    # line -- the site is run as delivered, not as a copy with its arguments
+    # flattened. ADJ/CAP/CAP_MB are grt_sweep's, TAG and PREDRT_MIN_GB are
+    # die_drt_chain.sh's, ANT_MIN_GB is antenna_probe_chain.sh's, and
+    # NEED_MB/MIN_GB/A are drt_db_compare_chain.sh's (`A` is its arm, bound by the
+    # loop the site sits in). Without them a site whose argument is a variable dies
+    # of `set -u` here and reads as a chain that ignores its gate -- which is how
+    # the die_predrt sites read when this test was first wired into CI.
     ADJ=0.1; CAP=8g; CAP_MB=8192; STUB_FREE_GB=99
+    TAG=die01; PREDRT_MIN_GB=12; ANT_MIN_GB=6; NEED_MB=10000; MIN_GB=12; A=arm1
     case "$line" in
       *'||'*) ok "$name:$ln checks the answer" ;;
       *)      bad "$name:$ln calls gate and ignores the answer" ;;
     esac
+    # The site runs inside a one-iteration loop. Some refusals are `continue` (the
+    # arm sweeps iterate their arms), and `continue` outside a loop is a bash error
+    # that would read as a refusal from a site that is in fact correct. The loop
+    # makes the site's own control flow legal.
+    #
+    # The witness is then the log line rather than the exit status, because a site
+    # whose refusal is `continue` exits 0 outside its chain. The question that can
+    # be answered from here is the one that matters: when the gate says no, does
+    # the chain say so, in its own log, naming the reason? `ABORT_$GATE_REASON`
+    # (ws_chain), `ABORT_DRT_$GATE_REASON` (die_drt_chain) and `ARM_ABORT $A
+    # $GATE_REASON` (drt_db_compare_chain) all do; a bare `ABORT` does not, and a
+    # site that ignores the answer writes nothing at all -- which is the drift this
+    # phase is here to catch. GATE_REASON itself is set in the subshell that ran the
+    # site, so the reason is looked for in the line, not in this shell's variable.
     LOG=$TMP/$name.$ln.refuse.log; : > "$LOG"
-    ( run_site "$line" ) >/dev/null 2>&1; rc=$?
-    reason=$(grep -oE '(ARM_)?ABORT_[A-Z_]*' "$LOG" | tail -1)
-    [ "$rc" -ne 0 ] && ok "$name:$ln refuses when the box cannot carry it" \
-                    || bad "$name:$ln went ahead on a refusal"
-    case "$reason" in
-      ABORT_DISK_LOW|ABORT_MEM_LOW|ARM_ABORT_DISK_LOW|ARM_ABORT_MEM_LOW)
-        ok "  and names $reason" ;;
-      *) bad "  refusal names [$reason]: the chain would log an empty 'ABORT_'" ;;
+    ( for _ in 1; do run_site "$line"; done ) >/dev/null 2>&1; rc=$?
+    refusal=$(grep -aE '(ARM_)?ABORT' "$LOG" | tail -1)
+    case "$refusal" in
+      *MEM_LOW*|*DISK_LOW*)
+        ok "$name:$ln refuses, and names the reason: ${refusal#\[selftest\] }" ;;
+      *)
+        bad "$name:$ln leaves no refusal naming DISK_LOW or MEM_LOW (rc=$rc, last ABORT line: ${refusal:-none}) -- the chain would go ahead on a refusal, or refuse without saying why" ;;
     esac
     LOG=$TMP/$name.$ln.go.log; : > "$LOG"
     STUB_MODE=go
-    ( run_site "$line" ) >/dev/null 2>&1; rc=$?
+    ( for _ in 1; do run_site "$line"; done ) >/dev/null 2>&1; rc=$?
     chk "  and goes when it can" 0 "$rc"
     export STUB_MODE=refuse
   done < <(grep -nE '^[[:space:]]*gate[[:space:]]' "$f")

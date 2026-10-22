@@ -198,6 +198,14 @@ fi
 
 # ---- wait for the box, and for the chain that is ahead of this one -------------
 if [ "$HARVEST" != 1 ]; then
+    # The shared gate, before the wait and the launch. The arm gates itself for its
+    # phase A (die_drt_chain.sh: 9000 MB against a 12 GB floor), but a refusal there
+    # arrives after this chain has launched it, and arrives in the ARM's log -- this
+    # chain would see "exited without launching", retry, and report the retries as if
+    # the arm had failed. Asking first costs one memwatch call and names the reason
+    # in this chain's own log. Every other *_chain.sh in build/ does the same, and
+    # gate_selftest.sh checks that it still does.
+    gate 9000 die_diode_flow 12 / || { say "ARM_ABORT_$GATE_REASON"; exit 1; }
     W0=$(date -u +%s); WAITED=0
     while :; do
         RUNNING=$(docker ps --format '{{.Names}}' | tr '\n' ' ')
