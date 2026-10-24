@@ -30,6 +30,17 @@
 #      again. Being back is announced, not assumed; not being back is announced
 #      louder, written to an ALERT file, and exits 1.
 #
+#   And never two of them. One runner directory is one agent id, so it gets one
+#   listener session; two are not extra capacity. They share _work and _diag, so
+#   they write the same job's page log and both accept the same job. Measured on
+#   2026-10-23/24 -- two run.sh sessions started 15 hours apart, `Set up job`
+#   failing with `The file .../_diag/pages/...._1.log already exists`, and the
+#   artifact upload coming back `403 Forbidden: job is completed`. So before a
+#   start this script stops the sessions already in the directory, it holds a
+#   start lock so two watchdogs cannot start at once, and it counts listeners
+#   afterwards; a start that somehow produces two stops both and starts one. A
+#   listener that is alive but not online is replaced, not joined.
+#
 #   The announcement is a Windows balloon notification, because the failure mode
 #   being fixed is silence, and a log line nobody opens is silence.
 #
@@ -142,28 +153,108 @@ in_distro() {  # in_distro SHELL_COMMAND
   wsl.exe -d "$DISTRO" -u "$WSL_USER" -e bash -c "$1" 2>/dev/null
 }
 
-listener_state() {  # alive | dead | unknown
-  # The [R] is not decoration. `pgrep -f` matches whole command lines, and the
-  # command line of the shell that runs pgrep contains the pattern itself, so a
-  # plain `.../bin/Runner.Listener` matches that shell every time and reports a
-  # dead runner as alive. Measured, on 2026-10-15: with both runner processes
-  # killed, this check said "alive", the watchdog therefore restarted nothing, and
-  # GitHub was right while this script was wrong. A bracket expression stops the
-  # pattern matching its own text: [R]unner matches the literal `Runner` in the
-  # runner's command line and not the `[R]unner` written here.
+# ---------------------------------------------------------------------------
+# how many listeners are in the runner directory
+# ---------------------------------------------------------------------------
+#
+# The question this script asks first is not "is a listener alive" but "how many
+# are there". A second one is invisible from GitHub -- both register as the same
+# agent id and both read `online` -- and it breaks jobs in ways that look like
+# something else entirely, so it is counted rather than assumed away.
+#
+# A session is run.sh -> run-helper.sh -> bin/Runner.Listener, all in one process
+# group (run.sh is started with setsid, so its pid is the group). Stopping only
+# the listener is not enough: run.sh loops on run-helper.sh, so the directory can
+# grow a new listener a second later, beside whatever is started next.
+
+listener_table() {  # "<pgid> <pid> <ppid>" per listener; "?" if the distro did not answer
+  # The [R] is not decoration. `ps` lists the command lines of the very processes
+  # running this command -- this shell, the grep, the awk -- and this shell's
+  # command line contains the pattern it is about to grep for. A plain
+  # `Runner.Listener` therefore matches the shell that is looking for it, and a
+  # dead runner reads as alive: measured on 2026-10-15, when the watchdog missed
+  # both runner processes being killed, restarted nothing, and GitHub was right
+  # while this script was wrong. A bracket expression stops the pattern matching
+  # its own text: [R]unner matches the literal `Runner` in the runner's command
+  # line and not the `[R]unner` written here. `$RUNNER_DIR` is left unexpanded in
+  # the command that reaches the distro for the same reason -- one more string in
+  # that shell's command line that is not the path being looked for.
   #
-  # "unknown" is a third answer, and it is not a nicety. wsl.exe calls to this
+  # The sentinel is the other half. Empty output has two meanings -- "no listener"
+  # and "the distro said nothing at all" -- and reading the second as the first is
+  # how a second listener gets started beside a live one. wsl.exe calls to this
   # machine failed with Wsl/Service/0x8007274c twice on 2026-10-15 while
-  # everything else was fine, and the next call worked. Reporting that as "dead"
-  # would start a second listener beside a live one; reporting it as "alive"
-  # would hide a real death. It is reported as what it is.
+  # everything else was fine, so a run that gets no answer is reported as that.
   local out
-  out=$(in_distro "pgrep -f '$RUNNER_DIR/bin/[R]unner.Listener' >/dev/null && echo alive || echo dead") || {
-    echo unknown; return; }
-  case "$out" in alive|dead) echo "$out" ;; *) echo unknown ;; esac
+  out=$(in_distro "ps -eo pgid=,pid=,ppid=,args= | grep -E '$RUNNER_DIR/bin/[R]unner.Listener' | awk '{print \$1, \$2, \$3}'; echo __TABLE_END__") \
+    || { printf '?\n'; return 1; }
+  case "$out" in
+    *__TABLE_END__) : ;;
+    *)              printf '?\n'; return 1 ;;
+  esac
+  printf '%s\n' "$out" | sed -e '/^__TABLE_END__$/d' -e 's/[[:space:]][[:space:]]*/ /g' \
+                            -e 's/^ //' -e 's/ $//' -e '/^$/d'
 }
 
-listener_alive() { [ "$(listener_state)" = alive ]; }
+table_state() {  # alive | dead | unknown, from a listener_table
+  case "$1" in '?') echo unknown ;; '') echo dead ;; *) echo alive ;; esac
+}
+
+table_count() {  # 0, 1, 2, ... or "?" -- from a listener_table
+  case "$1" in
+    '?') echo '?' ;;
+    '')  echo 0 ;;
+    *)   printf '%s\n' "$1" | wc -l | tr -d ' ' ;;
+  esac
+}
+
+table_pids() {  # the listener pids from a listener_table, on one line
+  [ "$1" = '?' ] && { printf '?\n'; return; }
+  printf '%s\n' "$1" | awk 'NF {printf "%s ", $2}' | sed -e 's/ $//' -e '/^$/d'
+}
+
+signal_tree() {  # signal_tree SIGNAL -- signal every listener and up to two ancestors
+  # The ancestors are the listener's own parent chain, not a process group: this
+  # machine also runs a second, unrelated runner (/home/kubew/actions-runner, a
+  # service unit), and nothing here may use a `kill -TERM -PGID` that guessed at
+  # the wrong group. Three hops is Run.sh -> run-helper.sh -> Runner.Listener; the
+  # walk stops at pid 1, or as soon as a parent is already gone.
+  in_distro "
+    ps -eo pid=,ppid=,args= | grep -E '$RUNNER_DIR/bin/[R]unner.Listener' | awk '{print \$1}' |
+    while read -r l; do
+      p=\$l
+      for _ in 1 2 3; do
+        [ \"\${p:-0}\" -gt 1 ] || break
+        kill -$1 \"\$p\" 2>/dev/null
+        p=\$(ps -o ppid= -p \"\$p\" 2>/dev/null | tr -d ' ')
+        [ -n \"\${p:-}\" ] || break
+      done
+    done
+    echo __TABLE_END__
+  " >/dev/null 2>&1
+}
+
+stop_listeners() {  # stop_listeners REASON -- 0 once the directory holds no listener
+  local reason=$1 t i
+  t=$(listener_table) || { log "cannot read the listener table -- not stopping anything blind"; return 1; }
+  [ -z "$t" ] && return 0
+  log "stopping $(table_count "$t") listener session(s) in $RUNNER_DIR ($reason): $(printf '%s' "$t" | tr '\n' ';')"
+  signal_tree TERM
+  for i in $(seq 1 20); do
+    sleep 1
+    t=$(listener_table) || return 1
+    [ -z "$t" ] && return 0
+  done
+  log "still there after 20s of TERM -- sending KILL: $(printf '%s' "$t" | tr '\n' ';')"
+  signal_tree KILL
+  for i in $(seq 1 10); do
+    sleep 1
+    t=$(listener_table) || return 1
+    [ -z "$t" ] && return 0
+  done
+  log "FAIL: a listener in $RUNNER_DIR survived TERM and KILL -- refusing to start a second one beside it"
+  return 1
+}
 
 github_status() {  # online | offline | absent | unknown
   command -v gh >/dev/null 2>&1 || { echo unknown; return; }
@@ -183,7 +274,7 @@ distro_answers() {
   wsl.exe -d "$DISTRO" -e true >/dev/null 2>&1
 }
 
-start_runner() {
+start_one_run() {  # the start itself, with no claim about what happened
   # The `sleep 3` is load-bearing, not politeness. Started with no grace at all
   # (`... &` and then the session ending at once), run.sh never even reaches its
   # own log file: measured on 2026-10-15, run.log's mtime did not move and nothing
@@ -194,7 +285,42 @@ start_runner() {
   # detached. Without this, this script would report a runner it never started.
   in_distro "cd '$RUNNER_DIR' && setsid nohup ./run.sh >> run.log 2>&1 < /dev/null & sleep 3" >/dev/null 2>&1
   sleep 2
-  listener_alive
+}
+
+start_runner() {  # start exactly one session; 0 only when exactly one is running
+  local t n
+  start_one_run
+  t=$(listener_table) || { log "cannot read the listener table after a start -- not claiming a restore"; return 1; }
+  n=$(table_count "$t")
+  [ "$n" = 1 ] && { log "started one listener in $RUNNER_DIR (pid $(table_pids "$t"))"; return 0; }
+  if [ "$n" != 0 ] && [ "$n" != '?' ]; then
+    # A start of its own cannot make two. This means something else started one at
+    # the same moment -- a hand-run ./run.sh, or a second watchdog that lost the
+    # lock -- and both of them are the state this script exists to prevent, so
+    # both go and exactly one comes back.
+    log "DUPLICATE after starting: $n listeners in $RUNNER_DIR ($(printf '%s' "$t" | tr '\n' ';')) -- clearing them and starting one"
+    stop_listeners "a start produced $n listeners" || return 1
+    start_one_run
+    t=$(listener_table) || return 1
+    n=$(table_count "$t")
+    [ "$n" = 1 ] && { log "now exactly one listener in $RUNNER_DIR (pid $(table_pids "$t"))"; return 0; }
+  fi
+  if [ "$n" = 0 ]; then
+    log "started ./run.sh in $RUNNER_DIR but no listener came up -- see $RUNNER_DIR/run.log"
+  else
+    log "started ./run.sh in $RUNNER_DIR but $n listeners are up"
+  fi
+  return 1
+}
+
+github_busy() {  # 0 when the runner is in the middle of a job
+  # A duplicate is worth clearing, a job that is running is not worth killing
+  # mid-flight: the pair heals on the first idle cycle instead. This is only
+  # called on the paths that are about to stop something, so it costs one API
+  # call on the rare cycle, not one per cycle.
+  command -v gh >/dev/null 2>&1 || return 1
+  [ "$(gh api "repos/$REPO/actions/runners" \
+        --jq "[.runners[] | select(.name==\"$RUNNER_NAME\") | .busy] | first // false" 2>/dev/null)" = true ]
 }
 
 wait_online() {  # wait_online SECONDS
@@ -209,15 +335,100 @@ wait_online() {  # wait_online SECONDS
 state_note() { printf '%s\n' "$1" > "$STATE/last_state" 2>/dev/null || true; }
 state_last() { cat "$STATE/last_state" 2>/dev/null || echo none; }
 
+# One starter at a time, and one loop per machine. A manual run, the logon loop and
+# anything else that calls this can all decide at the same moment that the runner
+# is down, and each of them starting a session is the duplicate the rest of this
+# script is against. mkdir is the atomic part, and it is a directory rather than a
+# pid file on purpose: the pids this shell sees belong to the Git installation it
+# came from, so `ps -p` cannot see a loop started by another one. Measured
+# 2026-10-24: two loops running at once, 15196 from C:\Program Files\Git and 8448
+# from a bundled Git, each unable to see the other's pid -- which is one more way
+# to end up with two listeners in one runner directory.
+lock_acquire() {  # lock_acquire NAME PATIENCE -- 0 held, 1 not held after PATIENCE s
+  local name=$1 patience=$2 dir="$STATE/$1.lock" other since age waited=0
+  while :; do
+    if mkdir "$dir" 2>/dev/null; then
+      printf '%s\n' $$ > "$dir/pid" 2>/dev/null || true
+      date +%s > "$dir/since" 2>/dev/null || true
+      return 0
+    fi
+    other=$(cat "$dir/pid" 2>/dev/null || true)
+    since=$(cat "$dir/since" 2>/dev/null || true)
+    case "$other" in ''|*[!0-9]*) other=0 ;; esac
+    case "$since" in ''|*[!0-9]*) since=$(date -r "$dir" +%s 2>/dev/null || echo 0) ;; esac
+    case "$since" in ''|*[!0-9]*) since=0 ;; esac
+    age=$(( $(date +%s) - since ))
+    # Only the age decides. "The pid is not running" is not evidence here: a pid in
+    # another Git installation reads as dead, and taking that lock away from a live
+    # loop is exactly the race this exists to prevent. A lock young enough to be
+    # held is respected even when its pid looks dead; an old one is abandoned,
+    # because nobody is coming back for it.
+    if [ "$since" != 0 ] && [ "$age" -gt 300 ]; then
+      log "taking over a $name lock nobody can still be holding (pid ${other:-?}, age ${age}s)"
+      rm -rf "$dir" 2>/dev/null || true
+      continue
+    fi
+    [ "$waited" -ge "$patience" ] && return 1
+    sleep 2
+    waited=$(( waited + 2 ))
+  done
+}
+lock_release() { rm -rf "$STATE/$1.lock" 2>/dev/null || true; }
+
 # ---------------------------------------------------------------------------
 # one check
 # ---------------------------------------------------------------------------
 
+alert_down() {  # alert_down WHY GITHUB_STATE -- the failure a log alone would hide
+  {
+    printf 'The push fast path is down and this watchdog could not restore it.\n\n'
+    printf 'runner:       %s (%s)\n' "$RUNNER_NAME" "$REPO"
+    printf 'what was seen: %s\n' "$1"
+    printf 'GitHub says:  %s\n' "$2"
+    printf 'log:          %s\n\n' "$LOG"
+    printf 'To start it by hand, in the distro -- note the trailing sleep, without\n'
+    printf 'which WSL tears the new process down with the session that started it:\n'
+    printf '  cd %s && setsid nohup ./run.sh >> run.log 2>&1 < /dev/null & sleep 3\n' "$RUNNER_DIR"
+  } > "$ALERT" 2>/dev/null || true
+  notify error "$RUNNER_NAME is DOWN" "It reads '$2' and could not be restarted. Pushes still get a hosted verdict, hours later. See $LOG."
+}
+
 check_once() {  # 0 up (possibly restarted here), 1 down
-  local lstate alive=no gh_state was why
-  lstate=$(listener_state)
-  [ "$lstate" = alive ] && alive=yes
+  local tbl lstate n gh_state was why
+  tbl=$(listener_table) || tbl='?'
+  lstate=$(table_state "$tbl")
+  n=$(table_count "$tbl")
   was=$(state_last)
+
+  # --- two listeners, asked before anything about GitHub ---------------------
+  # They read 'online' -- that is exactly the state that broke the 24 Oct push --
+  # so the online check below would pass and report a fast path that cannot
+  # finish a job. This is healed first, and never by starting a third.
+  if [ "$n" != '?' ] && [ "$n" -gt 1 ]; then
+    log "DUPLICATE: $n listeners in $RUNNER_DIR for one agent id -- this is what makes a job's page log collide and its artifact upload 403"
+    if github_busy; then
+      log "a job is running on $RUNNER_NAME, so nothing is stopped mid-job; this heals on the first idle cycle"
+      state_note online
+      return 0
+    fi
+    if ! lock_acquire start 120; then
+      log "another watchdog holds the start lock -- leaving the duplicate to it"
+      return 0
+    fi
+    if stop_listeners "two listeners for one agent id" && start_runner && wait_online "$RESTORE_WAIT"; then
+      lock_release start
+      log "healed: one listener in $RUNNER_DIR and $RUNNER_NAME reads 'online'"
+      notify warn "$RUNNER_NAME had two listeners" "Two run.sh sessions in $RUNNER_DIR shared _work and _diag. Both were stopped and one started; jobs in that window failed at 'Set up job' or on their artifact upload."
+      state_note online
+      rm -f "$ALERT" 2>/dev/null || true
+      return 0
+    fi
+    lock_release start
+    gh_state=$(github_status)
+    state_note down
+    alert_down "two listeners were in $RUNNER_DIR and reducing them to one did not bring $RUNNER_NAME back online" "$gh_state"
+    return 1
+  fi
 
   if [ "$lstate" = unknown ]; then
     # The distro did not answer. That is not the runner being dead, and starting a
@@ -230,22 +441,31 @@ check_once() {  # 0 up (possibly restarted here), 1 down
     fi
     why="$DISTRO did not answer"
     log "$DISTRO did not answer and GitHub reads '$gh_state' -- trying to reach it"
-  elif [ "$alive" = yes ]; then
+  elif [ "$lstate" = alive ]; then
     # Most cycles of the loop stop here: a live listener is cheap to confirm and
     # asks nothing of GitHub or the network. It is not treated as proof -- a
     # listener can be alive and disconnected -- which is why every
     # GH_CHECK_EVERY-th cycle, and every manual run, asks GitHub anyway.
     if [ "$MODE" = loop ] && [ $(( CYCLE % GH_CHECK_EVERY )) -ne 1 ]; then
-      log "ok: listener alive in $DISTRO (GitHub not asked this cycle)"
+      log "ok: one listener alive in $DISTRO, pid $(table_pids "$tbl") (GitHub not asked this cycle)"
       return 0
     fi
     gh_state=$(github_status)
+    if [ "$gh_state" = unknown ]; then
+      # The API did not answer, and from here that is indistinguishable from the
+      # runner being disconnected -- but it is also what a network blip looks like
+      # on a listener that is running a job. Replacing on that guess would kill the
+      # job to fix the network, so nothing is replaced on a guess; the next cycle
+      # asks again. This is the same rule the 'unknown' listener state follows.
+      log "the listener is alive in $DISTRO but GitHub did not answer -- not replacing it on a guess"
+      return 0
+    fi
     if [ "$gh_state" = online ]; then
       if [ "$was" = down ]; then
         log "back online: $RUNNER_NAME reads '$gh_state' (it was down at the last check)"
         notify info "$RUNNER_NAME is back" "The push fast path is up again: pushes get a chip-gate verdict in about a minute."
       else
-        log "ok: $RUNNER_NAME is online (listener alive: yes)"
+        log "ok: $RUNNER_NAME is online (one listener, pid $(table_pids "$tbl"))"
       fi
       state_note online
       rm -f "$ALERT" 2>/dev/null || true
@@ -305,11 +525,55 @@ check_once() {  # 0 up (possibly restarted here), 1 down
     log "$DISTRO is answering again -- continuing"
   fi
 
-  # The process is asked first, and its answer is the one that counts. GitHub's
-  # 'online' can be stale -- a runner that just died still reads online until its
-  # heartbeats lapse -- so a start that produced no process must not be reported as
-  # a restore on the strength of what GitHub still believes.
+  # One starter at a time, and never a start beside a survivor. Reaching this
+  # point with the listener alive means it is alive and disconnected, so it is
+  # replaced rather than joined -- a second listener beside it is exactly the
+  # duplicate this script spends the rest of its length undoing.
+  if ! lock_acquire start 120; then
+    # Not started, and not yet a failure: another run may be starting it right now.
+    # What this run says has to depend on what it can see, not on hope.
+    tbl=$(listener_table) || tbl='?'
+    gh_state=$(github_status)
+    if [ "$(table_count "$tbl")" = 1 ] && [ "$gh_state" = online ]; then
+      log "another watchdog is starting $RUNNER_NAME; it is online now -- nothing to do"
+      state_note online
+      return 0
+    fi
+    log "another watchdog has held the start lock for 120s and no listener is online"
+    alert_down "another run has held the start lock for 120s; this one refused to start a second listener beside it" "$gh_state"
+    return 1
+  fi
+  tbl=$(listener_table) || tbl='?'
+  if [ "$tbl" = '?' ]; then
+    lock_release start
+    log "cannot read the listener table -- not starting anything blind"
+    return 0
+  fi
+  # The lock may have been held by another run that has since restored it. Taking
+  # over a runner that is already up and online is not a restore, it is a second
+  # restart -- so the question is asked again now that this run owns the dir.
+  if [ "$(table_count "$tbl")" = 1 ] && [ "$(github_status)" = online ]; then
+    lock_release start
+    log "another watchdog restored $RUNNER_NAME while this one waited for the start lock -- nothing to do"
+    state_note online
+    return 0
+  fi
+  if [ "$(table_count "$tbl")" != 0 ]; then
+    if github_busy; then
+      lock_release start
+      log "a job is running on $RUNNER_NAME -- not stopping it; the listener is replaced on an idle cycle"
+      state_note online
+      return 0
+    fi
+    if ! stop_listeners "$why"; then
+      lock_release start
+      alert_down "a listener in $RUNNER_DIR would not stop, and starting another beside it is the duplicate" "$gh_state"
+      return 1
+    fi
+  fi
+
   if start_runner; then
+    lock_release start
     if wait_online "$RESTORE_WAIT"; then
       log "restored: $RUNNER_NAME is online again ($why; GitHub read '$gh_state' at the time)"
       notify warn "$RUNNER_NAME was down" "$why and GitHub said '$gh_state'. This watchdog started it and it is online again; pushes in that window waited on the hosted queue."
@@ -319,23 +583,14 @@ check_once() {  # 0 up (possibly restarted here), 1 down
     fi
     log "FAIL: the listener is running in $DISTRO but GitHub still reads '$gh_state' after ${RESTORE_WAIT}s ($why)"
   else
-    log "FAIL: no listener came up in $DISTRO:$RUNNER_DIR ($why; GitHub reads '$gh_state', which may be stale)"
+    lock_release start
+    log "FAIL: no single listener in $DISTRO:$RUNNER_DIR ($why; GitHub reads '$gh_state', which may be stale)"
   fi
 
   # Reached when the runner is not back, whichever way it did not come back: the
-  # FAIL line above records which way, and the alert below puts the same in a file
-  # and on screen, because a failure only in a log is the silence this is for.
-  {
-    printf 'The push fast path is down and this watchdog could not restore it.\n\n'
-    printf 'runner:       %s (%s)\n' "$RUNNER_NAME" "$REPO"
-    printf 'what was seen: %s\n' "$why"
-    printf 'GitHub says:  %s\n' "$gh_state"
-    printf 'log:          %s\n\n' "$LOG"
-    printf 'To start it by hand, in the distro -- note the trailing sleep, without\n'
-    printf 'which WSL tears the new process down with the session that started it:\n'
-    printf '  cd %s && setsid nohup ./run.sh >> run.log 2>&1 < /dev/null & sleep 3\n' "$RUNNER_DIR"
-  } > "$ALERT" 2>/dev/null || true
-  notify error "$RUNNER_NAME is DOWN" "It reads '$gh_state' and could not be restarted. Pushes still get a hosted verdict, hours later. See $LOG."
+  # FAIL line above records which way, and the alert puts the same in a file and
+  # on screen, because a failure only in a log is the silence this is for.
+  alert_down "$why" "$gh_state"
   return 1
 }
 
@@ -415,16 +670,23 @@ esac
 
 case "$MODE" in
   status)
-    lstate=$(listener_state)
+    tbl=$(listener_table) || tbl='?'
+    lstate=$(table_state "$tbl")
+    n=$(table_count "$tbl")
     gh_state=$(github_status)
-    printf 'runner:  %s in distro %s (%s)\n  GitHub says:     %s\n  listener:        %s\n  log:             %s\n' \
-      "$RUNNER_NAME" "$DISTRO" "$REPO" "$gh_state" "$lstate" "$LOG"
+    printf 'runner:  %s in distro %s (%s)\n  GitHub says:     %s\n  listeners:       %s  (pid %s)\n  log:             %s\n' \
+      "$RUNNER_NAME" "$DISTRO" "$REPO" "$gh_state" "$n" "$(table_pids "$tbl")" "$LOG"
     # GitHub alone is not the answer. A runner that just died still reads online
     # until its heartbeats lapse, so a status built on it reported "online" with
     # nobody listening -- measured on 2026-10-15, and it exited 0 while the fast
-    # path was dead. The listener is the thing that has to be there, so it is the
-    # thing that decides; "unknown" is not a pass either.
-    [ "$lstate" = alive ] && exit 0
+    # path was dead. The listeners are the thing that has to be there, so they are
+    # what decides; "unknown" is not a pass either. And more than one is not a
+    # pass: two share one _work/_diag, which is a fast path that breaks jobs rather
+    # than one that runs them.
+    if [ "$n" != '?' ] && [ "$n" -gt 1 ]; then
+      echo "  TWO LISTENERS for one agent id in $RUNNER_DIR -- their jobs collide. Run without --status to heal it." >&2
+    fi
+    [ "$lstate" = alive ] && [ "$n" = 1 ] && exit 0
     exit 1
     ;;
   once)
@@ -432,16 +694,16 @@ case "$MODE" in
     ;;
   loop)
     # One loop per machine: a second would race the first to start the same
-    # listener, and the loser's "could not restore" would be a lie.
-    if [ -f "$STATE/loop.pid" ]; then
-      other=$(cat "$STATE/loop.pid" 2>/dev/null || echo 0)
-      if [ -n "$other" ] && [ "$other" != 0 ] && ps -p "$other" >/dev/null 2>&1; then
-        echo "watchdog: already looping as pid $other -- this one exits" >&2
-        exit 0
-      fi
+    # listener, and the loser's "could not restore" would be a lie. The guard is a
+    # directory, not the old pid file, because two loops can come from two Git
+    # installations whose pids cannot be checked from one another -- and on
+    # 2026-10-24 two such loops were running at once (15196 and 8448).
+    if ! lock_acquire loop 0; then
+      other=$(cat "$STATE/loop.lock/pid" 2>/dev/null || echo ?)
+      echo "watchdog: already looping as pid $other -- this one exits" >&2
+      exit 0
     fi
-    echo $$ > "$STATE/loop.pid" 2>/dev/null || true
-    trap 'rm -f "$STATE/loop.pid"' EXIT INT TERM
+    trap 'lock_release loop' EXIT INT TERM
     log "loop started: every ${INTERVAL}s, GitHub asked every ${GH_CHECK_EVERY} cycles, notify=$NOTIFY"
     while :; do
       check_once || true
