@@ -257,8 +257,20 @@ jobs:
       # A distinct name on purpose: upload-artifact@v4 refuses two artifacts with
       # the same name in one run, and both jobs run on a push, so the hosted job's
       # `chip-gate-logs` would collide with a second one.
+      #
+      # continue-on-error, because an upload is not a gate. On run 40046909929 this
+      # step failed with `Failed to CreateArtifact: ... (403) Forbidden: job is
+      # completed` -- reproduced on a rerun of the same job, with `Chip gates`
+      # passing 11/11 both times -- and that red was the whole run's verdict: the
+      # gate said PASS and the run said failure, which under branch protection
+      # blocks a push over a log file nobody was waiting for. The logs are still
+      # here whenever the upload works, and the hosted `gates` job above uploads the
+      # same files on the same push. Nothing stops watching the artifact path itself:
+      # fast-path-canary.yml's own uploads stay fatal, so a broken artifact service
+      # shows up there, every hour, instead of as a red verdict on unrelated pushes.
       - name: Upload gate logs
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: chip-gate-logs-self-hosted
