@@ -26,9 +26,10 @@
 #   1. reads free GB on MOUNT (gate.sh's `free_gb`, the same function every chain
 #      gates with -- one definition of "free space" on this box, not a second one);
 #   2. if free < SOFT_GB, removes the OLDEST prunable `chip_top.odb` files until
-#      free >= TARGET_GB or there is nothing left to prune, and writes what it
-#      removed to `ws/logs/drt_disk_guard_pruned.md` BEFORE removing it, so a pass
-#      that has been pruned can still be identified afterwards;
+#      free >= TARGET_GB or there is nothing left to prune, and appends each one
+#      it actually removed to `ws/logs/drt_disk_guard_pruned.md` -- with df's
+#      reading taken after the removal, so a pruned pass can still be identified
+#      and the space it returned is a measurement rather than an estimate;
 #   3. if free is still < HARD_GB, the volume cannot carry another pass, so it
 #      stops the flow (`docker kill $CONTAINER`) rather than let a route be
 #      truncated into a corrupt ODB. GUARD_STOP=0 turns that into a logged
@@ -244,12 +245,22 @@ map_row() {  # $1 file, $2 free before, $3 free after
       printf 'violation count is in the step log (the `DRT-0199` line) and its DRC report is\n'
       printf 'still beside where the ODB was. `run-0`, the newest pass and the pass before it\n'
       printf 'are never pruned.\n\n'
-      printf '| removed (UTC) | database | size | free before -> after |\n'
+      printf 'Both free figures are `df -BG` readings taken either side of the removal, not\n'
+      printf 'the file size added to the previous figure: a 400 MB removal often does not\n'
+      printf 'move a whole-GB reading, and a row that says so is the honest one.\n\n'
+      printf '| removed (UTC) | database | size | free before -> after (df -BG) |\n'
       printf '|---|---|---|---|\n'
     } > "$MAP"
   fi
-  printf '| %s | `%s` | %s MB | %s G -> %s G |\n' \
-    "$(date -u '+%F %T')" "${1#"$S"/}" "$(size_mb "$1")" "$2" "$3" >> "$MAP"
+  if is_num "${3:-}"; then
+    printf '| %s | `%s` | %s MB | %s G -> %s G |\n' \
+      "$(date -u '+%F %T')" "${1#"$S"/}" "$(size_mb "$1")" "$2" "$3" >> "$MAP"
+  else
+    # df answered nothing after the removal. The removal is still a fact worth
+    # recording; what it freed is not known, so it is not guessed at.
+    printf '| %s | `%s` | %s MB | %s G -> (df unreadable) |\n' \
+      "$(date -u '+%F %T')" "${1#"$S"/}" "$(size_mb "$1")" "$2" >> "$MAP"
+  fi
 }
 
 prune_one() {  # $1 = odb path; 0 = it is gone
@@ -283,7 +294,7 @@ stop_flow() {  # $1 free GB
 }
 
 evaluate() {
-  local free before n=0 f mb=0
+  local free before after n=0 f mb=0
   S=$(resolve_step)
   [ -z "$S" ] && say "GUARD_WAIT step_dir_absent run=$RUN step=$STEP"
   free=$(guard_free_gb)
@@ -317,8 +328,16 @@ evaluate() {
       # remove (measured on the probe tree before this was moved).
       if prune_one "$f"; then
         n=$((n + 1))
-        map_row "$f" "$before" "$((before + mb))"; before=$((before + mb))
-        say "GUARD_PRUNE ok $f size_mb=$mb free_gb_now=$(guard_free_gb)"
+        # The "after" figure is df's reading after the removal, never
+        # before + size: MB added to GB is not free space, and on died26q4 that
+        # arithmetic wrote `16 G -> 443 G` into the map (2026-10-23). Reading it
+        # also keeps the column honest when the volume gets back less than a GB
+        # -- df -BG reports whole GB, so a 427 MB removal may not move the figure
+        # at all, and that is what the row should say.
+        after=$(guard_free_gb)
+        map_row "$f" "$before" "$after"
+        is_num "$after" && before=$after
+        say "GUARD_PRUNE ok $f size_mb=$mb free_gb_now=${after:-unreadable}"
       fi
     done
     free=$(guard_free_gb)

@@ -109,6 +109,24 @@ has "$T/out.log" "GUARD_PRUNE_DONE pruned=3" "three prunes counted"
 has "$T/out.log" "GUARD_PRUNE_EXHAUSTED" "target unreachable is said out loud"
 has "$T/logs/map.md" '`drt-run-1/chip_top.odb`' "map records what was removed"
 has "$T/logs/map.md" '`drt-run-3/chip_top.odb`' "map records the last one too"
+# The free column is df's reading, and that is the regression this guards: the
+# first version wrote before + size_mb, so a 1 MB fixture file claimed a whole
+# GB (on died26q4, 2026-10-23, it recorded `16 G -> 443 G` on a 150 GB volume).
+# The reading is pinned at 10 GB here, so the honest row is 10 -> 10 and the
+# arithmetic one would be 10 -> 11.
+has "$T/logs/map.md" '| 10 G -> 10 G |' "map's after column is the df reading, not before + size"
+hasnt "$T/logs/map.md" '10 G -> 11 G' "map does not add a file's MB to the GB figure"
+# One reading per row, carried forward: row N's before is row N-1's after. A
+# fabricated figure would drift away from the next row's starting point.
+chain_ok=1; prev=""
+while IFS= read -r pair; do
+  b=${pair%% G -> *}; a=${pair##* G -> }
+  a=${a%% G*}
+  [ -n "$prev" ] && [ "$b" != "$prev" ] && chain_ok=0
+  prev=$a
+done < <(grep -oE '[0-9]+ G -> [0-9]+ G' "$T/logs/map.md")
+[ "$chain_ok" = 1 ] && ok "each row starts from the previous row's reading" \
+  || bad "a row's before figure does not match the previous row's after"
 [ -f "$T/logs/docker.log" ] && bad "used docker although the dir was writable" || ok "host rm used when the dir is writable"
 
 echo
