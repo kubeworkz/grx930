@@ -73,9 +73,24 @@ arm_state() {  # $1 = one line, e.g. "LAUNCHED tag=died26q4"
     # half-written line simply does not match until the next poll.
     printf '%s\n' "$1" >> "$ARM_STATE" 2>/dev/null || true
 }
-[ -n "$ARM_STATE" ] && trap 'arm_state "EXIT rc=$?"' EXIT
 
-. "$B/gate.sh"   # free_gb + the disk/memory gate, defined once for every chain
+# One EXIT handler, because bash keeps only one per signal: the disk guard is
+# stopped on every way out of this chain -- the phase-A failure paths, the GRT
+# gate refusal, DIE_PHASE_A_ONLY, and the normal end -- while the arm's decision
+# marker is still written for the parent that launched it.
+on_exit() {
+    local rc=$?
+    disk_guard_stop "$TAG" >/dev/null 2>&1 || true
+    if [ -n "${ARM_STATE:-}" ]; then arm_state "EXIT rc=$rc"; fi
+    # `exit`, not `return`: the last statement of a function is not the chain's
+    # exit status, and an arm that failed must not report rc=0 because the marker
+    # line happened to succeed.
+    exit "$rc"
+}
+trap on_exit EXIT
+
+. "$B/gate.sh"        # free_gb + the disk/memory gate, defined once for every chain
+. "$B/disk_guard.sh"  # start/stop the DRT disk guard (DISK_GUARD=0 disables both)
 
 # The same readings the sweep chain harvests with, so the numbers are the same
 # numbers: `Completing 100% with` is the per-iteration summary (initial route
@@ -144,6 +159,10 @@ fi
 A0=$(date -u +%s)
 say "PREDRT_LAUNCHED tag=$TAG"
 arm_state "LAUNCHED tag=$TAG container=die_predrt"
+# Guarded from the moment the container is up, not from the moment step 06
+# appears: the step dir is hours away and the guard resolves it per poll, so it
+# is already watching when the antenna-repair loop starts writing route databases.
+disk_guard_start "$TAG" die_predrt
 while [ "$(ps_running die_predrt)" = "true" ]; do sleep 60; done
 A1=$(date -u +%s)
 RC=$(docker inspect -f '{{.State.ExitCode}}' die_predrt 2>/dev/null)

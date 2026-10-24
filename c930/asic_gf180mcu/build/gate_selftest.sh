@@ -309,7 +309,9 @@ echo "  --   $sites gate site(s) across the chains"
 # stopped being a test of the delivered chain and says so.
 mkdir -p "$TMP/root/build" "$TMP/root/drt_fast/logs" "$TMP/root/drt_fast/ckpt" \
          "$TMP/root/ws/logs" "$TMP/root/ws/template/asic_core" "$TMP/bin"
-cp -f "$BUILD/gate.sh" "$BUILD/memwatch.sh" "$TMP/root/build/"
+# disk_guard.sh too: the chains now source it beside gate.sh, and a staged chain
+# whose `.` fails would look like a chain that ignores its gate.
+cp -f "$BUILD/gate.sh" "$BUILD/memwatch.sh" "$BUILD/disk_guard.sh" "$TMP/root/build/"
 cat > "$TMP/bin/docker" <<SH
 #!/bin/sh
 printf 'docker %s\n' "\$*" >> "$TMP/docker.calls"

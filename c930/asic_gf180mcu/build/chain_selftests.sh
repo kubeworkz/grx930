@@ -18,7 +18,8 @@
 # WHAT THEY ARE
 #
 #   Each *_selftest.sh next to the script it guards -- die_diode_flow_chain.sh,
-#   die_drt_chain.sh, gate.sh, drt_extend_ws.sh, stage_tapeout_config.sh,
+#   die_drt_chain.sh, gate.sh, drt_disk_guard.sh (with disk_guard.sh, the helper
+#   the chains call), drt_extend_ws.sh, stage_tapeout_config.sh,
 #   stage_tapeout_watch.sh, lvs_check.sh, tools/lvs_switch_check.py and
 #   tools/lvs_chip/net_compare.py. None of them routes anything or launches a
 #   container: docker is a stub first on PATH and every call is recorded, which is
@@ -26,8 +27,9 @@
 #   check is the part that has no other witness -- that each chain still calls the
 #   shared gate instead of growing its own, that it refuses and names the reason
 #   when the box cannot carry the job, that the die arm announces its own launch
-#   with the line its parent waits for, that the reports are rewritten from the
-#   logs actually on disk, and that every staged copy differs from the delivered
+#   with the line its parent waits for, that every arm-starter still starts the DRT
+#   disk guard (and stops it on every way out), that the reports are rewritten from
+#   the logs actually on disk, and that every staged copy differs from the delivered
 #   file only in the destinations the test rewrote.
 #
 #   They are here because the failure they catch is not a wrong number -- it is a
@@ -68,7 +70,7 @@
 #
 # A BOX RUN IS THE SAME RUN
 #
-#   bash c930/asic_gf180mcu/build/chain_selftests.sh                 # all eight
+#   bash c930/asic_gf180mcu/build/chain_selftests.sh                 # all nine
 #   bash c930/asic_gf180mcu/build/chain_selftests.sh --list          # names only
 #   bash c930/asic_gf180mcu/build/chain_selftests.sh --only gate-wiring
 #   CHAIN_SELFTEST_TIMEOUT=600 bash ...                    # per test, seconds
@@ -95,6 +97,7 @@ CST_TIMEOUT=${CHAIN_SELFTEST_TIMEOUT:-300}
 TESTS=$(cat <<'EOF'
 die-launch-handshake|c930/asic_gf180mcu|bash build/die_launch_selftest.sh|^DIE_LAUNCH_SELFTEST pass=[1-9][0-9]* fail=0|bash pgrep timeout
 gate-wiring|c930/asic_gf180mcu|bash build/gate_selftest.sh|^GATE_SELFTEST pass=[1-9][0-9]* fail=0|bash df
+disk-guard|c930/asic_gf180mcu|bash build/drt_disk_guard_selftest.sh|^DISK_GUARD_SELFTEST pass=[1-9][0-9]* fail=0|bash
 drt-extend|c930/asic_gf180mcu|bash wafer_space_integration/extend_selftest.sh|^extend_selftest: [1-9][0-9]* passed, 0 failed|bash
 stage-tapeout-watch|c930/asic_gf180mcu|bash build/stage_tapeout_watch_selftest.sh|^== [1-9][0-9]* passed, 0 failed|bash
 stage-tapeout-config|c930/asic_gf180mcu|bash build/stage_tapeout_config_selftest.sh|^== [1-9][0-9]* passed, 0 failed|bash
@@ -140,7 +143,7 @@ fi
 
 # Not a platform check for its own sake: every harness here assumes Linux (/proc
 # through pgrep, coreutils' timeout, a `docker` stub reachable through PATH), and on
-# anything else the answer would be eight BLOCKED lines that look like eight broken
+# anything else the answer would be nine BLOCKED lines that look like nine broken
 # chains. Say what is true once, and stop.
 if [ "$(uname -s 2>/dev/null)" != Linux ]; then
   cat >&2 <<EOF

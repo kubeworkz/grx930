@@ -20,7 +20,13 @@ LOG=$WS/ws_chain.log
 TAG=${WS_TAG:-ws_v1}
 say() { echo "[$(date -u)] $*" | tee -a $LOG; }
 ps_running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null; }
-. "$ROOT/build/gate.sh"   # free_gb + the disk/memory gate, defined once for every chain
+. "$ROOT/build/gate.sh"        # free_gb + the disk/memory gate, defined once for every chain
+. "$ROOT/build/disk_guard.sh"  # start/stop the DRT disk guard (DISK_GUARD=0 disables both)
+
+# The guard is stopped on every way out, including the gate refusal below: a guard
+# left running after an aborted chain would prune the next arm's tree unasked.
+on_exit() { local rc=$?; disk_guard_stop "$TAG" >/dev/null 2>&1 || true; exit "$rc"; }
+trap on_exit EXIT
 
 say "WS_CHAIN_START tag=$TAG limit=${WS_LIMIT:-none}"
 
@@ -41,6 +47,9 @@ docker run -d --name ws_flow --user 0:0 -e HOME=/root \
   -v $ROOT:/work -e "WS_TAG=$TAG" -e "WS_LIMIT=${WS_LIMIT:-}" \
   $IMG /work/ws/ws_exec.sh >/dev/null
 say "WS_FLOW_LAUNCHED"
+# The step number is discovered by the guard (runs/<tag>/*-openroad-detailedrouting),
+# because this flow's DRT is not step 06 in every tag.
+disk_guard_start "$TAG" ws_flow
 
 # The routing verdict is written automatically from here on. watch_drt_curve.sh
 # waits for the detailed-routing step to appear (its deadline is IDLE hours, not
@@ -58,6 +67,9 @@ else
 fi
 
 while [ "$(ps_running ws_flow)" = "true" ]; do sleep 30; done
+# The container is gone, so nothing can grow the step tree any more; stop the guard
+# before the harvest rather than at exit, and leave the trap as the abort net.
+disk_guard_stop "$TAG"
 docker logs ws_flow > $WS/logs/ws_flow.$TAG.log 2>&1
 say "WS_FLOW_EXIT rc=$(docker inspect -f '{{.State.ExitCode}}' ws_flow 2>/dev/null)"
 # The watcher's last verdict, if the run reached detailed routing at all.

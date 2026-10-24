@@ -272,8 +272,9 @@ jobs:
   # Hosted, like `gates`, and for the same reason: this is the verdict a push gets
   # whether or not the build machine is up. The selftests are the definition in
   # c930/asic_gf180mcu/build/chain_selftests.sh -- one step, no test command named
-  # here -- and about three minutes, two of which are die_launch_selftest.sh's
-  # deliberate 50 s slow-arm case.
+  # here -- and a few minutes, most of it die_launch_selftest.sh's deliberate 50 s
+  # slow-arm case and the disk guard's start/stop cases (16 s on the box: two real
+  # pollers started, stopped and restarted).
   chain-selftests:
     name: "Chain selftests (one definition: build/chain_selftests.sh)"
     runs-on: ubuntu-24.04
