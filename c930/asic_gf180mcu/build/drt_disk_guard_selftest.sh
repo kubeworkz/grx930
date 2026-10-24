@@ -106,6 +106,7 @@ for i in 1 2 3; do gone "$R/drt-run-$i/chip_top.odb" "run-$i (superseded) pruned
 for i in 0 4 5; do exists "$R/drt-run-$i/chip_top.odb" "run-$i (protected) kept"; done
 exists "$R/drt-run-1/chip_top.drc" "run-1 drc report kept (only the ODB is pruned)"
 has "$T/out.log" "GUARD_PRUNE_DONE pruned=3" "three prunes counted"
+has "$T/out.log" "size_mb=1" "the log line carries the same size the row does"
 has "$T/out.log" "GUARD_PRUNE_EXHAUSTED" "target unreachable is said out loud"
 has "$T/logs/map.md" '`drt-run-1/chip_top.odb`' "map records what was removed"
 has "$T/logs/map.md" '`drt-run-3/chip_top.odb`' "map records the last one too"
@@ -116,6 +117,15 @@ has "$T/logs/map.md" '`drt-run-3/chip_top.odb`' "map records the last one too"
 # arithmetic one would be 10 -> 11.
 has "$T/logs/map.md" '| 10 G -> 10 G |' "map's after column is the df reading, not before + size"
 hasnt "$T/logs/map.md" '10 G -> 11 G' "map does not add a file's MB to the GB figure"
+# The size column, checked because the row is written after the file is gone.
+# The fixtures are 1 MB, so `size_mb` measured before the removal is 1; measured
+# after it (the order a row-per-removal invites) there is no file and the column
+# came out empty -- `|  MB |` -- which no free-space assertion would notice.
+has "$T/logs/map.md" '| 1 MB |' "row records the size measured before removal"
+hasnt "$T/logs/map.md" '|  MB |' "row has no empty size column"
+n=$(grep -cF '| 1 MB |' "$T/logs/map.md" 2>/dev/null || echo 0)
+[ "$n" = 3 ] && ok "all three pruned rows carry a size (got $n)" \
+  || bad "wanted 3 sized rows, got $n"
 # One reading per row, carried forward: row N's before is row N-1's after. A
 # fabricated figure would drift away from the next row's starting point.
 chain_ok=1; prev=""

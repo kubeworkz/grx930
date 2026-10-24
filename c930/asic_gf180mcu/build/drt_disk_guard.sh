@@ -28,8 +28,9 @@
 #   2. if free < SOFT_GB, removes the OLDEST prunable `chip_top.odb` files until
 #      free >= TARGET_GB or there is nothing left to prune, and appends each one
 #      it actually removed to `ws/logs/drt_disk_guard_pruned.md` -- with df's
-#      reading taken after the removal, so a pruned pass can still be identified
-#      and the space it returned is a measurement rather than an estimate;
+#      reading taken after the removal and the size measured before it, so a
+#      pruned pass can still be identified and the space it returned is a
+#      measurement rather than an estimate;
 #   3. if free is still < HARD_GB, the volume cannot carry another pass, so it
 #      stops the flow (`docker kill $CONTAINER`) rather than let a route be
 #      truncated into a corrupt ODB. GUARD_STOP=0 turns that into a logged
@@ -236,7 +237,13 @@ prunable() {
 
 size_mb() { local b; b=$(stat -c %s "$1" 2>/dev/null) || return 1; is_num "$b" || return 1; echo $((b / 1000000)); }
 
-map_row() {  # $1 file, $2 free before, $3 free after
+map_row() {  # $1 file, $2 free before, $3 free after, $4 size in MB (measured BEFORE removal)
+  # The size has to be handed in: the row is written only after prune_one has
+  # removed the file (a row for a removal that did not happen would be a lie in
+  # the other direction), so `stat` here has nothing left to measure. Choosing
+  # the order without passing the size wrote an empty size column -- `|  MB |`
+  # -- which is what section 2 of the selftest now forbids.
+  local size=${4:-}
   if [ ! -f "$MAP" ]; then
     {
       printf '# Route databases pruned by build/drt_disk_guard.sh\n\n'
@@ -254,12 +261,12 @@ map_row() {  # $1 file, $2 free before, $3 free after
   fi
   if is_num "${3:-}"; then
     printf '| %s | `%s` | %s MB | %s G -> %s G |\n' \
-      "$(date -u '+%F %T')" "${1#"$S"/}" "$(size_mb "$1")" "$2" "$3" >> "$MAP"
+      "$(date -u '+%F %T')" "${1#"$S"/}" "${size:-?}" "$2" "$3" >> "$MAP"
   else
     # df answered nothing after the removal. The removal is still a fact worth
     # recording; what it freed is not known, so it is not guessed at.
     printf '| %s | `%s` | %s MB | %s G -> (df unreadable) |\n' \
-      "$(date -u '+%F %T')" "${1#"$S"/}" "$(size_mb "$1")" "$2" >> "$MAP"
+      "$(date -u '+%F %T')" "${1#"$S"/}" "${size:-?}" "$2" >> "$MAP"
   fi
 }
 
@@ -335,7 +342,8 @@ evaluate() {
         # -- df -BG reports whole GB, so a 427 MB removal may not move the figure
         # at all, and that is what the row should say.
         after=$(guard_free_gb)
-        map_row "$f" "$before" "$after"
+        # $mb was measured before prune_one ran; the file is gone now.
+        map_row "$f" "$before" "$after" "$mb"
         is_num "$after" && before=$after
         say "GUARD_PRUNE ok $f size_mb=$mb free_gb_now=${after:-unreadable}"
       fi
