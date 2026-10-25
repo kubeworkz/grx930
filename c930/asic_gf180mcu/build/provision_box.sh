@@ -17,6 +17,7 @@
 #
 # What "the state the chains assume" is, in the order they need it:
 #
+#   0. a host that can run the precheck image        -- see the arch gate below
 #   1. docker, usable by this user with no sudo      -- every chain is a docker run
 #   2. ghcr.io/wafer-space/gf180mcu-precheck         -- toolchain *and* the PDK
 #   3. ghcr.io/efabless/openlane2:2.3.10             -- the librelane runs
@@ -58,6 +59,7 @@ MIN_FREE_GB=${MIN_FREE_GB:-50}
 
 REFRESH=0
 SKIP_IMAGES=0
+LOCAL_IMAGE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --root)        ROOT=$2; shift 2 ;;
@@ -65,17 +67,20 @@ while [ $# -gt 0 ]; do
         --branch)      BRANCH=$2; shift 2 ;;
         --refresh)     REFRESH=1; shift ;;
         --skip-images) SKIP_IMAGES=1; shift ;;
+        --local-image) LOCAL_IMAGE=1; shift ;;
         # Piped in (curl | bash) there is no script file for $0 to point at, so
         # the usage text is a heredoc rather than a sed over the header.
         -h|--help)
             cat <<'USAGE'
-usage: provision_box.sh [--root DIR] [--src DIR] [--branch B] [--refresh] [--skip-images]
+usage: provision_box.sh [--root DIR] [--src DIR] [--branch B] [--refresh] [--skip-images] [--local-image]
 
   --root DIR      deploy target, mounted as /work (default: $HOME/grx930_ol2)
   --src DIR       checkout to clone or fetch (default: $HOME/grx930)
   --branch B      branch to deploy (default: main)
   --refresh       re-pull the images even if they are already present
   --skip-images   never pull; fail if an image is missing
+  --local-image   $IMG was built on this host and is in no registry: never pull
+                  it, and let its own architecture decide the arch gate
 
 Log goes to $ROOT/logs/provision.log; the last line is PROVISION_OK or PROVISION_FAIL.
 USAGE
@@ -91,6 +96,50 @@ fail() { say "PROVISION_FAIL $*"; exit 1; }
 
 say "PROVISION_START root=$ROOT branch=$BRANCH"
 say "host: cores=$(nproc) mem=$(awk '/MemTotal/{printf "%.0fG", $2/1048576}' /proc/meminfo) disk=$(df -Pk "$ROOT" | awk 'NR==2{printf "%.0fG total, %.0fG free", $2/1048576, $4/1048576}')"
+
+# ---- 0. architecture --------------------------------------------------------
+# The published precheck image is linux/amd64 only: every tag in the registry
+# index is amd64 plus an attestation entry, with no arm64 anywhere.  That used
+# to make any non-x86_64 host a dead end, checked before docker was touched
+# because "wrong machine" is worth saying plainly rather than two minutes into
+# a pull.  It is no longer a dead end: the image builds from this repo's own
+# Dockerfile on arm64 in about a quarter of an hour (tools/gf180mcu-precheck),
+# so the gate asks what the image on this box *is* and whether it can execute
+# here -- not what the host's uname says.
+#
+# A local tag has no registry counterpart, so --local-image keeps it out of the
+# pull path entirely: `docker pull gf180mcu-precheck:arm64` fails after the
+# disk check has already promised room, and --refresh would turn that into a
+# failed provision on a box whose image is sitting right there.
+case "$(uname -m)" in
+    x86_64)        HOST_ARCH=amd64 ;;
+    aarch64|arm64) HOST_ARCH=arm64 ;;
+    *)             HOST_ARCH=$(uname -m) ;;
+esac
+
+if docker image inspect "$IMG" >/dev/null 2>&1; then
+    IMG_ARCH=$(docker image inspect -f '{{.Architecture}}' "$IMG")
+    if [ -z "$IMG_ARCH" ]; then
+        # An absent field is not evidence of the wrong architecture: docker 29's
+        # containerd store leaves it empty for anything pulled with --platform.
+        # Refusing here would reject a correct box, so the smoke test -- which
+        # has to execute the image -- stays the thing that decides.
+        say "arch: $HOST_ARCH (image records no architecture; trusting the local build)"
+    else
+        [ "$IMG_ARCH" = "$HOST_ARCH" ] \
+            || fail "arch-mismatch: $IMG is linux/$IMG_ARCH and this host is $HOST_ARCH, so it cannot execute here (build one for this host: tools/gf180mcu-precheck)"
+        say "arch: $HOST_ARCH (local image $IMG is linux/$IMG_ARCH)"
+    fi
+else
+    # Nothing local to inspect.  The published tag is amd64, so an amd64 host
+    # can pull it; any other host is told to build first, before docker spends
+    # fifteen minutes pulling an image it cannot execute.
+    [ "$LOCAL_IMAGE" = 0 ] \
+        || fail "image-missing: --local-image says $IMG was built here, but it is not in the local store"
+    [ "$HOST_ARCH" = "amd64" ] \
+        || fail "arch-unsupported: $HOST_ARCH -- $IMG ships linux/amd64 only (no arm64 in any tag). Build one for this host and pass --local-image: tools/gf180mcu-precheck"
+    say "arch: $HOST_ARCH"
+fi
 
 # ---- 1. docker, without sudo ------------------------------------------------
 # The chains call `docker` bare.  Testing it here is the whole point: this is the
@@ -122,6 +171,10 @@ say "disk: ${FREE_GB}G free (floor ${NEED_GB}G, ${PENDING} image(s) pending)"
 # ---- 3. images --------------------------------------------------------------
 pull() {
     local ref=$1 t0 t1
+    if [ "$LOCAL_IMAGE" = 1 ] && [ "$ref" = "$IMG" ]; then
+        say "local image, never pulled: $ref (linux/${IMG_ARCH:-arch-unrecorded})"
+        return 0
+    fi
     if [ "$REFRESH" = 0 ] && docker image inspect "$ref" >/dev/null 2>&1; then
         say "image present, not pulling: $ref ($(docker images --format '{{.Size}}' "$ref" | head -1))"
         return 0
@@ -136,6 +189,23 @@ pull() {
 }
 pull "$IMG"  || fail "image-missing: $IMG"
 pull "$IMG2" || fail "image-missing: $IMG2"
+
+# ---- 3b. can the librelane image actually start here? ------------------------
+# openlane2 is multi-arch (an arm64 box pulls linux/arm64 and runs openroad
+# natively), but the precheck image is not published for arm64 at all -- so a
+# host can hold both images and be able to execute only one of them.  That box
+# is not unprovisioned and it is not ready for a flow arm either, and saying
+# PROVISION_OK without saying which of the two it is produces exactly the box
+# this script exists to prevent: one that looks complete until the first chain
+# dies in it.  Reported, not fatal, and carried in the final line so a caller
+# can grep for librelane=ok.
+LIBRELANE_ARCH=$(docker image inspect -f '{{.Architecture}}' "$IMG2" 2>/dev/null || echo unknown)
+LIBRELANE=ok
+[ -n "$LIBRELANE_ARCH" ] || LIBRELANE=arch-unrecorded
+if [ -n "$LIBRELANE_ARCH" ] && [ "$LIBRELANE_ARCH" != "$HOST_ARCH" ]; then
+    LIBRELANE="unusable:linux/$LIBRELANE_ARCH-on-$HOST_ARCH"
+    say "librelane: $IMG2 is linux/$LIBRELANE_ARCH and this host is $HOST_ARCH, so the image cannot start here and no flow arm can run on this box. A binfmt handler would emulate it (slowly); a host of the matching architecture is the real fix."
+fi
 
 # ---- 4. repo ----------------------------------------------------------------
 # The checkout is kept at $SRC and only c930/asic_gf180mcu/ is deployed to $ROOT,
@@ -208,4 +278,4 @@ for s in /work/ws/die_predrt_exec.sh /work/build/gate.sh; do
 done
 say "smoke: 4-bit counter -> ${CELLS} cells (${MAPPED} gf180mcu), entrypoints present"
 
-say "PROVISION_OK images=2 cells=$CELLS root=$ROOT"
+say "PROVISION_OK images=2 librelane=$LIBRELANE cells=$CELLS root=$ROOT"
