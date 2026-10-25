@@ -172,6 +172,17 @@ So the measurement above runs on the post-GlobalRouting database with
 engine pin remains the fix for both. Report: `Claude outputs/die_drt_at01.md`; the full
 register: `Claude outputs/ws_run3_readiness_gaps.md` §1b.
 
+**And the same step on arm64, measured (2026-10-25).** A full flow from RTL on an
+`aarch64` box, same engine commit and same 0.1 config, reproduces both results:
+GRT completes with 0 overflow on every layer in **5** extra iterations against the
+x86 resume's 8, on 3.25 % less wire and 1.94 % fewer vias (Metal2–Metal5 resources
+identical on both sides; the demand is 3.28 % lower), and `DiodeInsertion` then
+aborts with the same `GRT-0183` after 4,187 jumpers and 2,688 diodes. Per-sweep
+cost is 25.0 s against 27.1 s, so the step's 37 % wall gap is the sweep count, not a
+slower host — the 5/8 comparison is an equivalence check, and it also means an ARM
+arm is not a way around the engine pin. Report:
+[`arm64_grt_equivalence.md`](arm64_grt_equivalence.md).
+
 ## Watching the routing verdict
 
 `watch_drt_curve.sh` reads the DRT step's own `DRT-0195` / `DRT-0199` lines and says what the
