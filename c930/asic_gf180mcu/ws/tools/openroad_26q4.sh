@@ -38,6 +38,31 @@
 #     tar -C /OpenROAD/install/bin -h -cf /out/orbin.tar openroad'
 #   mkdir -p $T/root && tar -xf $T/orfiles.tar -C $T/root && tar -xf $T/orbin.tar -C $T/root
 #
+#   stdbuf is part of the same extraction, and must be: see LINE BUFFERING below.
+#   The /tmp/l2 list that feeds the tar gets one extra line, and the tarball
+#   carries the Debian coreutils pair:
+#
+#     printf '%s\n' /usr/libexec/coreutils/libstdbuf.so >> /tmp/l2
+#     tar -C / -h -cf /out/lbuf.tar usr/libexec/coreutils/libstdbuf.so usr/bin/stdbuf
+#
+# LINE BUFFERING
+#
+#   The router's progress lines (`    Completing 40% with 441916 violations.`) are
+#   raw writes with no tag and no fflush, and LibreLane hands the tool a PIPE, so
+#   they sit in an 8 KB stdio buffer. The step log therefore arrives in ~8 KB
+#   blocks, which is indistinguishable from a router that has stopped -- measured
+#   on diecg01: 182 lines landed in a single 03:40:48 flush after 42 minutes of
+#   silence, and iteration 0's count plus iteration 1's start shared one flush.
+#   The guard that stops a stalled pass (build/drt_curve_guard.sh) cannot act on a
+#   log like that, so the child is made line-buffered here.
+#
+#   The image's own stdbuf CANNOT do this: its libstdbuf.so wants GLIBC_2.38 and
+#   this binary runs on the Debian extraction's libc (measured: `version
+#   `GLIBC_2.38' not found`). The extraction's own libstdbuf.so is the one that
+#   matches those symbols, so it is preloaded directly -- `stdbuf` itself is not
+#   needed, it only sets these two variables. Both are exported so the loader and
+#   every library the router dlopens see the same buffering.
+#
 #   `-h` matters: without it the .so symlinks come out dangling and the loader reports
 #   a missing library (`libX11-xcb.so.1: cannot open shared object file`) rather than
 #   anything about the real problem.
@@ -64,5 +89,13 @@ done
 if [ -z "$LD" ]; then
     echo "openroad_26q4: no dynamic loader under $R -- rebuild the extraction (see header)" >&2
     exit 127
+fi
+# Line-buffered stdout/stderr: `_STDBUF_O=L` is what the extracted libstdbuf.so
+# reads in its constructor. Without the library the variables are inert, so a
+# half-built extraction degrades to the old block buffering rather than failing.
+LBUF=$R/usr/libexec/coreutils/libstdbuf.so
+if [ -f "$LBUF" ]; then
+    export LD_PRELOAD=${LD_PRELOAD:+$LD_PRELOAD:}$LBUF
+    export _STDBUF_O=L _STDBUF_E=L
 fi
 exec "$LD" --library-path "$R/lib/x86_64-linux-gnu:$R/lib64" "$R/openroad" "$@"

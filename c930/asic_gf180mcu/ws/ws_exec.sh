@@ -42,6 +42,11 @@ echo "WS_EXEC: librelane $(librelane --version 2>&1 | head -1)"
 echo "WS_EXEC: core sources: $(ls asic_core/*.sv | wc -l) files; chip_core.sv $(wc -l < src/chip_core.sv) lines"
 echo "WS_EXEC: macros librelane/macros/macros_grx930.yaml: $(grep -c '^  gf180mcu' librelane/macros/macros_grx930.yaml) declared (expect 5 ws_ip), demo SRAM macro block present: $(grep -c '^  gf180mcu_fd_ip_sram__sram512x8m8wm1:' librelane/macros/macros_grx930.yaml) (expect 0)"
 
+# Line-buffered step logs: a step log that only reaches the disk every 8 KB cannot
+# tell a stalled router from a working one, which is what build/drt_curve_guard.sh
+# needs to know while DRT runs. Best effort -- see ws/tools/lln_logflush.sh.
+. /work/ws/tools/lln_logflush.sh
+
 if [ -n "${WS_LIMIT:-}" ]; then
     librelane --pdk gf180mcuD --pdk-root "${PDK_ROOT:-/workspace/gf180mcu}" \
         --manual-pdk --scl gf180mcu_fd_sc_mcu7t5v0 --pad gf180mcu_fd_io \

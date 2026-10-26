@@ -106,6 +106,12 @@ if [ "${PREDRT_PATCH_LLN:-}" = 1023 ]; then
     fi
 fi
 
+# Line-buffered step logs (ws/tools/lln_logflush.sh). Without it the DRT step's log
+# reaches this file only every 8 KB, and the curve guard cannot see an iteration
+# that stops printing until its 2 h wall clock -- the failure measured on diecg01,
+# where 182 lines arrived in one flush after 42 minutes of silence.
+. /work/ws/tools/lln_logflush.sh >> "$LOG" 2>&1
+
 set --
 [ -n "${PREDRT_OVERRIDE:-}" ] && set -- -c "$PREDRT_OVERRIDE"
 
