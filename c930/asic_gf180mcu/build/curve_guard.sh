@@ -89,6 +89,10 @@ curve_guard_start() {  # curve_guard_start <tag> [container]
   [ -n "${REGRESS_PCT:-}" ]   && envs+=(REGRESS_PCT="$REGRESS_PCT")
   [ -n "${STALL_ITERS:-}" ]   && envs+=(STALL_ITERS="$STALL_ITERS")
   [ -n "${STALL_BP:-}" ]      && envs+=(STALL_BP="$STALL_BP")
+  # The intra-iteration no-progress bound. Passed through for the same reason as
+  # the others: a chain that pins it (0 to disable, or a value justified by its
+  # own flush cadence) must be the value the guard actually runs with.
+  [ -n "${STALL_LOG_S:-}" ]   && envs+=(STALL_LOG_S="$STALL_LOG_S")
   [ -n "${CURVE_POLL:-}" ]    && envs+=(POLL="$CURVE_POLL")
   [ -n "${GUARD_STOP:-}" ]    && envs+=(GUARD_STOP="$GUARD_STOP")
   [ -n "${DRY:-}" ]           && envs+=(DRY="$DRY")

@@ -212,12 +212,25 @@ back 2.74x of the best route the pass had already found, which is not slow conve
 away from the answer. So every chain that launches a flow DRT container starts the guard
 (`build/curve_guard.sh`), and it stops the pass on the first of: an iteration still running past
 `ITER_BUDGET_S` (2 h, against the measured 26:05 per iteration), a pass past `PASS_BUDGET_S` (8 h,
-against the capped ~4 h), a count 25 % above this pass's best, or three iterations that each
-bought less than 0.25 %. It acts only after the log has shown a `DRT-0195`, so it cannot touch a
-flow still in synthesis or in the antenna repair between passes, and a stop is a `docker kill`
-that loses the pass -- the flow writes its ODB at the end of one -- which is why `GUARD_STOP=0`
-records the request instead. Its selftest drives every branch on a pinned clock and runs in CI
-as row `drt-curve-guard` of `build/chain_selftests.sh`.
+against the capped ~4 h), an **open iteration that has printed nothing for `STALL_LOG_S`** (30 min),
+a count 25 % above this pass's best, or three iterations that each bought less than 0.25 %. It acts
+only after the log has shown a `DRT-0195`, so it cannot touch a flow still in synthesis or in the
+antenna repair between passes, and a stop is a `docker kill` that loses the pass -- the flow writes
+its ODB at the end of one -- which is why `GUARD_STOP=0` records the request instead.
+
+The no-progress bound is the only one that acts before an iteration finishes, and it is therefore
+the only one that could be fooled by the engine's buffering. It was: before `465a678`, OpenROAD's
+raw progress writes sat in an 8 KB stdio buffer and LibreLane's own `log_file` added a second one,
+so a healthy step log could be unchanged for hours (on `diecg01`, 182 lines arrived in one flush
+after 42 minutes of silence, and iteration 0's count and iteration 1's start carried the same
+timestamp). Both buffers are gone -- the wrapper preloads the extraction's `libstdbuf.so` and
+`step.py` opens the log with `buffering=1` (`ws/tools/lln_logflush.sh`) -- and measured on
+`dielb01` each decile now reaches the log as a 95-byte write within a poll. The guard still refuses
+to fire on a log it has never seen flush mid-iteration (`CURVE_NO_PROGRESS_UNOBSERVED`), so an
+image that loses the patch falls back to the wall-clock budgets instead of stopping a healthy pass.
+
+Its selftest drives every branch on a pinned clock and runs in CI as row `drt-curve-guard` of
+`build/chain_selftests.sh`.
 
 A log path does **not** identify its run: a resumed run tree can hold the previous arm's step
 directory, log included, and the counts carry no tag — on 2026-10-21 that made `died26q4`'s

@@ -57,6 +57,14 @@
 #                           0.25 %). At 250k violations that is 625 violations
 #                           per iteration, under 1,500/hour at the measured
 #                           iteration cost.
+#        * NO_PROGRESS   -- an OPEN iteration whose log has produced no new bytes
+#                           for STALL_LOG_S. This is the hang INSIDE one
+#                           iteration, which no count-based rule can see: on
+#                           diecg01 iteration 1 printed `Completing 90%` and then
+#                           nothing for two hours, and only the 2 h wall clock was
+#                           left to catch it. It is the only rule that acts before
+#                           the work has finished, so it is also the only one that
+#                           can save the hours the ceiling would spend waiting.
 #      It never acts before the log has shown a DRT-0195, so it cannot kill a flow
 #      still in synthesis, placement, CTS or the pre-DRT antenna repair.
 #   3. it writes the reason and the numbers it decided on to VERDICT, so a chain
@@ -107,6 +115,8 @@
 #                           (0 disables the plateau rule, which is what a
 #                           deliberate asymptote measurement wants)
 #   STALL_BP=25             the plateau threshold, in basis points (25 = 0.25 %)
+#   STALL_LOG_S=1800        an OPEN iteration with no new log bytes for this long
+#                           is stopped (0 disables; see the buffer caveat below)
 #   GUARD_STOP=1            0 = log CURVE_STOP_REQUEST and do not kill
 #   DRY=1                   log WOULD_STOP, change nothing
 #   ONE_SHOT=1              one evaluation, then exit (0 ok, 2 stopped)
@@ -125,6 +135,19 @@
 #   * The wall clock is the guard's own, not the router's: an iteration's cost is
 #     measured between the two polls that saw its start and its count, so the
 #     figure in the log is accurate to +/- POLL and is described that way.
+#   * Progress is only as timely as the engine's stdout buffer. OpenROAD's logger
+#     writes through a fully-buffered stdout, so a log can sit unchanged for hours
+#     while the router works: measured on diecg01, 182 lines arrived in a single
+#     03:40:48 flush after 42 minutes of silence -- which is also why iteration 0
+#     and the start of iteration 1 shared one flush and reported `wall_s=0`.
+#     `stdbuf -oL` cannot fix it here: the image's libstdbuf.so wants GLIBC_2.38
+#     and the pinned binary runs on the Debian extraction's libc. So NO_PROGRESS
+#     arms itself only after a flush has been SEEN landing while an iteration was
+#     already open from a previous poll -- proof that output arrives between
+#     polls. Until then it says CURVE_NO_PROGRESS_UNOBSERVED once and leaves the
+#     pass to the wall-clock budgets. A batched log therefore cannot stop a
+#     healthy run: the rule that fires on silence is off until silence means
+#     something.
 #   * `docker kill` is irreversible for the step: the arm has to be relaunched.
 #   * It retires when its container has been gone for two polls. That is the one
 #     case a chain's EXIT trap cannot cover -- a chain killed with -9 never
@@ -136,7 +159,9 @@
 #   bash build/drt_curve_guard_selftest.sh
 #     Drives every branch through the real code path with a synthetic step log
 #     and a stubbed `docker`: arming, a normal descent, the regression stop, the
-#     in-flight iteration budget, the pass budget, the plateau rule (and that
+#     in-flight iteration budget, the no-progress stop and its two guards (a
+#     batched log must NOT stop, and STALL_LOG_S=0 must disable it), the pass
+#     budget, the plateau rule (and that
 #     STALL_ITERS=0 turns it off), a new pass resetting the best, GUARD_STOP=0,
 #     DRY, a log truncated under the guard, a half-written line not being parsed,
 #     and the container-gone retirement. It also checks that every chain which
@@ -161,6 +186,7 @@ PASS_BUDGET_S=${PASS_BUDGET_S:-28800}
 REGRESS_PCT=${REGRESS_PCT:-25}
 STALL_ITERS=${STALL_ITERS:-3}
 STALL_BP=${STALL_BP:-25}
+STALL_LOG_S=${STALL_LOG_S:-1800}
 GUARD_STOP=${GUARD_STOP:-1}
 DRY=${DRY:-0}
 ONE_SHOT=${ONE_SHOT:-0}
@@ -180,6 +206,7 @@ now() { if is_num "${CURVE_NOW:-}"; then printf '%s\n' "$CURVE_NOW"; else date -
 # ---------------------------------------------------------------- state ------
 OFF=0; PASS=1; ITER=0; COUNT=0; BEST=0; PASS_START=0; LAST_MARK=0
 STALL=0; ARMED=0; DONE=0; PASS_COUNTS=0; LAST_COUNT_ITER=-1; ITER_OPEN=0
+LAST_GROW=0; PROGRESS_OK=0; NOPROG_SAID=""
 WAIT_SAID=""; ABSENT_SAID=""; LOG_SEEN=""
 
 load_state() {
@@ -187,9 +214,9 @@ load_state() {
   local k v
   while IFS='=' read -r k v; do
     case $k in
-      OFF|PASS|ITER|COUNT|BEST|PASS_START|LAST_MARK|STALL|ARMED|DONE|PASS_COUNTS|LAST_COUNT_ITER|ITER_OPEN)
+      OFF|PASS|ITER|COUNT|BEST|PASS_START|LAST_MARK|STALL|ARMED|DONE|PASS_COUNTS|LAST_COUNT_ITER|ITER_OPEN|LAST_GROW|PROGRESS_OK)
         printf -v "$k" '%s' "$v" ;;
-      WAIT_SAID|ABSENT_SAID|LOG_SEEN) printf -v "$k" '%s' "${v:-}" ;;
+      WAIT_SAID|ABSENT_SAID|LOG_SEEN|NOPROG_SAID) printf -v "$k" '%s' "${v:-}" ;;
     esac
   done < "$STATE"
   # A corrupted state file must not turn into arithmetic the shell refuses to
@@ -207,6 +234,8 @@ load_state() {
   is_num "$PASS_COUNTS" || PASS_COUNTS=0
   is_num "$LAST_COUNT_ITER" || LAST_COUNT_ITER=-1
   is_num "$ITER_OPEN" || ITER_OPEN=0
+  is_num "$LAST_GROW" || LAST_GROW=0
+  is_num "$PROGRESS_OK" || PROGRESS_OK=0
 }
 
 save_state() {
@@ -224,6 +253,9 @@ save_state() {
     printf 'PASS_COUNTS=%s\n' "$PASS_COUNTS"
     printf 'LAST_COUNT_ITER=%s\n' "$LAST_COUNT_ITER"
     printf 'ITER_OPEN=%s\n' "$ITER_OPEN"
+    printf 'LAST_GROW=%s\n' "$LAST_GROW"
+    printf 'PROGRESS_OK=%s\n' "$PROGRESS_OK"
+    printf 'NOPROG_SAID=%s\n' "${NOPROG_SAID:-}"
     printf 'WAIT_SAID=%s\n' "${WAIT_SAID:-}"
     printf 'ABSENT_SAID=%s\n' "${ABSENT_SAID:-}"
     printf 'LOG_SEEN=%s\n' "${LOG_SEEN:-}"
@@ -258,6 +290,7 @@ parse_new() {
     say "CURVE_LOG_TRUNCATED path=$CURVE_LOG size=$size offset=$OFF -- re-reading from 0 and forgetting the curve it described"
     OFF=0; PASS=1; ITER=0; COUNT=0; BEST=0; PASS_START=0; LAST_MARK=0; STALL=0
     ARMED=0; DONE=0; PASS_COUNTS=0; LAST_COUNT_ITER=-1; ITER_OPEN=0
+    LAST_GROW=0; PROGRESS_OK=0; NOPROG_SAID=""
   fi
   [ "$size" -eq "$OFF" ] && return 0
   tail -c +$((OFF + 1)) "$CURVE_LOG" > "$CHUNK" 2>/dev/null || return 1
@@ -316,7 +349,7 @@ stop_now() {  # $1 reason, $2 detail, $3 at=completed|inflight
 
 # ------------------------------------------------------------- evaluation ----
 evaluate() {
-  local s n wall elapsed v
+  local s n wall elapsed v off_before silent
   NOW=$(now)
   S=$(resolve_step)
   if [ -z "${S:-}" ]; then
@@ -344,9 +377,20 @@ evaluate() {
     [ -n "${LOG_SEEN:-}" ] && say "CURVE_LOG_CHANGED from=$LOG_SEEN to=$CURVE_LOG -- resetting the curve"
     LOG_SEEN=$CURVE_LOG; OFF=0; ARMED=0; DONE=0; PASS=1; ITER=0; COUNT=0; BEST=0
     PASS_START=0; LAST_MARK=0; STALL=0; PASS_COUNTS=0; LAST_COUNT_ITER=-1
+    LAST_GROW=0; PROGRESS_OK=0; NOPROG_SAID=""
   fi
 
+  off_before=$OFF
   parse_new || { save_state; return 0; }
+  # Growth is the liveness signal, and it is only honest when it can arrive
+  # between polls: this engine's stdout is block-buffered (see the header), so a
+  # flush that carries `Start Nth` AND its progress AND its count proves nothing
+  # about silence. A flush landing while an iteration was ALREADY open from a
+  # previous poll does prove it, and that is the only thing that arms NO_PROGRESS.
+  if [ "$OFF" -ne "$off_before" ]; then
+    LAST_GROW=$NOW
+    if [ "$ARMED" = 1 ] && [ "$ITER_OPEN" = 1 ]; then PROGRESS_OK=1; fi
+  fi
 
   local e
   for e in ${EVENTS[@]+"${EVENTS[@]}"}; do
@@ -441,18 +485,34 @@ evaluate() {
     elapsed=$((NOW - PASS_START))
     if [ "$elapsed" -gt "$PASS_BUDGET_S" ]; then
       stop_now PASS_BUDGET "budget_s=$PASS_BUDGET_S" inflight
-    elif [ "$ITER_OPEN" = 1 ] && [ $((NOW - LAST_MARK)) -gt "$ITER_BUDGET_S" ]; then
-      # Only an OPEN iteration is judged on this clock. Between a count and the
+    elif [ "$ITER_OPEN" = 1 ]; then
+      # Only an OPEN iteration is judged on these clocks. Between a count and the
       # next `Start`, the step is doing something else (antenna check/repair
       # inside the step's own loop), and that is not an iteration overrunning --
       # stopping it there would kill a pass for doing the repair it was asked to
       # do. PASS_BUDGET is the bound that covers that gap.
-      WALL=$((NOW - LAST_MARK))
-      stop_now ITER_BUDGET "budget_s=$ITER_BUDGET_S iter_running_s=$WALL" inflight
+      silent=$((NOW - LAST_MARK))
+      if [ "$STALL_LOG_S" -gt 0 ] && [ "$LAST_GROW" -gt 0 ] \
+         && [ $((NOW - LAST_GROW)) -gt "$STALL_LOG_S" ]; then
+        if [ "$PROGRESS_OK" = 1 ]; then
+          # The router was seen emitting between polls in this run, and has now
+          # stopped: this is the intra-iteration hang, caught while the work is
+          # still unpaid for rather than at the wall-clock ceiling.
+          WALL=$silent
+          stop_now NO_PROGRESS "stall_log_s=$STALL_LOG_S silent_s=$((NOW - LAST_GROW))" inflight
+        elif [ "${NOPROG_SAID:-}" != 1 ]; then
+          NOPROG_SAID=1
+          say "CURVE_NO_PROGRESS_UNOBSERVED pass=$PASS iter=$ITER silent_s=$((NOW - LAST_GROW)) stall_log_s=$STALL_LOG_S -- no flush has ever arrived mid-iteration in this run, so this log cannot distinguish a stall from its own buffer; the wall-clock budgets still bound the pass"
+        fi
+      fi
+      if [ "$DONE" != 1 ] && [ "$silent" -gt "$ITER_BUDGET_S" ]; then
+        WALL=$silent
+        stop_now ITER_BUDGET "budget_s=$ITER_BUDGET_S iter_running_s=$WALL" inflight
+      fi
     fi
   fi
 
-  say "CURVE_STATE tag=$TAG pass=$PASS iter=$ITER count=$COUNT best=$BEST stall=$STALL armed=$ARMED done=$DONE offset=$OFF log=$CURVE_LOG"
+  say "CURVE_STATE tag=$TAG pass=$PASS iter=$ITER count=$COUNT best=$BEST stall=$STALL armed=$ARMED done=$DONE offset=$OFF progress_ok=$PROGRESS_OK last_grow=$LAST_GROW log=$CURVE_LOG"
   save_state
   return 0
 }
@@ -476,7 +536,7 @@ if [ "$ONE_SHOT" != 1 ]; then
 fi
 
 load_state
-say "CURVE_GUARD_START tag=$TAG run=$RUN step=$STEP container=$CONTAINER poll=$POLL iter_budget_s=$ITER_BUDGET_S pass_budget_s=$PASS_BUDGET_S regress_pct=$REGRESS_PCT stall_iters=$STALL_ITERS stall_bp=$STALL_BP stop=$GUARD_STOP dry=$DRY one_shot=$ONE_SHOT"
+say "CURVE_GUARD_START tag=$TAG run=$RUN step=$STEP container=$CONTAINER poll=$POLL iter_budget_s=$ITER_BUDGET_S pass_budget_s=$PASS_BUDGET_S regress_pct=$REGRESS_PCT stall_iters=$STALL_ITERS stall_bp=$STALL_BP stall_log_s=$STALL_LOG_S stop=$GUARD_STOP dry=$DRY one_shot=$ONE_SHOT"
 
 if [ "$ONE_SHOT" = 1 ]; then evaluate; exit $?; fi
 

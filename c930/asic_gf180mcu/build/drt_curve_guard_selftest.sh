@@ -18,6 +18,10 @@
 #   * a descent that must NOT stop (1,081,775 -> 237,089, the v8 shape);
 #   * the regression stop on 237,089 -> 649,172 (+174 %, v8's own collapse);
 #   * an iteration still running past ITER_BUDGET_S (the 16-27 h failure);
+#   * an iteration that stops printing mid-route, stopped as NO_PROGRESS before
+#     the wall clock is anywhere near due -- and the two cases where it must NOT
+#     fire: a BATCHED log (8 KB stdout blocks, which look identical to a stall)
+#     and STALL_LOG_S=0;
 #   * a pass past PASS_BUDGET_S, both on a count and while still in flight;
 #   * the plateau rule at 0.01 %/iteration, and that STALL_ITERS=0 turns it off;
 #   * a NEW pass starting above the old pass's best, which must NOT stop;
@@ -118,6 +122,10 @@ mark() {  # mark <iteration>
   fi
 }
 result() { printf '    Completing 100%% with %s violations.\r[INFO DRT-0199]   Number of violations = %s.\n' "$1" "$1" >> "$LOG"; }
+# A mid-iteration progress line: bytes the guard does not parse (no marker), which
+# is exactly what a liveness test needs -- it proves the router is printing
+# without moving the curve.
+prog() { printf '    Completing %s%% with %s violations.\r' "$1" "$2" >> "$LOG"; }
 step() { mark "$1"; result "$2"; }
 
 T0=1700000000
@@ -188,6 +196,58 @@ g "$T0" ITER_BUDGET_S=600
 result 900000
 g $((T0 + 601)) ITER_BUDGET_S=600
 has "$GL" "CURVE_ITER_SLOW"
+hasnt "$GL" "CURVE_STOPPED"
+killed 0
+
+# -------------------------------------- 5b. an iteration that stops printing ---
+# The gap no count-based rule can see: iteration 1 printed its deciles and then
+# went silent while the router still held the core. On diecg01 that silence began
+# at `Completing 90%` and lasted two hours, and the only thing left to catch it was
+# ITER_BUDGET_S at its ceiling. Here the same shape is stopped in 30 minutes.
+reset_all
+step 0 1000000
+g "$T0" ITER_BUDGET_S=7200 STALL_LOG_S=1800
+mark 1
+g "$T0" ITER_BUDGET_S=7200 STALL_LOG_S=1800
+prog 10 900000
+g $((T0 + 120)) ITER_BUDGET_S=7200 STALL_LOG_S=1800
+prog 20 800000
+g $((T0 + 240)) ITER_BUDGET_S=7200 STALL_LOG_S=1800
+hasnt "$GL" "CURVE_STOPPED"
+# 1,801 s after the last byte -- a fifth of the wall-clock budget -- with the
+# iteration nowhere near its 7,200 s ceiling.
+g $((T0 + 2041)) ITER_BUDGET_S=7200 STALL_LOG_S=1800
+has "$GL" "CURVE_STOPPED reason=NO_PROGRESS at=inflight"
+has "$GL" "stall_log_s=1800 silent_s=1801"
+has "$VERDICT" "STOPPED reason=NO_PROGRESS"
+killed 1
+
+# --------------------------------- 5c. a BATCHED log is not a silent router -----
+# OpenROAD writes through a fully-buffered stdout, so a healthy log can sit
+# unchanged for hours: on diecg01, 182 lines arrived in one flush after 42 minutes
+# of nothing, and iteration 0's count and iteration 1's start carried the same
+# timestamp (`wall_s=0`). This is that shape -- every flush carries a start, none
+# arrives mid-iteration -- and it must NOT be stopped, or the guard kills a
+# healthy pass on every arm.
+reset_all
+step 0 1000000
+g "$T0" ITER_BUDGET_S=7200 STALL_LOG_S=1800
+mark 1
+g $((T0 + 1000)) ITER_BUDGET_S=7200 STALL_LOG_S=1800
+g $((T0 + 6000)) ITER_BUDGET_S=7200 STALL_LOG_S=1800
+hasnt "$GL" "CURVE_STOPPED"
+has "$GL" "CURVE_NO_PROGRESS_UNOBSERVED"
+killed 0
+
+# ------------------------------------------ 5d. and STALL_LOG_S=0 turns it off --
+reset_all
+step 0 1000000
+g "$T0" STALL_LOG_S=0
+mark 1
+g "$T0" STALL_LOG_S=0
+prog 10 900000
+g $((T0 + 120)) STALL_LOG_S=0
+g $((T0 + 2041)) STALL_LOG_S=0
 hasnt "$GL" "CURVE_STOPPED"
 killed 0
 
@@ -276,6 +336,11 @@ has "$GL" "CURVE_ITER pass=1 iter=1"
 hasnt "$GL" "CURVE_STOPPED"
 killed 0
 # ... and a gap that outlasts the whole pass is still stopped, by the pass budget.
+# The iteration is closed first: with one open, the no-progress rule would own
+# this stop (7 h of silence on an open iteration is a stall, and naming it that
+# is the point of case 5b). What is under test here is the repair gap.
+result 390000
+g $((T0 + 3800)) ITER_BUDGET_S=600 PASS_BUDGET_S=28800
 g $((T0 + 29000)) ITER_BUDGET_S=600 PASS_BUDGET_S=28800
 has "$GL" "CURVE_STOPPED reason=PASS_BUDGET at=inflight"
 killed 1
