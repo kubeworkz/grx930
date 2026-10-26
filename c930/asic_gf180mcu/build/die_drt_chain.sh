@@ -80,6 +80,7 @@ arm_state() {  # $1 = one line, e.g. "LAUNCHED tag=died26q4"
 # marker is still written for the parent that launched it.
 on_exit() {
     local rc=$?
+    curve_guard_stop "$TAG" >/dev/null 2>&1 || true
     disk_guard_stop "$TAG" >/dev/null 2>&1 || true
     if [ -n "${ARM_STATE:-}" ]; then arm_state "EXIT rc=$rc"; fi
     # `exit`, not `return`: the last statement of a function is not the chain's
@@ -91,6 +92,7 @@ trap on_exit EXIT
 
 . "$B/gate.sh"        # free_gb + the disk/memory gate, defined once for every chain
 . "$B/disk_guard.sh"  # start/stop the DRT disk guard (DISK_GUARD=0 disables both)
+. "$B/curve_guard.sh" # start/stop the DRT wall-clock + regression guard
 
 # The same readings the sweep chain harvests with, so the numbers are the same
 # numbers: `Completing 100% with` is the per-iteration summary (initial route
@@ -163,9 +165,19 @@ arm_state "LAUNCHED tag=$TAG container=die_predrt"
 # appears: the step dir is hours away and the guard resolves it per poll, so it
 # is already watching when the antenna-repair loop starts writing route databases.
 disk_guard_start "$TAG" die_predrt
+# Phase A is where the DIE's flow arm runs DetailedRouting when PREDRT_STOP is set
+# to it (die_diode_flow_chain.sh launches this chain that way), so the curve guard
+# bounds that pass too. On an arm that stops before routing it never arms: it
+# acts only after the log has shown a DRT-0195.
+curve_guard_start "$TAG" die_predrt
 while [ "$(ps_running die_predrt)" = "true" ]; do sleep 60; done
 A1=$(date -u +%s)
 RC=$(docker inspect -f '{{.State.ExitCode}}' die_predrt 2>/dev/null)
+# The container is gone, so the guard has nothing left to bound; stop it before
+# the harvest and report the one line it left (none when the arm stopped before
+# the router started).
+curve_guard_stop "$TAG"
+say "DRT_CURVE_GUARD $(curve_guard_verdict "$TAG")"
 docker logs die_predrt > "$PREDRT_CLOG" 2>&1
 say "PREDRT_EXIT rc=$RC"
 if [ "$RC" != 0 ]; then

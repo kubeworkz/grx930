@@ -205,6 +205,20 @@ on the armed verdict by sending SIGTERM to the OpenROAD process whose command li
 routing script: flag-only by default, and it cannot touch a run that is not in detailed
 routing. `build/ws_chain.sh` starts a watcher with every flow run.
 
+**The watcher reports; the bound is `build/drt_curve_guard.sh`.** A verdict is only worth having
+if something acts on it, and the two measured ways a pass burns days need different clocks: v8's
+late iterations cost 16-27 h each, which the iteration cap cannot see, and one iteration handed
+back 2.74x of the best route the pass had already found, which is not slow convergence but a walk
+away from the answer. So every chain that launches a flow DRT container starts the guard
+(`build/curve_guard.sh`), and it stops the pass on the first of: an iteration still running past
+`ITER_BUDGET_S` (2 h, against the measured 26:05 per iteration), a pass past `PASS_BUDGET_S` (8 h,
+against the capped ~4 h), a count 25 % above this pass's best, or three iterations that each
+bought less than 0.25 %. It acts only after the log has shown a `DRT-0195`, so it cannot touch a
+flow still in synthesis or in the antenna repair between passes, and a stop is a `docker kill`
+that loses the pass -- the flow writes its ODB at the end of one -- which is why `GUARD_STOP=0`
+records the request instead. Its selftest drives every branch on a pinned clock and runs in CI
+as row `drt-curve-guard` of `build/chain_selftests.sh`.
+
 A log path does **not** identify its run: a resumed run tree can hold the previous arm's step
 directory, log included, and the counts carry no tag — on 2026-10-21 that made `died26q4`'s
 watcher report `diejmp01`'s curve under the new tag. So the log is identified by the step's own

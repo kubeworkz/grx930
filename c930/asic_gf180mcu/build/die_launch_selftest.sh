@@ -74,12 +74,13 @@ bad() { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; }
 chk() { if [ "$2" = "$3" ]; then ok "$1 = $3"; else bad "$1: expected [$2] got [$3]"; fi; }
 
 mkdir -p "$R"/build "$R"/ws/logs "$R"/drt_fast/verdict "$R"/bin "$R"/children
-# Both sourced libraries the chains use, so `.` succeeds and the wiring under test
-# is the delivered one. The guard itself is disabled in every case here (DISK_GUARD=0):
-# this test is about the launch handshake, and a poller left behind by a fixture would
-# outlive it.
+# Both sourced helpers the chains use, so `.` succeeds and the wiring under test is
+# the delivered one. Both guards are disabled in every case here (DISK_GUARD=0 /
+# CURVE_GUARD=0): this test is about the launch handshake, and a poller left behind
+# by a fixture would outlive it.
 cp -f "$BUILD/gate.sh" "$R/build/"
 cp -f "$BUILD/disk_guard.sh" "$R/build/"
+cp -f "$BUILD/curve_guard.sh" "$R/build/"
 
 # ---- the stubs -------------------------------------------------------------
 # docker: never a real container. `inspect` answers what the chains read -- not
@@ -218,7 +219,7 @@ MARK=$R/ws/logs/die_drt_chain.$TAGD.launch
 : > "$MARK"
 : > "$STUB_CALLS"
 DIE_TAG=$TAGD DIE_PHASE_A_ONLY=1 DIE_ARM_STATE="$MARK" PREDRT_MIN_GB=0 \
-    DISK_GUARD=0 PREDRT_STOP=OpenROAD.DetailedRouting PATH="$R/bin:$PATH" \
+    DISK_GUARD=0 CURVE_GUARD=0 PREDRT_STOP=OpenROAD.DetailedRouting PATH="$R/bin:$PATH" \
     bash "$R/build/die_drt_chain.sh" > "$TMP/dtestD.arm.out" 2>&1
 rcD=$?
 chk "4: the real arm chain completes its phase A" 0 "$rcD"
@@ -234,6 +235,12 @@ chk "4: the guard is started from the arm chain" 1 \
     "$(grep -c "DISK_GUARD_DISABLED tag=$TAGD" "$R/ws/logs/die_drt_chain.log")"
 chk "4: and after the container is up, not before" 1 \
     "$(awk '/PREDRT_LAUNCHED tag='"$TAGD"'/ {l=NR} /DISK_GUARD_DISABLED tag='"$TAGD"'/ {d=NR} END {print (d>l && l>0) ? 1 : 0}' "$R/ws/logs/die_drt_chain.log")"
+# The curve guard is held to the same contract: started at the arm's container,
+# after it is up, and disabled by its own switch for this fixture.
+chk "4: the curve guard is started from the arm chain" 1 \
+    "$(grep -c "CURVE_GUARD_DISABLED tag=$TAGD" "$R/ws/logs/die_drt_chain.log")"
+chk "4: and after the container is up, not before" 1 \
+    "$(awk '/PREDRT_LAUNCHED tag='"$TAGD"'/ {l=NR} /CURVE_GUARD_DISABLED tag='"$TAGD"'/ {d=NR} END {print (d>l && l>0) ? 1 : 0}' "$R/ws/logs/die_drt_chain.log")"
 
 # ---- 5. the consumer reads that marker, end to end ------------------------
 # PREDRT_MIN_GB=0 in the parent's environment, inherited by the arm: the real 12 GB
@@ -242,7 +249,7 @@ chk "4: and after the container is up, not before" 1 \
 # gate working, and not what this case is asking.
 t0=$(date +%s)
 TMO=40 run_chain "$TAGD" DIE_DIO_CHILD="$R/build/die_drt_chain.sh" PREDRT_MIN_GB=0 \
-    DISK_GUARD=0 DIE_DIO_LAUNCH_WAIT=120 DIE_DIO_RETRY_WAIT=2 DIE_DIO_ATTEMPTS=2
+    DISK_GUARD=0 CURVE_GUARD=0 DIE_DIO_LAUNCH_WAIT=120 DIE_DIO_RETRY_WAIT=2 DIE_DIO_ATTEMPTS=2
 tE=$(( $(date +%s) - t0 ))
 chk "5: real arm launches / retries" "1 0" \
     "$(clog | grep -c ARM_LAUNCHED) $(clog | grep -c 'ARM_RETRY attempt=')"
