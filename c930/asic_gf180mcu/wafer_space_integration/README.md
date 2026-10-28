@@ -196,6 +196,17 @@ vias and the same per-layer demand as x86, and the same `GRT-0183` net `_167563_
 Per-sweep cost favours neither host on that evidence (244 s against 217 s for the
 sweep loop). Report: [`arm64_grt_equivalence.md`](arm64_grt_equivalence.md).
 
+**And the reset that made the discrepancy.** `split25` is not a timing defect but a missing
+constraint: LibreLane's CTS passes no `-clk_nets`, so an asynchronous reset is never treed, and
+the post-CTS resizer's load splitting answers one 4,265-load net with a single buffer in front of
+the same 2,132 loads. The CTS step now declares the reset as a clock root
+(`ws/tools/lln_reset_cts.sh`, sourced by both flow exec scripts): measured on the core's pre-CTS
+database with the step's own argument list, that turns the one 4,265-load net into 210 nets of
+11–23 loads. With the reset bounded, the two engines stop disagreeing — −36.097 and −36.0969 ns
+WNS on the legalized repair, against −0.0640 and −8.6457 ns on the database it started from —
+which is what makes the engine question and the design question separable. Report:
+[`reset_distribution_fix.md`](reset_distribution_fix.md).
+
 ## Watching the routing verdict
 
 `watch_drt_curve.sh` reads the DRT step's own `DRT-0195` / `DRT-0199` lines and says what the

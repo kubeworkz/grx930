@@ -112,6 +112,13 @@ fi
 # where 182 lines arrived in one flush after 42 minutes of silence.
 . /work/ws/tools/lln_logflush.sh >> "$LOG" 2>&1
 
+# Reset nets into CTS (ws/tools/lln_reset_cts.sh). This range starts at
+# GlobalRouting, so the CTS step is behind it and the patch changes nothing here;
+# it is wired so that a chain that resumes EARLIER (a fresh tag through CTS) gets
+# the reset tree, rather than depending on which exec script an arm was launched
+# with. The line it prints lands in this log either way.
+. /work/ws/tools/lln_reset_cts.sh >> "$LOG" 2>&1
+
 set --
 [ -n "${PREDRT_OVERRIDE:-}" ] && set -- -c "$PREDRT_OVERRIDE"
 

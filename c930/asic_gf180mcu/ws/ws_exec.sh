@@ -47,6 +47,14 @@ echo "WS_EXEC: macros librelane/macros/macros_grx930.yaml: $(grep -c '^  gf180mc
 # needs to know while DRT runs. Best effort -- see ws/tools/lln_logflush.sh.
 . /work/ws/tools/lln_logflush.sh
 
+# Reset nets into CTS: LibreLane passes no -clk_nets, so the reset is never treed
+# and reaches the post-CTS resizer as one ~4,266-load net -- load splitting then
+# re-drives the same fanout behind a single buffer (measured: `split25`, 2,132
+# loads, 21-47 ns transition against a 3 ns limit, and the 8.6 ns STA disagreement
+# between the pinned and 26Q4 engines that follows from it). Best effort -- see
+# ws/tools/lln_reset_cts.sh.
+. /work/ws/tools/lln_reset_cts.sh
+
 if [ -n "${WS_LIMIT:-}" ]; then
     librelane --pdk gf180mcuD --pdk-root "${PDK_ROOT:-/workspace/gf180mcu}" \
         --manual-pdk --scl gf180mcu_fd_sc_mcu7t5v0 --pad gf180mcu_fd_io \

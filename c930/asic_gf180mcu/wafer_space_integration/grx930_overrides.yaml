@@ -172,6 +172,71 @@ DESIGN_REPAIR_BUFFER_INPUT_PORTS: false
 DESIGN_REPAIR_BUFFER_OUTPUT_PORTS: false
 RUN_POST_GPL_DESIGN_REPAIR: false
 
+# The reset distribution (2026-10-27). The reset is not a clock, so the SDC never
+# declared it and LibreLane's CTS passes no `-clk_nets`: it reaches the post-CTS
+# resizer as ONE net with thousands of loads, and load splitting re-drives that same
+# fanout behind a single buffer instead of bounding it.
+#
+# Measured on the die (post-antenna-repair database, tt, 40 ns):
+#
+#   i_chip_core.rst_n at the CTS position   4,266 pins, 4,204 sequential loads
+#   35-openroad-resizertimingpostcts        [INFO RSZ-0045] Inserted 2954 buffers,
+#                                           133 to split loads.
+#   what that built                        split25, a clkbuf_16 driving net25 with
+#                                           2,132 loads; the whole design's fanout
+#                                           tail is net25 2,132, net 1,113,
+#                                           net143 1,067, net4 650, net1 557,
+#                                           net1639 536, i_chip_core.rst_n 535
+#   transition at the load pin             21.3 ns (pinned engine) / 46.8 ns (26Q4)
+#                                           against MAX_TRANSITION_CONSTRAINT: 3
+#   setup WNS, same database, two engines  -0.0640 ns (pinned) / -8.6457 ns (26Q4)
+#
+# Neither WNS is a design number: both engines are extrapolating the delay that
+# follows from a 7-16x illegal transition, and they do it differently. The evidence
+# is in wafer_space_integration/sta_engine_reconciliation.md.
+#
+# THE FIX, AND WHERE IT IS WIRED
+#
+#   ws/tools/lln_reset_cts.sh (sourced by ws/ws_exec.sh and ws/die_predrt_exec.sh,
+#   next to lln_logflush.sh) installs ws/tools/librelane_reset_cts_patch.py, which
+#   makes the CTS step treat the reset as a clock root: the nets whose fanout is over
+#   MAX_FANOUT_CONSTRAINT, found from the reset pad through its buffers. Measured by
+#   running the patched region itself (ws/probe/reset_cts_procs_check.sh) on the
+#   core's pre-CTS database, with the step's own argument list:
+#
+#     before   i_chip_core.rst_n   4,265 loads, the only reset net over the limit
+#     after    CTS's own tree      210 nets at 11-23 loads each, median 14 (CTS's sink
+#                                  clustering bounds them at its own limit, which is why
+#                                  they are still over the design's fanout limit of 10)
+#     inserted 2,392 clkbuf + 909 clkload (clock and reset trees together)
+#
+#   The resizer then never sees a 4,265-load net, so there is nothing for load
+#   splitting to answer. The alternative form -- passing `-clk_nets` explicitly --
+#   is NOT used and must not be: it replaces LibreLane's own clock-net discovery, and
+#   the clock's net has no database name on this design (`_b09185b2e7bf0000_p_Net`),
+#   so the CLOCK would go untreed to buy a reset tree.
+#
+#   Reset nets can also be named explicitly with CTS_RESET_NETS (a list), and the
+#   pad glob with CTS_RESET_NET_PATTERN (default *rst*); the pad is recognised by
+#   its master (`*in_c*`/`*in_s*`, the gf180mcu_fd_io input pads) and its Y output.
+#
+# ON THE repair_design SIDE, WHICH IS WHERE THE LIMITS LIVE
+#
+#   A per-net or per-pin fanout limit is NOT expressible on this build: both
+#   `set_max_fanout <v> [get_nets <net>]` and `set_max_fanout <v> [get_pins <pin>]`
+#   answer `[ERROR STA-0100] unsupported object type ...` (measured 2026-10-27). So
+#   the reset is constrained by the same design-wide limits every net gets --
+#   MAX_FANOUT_CONSTRAINT: 10, MAX_TRANSITION_CONSTRAINT: 3,
+#   MAX_CAPACITANCE_CONSTRAINT: 0.2, all set in the SDC -- and what was missing was
+#   not the constraint but the pass that enforces it: `repair_design` is off at both
+#   of its positions (RUN_POST_GPL above, RUN_POST_GRT at LibreLane's own default
+#   false). Turning it on costs, on this design, 2,104 fanout violators -> 12,139
+#   buffers (+3.5 % of 340,141 instances) with the transition and capacitance
+#   margins left at zero, because those two violations (79,417 max-slew, 7,036
+#   max-cap) are what make the same pass explode at post-GPL. It stays off; the CTS
+#   tree is what removes the violation the repair would otherwise be asked to fix,
+#   and the numbers above are why the ordering matters.
+
 # Power distribution. The template's pdn_cfg.tcl ends by sourcing its SRAM stripe
 # grid (pdn_5v_sram.tcl, or pdn_3v3_sram.tcl when SRAM_DEFINE says so), and that
 # grid stripes around i_chip_core.sram_0 / sram_1 -- the two foundry SRAM macros
