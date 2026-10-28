@@ -137,24 +137,35 @@ same file, and the netlist is unaffected.
 
 ## Routing (the measurement this was for)
 
-The FF part's own 0.1-`GRT_ADJUSTMENT` result is 8 sweeps to overflow 0, 28.73 M µm of GRT wire,
-and `GRT-0183` on one net (recorded in `arm64_grt_equivalence.md`). The surrogate resumes the
-same tag with `-F OpenROAD.GeneratePDN -T OpenROAD.GlobalRouting`, i.e. the identical knobs
-(`PL_TARGET_DENSITY_PCT 55`, `GRT_ADJUSTMENT 0.1`, `GRT_ALLOW_CONGESTION true`), so the
-comparison is the macro bank against no macro bank and nothing else.
+The knobs are the routing runs' own — `PL_TARGET_DENSITY_PCT 55`, `GRT_ADJUSTMENT` 0.1,
+`GRT_ALLOW_CONGESTION true` — so the run is the same flow, on the same tag, with the macro bank
+in place of part of the flop array.
 
-Status: at the time of writing the tag had been through synthesis, floorplan, the PDN, the
-three-corner STA and CTS, and was in the post-CTS resizer — step 35 of 39, the step before the
-route. Live state is in `ws/logs/sram_chain.nohup` and `runs/sram03/`; the numbers go in the
-table below when `*-openroad-globalrouting` lands. (Tag `sram02` is the same run killed at the
-`-F` mistake above; `sram03` is the fresh one.)
+**The control is not yet measured, and the numbers that look like one are a different design.**
+The only 0.1 routing results in this tree belong to the die arm: `ws_arm64_v1` and `die01` need
+5 and 8 extra iterations to reach overflow 0 and route 38.18 M and 39.46 M µm, on 243,798 nets
+(`arm64_grt_equivalence.md`). This vehicle is a 192,563-instance design at 13.44 % total GRT
+utilisation, so borrowing those numbers would compare a smaller part against a larger one and
+call the difference the macro bank's. The FF column below is therefore left unmeasured; the
+comparison needs a FF run of *this* tag with these same two files swapped out.
+
+Status: `sram03` completed `OpenROAD.GlobalRouting` at 06:27 UTC and stopped at the chain's
+`-T OpenROAD.GlobalRouting` limit with `SRAM_EXIT:0` — routed through step 37 of 39, nothing
+beyond it attempted. Record is `ws/logs/sram_surrogate.sram03.log` and `runs/sram03/`. (Tag
+`sram02` is the same run killed at the `-F` mistake above; `sram01` is the pre-fix one that died
+at Yosys step 8. `ws/logs/sram_chain.nohup` is `sram01`'s log, not this run's.)
 
 | | FF array (1×1, 0.1) | macro surrogate (1×1, 0.1) |
 |---|---|---|
-| GRT sweeps to convergence | 8 | pending |
-| final overflow | 0 on every layer | pending |
-| GRT wirelength | 28.73 M µm | pending |
-| `GRT-0115` / `GRT-0183` | none / none | pending |
+| GRT extra iterations | not measured on this part | 5 of 50 |
+| final overflow, M1–M5 | — | 0 / 0 / 0 / 0 / 0 |
+| GRT wirelength | — | 13,858,798 µm |
+| `GRT-0115` / `GRT-0183` | — | absent / absent |
+
+What the macro column does establish on its own: the macro bank, its fixed placement and its
+strapped grid do not stop the global router — the same 5-iteration convergence the die arm's
+ARM run reached, with no `GRT-0183`, on a design whose storage is now eight foundry macros
+rather than flops.
 
 ## What this does not prove
 
