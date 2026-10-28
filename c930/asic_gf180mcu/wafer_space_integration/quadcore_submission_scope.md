@@ -4,7 +4,9 @@
 three things that decide it costed: the ASIC wrapper, the SRAM macros the memories need, and the
 pad ring. It is a scope, not a plan of record: no RTL, config or flow file was changed to write
 it, and the largest item in it — which slot the part goes in — is now answered: none of
-wafer.space's, so the route is a foundry shuttle (§8).
+wafer.space's, so the route is a foundry shuttle (§8). **Decided 28 October 2026:** the memory
+architecture is configuration B (§4) — main memory off-chip, L1 32 KB and L2 64 KB as macros,
+86.4 mm² of content.
 
 **Basis.** `c930_soc_top.sv` (the 4-core SoC), the wafer.space project template and pre-check in
 this tree, and the two measured area figures already in the record: one core at **5.95 mm²** of
@@ -170,7 +172,7 @@ need a pipeline stage in the systolic feed.
 | L2 macros (64 KB) | 26.80 | |
 | main-memory macros (64 KB) | 26.80 | after the §4 rework |
 | crossbar, directory, APLIC, UART, ROM, glue | ~2 | estimate |
-| **total** | **≈113 mm²** | against the brief's 46 mm² → **2.5×** |
+| **total (configuration A)** | **≈113 mm²** | against the brief's 46 mm² → **2.5×**; configuration B, below, is **86.4 mm²** |
 
 The brief counted the L2 as "~3 mm² estimate" and the 64 KB main memory as nothing at all. SRAM
 at this node is ~19.6 kbit/mm² at best, so **the two 64 KB arrays alone are 53.6 mm²** — more
@@ -184,49 +186,113 @@ is considered. The denser community 3.3 V blocks (1 KB each; 108 KB per slot, st
 160 KB) would narrow the gap at the price of a second voltage domain and non-foundry IP: a lever
 to investigate, not a plan.
 
-### The decision this forces
+### The decision: configuration B, frozen 28 October 2026
 
 Row area is what standard cells can use — macro blocks are lost to placement and to their PDN
-keep-out. In a 2×4 (137 mm² core) the three configurations are:
+keep-out. In a 2×4 (137 mm² core) the three configurations were:
 
 | Configuration | Macros | Total | Cell utilisation of the remaining rows | Verdict |
 |---|---:|---:|---:|---|
-| **A** as simulated: 64 KB L2, 64 KB main, 8 KB/core L1 | 67.0 | 113.2 | 46.2 / 69.8 = **66 %** | worse than the 46 % that is failing to route today |
-| **B** main memory off-chip (board SRAM), rest unchanged | 40.2 | 86.4 | 46.2 / 96.6 = **48 %** | at today's edge |
-| **C** B + L2 → 16 KB + L1 → 1 KB/core | 10.1 | 56.3 | 46.2 / 126.8 = **36 %** | the defensible one |
+| **A** as simulated: 64 KB L2, 64 KB main, 8 KB/core L1 | 67.0 | 113.2 | 46.2 / 69.8 = **66 %** | rejected: denser than the 46 % failing to route today |
+| **B** main memory off-chip (board SRAM), rest unchanged | 40.2 | 86.4 | 46.2 / 96.6 = **48 %** | **decided** |
+| **C** B + L2 → 16 KB + L1 → 1 KB/core | 10.1 | 56.3 | 46.2 / 126.8 = **36 %** | the fallback if the routing surrogate fails |
 
-**B is the interesting move** and it is not an exotic one: the 1×1 part already proves the ROM +
-UART path, and an external 5 V SRAM on the board the project is designing anyway removes 26.8 mm²
-of the most awkward macro block in the design — at the cost of replacing `c930_ddr` with a simple
-external-memory controller and adding a bus to the board contract. A and C are the two ends; the
-choice is a product decision, and it should be made *before* the wrapper is written, because it
-decides `MEM_BYTES` and the cache parameters.
+**Decided: B.** What it freezes — each of these is now a parameter the wrapper, the floorplan and
+the board are written against, not a question:
+
+| Item | Frozen value | Consequence |
+|---|---|---|
+| main memory | off-chip, 64 KB, 32 B lines | `MEM_BYTES 65536` stays the address window; 26.8 mm² of macro leaves the die |
+| L1 | 8 KB/core (`INDEX_WIDTH 7`), 32 KB | 64 × `sram512x8`, 13.40 mm² |
+| L2 | 64 KB (512 sets × 4 ways × 32 B) | 128 × `sram512x8`, 26.80 mm² |
+| NPU operand banks | flops, 1.25 KB per NPU | 2.66 mm²; synthesised at the SoC's `MAX_M/K/N` 8/16/12 |
+| boot | 1 KB ROM + UART loader | unchanged by the decision |
+| **content** | **86.4 mm²** (46.2 cells + 40.2 macros) | against 113.2 mm² for A |
+
+**What it does to area — and the correction it forces on the price.** B removes 26.8 mm² of
+*content*; it does not remove die area at the density already costed. Filling in the same
+`core = cells/utilisation + macros`, `die = core/0.85` model the §1 geometry came from:
+
+| | rows needed | core | die (÷0.85) | at €913/mm² |
+|---|---:|---:|---:|---:|
+| B at 48 % (the 2×4 core) | 96.6 | 136.8 | 161 | ≈€147k |
+| B at 46 % (today's density) | 100.4 | 140.6 | 165 | ≈€151k |
+| B at 42 % | 110.0 | 150.2 | 177 | ≈€161k |
+| A at 46 % (the same density) | 100.4 | 167.4 | 197 | ≈€180k |
+
+Two readings, both wanted:
+
+* **At equal density B is 32 mm² of die smaller** than A (165 against 197), because the macro is
+  gone from the placed area *and* from the rows it would have consumed.
+* **At the costed 161 mm² die, B is at 48 %** — two points *denser* than the 46 % that is failing
+  to route at 1×1 today. B does not buy routability at that size; it buys it at ~165 mm² (46 %)
+  and comfortably at ~177 mm² (42 %). Those cost €4–14k more than the original 161, which is
+  noise against the tooling spend either route needs (§8), so **the die is sized for density, not
+  for the tightest area**: 165 mm² is the planning number, 177 mm² the relief valve, and C (36 %)
+  the fallback if neither routes.
+
+**The die shape is now ours.** The 2×4 outline existed to tile eight wafer.space unit slots; a
+foundry shuttle has no such grid. 165 mm² is a ~12.9 × 12.9 mm square (161 mm² is 12.7 mm), which
+retires the 20.5 mm dimension that made reticle-field fit an open question (§9) and makes the part
+easier to bond. The `7.864 × 20.488 mm` in the enquiries is configuration A's footprint; what the
+supplier is asked about from here is a ~13 mm square part of about the same area.
+
+**The RTL is a file swap, not a rework.** `c930_ddr`'s port list — two 256-bit cache-line read
+ports, a 64-bit byte-strobed write port, and a 64-bit AXI4 full slave — is already an interface
+four implementations sit behind in this tree (`rtl/c930_ddr.sv`, `sim/c930_ddr_verilator.sv`,
+`synth/c930_ddr_stub.sv`, `rtl/c930_ddr3l.sv`), which is why `c930_soc_top` and every testbench
+elaborate unchanged when one is swapped for another. Configuration B adds a fifth:
+`rtl/c930_extmem.sv`, same ports, holding the cache→AXI bridge and the arbiter `c930_ddr3l.sv`
+already carries (its 751 lines are the bridge, the arbiter and a Xilinx MIG layer) with the MIG and
+its `ui_clk` crossing replaced by a single-clock synchronous-SRAM FSM. Simulation keeps
+`c930_ddr.sv`; the ASIC build names the new file.
+
+### The board contract this freezes
+
+Main memory is the first thing on the board the SoC cannot boot without, so its interface belongs
+to the decision rather than to a later detail:
+
+| | Frozen |
+|---|---|
+| port | `em_dq[63:0]` bidirectional, `em_a[15:0]` (byte address, 13 bits used for the 8K-deep array), `em_bw_n[7:0]`, `em_ce_n`/`em_we_n`/`em_oe_n`, `em_clk` out — **92 pads** |
+| width | 64-bit, because the AXI4 slave and the dcache write port already are: a 32 B line fills in 4 beats, and the controller stays a protocol adapter rather than a width converter |
+| clocking | one domain, the core clock — the DDR3L controller needs a CDC only because MIG runs at 200 MHz, and there is no MIG here |
+| rate | 8 B/cycle, 200 MB/s at 25 MHz; a line fill is 4 beats plus address setup, against 2 cycles for the on-chip array it replaces |
+| parts | 8K × 64 bits = 64 KB as several synchronous 5 V SRAMs in parallel (four ×16 or eight ×8 — the exact width is a parts-availability question, not an architecture one); a single 64-bit-wide 5 V SRAM is not a catalogue part, and 3.3 V parts would add a second I/O domain |
+| boot | unchanged: 1 KB ROM, then 64 KB of firmware over UART (~5.7 s at 115200) |
+
+The cost shows in the pad ring: 92 memory pads against ~28 for everything else takes the ring from
+the ~4 % §5 describes to ~19 %, so the bring-up pads that section argues for are still affordable
+but no longer free.
 
 ---
 
 ## 5. The pad ring
 
-**Geometry is easy.** A 2×4 die is 7,864 × 20,488 µm; with the foundry pads at 75 µm pitch
-between 355 µm corners, the perimeter holds ~717 pad sites. The 1×1 ring uses 18 of them for
-power and 56 for signals (74 sites in all); this design needs ~18 power and ~10 signals, so the ring would be
-~4 % occupied and mostly `__fill1`. Padding out a bigger ring is not the problem.
+**Geometry is easy.** Configuration B's planning die is a ~12.9 mm square (§4); at the foundry
+pads' 75 µm pitch between 355 µm corners its perimeter holds ~670 pad sites. The 1×1 ring uses 18
+of them for power and 56 for signals (74 sites in all); B adds a 92-pad memory port, so with ~18
+power, ~10 signals and room to bring up it is ~19 % occupied and mostly `__fill1`. Padding out a
+ring is not the problem.
 
 **Everything downstream of the ring is.** The ring is generated from a slot definition —
 `librelane/slots/slot_<slot>.yaml` (`DIE_AREA`, `CORE_AREA`, `PAD_SOUTH/EAST/NORTH/WEST`), a block
 in `src/slot_defines.svh`, and the template's `scripts/padring.py` — and the template ships four
-slot files. A 2×4 needs a fifth, and the pre-check needs a `mask_2x4.gds` that does not exist. The
+slot files, none of them this die. A ~13 mm square needs a fifth definition of our own, and the
+pre-check has no mask for it at all — which is §1's fact again: the quad-core is not a wafer.space
+part, so the pre-check is not its gate. The
 wafer.space IP cells the submission must carry (`qrcode_id`, `shuttle_id`, `project_id`, `marker`,
 `logo`) are placed in `macros_5v.yaml`; the marker and logo follow `$DIE_AREA` expressions, but
 **qrcode at (26,26), shuttle_id at (26,175.6) and project_id at (175.6,26) are absolute 1×1
 coordinates** and their encoded content is issued per submission — so that is an external item
 too, not a config edit.
 
-**The one decision worth taking now** is not the ring size but what the extra room is *for*: the
-1×1 part has ten board signals on one edge and boots blind over UART. A die this much larger has
-hundreds of free pad sites, and the cheapest thing to buy with them is bring-up bandwidth (a
-second UART, a couple of IRQs, or a 2-wire debug port), given that the first silicon will be
-debugged over whatever is bonded out. That belongs in the board contract with the memory decision
-above, because both change the board.
+**What is still open here** is not the ring size but what the spare sites are *for*: the 1×1 part
+has ten board signals on one edge and boots blind over UART. Even after B's memory port the ~670
+site ring has ~540 left, and the cheapest thing to buy with them is bring-up bandwidth (a second
+UART, a couple of IRQs, or a 2-wire debug port), given that the first silicon will be debugged
+over whatever is bonded out. That is the last board decision left, and it changes the board the
+same way the memory port did.
 
 ---
 
@@ -235,16 +301,16 @@ above, because both change the board.
 | # | Risk | Number / evidence | Mitigation |
 |---|---|---|---|
 | 1 | **No wafer.space slot exists — closed 27 Oct 2026** | pre-check accepts 4 slots; catalogue max is 1×1 (20.12 mm²), whose whole 5 V SRAM budget is 40 KB against this part's 160 KB | Route it to a foundry shuttle: `quadcore_gf_enquiry.md` asks GF for a written area limit and price on a 161 mm² die (§8) |
-| 2 | Memory area undercounted | 67 mm² of macro; total 113 mm², 2.5× the brief | Configuration B or C (§4) before the wrapper is written |
-| 3 | Routing at 2×4 | 66 % row utilisation in configuration A, against 46 % failing at 1×1 today | B/C; and the surrogate run in §7 |
-| 4 | `c930_ddr` rework | 3 ports, combinational reads | Bank + arbitrate, or off-chip (B) |
+| 2 | Memory area undercounted | 67 mm² of macro; total 113 mm², 2.5× the brief | **Closed 28 Oct:** B freezes 86.4 mm², 40.2 mm² of it macro (§4) |
+| 3 | Routing at 48 % | B is 48 % on the 2×4 core, 46 % at a 165 mm² die, against 46 % failing at 1×1 today | the surrogate run (§7 step 3); C is the fallback |
+| 4 | `c930_ddr` → external controller | 3 ports, combinational reads; 64 KB moves off-chip | `c930_extmem.sv` behind `c930_ddr`'s port list (§4) |
 | 5 | First-macro-flow risk | placement, PDN straps over macros, antenna, 5LM pin access, STA vs vendor `.lib` | The template's macro steps exist; retire the risk on a 1×1 surrogate (§7) |
 | 6 | Never synthesised as a chip top | NPU alone produced 2 real defects on first contact | lint + yosys probe on the closure, days |
 | 7 | Reset/CTS for 4 cores | the 1×1 reset-tree fix is core-level; this part has four reset domains + 2 NPUs | `librelane_reset_cts_patch.py` generalises, but it is 4× the nets |
 | 8 | Hold | −2.44 ns on both engines at 1×1 | unresolved; scales with the design |
 | 9 | 25 MHz over 4 cores | FPGA closed ~121 MHz, but on 7-series; GF180 5 V 7-track is slower | STA is an experiment, not an assumption; the part boots either way |
 | 10 | Boot/bring-up | ROM is the only resident memory; 64 KB over UART ≈ 5.7 s | loader firmware; debug pads (§5) |
-| 11 | Board | 7.9 × 20.5 mm die, ~30 bonds, CoB markers are per-slot | custom board already planned; it changes shape |
+| 11 | Board | ~13 mm square die, ~30 bonds plus the 92-pad memory port, CoB markers issued per submission | the board is now specified by §4's contract rather than inherited from a slot |
 | 12 | **Price/schedule** | 8× a 1×1 slot's area basis; public floor €913/mm² (≈€147k), GF terms unpublished | `quadcore_gf_enquiry.md` (§8) |
 
 ---
@@ -252,10 +318,11 @@ above, because both change the board.
 ## 7. Sequencing
 
 0. **Ask the foundry question** (`quadcore_gf_enquiry.md`) — wafer.space answered "no" on 27 Oct
-   (§1). Nothing below is wasted by the answer; what it decides is price, date, and whether the die
-   has to be reshaped to fit a shuttle block.
-1. **Freeze the memory architecture** (§4): `MEM_BYTES`, L1 size, L2 size, on-chip or off-chip
-   main memory. This is the area decision and it gates everything.
+   (§1). Nothing below is wasted by the answer; what it decides is price and date — the die shape
+   is ours to fix since configuration B (§4).
+1. ~~**Freeze the memory architecture**~~ **Done 28 Oct 2026: configuration B** (§4) — main memory
+   off-chip, L1 8 KB/core, L2 64 KB, NPU banks in flops, 86.4 mm² of content, and the board
+   contract that goes with it.
 2. **Write `chip_core_quad.sv` + tie-offs** and retire §3's four exceptions; run the adapter lint
    and a synthesis-only probe on the full closure.
 3. **Retire the macro-flow risk cheaply, on a 1×1 surrogate.** The 1×1 slot has room for the
@@ -270,12 +337,13 @@ above, because both change the board.
    contract's signal list. On a wafer.space part these come from the template (`slot_1x1.yaml`,
    the per-slot pad mask, the per-submission IP cells); on a shuttle they are ours to draw and the
    foundry issues the mask, seal-ring and scribe rules (§8).
-5. **Memory conversion**: `c930_ddr` banking/arbitration (or the external controller), L1/L2
-   macro tiling with the L2's existing bank structure.
+5. **Memory conversion**: `rtl/c930_extmem.sv` behind `c930_ddr`'s port list (§4), then L1/L2
+   macro tiling on the L2's existing bank structure.
 6. **PDN + floorplan at the chosen configuration**, then STA, then routing. The unknown is
    routing at 36–48 % with macro blocks; nothing before step 3 tells us anything about it.
 
-Steps 1–3 are ours and startable now. Steps 4–6 are large, and step 4 depends on §1.
+Steps 1–3 are ours and startable now — 1 is done. Steps 4–6 are large; step 4 needs the board
+contract, not a supplier.
 
 ---
 
@@ -287,7 +355,7 @@ part does not fit any slot wafer.space publishes, in any flavour.
 
 **The single-die routes, priced as far as public information goes.**
 
-| Route | Status | Price for 161 mm² | What decides it |
+| Route | Status | Price for a ~161–165 mm² die | What decides it |
 |---|---|---|---|
 | **GlobalFoundries GlobalShuttle**, 180 nm | GF's MPW page lists 180 nm, and the GF180MCU PDK's own manufacturing page says GF runs an MPW programme on this process. **No published area limit, price, quantity or cadence** — GF routes schedules through GF Connect and directs MPW questions to its contact form | unpublished; “up to 100 dice” described as part of the base fee | a written answer to `quadcore_gf_enquiry.md` |
 | **EUROPRACTICE / imec**, GF180MCU (“Open PDK”) | published in the 2026 price list: area-priced, **6 mm² minimum billed**, two GF180MCU registration dates in 2026. Access to GF through EUROPRACTICE runs via **Fraunhofer IIS** and is **NDA-gated and entity-only** (signed NDA + questionnaire; GF contracts with companies and research institutes, not individuals) | **€913/mm² → ≈€147k** standard, €830/mm² → **≈€134k** discounted, *if a design this size is accepted* | whether their GF180 maximum die size allows 161 mm² (their published block sizes are fixed per technology) — and who signs the NDA |
@@ -305,6 +373,12 @@ filled from this project's record, the entity's own details included — **went 
 27 October 2026** (message id `1a17fc34b4f1a94c`; both attachments hash-verified against the prepared
 files), so what this step waits on now is the entity's signature. Receipts in
 [`nda_pack/`](nda_pack/).
+
+**What the supplier is being asked changed on 28 October.** Configuration B (§4) keeps about the
+same area but is a ~13 mm square part instead of A's `7.864 × 20.488 mm`, and both enquiries were
+sent with A's footprint. The area question stands as written; the shape question in
+`quadcore_gf_enquiry.md` should be read against the square, and that is the correction to send
+with the NDA signature rather than a second enquiry.
 
 **The four-die module does not carry the accelerators.** The arithmetic is unforgiving: one core is
 5.95 mm² of cells and one NPU **8.86 mm²**, so a die holding one of each needs **14.81 mm²** against
@@ -325,15 +399,17 @@ against a supplier who has quoted it.
 
 ## 9. What this does not settle
 
-* **Whether 113 mm² routes at all** in 5LM with 67 mm² of macro. Configuration C is arithmetic,
-  not evidence; the surrogate in §7 step 3 is the closest cheap evidence available.
+* **Whether 86.4 mm² routes** in 5LM with 40.2 mm² of macro — 48 % on the 2×4 core, 46 % at 165 mm²,
+  against the 46 % failing at 1×1 today. That C (36 %) is the arithmetic fallback, not evidence; the
+  surrogate in §7 step 3 is the closest cheap evidence available.
 * **The vendor `.lib` corners' effect on STA.** The macros ship with 1.62–5.5 V corners; which
   three the flow picks and what they do to the 40 ns budget is unmeasured.
-* **Field fit.** Whether 7.864 × 20.488 mm fits a shuttle block's reticle field is unverified — it
-  is question 3 in `quadcore_gf_enquiry.md`, and it decides whether the die has to be reshaped
-  rather than merely re-priced.
-* **Price and date.** EUROPRACTICE publishes €913/mm² for GF180MCU (≈€147k at 161 mm²) and two
-  2026 registration dates; GF's own terms are unpublished. Neither is a quote for a die this size.
+* ~~**Field fit.**~~ **Retired by configuration B** (§4): 165 mm² is a ~12.9 mm square, and the
+  20.5 mm dimension existed only to tile eight wafer.space slots. The enquiries still quote A's
+  `7.864 × 20.488 mm` footprint — that is the one supplier sentence needing correcting (§8).
+* **Price and date.** EUROPRACTICE publishes €913/mm² for GF180MCU — ≈€147k at 161 mm², ≈€151k at
+  B's 165 mm² planning die, ≈€161k at the 177 mm² relief valve — and two 2026 registration dates;
+  GF's own terms are unpublished. Neither is a quote for a die this size.
 * **Whether the quad-core should be a *product* at all**, as opposed to the accelerator-slice
   reading in `c930_core_scaling.md` §5 — where core count is close to irrelevant and the array's
   utilisation is the lever. This document costs the physical part; it does not argue for it.
@@ -350,6 +426,10 @@ docker run --rm --entrypoint sh ghcr.io/wafer-space/gf180mcu-precheck -c '
 # The slot ceiling, from the tool we have to pass:
 grep -n "choices" c930/asic_gf180mcu/tools/gf180mcu-precheck/precheck.py
 grep -n "Unsupported slot size" c930/asic_gf180mcu/tools/gf180mcu-precheck/scripts/klayout/check_size.py
+
+# The memory implementations behind one port list (configuration B adds a fifth):
+ls c930/rtl/c930_ddr.sv c930/sim/c930_ddr_verilator.sv c930/synth/c930_ddr_stub.sv \
+   c930/rtl/c930_ddr3l.sv
 
 # The SoC's memory and port inventory:
 grep -n "A_DEPTH\|B_DEPTH" c930/rtl/c930_npu_core.sv
