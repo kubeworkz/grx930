@@ -31,7 +31,11 @@
 #      and records its exit, with its phase A run against a stub docker;
 #   5  the two together: the parent reads that marker and does not retry;
 #   6  the staged copies differ from the delivered chains only in the destination
-#      lines this test rewrites.
+#      lines this test rewrites;
+#   7  the engine the arm is handed is the ARCH DISPATCHER (ws/tools/openroad_engine.sh)
+#      and not a build, the class it prints is read from the engine's own `-version`
+#      line -- both classes, including the one that is NOT the pinned build -- and a
+#      plan that resolves to the image's engine never reads as pinned.
 #
 # WHAT IT DOES NOT DO
 #
@@ -86,6 +90,11 @@ cp -f "$BUILD/curve_guard.sh" "$R/build/"
 # docker: never a real container. `inspect` answers what the chains read -- not
 # running, exit 0 -- and `ps` is empty, so the busy check passes. Every call is
 # recorded, which is how the "launched nothing" checks below are made.
+#
+# `run` with `-version` is the one call whose OUTPUT the chain reads rather than
+# merely records: it is the engine probe, and what it answers decides the class the
+# chain prints in its log and carries into its report. STUB_ENGINE_VERSION picks
+# which build that is, so both classes are reachable without a container.
 cat > "$R/bin/docker" <<'SH'
 #!/bin/sh
 printf 'docker %s\n' "$*" >> "$STUB_CALLS"
@@ -95,6 +104,10 @@ case "$1" in
       *State.Running*)  echo false ;;
       *State.ExitCode*) echo 0 ;;
       *)                echo gone ;;
+    esac ;;
+  run)
+    case "$*" in
+      *-version*) printf '%s\n' "${STUB_ENGINE_VERSION:-26Q4-407-geb14e40b7b (wrapper)}" ;;
     esac ;;
 esac
 exit 0
@@ -178,7 +191,14 @@ chk "1: the marker carried the decision" 1 \
 chk "1: went on to the container" 1 "$(clog | grep -c ARM_CONTAINER_UP)"
 case "$rcA" in 0|124) ok "1: waited ${tA}s for the arm's own answer" ;;
     *) bad "1: unexpected exit $rcA after ${tA}s" ;; esac
-chk "1: it launched no container itself" 0 "$(grep -cE '^docker (run|rm|stop|create)' "$STUB_CALLS")"
+# The engine probe is now the parent's only `docker run`, and it is a `--rm`
+# one-shot that names nothing. What this case is about is the ARM's container --
+# the one a second launch would race -- so the check counts what could arm or
+# remove one, and holds the probe to its own footprint instead of exempting it:
+# a `run` that is detached or named fails here exactly as before.
+chk "1: it launched no arm container itself" 0 \
+    "$(grep -cE '^docker (run -d|rm|stop|create)|--name' "$STUB_CALLS")"
+chk "1: its only run is the engine probe" 1 "$(grep -c '^docker run --rm ' "$STUB_CALLS")"
 
 # ---- 2. an arm that refused is the one thing worth retrying ---------------
 TMO=120 run_chain dtestB DIE_DIO_CHILD="$R/children/refuse.sh" DIE_DIO_LAUNCH_WAIT=60 \
@@ -200,7 +220,8 @@ chk "3: stops with rc=1" 1 "$rcC"
 chk "3: exactly one launch" 1 "$(clog | grep -c ARM_LAUNCHED)"
 chk "3: no retry" 0 "$(clog | grep -c 'ARM_RETRY attempt=')"
 chk "3: aborts instead" 1 "$(clog | grep -c 'launch_wait_timeout_15s')"
-chk "3: and launched no container" 0 "$(grep -cE '^docker (run|rm|stop|create)' "$STUB_CALLS")"
+chk "3: and launched no arm container" 0 \
+    "$(grep -cE '^docker (run -d|rm|stop|create)|--name' "$STUB_CALLS")"
 
 # ---- 4. the producer: the real arm chain writes the line the parent reads --
 # A run tree just complete enough for phase A: the GRT gate wants a step log with
@@ -259,6 +280,40 @@ ok "5: parent and arm agreed in ${tE}s"
 # ---- 6. nothing reached the box ------------------------------------------
 chk "6: no stub container was ever left behind" 0 \
     "$(grep -cE '^docker (start|stop|kill|exec)' "$STUB_CALLS")"
+
+# ---- 7. the engine is asked through the dispatcher, not named by this chain ---
+# This chain handed the arm /work/ws/tools/openroad_26q4.sh directly until
+# 2026-10-26. That wrapper is amd64-only -- on an arm64 box it is a 127 in the
+# arm's first minute -- and the fix belongs in the chain (one starting line for
+# every host) rather than in whoever launches it. Pinned from both ends here: the
+# file the chain names, and the env the child was handed in case 5, because a
+# chain that named the dispatcher and then passed the wrapper on would read as
+# fixed and behave as broken. The class checks are the same fault one step out:
+# the arm64 arm is the whole reason the dispatcher exists, so a plan or a log that
+# calls the image's own engine "pinned" is worse than no line at all.
+mkdir -p "$R/ws/tools"
+: > "$R/ws/tools/openroad_engine.sh"
+: > "$R/ws/tools/openroad_26q4.sh"
+: > "$R/ws/tools/openroad_arm64.sh"
+chk "7: the chain names the dispatcher" 1 \
+    "$(grep -c '^ENGINE=/work/ws/tools/openroad_engine.sh$' "$R/build/die_diode_flow_chain.sh")"
+chk "7: and probed the engine it was about to launch" 1 \
+    "$(grep -c 'ARM_ENGINE engine=/work/ws/tools/openroad_engine.sh class=pinned' "$TMP/$TAGD.out" 2>/dev/null)"
+chk "7: the child was handed the dispatcher" 1 \
+    "$(grep -c -- '-e PREDRT_OR=/work/ws/tools/openroad_engine.sh' "$STUB_CALLS")"
+chk "7: not a build directly" 0 \
+    "$(grep -c -- '-e PREDRT_OR=/work/ws/tools/openroad_26q4.sh' "$STUB_CALLS")"
+
+TMO=60 run_chain dtestP DIE_DIO_PLAN=1 STUB_ENGINE_VERSION='26Q4-407-geb14e40b7b (wrapper)'
+chk "7: the plan reads a 26Q4 engine as pinned" 1 \
+    "$(clog | grep -c "PLAN engine_version='26Q4-407-geb14e40b7b (wrapper)' engine_class=pinned")"
+chk "7: and names the dispatcher, not a build" 1 \
+    "$(clog | grep -c 'PLAN engine=/work/ws/tools/openroad_engine.sh (dispatcher)')"
+chk "7: both wrappers it can pick are checked" 2 \
+    "$(clog | grep -c 'PLAN wrapper_openroad_.*_ok ')"
+TMO=60 run_chain dtestQ DIE_DIO_PLAN=1 STUB_ENGINE_VERSION='dcf36133a369abc8f3c5e5738cd4d82e4903c0e0'
+chk "7: the image's own engine reads as image" 1 "$(clog | grep -c 'engine_class=image')"
+chk "7: and never as pinned" 0 "$(clog | grep -c 'engine_class=pinned')"
 
 echo
 if [ "$fail" = 0 ]; then

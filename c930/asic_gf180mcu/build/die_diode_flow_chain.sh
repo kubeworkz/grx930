@@ -21,9 +21,15 @@
 #
 # THE TWO THINGS IT NEEDS, BOTH CHECKED
 #
-#   * the engine       PREDRT_OR=/work/ws/tools/openroad_26q4.sh
-#                      (OpenROAD 26Q4-407-geb14e40b7b, the commit extracted from
-#                       openroad/debian12:26Q4-407-geb14e40b7b)
+#   * the engine       PREDRT_OR=/work/ws/tools/openroad_engine.sh
+#                      One path per chain, resolved per HOST by the dispatcher: on
+#                      x86_64 it execs ws/tools/openroad_26q4.sh (OpenROAD
+#                      26Q4-407-geb14e40b7b, the commit extracted from
+#                      openroad/debian12:26Q4-407-geb14e40b7b); on aarch64 it execs
+#                      ws/tools/openroad_arm64.sh, because that image publishes amd64
+#                      only and the pinned wrapper there is a 127 in the arm's first
+#                      minute. It was named directly here until 2026-10-26; see
+#                      "WHICH ENGINE RAN" below for what that changes on arm64.
 #   * the backport     PREDRT_PATCH_LLN=1023 -> ws/tools/librelane_1023_io_patch.py
 #                      REQUIRED at step level, and this is measured, not assumed:
 #                      without it the pin arm dies as step 01 FINISHES --
@@ -32,6 +38,28 @@
 #                      stops at 01-openroad-globalrouting). die_predrt_exec.sh
 #                      refuses to start the arm if the patch did not apply, so a
 #                      silent fall back to the unpatched LibreLane is impossible.
+#
+# WHICH ENGINE RAN, AND WHAT THE ARM THEREFORE MEASURES
+#
+#   The dispatcher's choice is a property of the HOST, so one chain is two arms:
+#
+#     x86_64   the pinned 26Q4 build -- the arm this header describes, whose
+#              antenna repair COMPLETES (2979 -> 114 violations left, 3540 diodes
+#              + 5647 jumpers).
+#     aarch64  the pre-check image's own OpenROAD (dcf36133, the SAME commit the
+#              x86 image ships) under `stdbuf -oL`. It has neither of the two
+#              no-path recoveries the die needs, so that arm is the OBSERVABILITY
+#              arm -- does the flow reach the router, and what does the router do
+#              -- and it cannot complete the repair; ws/tools/openroad_arm64.sh
+#              carries the measurement behind that statement.
+#
+#   The class is read from the engine's own `-version` line (the pinned build names
+#   itself there, the image's own is a bare commit hash), the way every other log
+#   in this project identifies the engine, and it is printed wherever the engine is
+#   named: `ARM_ENGINE class=`, `PLAN engine_class=`, and the report's `* engine:`
+#   line -- which quotes the version the ARM's own container logged rather than
+#   asserting the pin. Nothing here refuses an arm64 run: the arm is measurable and
+#   observable there, and an equivalence that was not measured is not evidence.
 #
 # THE ARM IS THE UNMODIFIED FLOW
 #
@@ -83,7 +111,13 @@ B=$ROOT/build
 WS=$ROOT/ws
 D=$ROOT/drt_fast
 IMG=ghcr.io/wafer-space/gf180mcu-precheck
-OR26=/work/ws/tools/openroad_26q4.sh
+# The engine: the chain names the DISPATCHER, which resolves per host (see the
+# header). ENGINE_26Q4 / ENGINE_A64 are only what it can resolve TO -- named here so
+# the PLAN can say which of the two files are on this box instead of leaving it to a
+# 127 inside the arm's container.
+ENGINE=/work/ws/tools/openroad_engine.sh
+ENGINE_26Q4=/work/ws/tools/openroad_26q4.sh
+ENGINE_A64=/work/ws/tools/openroad_arm64.sh
 PATCH=/work/ws/tools/librelane_1023_io_patch.py
 TAG=${DIE_DIO_TAG:-died26q4}
 STATE=${DIE_DIO_STATE:-/work/ws/template/librelane/runs/ws_v3/36-openroad-stamidpnr-2/state_out.json}
@@ -174,16 +208,60 @@ source_log() {  # the most complete log this arm left
     done
 }
 
+# Which engine an arm ran, from the engine's own `-version` line -- the identifier
+# every chain in this project records it by. `unknown` is a class of its own: a log
+# that never got written must not be rounded to one of the two builds, because the
+# two are not interchangeable (see the header).
+engine_class() {  # $1 = a -version line -> pinned | image | unknown
+    case "${1:-}" in
+        "")     printf 'unknown' ;;
+        *26Q4*) printf 'pinned' ;;
+        *)      printf 'image' ;;
+    esac
+}
+# Ask the engine what it is, in the container, the way the arm's own log will record
+# it. `--rm` and unnamed on purpose: the arm's own busy check is `docker ps`, and it
+# must not see this one -- it is gone before the arm is launched.
+# The trailing trim is not cosmetic-only: the engines do not agree on the tail of
+# their version line (the image's own build prints one with a trailing space), and
+# the string is carried into `PLAN engine_version='...'` and the report, where a
+# stray space reads like a broken quote.
+engine_probe() {
+    docker run --rm -e HOME=/root -v "$ROOT:/work" "$IMG" \
+        /bin/sh -c "\"${ENGINE}\" -version 2>&1 | head -1" </dev/null 2>&1 \
+        | tr -d '\r' | sed 's/[[:space:]]*$//' | tail -1
+}
+# The engine line the ARM's own container wrote (ws/die_predrt_exec.sh records
+# `PREDRT openroad_override=<path> <version>`): what actually ran, not what this
+# host would resolve today -- the report is also rewritten by DIE_DIO_HARVEST=1,
+# days later, against logs written by an arm that has since exited. Empty when the
+# arm never reached the flow.
+arm_engine_line() {
+    grep -ahoE '^PREDRT openroad_override=[^ ]+ .*$' "${CLOG:-}" "${FLOG:-}" 2>/dev/null | tail -1
+}
+
 # ---- modes that launch nothing -------------------------------------------------
 if [ "$PLAN" = 1 ]; then
     say "PLAN tag=$TAG arm='flow end to end, DetailedRouting on a diode-repaired die'"
-    say "PLAN engine=$OR26 (pin) backport=$PATCH stop=$STOP override='${OVERRIDE:-none (the staged config, unmodified)}'"
+    say "PLAN engine=$ENGINE (dispatcher) backport=$PATCH stop=$STOP override='${OVERRIDE:-none (the staged config, unmodified)}'"
     say "PLAN state=$STATE host=${ROOT}${STATE#/work}"
     [ -f "${ROOT}${STATE#/work}" ] && say "PLAN state_ok $(stat -c %s "${ROOT}${STATE#/work}") bytes" || say "PLAN state_MISSING"
     [ -f "${ROOT}${PATCH#/work}" ] && say "PLAN patch_ok $(wc -l < "${ROOT}${PATCH#/work}") lines" || say "PLAN patch_MISSING"
-    [ -f "${ROOT}${OR26#/work}" ] && say "PLAN wrapper_ok ${ROOT}${OR26#/work}" || say "PLAN wrapper_MISSING"
-    say "PLAN launch: DIE_TAG=$TAG DIE_PREDRT_OVERRIDE='$OVERRIDE' PREDRT_OR=$OR26 PREDRT_PATCH_LLN=1023 PREDRT_STOP=$STOP DIE_PHASE_A_ONLY=1 bash $B/die_drt_chain.sh"
-    say "PLAN engine_versions $(docker run --rm -e HOME=/root -v "$ROOT:/work" "$IMG" /bin/sh -c "\"${OR26}\" -version 2>&1 | head -1" </dev/null 2>&1 | tail -1)"
+    [ -f "${ROOT}${ENGINE#/work}" ] && say "PLAN wrapper_ok ${ROOT}${ENGINE#/work}" || say "PLAN wrapper_MISSING"
+    # Both files the dispatcher can pick from. Only one of them is reachable per
+    # host, and a missing one is a 127 inside the arm's container: name which are
+    # there rather than discovering it from the arm's death.
+    for E2 in "$ENGINE_26Q4" "$ENGINE_A64"; do
+        E2B=$(basename "$E2" .sh)
+        if [ -f "${ROOT}${E2#/work}" ]; then say "PLAN wrapper_${E2B}_ok ${ROOT}${E2#/work}"
+        else say "PLAN wrapper_${E2B}_MISSING ${E2}"; fi
+    done
+    say "PLAN launch: DIE_TAG=$TAG DIE_PREDRT_OVERRIDE='$OVERRIDE' PREDRT_OR=$ENGINE PREDRT_PATCH_LLN=1023 PREDRT_STOP=$STOP DIE_PHASE_A_ONLY=1 bash $B/die_drt_chain.sh"
+    # The engine's own answer, and the class it implies. Read in the container, not
+    # on the host: the dispatcher runs there, and `uname -m` on the host is the one
+    # thing that would answer a different question.
+    EP=$(engine_probe)
+    say "PLAN engine_version='${EP:-none}' engine_class=$(engine_class "$EP")"
     say "PLAN disk_gb_free $(free_gb /) mem $(bash "$B/memwatch.sh" --headroom)"
     say "PLAN_DONE (launched nothing)"
     exit 0
@@ -193,7 +271,7 @@ if [ "$HARVEST" = 1 ]; then
     say "HARVEST tag=$TAG (launching nothing; rewriting $OUT from the logs on disk)"
 else
     say "DIE_DIO_FLOW_START tag=$TAG arm='flow -> DetailedRouting on a diode-repaired die'"
-    say "DIE_DIO_FLOW_ARM engine=$OR26 backport=1023 stop=$STOP override='${OVERRIDE:-none}' attempts=$ATTEMPTS wait=$WAIT"
+    say "DIE_DIO_FLOW_ARM engine=$ENGINE backport=1023 stop=$STOP override='${OVERRIDE:-none}' attempts=$ATTEMPTS wait=$WAIT"
 fi
 
 # ---- wait for the box, and for the chain that is ahead of this one -------------
@@ -236,15 +314,26 @@ if [ "$HARVEST" != 1 ]; then
     # retry would `docker rm -f die_predrt` a healthy arm. So the rule is: while the
     # child is alive, wait; retry only when it is gone with no LAUNCHED line; and if
     # it is alive without a decision past LAUNCH_WAIT, abort rather than race it.
+    # Which engine the dispatcher resolves to on THIS host, probed once, before the
+    # first attempt: an arm64 arm and a pinned x86 arm are not the same measurement,
+    # and this chain's log has to say which one it started rather than leaving it to
+    # whoever reads the report afterwards. One `-version` container, ~1 s, at a
+    # moment the box is known free -- the retry loop below starts the real one next,
+    # and its `docker ps` gate would refuse if this one were still up (it is not:
+    # the call is synchronous).
+    EP=$(engine_probe)
+    ENGINE_CLASS=$(engine_class "$EP")
+    say "ARM_ENGINE engine=$ENGINE class=$ENGINE_CLASS version='${EP:-none}'"
+
     attempt=0; launched=0
     while [ "$attempt" -lt "$ATTEMPTS" ]; do
         attempt=$((attempt+1))
         : > "$MARK"
         A0=$(date -u +%s)
-        DIE_TAG="$TAG" DIE_PREDRT_OVERRIDE="$OVERRIDE" PREDRT_OR="$OR26" PREDRT_PATCH_LLN=1023 \
+        DIE_TAG="$TAG" DIE_PREDRT_OVERRIDE="$OVERRIDE" PREDRT_OR="$ENGINE" PREDRT_PATCH_LLN=1023 \
             PREDRT_STOP="$STOP" DIE_PHASE_A_ONLY=1 DIE_ARM_STATE="$MARK" \
             nohup setsid bash "$CHILD" >/dev/null 2>&1 </dev/null &
-        say "ARM_LAUNCHED attempt=$attempt tag=$TAG via=$CHILD engine=$OR26 patch=1023 stop=$STOP override='${OVERRIDE:-none}'"
+        say "ARM_LAUNCHED attempt=$attempt tag=$TAG via=$CHILD engine=$ENGINE class=$ENGINE_CLASS patch=1023 stop=$STOP override='${OVERRIDE:-none}'"
         L0=$(date -u +%s)
         while :; do
             # The child's line is `LAUNCHED tag=<tag> container=die_predrt`, so match the
@@ -313,21 +402,50 @@ fi
 
 # ---- the report ---------------------------------------------------------------
 SRC=$(source_log)
+# What engine this arm ran, read from the arm's OWN logs -- not from this host's
+# dispatcher, which may be a different machine than the one that wrote them (the
+# report is also rewritten by DIE_DIO_HARVEST=1) and resolves for the host it is
+# asked on, not for the arm. The class decides the two things below that are only
+# true of the pinned engine.
+ARM_ENGINE_REC=$(arm_engine_line)
+ARM_ENGINE_VERSION=$(printf '%s\n' "${ARM_ENGINE_REC:-}" | cut -d' ' -f3- | sed 's/[[:space:]]*$//')
+ARM_ENGINE_CLASS=$(engine_class "$ARM_ENGINE_VERSION")
 mkdir -p "$D/verdict"
 {
     printf '# The die'"'"'s flow, end to end, on a diode-repaired database\n\n'
     printf 'Written %s UTC by `build/die_diode_flow_chain.sh` (tag `%s`).\n' "$(date -u '+%F %T')" "$TAG"
-    printf 'It is the arm the die did not have: the same frozen state every pre-DRT arm\n'
-    printf 'resumes from, run with the flow'"'"'s antenna repair able to COMPLETE, and then\n'
-    printf 'routed by the flow'"'"'s own `OpenROAD.DetailedRouting` step.\n\n'
+    case "$ARM_ENGINE_CLASS" in
+        image)  printf 'It is the same frozen state every pre-DRT arm resumes from, run with\n'
+                printf 'the flow'"'"'s antenna repair UNRESTRICTED -- but on the engine that cannot\n'
+                printf 'complete it (see the engine line below), so read it as the observation\n'
+                printf 'arm: what the flow and the router do on this database.\n\n' ;;
+        *)      printf 'It is the arm the die did not have: the same frozen state every pre-DRT arm\n'
+                printf 'resumes from, run with the flow'"'"'s antenna repair able to COMPLETE, and then\n'
+                printf 'routed by the flow'"'"'s own `OpenROAD.DetailedRouting` step.\n\n' ;;
+    esac
     printf '## The arm\n\n'
     printf '* resume state `%s` — the same `ws_v3` step-36 state `diejmp01` and every\n' "$STATE"
     printf '  probe consumed, so the database the router sees is the only variable this arm\n'
     printf '  shares with them.\n'
     printf '* steps: `OpenROAD.GlobalRouting` → antenna repair → `OpenROAD.STA*` →\n'
     printf '  `OpenROAD.DetailedRouting` (`PREDRT_STOP=%s`).\n' "$STOP"
-    printf '* engine: `%s` — OpenROAD 26Q4, the build whose FastRoute recovery completes\n' "$OR26"
-    printf '  the repair the pinned build aborts (GRT-0183).\n'
+    # The engine as the ARM's own container logged it -- not as this host would
+    # resolve it today, and (on arm64) not the pinned build at all. The class picks
+    # which of the three paragraphs is true, so no log of this chain claims the pin
+    # for an arm that ran the image's own engine.
+    printf '* engine: `%s`%s\n' "$ENGINE" "${ARM_ENGINE_VERSION:+ (as the arm logged it: $ARM_ENGINE_VERSION)}"
+    case "$ARM_ENGINE_CLASS" in
+        pinned) printf '  OpenROAD 26Q4, the build whose FastRoute recovery completes the\n'
+                printf '  repair the pinned build aborts (GRT-0183).\n' ;;
+        image)  printf '  the pre-check image'"'"'s own build under stdbuf -oL: this is the\n'
+                printf '  OBSERVABILITY arm, not the repair arm. The pinned 26Q4 engine\n'
+                printf '  publishes amd64 only, so nothing on this host can complete the\n'
+                printf '  antenna repair (ws/tools/openroad_arm64.sh) -- the router numbers\n'
+                printf '  below are the router'"'"'s own, on the database this flow produced.\n' ;;
+        *)      printf '  no engine line in the arm'"'"'s logs (PREDRT openroad_override=), so\n'
+                printf '  this report cannot say which engine ran -- see the failure\n'
+                printf '  section below.\n' ;;
+    esac
     printf '* LibreLane backport `#1023` applied in-container (`%s`); without it this arm\n' "$PATCH"
     printf '  dies as step 01 finishes (`[ERROR STA-0107] ..._p_Scene is not the name of a\n'
     printf '  scene`, measured on run `diepin02`).\n'
@@ -349,6 +467,7 @@ mkdir -p "$D/verdict"
 
     printf '## The flow'"'"'s DetailedRouting on that database\n\n'
     if grep -aqE 'Completing 100% with' "${SRC:-/dev/null}" 2>/dev/null; then
+        REACHED=1
         printf 'Source log: `%s`\n\n' "$SRC"
         printf '| pass | initial route | per-iteration series | last (DRT-0199) | antenna found → diodes/jumpers inserted BEFORE this pass |\n'
         printf '|---|---|---|---|---|\n'
@@ -363,6 +482,7 @@ mkdir -p "$D/verdict"
             "$(commas "$(peak_mem "${MEMS:-$SRC}")")" "${MEMS:-$SRC}" "$(cat "$STEPDIR/runtime.txt" 2>/dev/null || echo 'not written yet')"
         printf '* the router'"'"'s final total (`DRT-0199`) is `%s`.\n\n' "$(commas "$(last_total "$SRC")")"
     else
+        REACHED=0
         printf '**The flow did not reach detailed routing.** The arm'"'"'s result is the\n'
         printf 'failure, quoted exactly, because "the backport is sufficient end to end" is the\n'
         printf 'thing this arm was built to test:\n\n```\n'
@@ -374,7 +494,30 @@ mkdir -p "$D/verdict"
     printf '| arm | engine | pre-DRT database | DRT pass 0 | pass 0 last | pass 1 (after the step'"'"'s own repair) |\n'
     printf '|---|---|---|---|---|---|\n'
     printf '| `diejmp01` | pinned `dcf36133` | jumper-only, 1209 antenna violations left, 0 diodes | 446,541 → 303,874 → 296,214 → 125,994 → … | **27,758** (5:45:12, peak 9,065 MB) | 854,844 → 513,688 → 473,460 → 415,213 → … (the step put 4,013 diodes into the ROUTED database and restarted) |\n'
-    printf '| `%s` | 26Q4 pin | the flow'"'"'s own completed repair | see the table above | see above | see above |\n\n' "$TAG"
+    # This row is about THIS arm, so its engine cell is the same fact as the
+    # `* engine:` bullet above and is read from the same class. It was written as a
+    # bare "26Q4 pin" until 2026-10-26, which made it the one line of an arm64 report
+    # that still claimed the pin -- on the arm that ran the image's own build it was
+    # wrong in the engine cell AND in the database cell (that repair does not
+    # complete).
+    case "$ARM_ENGINE_CLASS" in
+        pinned) OUR_ENGINE="26Q4 pin" ;;
+        image)  OUR_ENGINE="the image's own build" ;;
+        *)      OUR_ENGINE="unknown" ;;
+    esac
+    case "$ARM_ENGINE_CLASS" in
+        pinned) OUR_DB="the flow's own completed repair" ;;
+        image)  OUR_DB="the repair this build makes before GRT-0183 (see above)" ;;
+        *)      OUR_DB="the repair, as far as it got (see above)" ;;
+    esac
+    # ... and the three routing columns pointed at "the table above", which does not
+    # exist on an arm that stopped before the router.
+    if [ "${REACHED:-0}" = 1 ]; then
+        OUR_D0="see the table above"; OUR_D1="see above"; OUR_D2="see above"
+    else
+        OUR_D0="none — the flow stopped in the repair (see above)"; OUR_D1="none"; OUR_D2="none"
+    fi
+    printf '| `%s` | %s | %s | %s | %s | %s |\n\n' "$TAG" "$OUR_ENGINE" "$OUR_DB" "$OUR_D0" "$OUR_D1" "$OUR_D2"
 
     printf '## What this does and does not establish\n\n'
     printf '* This arm differs from the pinned arm in TWO ways — the engine and the repair the\n'
