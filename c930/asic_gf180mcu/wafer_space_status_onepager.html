@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GRX930 on wafer.space — status and indicative schedule</title>
+<style>
+  @page { size: A4; margin: 15mm 14mm 16mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 8.85pt;
+    line-height: 1.37;
+    color: #1d2733;
+  }
+  h1, h2, h3 { font-family: "Segoe UI Semibold", "Segoe UI", Arial, sans-serif; color: #0f2740; margin: 0; }
+  h1 { font-size: 20pt; letter-spacing: -0.2pt; }
+  h2 {
+    font-size: 11.2pt; letter-spacing: 0.02em; text-transform: uppercase;
+    margin: 10pt 0 5pt; padding-bottom: 3pt; border-bottom: 1.6pt solid #0f2740;
+  }
+  h3 { font-size: 9.8pt; margin: 10pt 0 4pt; }
+  h2, h3 { break-after: avoid; }
+  p { margin: 0 0 6pt; }
+  strong { color: #0b1d2e; }
+  em { color: #45566a; }
+  a { color: #0f4c81; text-decoration: none; }
+
+  .masthead { border-top: 5pt solid #0f2740; padding-top: 9pt; }
+  .eyebrow { font-size: 7.8pt; letter-spacing: 0.16em; text-transform: uppercase; color: #6b7c8f; margin-bottom: 3pt; }
+  .dateline { font-size: 8.2pt; color: #45566a; margin-top: 5pt; }
+  .rule-accent { height: 2pt; background: #00a3a3; width: 46pt; margin: 8pt 0 0; }
+
+  .kpis { display: flex; gap: 6pt; margin: 11pt 0 2pt; }
+  .kpi {
+    flex: 1; border: 0.7pt solid #d3dbe3; border-top: 2.4pt solid #00a3a3;
+    padding: 6pt 7pt 5pt; background: #f7fafb;
+  }
+  .kpi .v { font-size: 13pt; font-weight: 600; color: #0f2740; letter-spacing: -0.2pt; display: block; }
+  .kpi .l { font-size: 7.4pt; color: #5a6b7d; line-height: 1.3; display: block; margin-top: 2pt; }
+
+  .footnote { margin-top: 9pt; }
+  .lede { font-size: 8.4pt; color: #45566a; margin: 2pt 0 4pt; }
+  .callout {
+    background: #f2f7fa; border-left: 3pt solid #0f4c81;
+    padding: 7pt 9pt 3pt; margin: 8pt 0 2pt;
+  }
+  .callout h3 { margin-top: 0; }
+  .callout ul { margin: 0; padding-left: 12pt; }
+  .callout li { margin-bottom: 3.5pt; }
+
+  table { width: 100%; border-collapse: collapse; margin: 5pt 0 9pt; break-inside: avoid; }
+  th {
+    text-align: left; font-size: 7.6pt; letter-spacing: 0.06em; text-transform: uppercase;
+    color: #ffffff; background: #0f2740; padding: 4pt 6pt; font-weight: 600;
+  }
+  td { padding: 3pt 6pt; border-bottom: 0.6pt solid #dfe6ec; vertical-align: top; }
+  tbody tr:nth-child(even) td { background: #f6f8fa; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .state { font-weight: 600; white-space: nowrap; }
+  .done { color: #1a6b3c; }
+  .open { color: #a4560a; }
+  .blocked { color: #a32020; }
+
+  .footnote { font-size: 7.8pt; color: #5a6b7d; border-top: 0.6pt solid #d3dbe3; margin-top: 12pt; padding-top: 6pt; }
+  ul.tight { margin: 3pt 0 7pt; padding-left: 13pt; }
+  ol.tight { margin: 3pt 0 7pt; padding-left: 15pt; }
+  ul.tight li, ol.tight li { margin-bottom: 3.5pt; }
+  .keep { break-inside: avoid; }
+  .pagebreak { break-before: page; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="eyebrow">Programme status &middot; confidential</div>
+  <h1>GRX930 on wafer.space</h1>
+  <div class="dateline">Status and indicative schedule &mdash; 26 October 2026, 20:10 local (27 October 2026, 00:10 UTC).
+  Every figure is measured from a run or a report in the tree; the routing number is live and moves while the current pass runs.</div>
+  <div class="rule-accent"></div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><span class="v">75,455</span><span class="l">DRC violations at end of routing pass 0, from 461,079</span></div>
+  <div class="kpi"><span class="v">258,713</span><span class="l">live count, pass 1, falling &mdash; deemed converging</span></div>
+  <div class="kpi"><span class="v">1,710</span><span class="l">antenna diodes inserted by the flow, which now completes</span></div>
+  <div class="kpi"><span class="v">12&ndash;50 min</span><span class="l">cost of one routing round, against 16&ndash;27 hours before</span></div>
+</div>
+
+<h2>In one paragraph</h2>
+<p>The silicon-side design is done and verified in simulation; the physical implementation is one step from done. The part intended for the shuttle is a <strong>single-core</strong> GRX930 test chip in the template's 1&times;1 pad ring, booting from its own ROM with no external loader. The flow now completes synthesis, placement, clock tree insertion, global routing and &mdash; for the first time &mdash; <strong>the full antenna repair, in-flow, with 1,710 diodes inserted</strong>, and it is inside detailed routing with a curve that is falling: 461,079 &rarr; 75,455 violations in the first pass, and 542,150 &rarr; 258,713 in the second after the repair re-routed the diode-carrying database. Iterations now cost 12&ndash;50 minutes rather than 16&ndash;27 hours. It is not yet clean, and the pass-over-pass restart level is what decides the date. On the shuttle side the position is unchanged and now verified: <strong>Run 3's full-size slots are sold out</strong>, so the binding deadline is whichever date Run 4 is announced with.</p>
+
+<div class="callout keep">
+  <h3>What changed since the 24 October edition</h3>
+  <ul>
+    <li><strong>Antenna repair is closed</strong> &mdash; the step that aborted (<code>GRT-0183</code>) now completes in-flow, 1,710 diodes inserted, no jumper-only fallback.</li>
+    <li><strong>Detailed routing turned</strong> &mdash; the last edition's 1.03&nbsp;M &rarr; 1.65&nbsp;M &ldquo;each pass worse&rdquo; is now <strong>75,455</strong> at the first pass end, converging in the second.</li>
+    <li><strong>Iteration cost collapsed</strong> &mdash; 16&ndash;27 hours per round became 12&ndash;50 minutes, and a guard stops any round that overruns.</li>
+  </ul>
+</div>
+
+<h2>What is actually going to the shuttle</h2>
+<table>
+  <tbody>
+    <tr><td style="width:26%"><strong>Process</strong></td><td>GF180MCU, 180 nm, 5LM_1TM_11K, <code>gf180mcu_fd_sc_mcu7t5v0</code></td></tr>
+    <tr><td><strong>Slot / die</strong></td><td>1&times;1, <strong>3932 &times; 5122 &micro;m</strong>, origin (0,0), dbu 0.001 &micro;m</td></tr>
+    <tr><td><strong>Core</strong></td><td>3048 &times; 4238 &micro;m = <strong>12.93 mm&sup2;</strong>, ~46&nbsp;% utilisation</td></tr>
+    <tr><td><strong>CPU</strong></td><td>1&times; RV64IMAC, 5-stage, 512&nbsp;B I + 512&nbsp;B D cache (16 &times; 32&nbsp;B lines)</td></tr>
+    <tr><td><strong>Memory</strong></td><td>2&nbsp;KB on-chip SRAM + 1&nbsp;KB boot ROM at <code>0x0001_0000</code> (<code>CORE_RESET_PC</code>)</td></tr>
+    <tr><td><strong>I/O</strong></td><td>UART, GPIO, one external interrupt, 74 pad openings (template ring)</td></tr>
+    <tr><td><strong>Frequency</strong></td><td>see <em>Timing</em> below &mdash; the 40&nbsp;ns data paths close (25&nbsp;MHz) once the reset tree is fixed; 50&nbsp;MHz needs a re-floorplan</td></tr>
+  </tbody>
+</table>
+
+<div class="keep">
+<h3>On &ldquo;quad-core&rdquo;</h3>
+<p>The quad-core SoC (4&times; RV64IMAC, 2 NPUs, 64&nbsp;KB shared L2, write-through MSI-lite directory) is a real, FPGA-validated design &mdash; timing closed on the Artix-7 at ~121&nbsp;MHz, 0 failing endpoints &mdash; but it is not this shuttle part. Its memory architecture was frozen on 28&nbsp;Oct&nbsp;2026 as <strong>configuration B</strong>: main memory moves off-chip, removing 26.8&nbsp;mm&sup2; of SRAM macro and putting the part at <strong>86.4&nbsp;mm&sup2; of content</strong> (46.2&nbsp;mm&sup2; of cells + 40.2&nbsp;mm&sup2; of macro) &mdash; <strong>not the ~46&nbsp;mm&sup2; earlier editions quoted</strong>, which counted the cells and none of the memories. On the area model that costed the 2&times;4, that is a <strong>~165&nbsp;mm&sup2; die at 46&nbsp;% row utilisation &mdash; a ~12.9&nbsp;mm square</strong>, and <strong>&asymp;&euro;151k</strong> at EUROPRACTICE's published &euro;913/mm&sup2; (&asymp;&euro;147k at 161&nbsp;mm&sup2;, &asymp;&euro;161k at a 177&nbsp;mm&sup2; relief valve). GlobalFoundries' own shuttle terms are unpublished, and <strong>wafer.space cannot build it:</strong> 20.12&nbsp;mm&sup2; is its largest die (confirmed 27&nbsp;Oct&nbsp;2026). Putting it on silicon is therefore its own decision with its own supplier, downstream of this vehicle proving the flow. Details: <code>wafer_space_integration/quadcore_submission_scope.md</code> &sect;4.</p>
+</div>
+
+<h2>Status by stage</h2>
+<table>
+  <thead>
+    <tr><th style="width:23%">Stage</th><th style="width:17%">State</th><th>Evidence</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>RTL, boot, bring-up</td><td class="state done">done</td><td>boots from ROM with empty SRAM (<code>+NO_PRELOAD</code> PASS); <code>-DROM_DISABLE</code> control fails; cache index/tag and MMIO read-hold fixes landed</td></tr>
+    <tr><td>Pad ring + adapter</td><td class="state done">done</td><td>template <code>chip_top.sv</code> / <code>slot_1x1.yaml</code> unmodified; adapter lint PASS (caught two real defects); precheck stage-3 slot size passes</td></tr>
+    <tr><td>Global routing</td><td class="state done">done</td><td><code>GRT-0183</code> root-caused to a no-path in a bounded search region; <code>GRT_ADJUSTMENT 0.1</code> converges with 0 overflow on every layer in 8 sweeps</td></tr>
+    <tr><td>Antenna repair</td><td class="state done">done</td><td>in-flow on the 26Q4 engine: <strong>1,710 diodes inserted</strong>, step completes; the same step aborted on the pinned build</td></tr>
+    <tr><td>Active-layer density</td><td class="state done">done, not yet on this core</td><td>replacement fill reaches COMP 31.27&nbsp;% / Poly2 26.25&nbsp;% (floors 25 / 14) with 0 deck violations; the PDK default missed both</td></tr>
+    <tr><td>GDS stream-out</td><td class="state done">done</td><td>rebuilt from DEF + PDK library; the previous artifact had LEF-indexed layers, 229 cell abstracts and 30,130 cells in the wrong rows</td></tr>
+    <tr><td>Netlist vs layout (structural)</td><td class="state done">done</td><td>CDL-vs-DEF compare <code>MATCH</code>: 53,745 instances, 0 unmatched, 0 DEF-only</td></tr>
+    <tr><td><strong>Detailed routing</strong></td><td class="state open">in progress &mdash; falling</td><td>pass 0 <strong>461,079 &rarr; 75,455</strong>; repair re-route <strong>542,150 &rarr; 258,713</strong> and iterating; gate requires 0</td></tr>
+    <tr><td>Timing</td><td class="state open">reset tree</td><td>data paths close at 40&nbsp;ns (&minus;0.064&nbsp;ns on the pinned engine); a 2,132-load <code>clkbuf_16</code> on reset does not. Hold &minus;2.44&nbsp;ns on both engines</td></tr>
+    <tr><td>Precheck on a core GDS</td><td class="state blocked">never run</td><td>pad-mask offset (74 openings 0.5&nbsp;&micro;m inside the golden mask) and a 5&nbsp;nm grid snap are known items</td></tr>
+    <tr><td>Shuttle slot</td><td class="state blocked">unavailable</td><td>Run 3 full-size slots sold out (confirmed 26 Oct); Run 4 undated</td></tr>
+  </tbody>
+</table>
+
+<h2>The blocker, in numbers</h2>
+<p>The live arm is the die with its antenna repair completed, routed on OpenROAD 26Q4, capped at 8 optimisation rounds per pass and re-routed up to 10 times by the antenna-repair loop. Two passes are in the log:</p>
+
+<table>
+  <thead>
+    <tr><th style="width:9%">Pass</th><th style="width:14%">Start</th><th>Rounds, in order</th><th style="width:19%">Standing</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="num">0</td>
+      <td class="num">461,079</td>
+      <td class="num">461,079 &rarr; 273,018 &rarr; 251,227 &rarr; 145,595 &rarr; 115,794 &rarr; 100,318 &rarr; 89,865 &rarr; 83,371 &rarr; <strong>75,455</strong></td>
+      <td>capped after 8 rounds, &minus;83.6&nbsp;%</td>
+    </tr>
+    <tr>
+      <td class="num">1</td>
+      <td class="num">542,150</td>
+      <td class="num">542,150 &rarr; 297,665 &rarr; 275,717 &rarr; <strong>258,713</strong> &rarr; (4th round open)</td>
+      <td>converging, mean gain 20.7&nbsp;%/round</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The restart is higher than the pass-0 floor because the antenna repair inserted its diodes into the routed database and the router re-lands every net they touch. The question the schedule turns on is not the within-pass slope &mdash; that is healthy &mdash; but whether the <strong>next</strong> pass starts below 542,150 and ends below 75,455. If the restart level falls pass over pass, the loop closes; if it stays above the previous floor, the repair is adding more disturbance than the router removes and the configuration changes below are back on the critical path.</p>
+
+<p>Three things changed the cost of finding out. Iterations are measured at <strong>12&ndash;50 minutes</strong>, with a single 84-minute outlier, against the 16&ndash;27 hours recorded on the earlier core-only curve. A wall-clock and regression guard watches every pass and stops the first of: a round past 2&nbsp;h, a pass past 8&nbsp;h, 30 minutes of silence in an open round, a count 25&nbsp;% above the pass's best, or three rounds each buying less than 0.25&nbsp;%. It fired once today (a 2&nbsp;h round, on an earlier launch) and the arm was relaunched; since then every round has landed inside its budget. And the step log is line-buffered end to end, so a silent router and a stalled one are now distinguishable &mdash; the guard's 30-minute rule is real rather than nominal.</p>
+
+<p>The one standing operational risk is disk: the flow box is at <strong>9.4&nbsp;GB free of 150&nbsp;GB (94&nbsp;% used)</strong>, and a pass writes a ~400&nbsp;MB database. A guard polls the volume and prunes old route trees at the soft threshold, so the arm is protected, but headroom is thin and the spare ARM box (217&nbsp;GB free) is where the next arm would go.</p>
+
+<div class="keep">
+<h2>Timing</h2>
+<p>The 24 October edition carried two STA readings of the same database and could not reconcile them. They are reconciled now, and neither was a design change: the &minus;345&nbsp;ns row was taken <em>before</em> the post-CTS resizer, and the flow's own next STA step reads &minus;0.100&nbsp;ns on that same database. Re-running the post-repair STA on the pinned engine, through the flow's own tool, reproduces its control to five figures:</p>
+<table>
+  <thead>
+    <tr><th style="width:32%">Measurement</th><th>Engine</th><th>Setup WNS</th><th>Setup TNS</th><th>Endpoints</th><th>40 ns?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>post-CTS, before the resizer (13 Oct)</td><td>pinned</td><td class="num">&minus;345.20 ns</td><td class="num">&mdash;</td><td class="num">30,490</td><td>superseded</td></tr>
+    <tr><td>post-resizer (13 Oct)</td><td>pinned</td><td class="num">&minus;0.100 ns</td><td class="num">&minus;2.01 ns</td><td class="num">43</td><td>yes</td></tr>
+    <tr><td>post-repair (27 Oct)</td><td>pinned</td><td class="num"><strong>&minus;0.064 ns</strong></td><td class="num">&minus;0.62 ns</td><td class="num">28</td><td>yes</td></tr>
+    <tr><td>post-repair (27 Oct)</td><td>26Q4</td><td class="num">&minus;8.646 ns</td><td class="num">&minus;6,808 ns</td><td class="num">2,393</td><td>no</td></tr>
+  </tbody>
+</table>
+<p>The two engines disagree by 8.6&nbsp;ns on identical input, and the whole difference is one net: <code>split25</code>, a <code>clkbuf_16</code> driving <strong>2,132 loads</strong> with a 21&ndash;47&nbsp;ns transition against a 3&nbsp;ns limit. Both engines flag that transition as illegal and charge it differently (0.39&nbsp;ns against 18.55&nbsp;ns at the load pin). So the useful statement is not a single WNS:</p>
+<ul class="tight">
+  <li>the <strong>40&nbsp;ns data paths close</strong> (&minus;0.064&nbsp;ns, i.e. 25&nbsp;MHz), and did before the repair;</li>
+  <li>the <strong>reset distribution does not</strong>, on either engine, and that is a buffering fix rather than a frequency decision;</li>
+  <li>hold is &minus;2.44&nbsp;ns on both engines, so it is a real item for the resizer.</li>
+</ul>
+<p>Until the reset tree is fixed, no frequency should be quoted; after it, 40&nbsp;ns is the target and 50&nbsp;MHz needs a re-floorplan.</p>
+</div>
+
+<h2>Indicative timeframes</h2>
+<table>
+  <thead>
+    <tr><th style="width:30%">Milestone</th><th style="width:22%">Estimate</th><th style="width:12%">Confidence</th><th>What moves it</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A routing curve that reaches zero</td><td>1&ndash;3 weeks of iteration</td><td>medium</td><td>whether the pass-over-pass restart level falls; a configuration change is ~2&nbsp;h per experiment in the fast loop</td></tr>
+    <tr><td>Clean route &rarr; GDS &rarr; precheck pass</td><td>2&ndash;4 weeks after that</td><td>medium-low</td><td>each pre-routing change forces a re-route; each precheck run is ~9&nbsp;h, and the pad-mask/grid items need a re-spin</td></tr>
+    <tr><td><strong>GDS ready to upload</strong></td><td><strong>late November 2026 at the earliest; December 2026&ndash;Q1 2027 is the realistic band</strong></td><td>medium-low</td><td>routing convergence above; nothing else is on the critical path</td></tr>
+    <tr><td>Run 3 (clean GDS 16 Dec 2026)</td><td><strong>not achievable, and moot</strong></td><td>high</td><td>full-size slots sold out; purchase closed to us</td></tr>
+    <tr><td>Run 4</td><td>date unknown</td><td>&mdash;</td><td>wafer.space has not published one; we will be precheck-clean and uploadable on day one</td></tr>
+    <tr><td>Silicon in hand</td><td>follows the shuttle, not us</td><td>high</td><td>Run 3 parts are quoted for Q2 2027; Run 4 ships on its own schedule</td></tr>
+  </tbody>
+</table>
+
+<p>Budget unchanged: <strong>$8,000</strong> for the 1&times;1 slot, <strong>$1,500</strong> for chip-on-board, with the CoB option kept alive in the layout (the four marker cells are already instantiated).</p>
+
+<div class="keep">
+<h2>What we need decided</h2>
+<ol class="tight">
+  <li><strong>Reset buffering, then the target clock</strong> &mdash; fix the 2,132-load reset buffer so both engines agree, and confirm 40&nbsp;ns (25&nbsp;MHz) as the target; 50&nbsp;MHz needs a re-floorplan. The part boots either way.</li>
+  <li><strong>Quad-core vehicle</strong> &mdash; whether the four-core SoC should be scoped as a larger-slot submission in parallel, or held until this vehicle has taped out.</li>
+  <li><strong>Slot strategy</strong> &mdash; watch for a released Run 3 full-size slot and subscribe for Run 4 notification, or accept that the first silicon lands on Run 4's calendar.</li>
+</ol>
+</div>
+
+<div class="keep">
+<h2>Evidence trail</h2>
+<p class="lede">Every figure above traces to a run or a report. These are the ones a reviewer would ask for.</p>
+<table>
+  <thead>
+    <tr><th style="width:34%">Claim</th><th style="width:30%">Source</th><th>How it was measured</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Global routing closes at 0 overflow</td><td>run <code>ws_v3</code> step 37</td><td>one-knob probes on the frozen pre-GRT state, &asymp;7&nbsp;min each; <code>wafer_space_integration/probe_grt.sh</code></td></tr>
+    <tr><td>Antenna repair completes, 1,710 diodes</td><td>run <code>dielb01</code> step 04</td><td>the 26Q4 engine in-flow; the pinned build aborts with <code>GRT-0183</code> on the same database</td></tr>
+    <tr><td>DRT pass 0: 461,079 &rarr; 75,455</td><td>run <code>dielb01</code> step 06</td><td>the step's own <code>DRT-0195</code> / <code>DRT-0199</code> lines, segmented per pass by <code>watch_drt_curve.sh</code></td></tr>
+    <tr><td>Timing: &minus;0.064&nbsp;ns pinned, &minus;8.646&nbsp;ns 26Q4</td><td><code>sta_engine_reconciliation.md</code></td><td>single-step LibreLane resume on identical state; the control reproduces the flow's &minus;0.0999734&nbsp;ns to five figures</td></tr>
+    <tr><td>Density 31.27&nbsp;% / 26.25&nbsp;%, 0 deck violations</td><td><code>wafer_space_integration/fill/</code></td><td>the gf180mcuD deck in the pre-check image, deep mode, on the flow's own GDS</td></tr>
+    <tr><td>Structural LVS <code>MATCH</code></td><td><code>build/lvs_chip/net_compare.json</code></td><td>CDL vs DEF: 53,745 instances each, 0 unmatched, 0 DEF-only</td></tr>
+    <tr><td>Run 3 full-size slots sold out</td><td>Crowd Supply campaign page</td><td>read 26&nbsp;Oct 2026; the site still shows 9&nbsp;Dec purchase / 16&nbsp;Dec GDS dates</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="footnote">Prepared from the run tree on the flow box and the reports in <code>Claude outputs/</code> (<code>ws_run3_readiness_gaps.md</code> is the full gap register). Figures are point-in-time; the detailed routing count changes with every round.</p>
+
+</body>
+</html>
