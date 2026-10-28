@@ -138,42 +138,72 @@ same file, and the netlist is unaffected.
 ## Routing (the measurement this was for)
 
 The knobs are the routing runs' own — `PL_TARGET_DENSITY_PCT 55`, `GRT_ADJUSTMENT` 0.1,
-`GRT_ALLOW_CONGESTION true` — so the run is the same flow, on the same tag, with the macro bank
-in place of part of the flop array.
+`GRT_ALLOW_CONGESTION true` — so the run is the same flow on one tag, with only the memory's
+implementation swapped.
 
-**The control is not yet measured, and the numbers that look like one are a different design.**
-The only 0.1 routing results in this tree belong to the die arm: `ws_arm64_v1` and `die01` need
-5 and 8 extra iterations to reach overflow 0 and route 38.18 M and 39.46 M µm, on 243,798 nets
-(`arm64_grt_equivalence.md`). This vehicle is a 192,563-instance design at 13.44 % total GRT
-utilisation, so borrowing those numbers would compare a smaller part against a larger one and
-call the difference the macro bank's. The FF column below is therefore left unmeasured; the
-comparison needs a FF run of *this* tag with these same two files swapped out.
+**Both columns are measured on this tag.** `sram03` completed `OpenROAD.GlobalRouting` at 06:27
+UTC and stopped at the chain's `-T OpenROAD.GlobalRouting` limit with `SRAM_EXIT:0`; `ffctl01`
+ran the same staged tree, image, two flow patches (line-buffered step logs, reset into CTS) and
+routing knobs -- `resolved.json` shows `PL_TARGET_DENSITY_PCT 55`, `GRT_ADJUSTMENT 0.1`,
+`GRT_ALLOW_CONGESTION true` and a `PDN_CFG` with no macro grids -- to `Flow complete.` at the
+same limit. The only difference between the tags is the file pair: `macros_grx930_sram.yaml` +
+`grx930_sram_surrogate.yaml` instead of `macros_grx930.yaml` + `grx930_overrides.yaml`. That the
+FF tag really was the FF configuration is in its own GRT header: `GRT-0003 Macros: 5` (the ws_ip
+cells) against `13` in `sram03` (the same five plus the eight SRAM macros). Records are
+`runs/sram03/` and `runs/ffctl01/`. (`sram02` is the run killed at the `-F` mistake above;
+`sram01` is the pre-fix one that died at Yosys step 8.)
 
-Status: `sram03` completed `OpenROAD.GlobalRouting` at 06:27 UTC and stopped at the chain's
-`-T OpenROAD.GlobalRouting` limit with `SRAM_EXIT:0` — routed through step 37 of 39, nothing
-beyond it attempted. Record is `ws/logs/sram_surrogate.sram03.log` and `runs/sram03/`. (Tag
-`sram02` is the same run killed at the `-F` mistake above; `sram01` is the pre-fix one that died
-at Yosys step 8. `ws/logs/sram_chain.nohup` is `sram01`'s log, not this run's.)
+`ffctl01` cost one thing `sram03` did not: its post-CTS resizer ran 32,120 iterations over
+2 h 06 m (16:13 → 18:19 UTC) against 17,240 over 1 h 14 m, and left 30,903 timing-repair buffers
+against 13,404. That is the flop array being timed, before routing starts.
 
 | | FF array (1×1, 0.1) | macro surrogate (1×1, 0.1) |
 |---|---|---|
-| GRT extra iterations | not measured on this part | 5 of 50 |
-| final overflow, M1–M5 | — | 0 / 0 / 0 / 0 / 0 |
-| GRT wirelength | — | 13,858,798 µm |
-| `GRT-0115` / `GRT-0183` | — | absent / absent |
+| tag | `ffctl01` | `sram03` |
+| macros at GRT (`GRT-0003`) | 5 (ws_ip only) | 13 (5 ws_ip + 8 SRAM) |
+| instances / netlist | 333,118 | 210,385 |
+| sequential cells | 33,868 | 17,658 |
+| timing-repair buffers | 30,903 | 13,404 |
+| routed nets (`GRT-0014`) | 244,108 | 133,410 |
+| GRT extra iterations | 5 of 50 | 5 of 50 |
+| final overflow, M1–M5 | 0 / 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 / 0 |
+| total GRT usage (peak layer) | 39.57 % (Metal2 56.20 %) | 13.44 % (Metal2 25.89 %) |
+| GRT wirelength | 38,304,655 µm | 13,858,798 µm |
+| wirelength per routed net | 157 µm | 104 µm |
+| `GRT-0115` / `GRT-0183` | absent / absent | absent / absent |
+| `GRT-0281` large fanout | 1 net, 1,072 terminals | none |
+| GRT runtime | 00:02:03 | 00:00:48 |
 
-What the macro column does establish on its own: the macro bank, its fixed placement and its
-strapped grid do not stop the global router — the same 5-iteration convergence the die arm's
-ARM run reached, with no `GRT-0183`, on a design whose storage is now eight foundry macros
-rather than flops.
+**What the table says about feasibility.** The macro bank is not a precondition for global
+routing. FF storage reaches overflow 0 on all five layers in the same five extra iterations, with
+no `GRT-0115` or `GRT-0183`, so on this tag the router closes either way. The macro bank's value
+here is cost, not feasibility.
+
+**What it says about that cost.** The FF column is a larger design — 244 k routed nets against
+133 k, 333 k instances against 210 k — so most of the 2.76 × wirelength is the memory being built
+out of flops at all, and must not be quoted as router inefficiency. The figure that does not
+scale away is utilisation: 39.57 % total with Metal2 at 56.20 %, against 13.44 % and 25.89 %.
+Metal2 is where DRT has to jog and escape both macro and standard-cell pins and where antenna
+repair adds its detours, and it is the step this family of runs keeps dying in; the FF
+configuration leaves it nearly saturated before the first iteration. The 17,500 extra repair
+buffers are also ~1.0 mm² of new cells to place, connect and keep on the grid, plus the two hours
+of resizer wall clock above.
+
+Wirelength per routed net (157 against 104 µm) is kept in the table because it does not cancel
+with size. It is consistent with the flop array's wide read/write cones and the repair buffers'
+chains, but it is a property of the netlist, not a congestion verdict.
+
+What this establishes: on one tag and one set of knobs, the memory's implementation changes how
+much design the router has to fit (2.76 × wirelength, 2.9 × total utilisation, Metal2 56 % against
+26 %) and what the post-CTS repair costs, but not whether global routing converges — both columns
+reach zero overflow in five extra iterations with no `GRT-0115` or `GRT-0183`.
 
 ## What this does not prove
 
 - **Scale.** Eight macros in one bank is not 320 tiled across four cores. It proves the plumbing,
   not the floorplan of the quad-core.
 - **Placement quality.** The bank is fixed by hand in a corner; nothing here says that is where a
-  real memory should go, only that a corner bank of this size can be placed, strapped and (if the
-  routing table above fills in) routed.
+  real memory should go, only that a corner bank of this size can be placed, strapped and routed.
 - **DRT, antenna repair and 5LM pin access.** Those live in steps this run has not reached. The
   macro's pins are Metal2, which is also where DRT has to jog and escape, so that is the next
   real risk, not a formality.
