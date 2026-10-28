@@ -1,0 +1,22 @@
+# grx930_sram_surrogate.yaml -- the macro-flow surrogate's overrides.
+#
+# Passed LAST, after grx930_overrides.yaml, and it changes only what the
+# surrogate has to differ in:
+#
+#   * the RTL is built with the foundry SRAM as its storage instead of the
+#     flip-flop array (`USE_SRAM_MACRO`, see grx930_sram_64kb), which is what
+#     drags the whole macro path through the flow: MACROS, fixed placement, PDN
+#     straps over a macro, antenna repair, STA against the vendor .lib;
+#   * the PDN gets the per-instance grids for the eight slices.
+#
+# Everything else -- sources, synthesis strategy, density, the routing knobs,
+# the fill script -- is the routing part's own configuration, unchanged, so this
+# run is comparable with the one it is a variant of.
+#
+# The define is deliberately flow-scoped: the RTL sims (`make sim`) and the FPGA
+# build never see it, and the tapeout configuration keeps the FF array until the
+# macro path has a routed result behind it.
+VERILOG_DEFINES:
+- USE_SRAM_MACRO
+
+PDN_CFG: dir::pdn/pdn_cfg_grx930_sram.tcl

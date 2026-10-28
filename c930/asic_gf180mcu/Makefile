@@ -157,11 +157,16 @@ SIM_DEFS      ?=
 # a ROM the chip does not instantiate. Left out of the list for that reason.
 SIM_UNUSED_ROM := $(SIM_RTL_DIR)/c930_bootrom.sv $(SIM_RTL_DIR)/bootrom_wrapper.sv
 SIM_RTL        := $(filter-out $(SIM_UNUSED_ROM),$(wildcard $(SIM_RTL_DIR)/*.sv))
+# Behavioural model of the foundry SRAM macro, for the macro-backed storage
+# configuration (`SIM_DEFS=-DUSE_SRAM_MACRO`). Always listed: an uninstantiated
+# module costs nothing, and it keeps the two configurations one command apart.
+SIM_MACRO_MODEL := ../tb/gf180mcu_fd_ip_sram__sram512x8m8wm1.v
 
 sim: $(BUILD)
 	@echo "=== Boot test: $(TOP) with $(words $(SIM_RTL)) RTL files + ../tb/tb_grx930_test_chip.sv ==="
 	@$(SIM_IVERILOG) -g2012 $(SIM_DEFS) -Ptb_grx930_test_chip.CLK_FREQ=$(SIM_CLK_FREQ) \
-		-o $(BUILD)/$(TOP)_boot.vvp $(SIM_RTL) ../tb/tb_grx930_test_chip.sv || { \
+		-o $(BUILD)/$(TOP)_boot.vvp $(SIM_RTL) $(SIM_MACRO_MODEL) \
+		../tb/tb_grx930_test_chip.sv || { \
 		echo "FAIL: compile error"; exit 1; }
 	@$(SIM_VVP) $(BUILD)/$(TOP)_boot.vvp $(SIM_PLUSARGS) > $(BUILD)/sim.log 2>&1 || { \
 		cat $(BUILD)/sim.log; echo "FAIL: simulation aborted (see $(BUILD)/sim.log)"; exit 1; }

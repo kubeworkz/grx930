@@ -178,9 +178,13 @@ module grx930_test_chip
   // D-cache misses forever and let a concurrent D-cache request mask the
   // I-cache completion.
   logic dcache_rd_granted;   // combinational: D-cache owns the port this cycle
-  logic rd_owner_p1, rd_owner_p2; // owner of the in-flight access, pipelined
+  logic inflight;            // a read has been accepted and is not yet complete
+  logic inflight_rom;        // ... the ROM is serving it (held until done)
+  logic inflight_d;          // ... the D-cache owns it (held until done)
+  logic sram_busy;           // SRAM cannot accept a read this cycle
 
   assign dcache_rd_granted = ~icache_rd_req & dcache_rd_req;
+
 
   // --- Boot ROM / SRAM address split ---------------------------------------
   // Both memories present the same interface (256-bit line, 2-cycle latency),
@@ -203,45 +207,61 @@ module grx930_test_chip
     .o_rd_done (rom_rd_done)
   );
 
-  assign sram_rd_req  = (icache_rd_req | dcache_rd_granted) & ~rom_hit;
+  // -------------------------------------------------------------------------
+  // Read handshake: one access in flight, owner and select held until done.
+  //
+  // The two memories no longer have the same latency, so a fixed-depth owner
+  // pipeline cannot align the done pulse with the master that asked for it:
+  // the ROM answers in 2 cycles, while the macro-backed SRAM
+  // (`USE_SRAM_MACRO`) needs 5 -- four word beats plus the registered output --
+  // and refuses a read for a cycle while it drains a buffered write
+  // (`o_busy`). Both requesters hold their request until *_rd_done, so the bus
+  // can simply accept one access at a time, latch who owns it, and route each
+  // memory's own done strobe to that owner.
+  //
+  // Holding the select also keeps the fill line stable for the write-back
+  // cycle: the I-cache controller drops its request at the done cycle and
+  // stores the line ONE CYCLE LATER, so a live-address mux would pick the
+  // wrong (idle) memory exactly when the line is consumed -- which is how the
+  // ROM boot once silently stored X in the cache.
+  wire accept_i = icache_rd_req & ~inflight & (rom_hit | ~sram_busy);
+  wire accept_d = dcache_rd_req & ~icache_rd_req & ~inflight & (rom_hit | ~sram_busy);
+  wire accept   = accept_i | accept_d;
+
+  // One-cycle request pulse: both memories latch on it and report their own
+  // completion later. `rom_hit` is only sampled on an accept cycle -- another
+  // master may present a different address while this access is in flight, so
+  // it must not be read live downstream.
+  //
+  // The address mux selects on the request priority, NOT on accept_d: rom_hit
+  // is decoded from this address and the accept terms test rom_hit, so routing
+  // accept_d back into the mux is a combinational loop (Yosys `check` reports
+  // it, and Checker.YosysSynthChecks then stops the flow). Priority and accept
+  // agree on every accept cycle -- accept_d requires ~icache_rd_req -- so the
+  // address is the requester's either way.
+  assign sram_rd_req  = accept & ~rom_hit;
   assign sram_rd_addr = dcache_rd_granted ? dcache_rd_addr : icache_rd_addr;
 
-  // Which memory served the in-flight access, HELD for its whole lifetime.
-  // The live rom_hit cannot be used downstream: the I-cache controller drops
-  // its request (and address) at the done cycle, then writes the fill line ONE
-  // CYCLE LATER, so a live-address mux picks the wrong (idle) memory exactly
-  // when the line is consumed -- an undriven/older line, which is how the ROM
-  // boot silently stored X in the cache. Sampled while the request is
-  // presented, so it is valid from accept through the extra write-back cycle.
-  logic line_from_rom;
+  wire done_any = inflight_rom ? rom_rd_done : sram_rd_done;
 
-  always_ff @(posedge core_clk or negedge core_rst_n) begin
-    if (!core_rst_n)
-      line_from_rom <= 1'b0;
-    else if (icache_rd_req | dcache_rd_granted)
-      line_from_rom <= rom_hit;
-  end
-
-  // The SRAM reports completion two cycles after accepting a request
-  // (rd_valid_p1 → rd_valid_p2), so the owner flag is pipelined in lockstep
-  // to align the done pulse with the master whose request is completing.
   always_ff @(posedge core_clk or negedge core_rst_n) begin
     if (!core_rst_n) begin
-      rd_owner_p1 <= 1'b0;
-      rd_owner_p2 <= 1'b0;
-    end else begin
-      rd_owner_p1 <= dcache_rd_granted;
-      rd_owner_p2 <= rd_owner_p1;
+      inflight     <= 1'b0;
+      inflight_rom <= 1'b0;
+      inflight_d   <= 1'b0;
+    end else if (accept) begin
+      inflight     <= 1'b1;
+      inflight_rom <=   rom_hit;
+      inflight_d   <=   accept_d;
+    end else if (done_any) begin
+      inflight     <= 1'b0;
     end
   end
 
   // D-cache reads also go to SRAM (address 0x0000_0000 – 0x0000_07FF; higher
-  // aliases); addresses in the ROM window are served by the ROM instead.
-  // Done routing: whichever master owns the in-flight access sees completion,
-  // from whichever memory the (held) select names. Both memories register the
-  // done pulse from the request cycle, and the owner flag pipelines in lockstep.
-  assign icache_rd_done = (line_from_rom ? rom_rd_done : sram_rd_done) & ~rd_owner_p2;
-  assign dcache_rd_done = (line_from_rom ? rom_rd_done : sram_rd_done) &  rd_owner_p2;
+  // aliases), and addresses in the ROM window are served by the ROM instead.
+  assign icache_rd_done = done_any & ~inflight_d;
+  assign dcache_rd_done = done_any &  inflight_d;
 
   // Read data feeds both cache fill ports; the *_rd_done strobes above decide
   // which side consumes a given line.  Left undriven before, which tripped
@@ -249,8 +269,8 @@ module grx930_test_chip
   // never received cache line data at all.
   // Both memories must HOLD their line past the done pulse for this to work:
   // the SRAM's rd_word[] registers do, and the ROM's rd_line_r does.
-  assign icache_rd_line = line_from_rom ? rom_rd_line : sram_rd_line;
-  assign dcache_rd_line = line_from_rom ? rom_rd_line : sram_rd_line;
+  assign icache_rd_line = inflight_rom ? rom_rd_line : sram_rd_line;
+  assign dcache_rd_line = inflight_rom ? rom_rd_line : sram_rd_line;
 
   // D-cache write-through to SRAM
   assign sram_wr_req   = dcache_wr_valid;
@@ -278,7 +298,8 @@ module grx930_test_chip
     .i_wr_addr  (sram_wr_addr),
     .i_wr_data  (sram_wr_data),
     .i_wr_strobe(sram_wr_strobe),
-    .o_wr_done  (sram_wr_done)
+    .o_wr_done  (sram_wr_done),
+    .o_busy     (sram_busy)
   );
 
   // --- UART (16550, AXI4-Lite) ---
@@ -359,6 +380,15 @@ endmodule
 // array (545K flops ≈ 34 mm² alone), and even the 8KB version pushed the
 // netlist to 84% core utilization, so storage is 2KB single-bank.
 // Byte addresses ≥ 2KB wrap (alias) into this array.
+//
+// Two implementations behind the same ports:
+//   * default -- a flip-flop array, 2-cycle line read (every existing run and
+//     the FPGA build use this);
+//   * `USE_SRAM_MACRO` -- eight foundry gf180mcu_fd_ip_sram__sram512x8m8wm1
+//     macros, byte-sliced, 5-cycle line read. This variant exists to put the
+//     real macro path (MACROS, PDN straps over a macro, fixed placement,
+//     antenna, STA against the vendor .lib) through the flow; see the block
+//     comment on the implementation for the beat sequence.
 // ---------------------------------------------------------------------------
 module grx930_sram_64kb
 (
@@ -376,14 +406,202 @@ module grx930_sram_64kb
   input  logic [63:0]  i_wr_addr,
   input  logic [63:0]  i_wr_data,
   input  logic [7:0]   i_wr_strobe,
-  output logic         o_wr_done
+  output logic         o_wr_done,
+
+  // Cannot accept a read this cycle: the macro bank starts a fill only when
+  // the port is free (a buffered write gets it first). Always 0 for the FF
+  // array, which is fully pipelined.
+  output logic         o_busy
 );
 
   // =========================================================================
   // Storage: 2KB = 256 × 64-bit words (single bank; Plan B shrink from 8KB)
   // =========================================================================
   localparam int DEPTH = 256;            // 64-bit words
-  localparam int AW    = $clog2(DEPTH);  // 10 bits
+  localparam int AW    = $clog2(DEPTH);  // 8 bits
+
+`ifdef USE_SRAM_MACRO
+  // =========================================================================
+  // Foundry-macro storage: 8 × gf180mcu_fd_ip_sram__sram512x8m8wm1
+  //
+  // This is the macro-flow surrogate (scope §7 step 3): the same 2KB built
+  // from the real SRAM instead of flops, so the flow has to do everything a
+  // macro needs -- MACROS/PDN_MACRO_CONNECTIONS, straps over a macro, fixed
+  // placement, antenna repair and STA against the vendor .lib -- at the
+  // utilisation this part already routes.
+  //
+  // The macro is 512 × 8 with one synchronous port (Q is registered), so the
+  // 64-bit word is byte-sliced across eight of them and the 256-bit line is
+  // assembled from four sequential beats:
+  //
+  //   cycle  0        1         2         3         4
+  //   addr   beat0 -> beat1  -> beat2  -> beat3
+  //   Q      --        beat0     beat1     beat2     beat3 (captured here)
+  //
+  // o_rd_done is registered from that last capture, i.e. a line read takes 5
+  // cycles against the FF array's 2 -- the same number of beats a real cache
+  // fill takes. The bus above does not care: it routes each memory's own done
+  // strobe and holds the owner for the access's lifetime.
+  //
+  // A single-port macro cannot read and write in the same cycle, so one write
+  // is buffered and applied between fills, and o_busy is high from the moment
+  // it arrives until it has been applied. The d-cache holds its write request
+  // until o_wr_done, which is what makes a one-deep buffer enough.
+  // =========================================================================
+  logic [AW:0]   m_a;          // {0, word}: 9 bits, 256 of the 512 rows used
+  logic          m_cen;        // chip enable, active low
+  logic          m_gwen;       // global write enable, active low
+  logic [63:0]   m_wen;        // per-bit write mask, active low: one byte per
+                               // slice, all 8 bits of it the slice's strobe
+  logic [63:0]   m_d;
+  logic [63:0]   m_q;
+
+  logic          fill_active;  // a line fill owns the port
+  logic [1:0]    fill_beat;    // beat being issued, 0..3
+  logic [AW-1:0] fill_word;    // word index of beat 0
+  logic          q_is_word;    // m_q next cycle holds a line word
+  logic [1:0]    q_word;       // ... which one
+  logic          rd_done_r;
+
+  logic          wb_valid;     // one buffered write, waiting for the port
+  logic [AW-1:0] wb_addr;
+  logic [63:0]   wb_data;
+  logic [7:0]    wb_strobe;
+  logic          wr_req_d;     // rising-edge detect: the requester holds req
+  logic          wr_done_r;
+
+  logic [63:0]   rd_word [3:0];  // 4 consecutive 64-bit words = 256-bit line
+
+  assign o_busy    = fill_active | wb_valid;
+  assign o_rd_line = {rd_word[3], rd_word[2], rd_word[1], rd_word[0]};
+  assign o_rd_done = rd_done_r;
+  assign o_wr_done = wr_done_r;
+
+  always_ff @(posedge i_clk or negedge i_rst_n) begin
+    if (!i_rst_n) begin
+      m_cen       <= 1'b1;
+      m_gwen      <= 1'b1;
+      m_wen       <= {64{1'b1}};
+      m_a         <= '0;
+      m_d         <= '0;
+      fill_active <= 1'b0;
+      fill_beat   <= 2'd0;
+      fill_word   <= '0;
+      q_is_word   <= 1'b0;
+      q_word      <= 2'd0;
+      rd_done_r   <= 1'b0;
+      wb_valid    <= 1'b0;
+      wb_addr     <= '0;
+      wb_data     <= '0;
+      wb_strobe   <= '0;
+      wr_req_d    <= 1'b0;
+      wr_done_r   <= 1'b0;
+    end else begin
+      // Port idle and no completion, unless something below says otherwise.
+      m_cen     <= 1'b1;
+      m_gwen    <= 1'b1;
+      m_wen     <= {64{1'b1}};
+      rd_done_r <= 1'b0;
+      wr_done_r <= 1'b0;
+      wr_req_d  <= i_wr_req;
+
+      // 1. Collect the word the macro drove out this cycle.
+      if (q_is_word) begin
+        rd_word[q_word] <= m_q;
+        if (q_word == 2'd3)
+          rd_done_r <= 1'b1;
+      end
+
+      // 2. Buffer one write. Captured on the rising edge of i_wr_req, which
+      //    the d-cache holds until o_wr_done -- so a held request is one
+      //    write, not one per cycle.
+      if (i_wr_req & ~wr_req_d & ~wb_valid) begin
+        wb_valid  <= 1'b1;
+        wb_addr   <= i_wr_addr[AW+2:3];
+        wb_data   <= i_wr_data;
+        wb_strobe <= i_wr_strobe;
+      end
+
+      // 3. Drive the single port: a buffered write first, then line beats.
+      if (wb_valid & ~fill_active) begin
+        m_cen     <= 1'b0;
+        m_gwen    <= 1'b0;          // write
+        // One bit of the strobe masks all eight data bits of its slice:
+        // slice i holds byte i, so WEN[8i +: 8] = ~wb_strobe[i] repeated.
+        m_wen     <= ~{8{wb_strobe}};
+        m_a       <= {1'b0, wb_addr};
+        m_d       <= wb_data;
+        wb_valid  <= 1'b0;
+        wr_done_r <= 1'b1;
+        q_is_word <= 1'b0;
+      end else if (!fill_active) begin
+        if (i_rd_req) begin
+          // Accept: beat 0 goes out this cycle.
+          fill_active <= 1'b1;
+          fill_beat   <= 2'd1;
+          fill_word   <= i_rd_addr[AW+2:3];
+          m_cen       <= 1'b0;
+          m_gwen      <= 1'b1;      // read
+          m_a         <= {1'b0, i_rd_addr[AW+2:3]};
+          q_is_word   <= 1'b1;
+          q_word      <= 2'd0;
+        end else begin
+          q_is_word <= 1'b0;
+        end
+      end else begin
+        m_cen     <= 1'b0;
+        m_gwen    <= 1'b1;          // read
+        m_a       <= {1'b0, fill_word + fill_beat};
+        q_is_word <= 1'b1;
+        q_word    <= fill_beat;
+        if (fill_beat == 2'd3) begin
+          fill_active <= 1'b0;
+          fill_beat   <= 2'd0;
+        end else begin
+          fill_beat <= fill_beat + 2'd1;
+        end
+      end
+    end
+  end
+
+  // Byte slice i of the 64-bit word lives in macro i: all eight share the
+  // address, enables and clock, and each gets its own active-low byte mask.
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_0 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[ 7: 0]),
+    .A (m_a), .D (m_d[ 7: 0]), .Q (m_q[ 7: 0])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_1 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[15: 8]),
+    .A (m_a), .D (m_d[15: 8]), .Q (m_q[15: 8])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_2 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[23:16]),
+    .A (m_a), .D (m_d[23:16]), .Q (m_q[23:16])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_3 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[31:24]),
+    .A (m_a), .D (m_d[31:24]), .Q (m_q[31:24])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_4 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[39:32]),
+    .A (m_a), .D (m_d[39:32]), .Q (m_q[39:32])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_5 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[47:40]),
+    .A (m_a), .D (m_d[47:40]), .Q (m_q[47:40])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_6 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[55:48]),
+    .A (m_a), .D (m_d[55:48]), .Q (m_q[55:48])
+  );
+  gf180mcu_fd_ip_sram__sram512x8m8wm1 u_macro_7 (
+    .CLK (i_clk), .CEN (m_cen), .GWEN (m_gwen), .WEN (m_wen[63:56]),
+    .A (m_a), .D (m_d[63:56]), .Q (m_q[63:56])
+  );
+`else
+  // =========================================================================
+  // Flip-flop array (default): 2-cycle line read, 1-cycle write
+  // =========================================================================
 
   // Storage array (synthesized as a flip-flop array)
   logic [63:0] mem [DEPTH-1:0];
@@ -461,5 +679,7 @@ module grx930_sram_64kb
   end
 
   assign o_wr_done = wr_valid_p1;
+  assign o_busy    = 1'b0;   // fully pipelined: a read can be accepted every cycle
+`endif
 
 endmodule

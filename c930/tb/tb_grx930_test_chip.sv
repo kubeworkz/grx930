@@ -135,6 +135,13 @@ module tb_grx930_test_chip #(
   endfunction
 
   task automatic preload_sram();
+`ifdef USE_SRAM_MACRO
+    // The macro-backed storage has no flop array to poke: its contents are the
+    // macro's own X state, as silicon's are. The ROM is the boot source and the
+    // firmware writes the SRAM before it reads it, so the preload is not
+    // needed -- this configuration must boot and pass without it.
+    $display("[info] USE_SRAM_MACRO: SRAM preload skipped (foundry macro storage)");
+`else
     logic [31:0] hi;
     for (int i = 0; i < SRAM_WORDS; i++)
       dut.u_sram.mem[i] = 64'd0;
@@ -143,6 +150,7 @@ module tb_grx930_test_chip #(
       dut.u_sram.mem[i >> 1] = {hi, img[i]};      // little-endian word pair
     end
     $display("[info] firmware %s: %0d words (%0d bytes) into SRAM", fw_path, nwords, nwords * 4);
+`endif
   endtask
 
   // -------------------------------------------------------------------------
@@ -204,8 +212,25 @@ module tb_grx930_test_chip #(
   // -------------------------------------------------------------------------
   int hb_first;
 
+  // One 64-bit word of the chip's SRAM, whichever storage backs it. The FF
+  // configuration is one array; the macro bank is eight byte-wide macros, so a
+  // word is assembled from theirs -- written out because a hierarchical name
+  // cannot be indexed.
+`ifdef USE_SRAM_MACRO
+  function automatic logic [63:0] sram_word(input int idx);
+    return {dut.u_sram.u_macro_7.mem[idx], dut.u_sram.u_macro_6.mem[idx],
+            dut.u_sram.u_macro_5.mem[idx], dut.u_sram.u_macro_4.mem[idx],
+            dut.u_sram.u_macro_3.mem[idx], dut.u_sram.u_macro_2.mem[idx],
+            dut.u_sram.u_macro_1.mem[idx], dut.u_sram.u_macro_0.mem[idx]};
+  endfunction
+`else
+  function automatic logic [63:0] sram_word(input int idx);
+    return dut.u_sram.mem[idx];
+  endfunction
+`endif
+
   task automatic check_magic();
-    automatic logic [63:0] got = dut.u_sram.mem[MAGIC_ADDR / 8];
+    automatic logic [63:0] got = sram_word(MAGIC_ADDR / 8);
     if (got !== {32'd0, EXP_MAGIC_LO}) begin
       $display("[fail] SRAM 0x%0h: got 0x%0h expected 0x%0h (D-cache write-through / load)",
                MAGIC_ADDR, got, {32'd0, EXP_MAGIC_LO});
@@ -217,7 +242,7 @@ module tb_grx930_test_chip #(
   endtask
 
   task automatic check_mark();
-    automatic logic [63:0] got = dut.u_sram.mem[MARK_ADDR / 8];
+    automatic logic [63:0] got = sram_word(MARK_ADDR / 8);
     if (got !== EXP_MARK) begin
       $display("[fail] SRAM 0x%0h: got 0x%0h expected 0x%0h (firmware did not reach its marker)",
                MARK_ADDR, got, EXP_MARK);

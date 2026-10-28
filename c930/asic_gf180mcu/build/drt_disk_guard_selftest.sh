@@ -352,6 +352,10 @@ echo "=== 19. the wiring: every flow arm starts this guard, and stops it ==="
 #                        when PREDRT_STOP is pushed past DRT; its phase-B fast loop
 #                        is the instrument this guard's thresholds were measured on.
 #     ws_chain.sh        the full Chip flow, no step limit, through routing.
+#     sram_surrogate_chain.sh  the macro-flow surrogate: the Chip flow with the
+#                        foundry SRAM as storage, run through GlobalRouting now
+#                        and DRT when it is extended -- same run tree, same ODBs,
+#                        so the same guard.
 #
 #   Every other chain that starts a container is exempt for a stated reason, not
 #   by omission: ws_synth_chain.sh pins WS_LIMIT=Checker.YosysSynthChecks (one run
@@ -365,7 +369,7 @@ echo "=== 19. the wiring: every flow arm starts this guard, and stops it ==="
 #   The tripwire at the end is for the NEXT arm: a chain that starts a flow
 #   container and appears in neither list fails here, so a new arm is wired or
 #   exempted on purpose instead of inheriting this pass.
-GUARD_ARMS="die_drt_chain.sh:die_predrt ws_chain.sh:ws_flow"
+GUARD_ARMS="die_drt_chain.sh:die_predrt ws_chain.sh:ws_flow sram_surrogate_chain.sh:sram_surrogate"
 GUARD_EXEMPT="ws_synth_chain.sh drt_db_compare_chain.sh ws_probe_chain.sh antenna_probe_chain.sh die_diode_flow_chain.sh both_chain.sh core_chain.sh grt03c_chain.sh grt_sweep_chain.sh"
 
 # The check is a function because it is run twice from different trees: once on
@@ -506,7 +510,11 @@ guard_wiring_check() {  # guard_wiring_check <build dir> <log>
     arm=$(basename "$f")
     case " $GUARD_ARMS " in *" $arm:"*) continue ;; esac
     case " $GUARD_EXEMPT " in *" $arm "*) continue ;; esac
-    if grep -q 'docker run -d' "$f" && grep -qE 'ws/(ws|die_predrt|die_drt)_exec\.sh' "$f"; then
+    # The exec-script names are matched, not the container name: that is what
+    # says "this launches a flow" regardless of which runner it calls. A new
+    # runner must be added here or its chain bypasses this tripwire entirely --
+    # which is exactly how sram_surrogate_chain.sh slipped past the first pass.
+    if grep -q 'docker run -d' "$f" && grep -qE 'ws/(ws|die_predrt|die_drt|sram_surrogate)_exec\.sh' "$f"; then
       sayf FAIL "$arm starts a flow container and is neither wired to the guard (GUARD_ARMS) nor exempted (GUARD_EXEMPT with a reason)"
       found=1
     fi
