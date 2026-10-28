@@ -1,4 +1,4 @@
-# arm64 vs x86 at GlobalRouting: the same 0.1 verdict, in 5 sweeps instead of 8
+# arm64 vs x86 at GlobalRouting: the same route, and 5-vs-8 was the netlist
 
 Written 2026-10-25 from two run trees: `ws_arm64_v1` on `ubuntu@2.31.100.64`
 (aarch64, a fresh full flow from RTL) and `die01` on `ubuntu@49.13.6.8` (x86_64,
@@ -7,21 +7,35 @@ the ARM box was provisioned to settle — does an arm64 build of the pre-check f
 route this die the way the x86 flow has routed it since October? — at the step
 where the two differ, and at the step where they fail identically.
 
+Extended 2026-10-26 with the replay this note asked for: `diea6401`, the die's own
+frozen state — the same files `die01` resumed — run on the ARM box. It removes the
+one variable the first comparison could not, the netlist, and it withdraws the
+per-sweep-cost conclusion. Both are recorded below.
+
 ## Verdict
 
-Global routing is equivalent. Both sides finish `GRT-0096` with **0 overflow on
-every layer**, no `GRT-0115` and no `GRT-0183`; the arm64 route needs **5** of its
-50 allowed overflow-removal sweeps where x86 needed **8**, and it lands **3.25 %
-less wire and 1.94 % fewer vias** on a netlist that differs by 10 instances. The
-37 % wall-clock gap is the sweep count, not a slow host: after removing the ~30 s
-of per-step setup both sides pay once, an arm64 sweep costs 25.0 s against x86's
-27.1 s (arm64 7.8 % faster).
+Global routing is equivalent, and on identical input it is *the same route*: fed
+the die's own `ws_v3` database, the ARM box needs the same **8** overflow-removal
+sweeps as x86, lands the same **39,459,512 µm** of wire and **1,656,170** vias,
+reports the same resource and demand on every layer, and finishes with **0
+overflow**, no `GRT-0115` and no `GRT-0183` (the replay `diea6401`, below).
 
-One step later the two runs **fail identically**: `OpenROAD.DiodeInsertion`
-aborts in `repair_antennas`' own GRT pass with `[ERROR GRT-0183]`, which is the
-pinned engine bug this build has always had, not an arm64 difference. So the ARM
-box neither fixes nor worsens the pre-DRT blocker, and an ARM arm is not a way
-around the engine pin.
+The full-flow comparison that first asked the question put the arm64 route at **5**
+sweeps with **3.25 % less wire and 1.94 % fewer vias** — on a netlist that differs
+by 10 instances. The replay settles that: on the same database both architectures
+agree to the unit, so the difference was the netlist, not the host.
+
+One step later both runs **fail identically**: `OpenROAD.DiodeInsertion` aborts in
+`repair_antennas`' own GRT pass with `[ERROR GRT-0183]`, on the same net
+(`_167563_`), at the same call site, after the same 3,846 jumpers and 2,522 diodes.
+So the ARM box neither fixes nor worsens the pre-DRT blocker, and an ARM arm is not
+a way around the engine pin.
+
+The claim this note has to withdraw is the per-sweep one. On equal work the ARM
+box's sweep loop took **244 s against x86's 217 s**, so the earlier "arm64 7.8 %
+faster per sweep" came from dividing unequal sweep counts. One run each on a shared
+vCPU does not resolve host variance, and nothing here says either host routes
+faster.
 
 ## The two runs
 
@@ -97,6 +111,10 @@ and it moves 4 % of Metal1's demand. That is not proof that this is the cause of
 the 3 % demand gap, but it is why the result is an equivalence check at the
 routing-step level rather than a bit-for-bit netlist A/B.
 
+The replay below settles the question this section raises: on identical input the
+ARM box also needs 8 sweeps, so 5-vs-8 describes a **netlist** difference, not an
+architecture one.
+
 ### The per-iteration cost control
 
 Wall clock alone would mislead: 155.4 s against 246.8 s looks like the ARM box is
@@ -110,7 +128,7 @@ once, and dividing that by 5 instead of 8 understates the arm64 advantage:
 | step wall (`runtime.txt`) | 155.421 s | 246.830 s | 0.63× |
 | `GRT-0303` global routing runtime | 125 s | 217 s | 0.58× |
 | step − `GRT-0303` (setup, I/O, metrics) | 30.4 s | 29.8 s | 1.02× |
-| **average per extra sweep** | **25.0 s** | **27.1 s** | **arm64 7.8 % faster** |
+| **average per extra sweep** | **25.0 s** | **27.1 s** | **arm64 7.8 % faster (this pair only — withdrawn below)** |
 
 The fixed overhead is equal within 2 %, which is the control that makes the third
 row usable: the only thing that differs per sweep is the sweep. Both runs are
@@ -120,7 +138,9 @@ single-threaded GRT (`threads` 1, average `cpu_percent` 99.83 / 99.84, peak RSS
 filling (which `GRT-0303` includes and the sweep count does not divide), so treat
 it as an upper bound on the sweep-cost difference, not a benchmark of the two
 hosts. The point it establishes is narrow and sufficient: the 37 % wall gap is
-5/8 of the work, not a host that is half the speed.
+5/8 of the work, not a host that is half the speed — for *this* pair of runs. On
+equal work the comparison reverses (the replay's sweep loop is 244 s against x86's
+217 s, below), so the 7.8 % here should not be read as an arm64 advantage.
 
 ## Step 40 — `OpenROAD.DiodeInsertion`: identical failure, +9 % more repairs
 
@@ -152,22 +172,80 @@ the whole arm in `GUARD_WAIT … step_dir_absent`, because the step it was armed
 (`*-openroad-detailedrouting`) never appeared; with 238–246 GB free it never had
 a reason to prune, so nothing was removed.
 
+## The clean falsifier, run: the die's own database on the ARM box
+
+`diea6401` (2026-10-26, 22:52 → 23:22 UTC, wall 30 min, container rc=2) is the
+replay this note asked for. It is the x86 reference's own resume state —
+`ws_v3/36-openroad-stamidpnr-2/state_out.json` and the 10 files it names, 722 MB,
+md5-checked across the two boxes — run through `build/die_diode_flow_chain.sh` on
+`ubuntu@2.31.100.64`. The engine is chosen in-container by
+`ws/tools/openroad_engine.sh` → `ws/tools/openroad_arm64.sh` (the image's own
+`dcf36133` under `stdbuf -oL`); the chain records it as `class=image`, because the
+pinned 26Q4 build publishes amd64 only, and the arm's own log carries
+`PREDRT openroad_override=/work/ws/tools/openroad_engine.sh dcf36133…`.
+
+| measure | x86 `die01` | arm64 `diea6401` (replay) |
+|---|---|---|
+| input database | `ws_v3` step-36 state | **the same files, md5-identical** |
+| extra iterations | 8 / 50 | **8 / 50** |
+| final overflow, M1–M5 | 0/0/0/0/0 | **0/0/0/0/0** |
+| `GRT-0115` / `GRT-0183` | absent | **absent** |
+| routed wirelength | 39,459,512 µm | **39,459,512 µm** |
+| vias | 1,656,170 | **1,656,170** |
+| resource, M1…M5 (total) | 773,110 · 2,454,175 · 2,678,584 · 2,348,963 · 1,531,619 (9,786,451) | **identical, per layer** |
+| demand, M1…M5 (total) | 66,430 · 1,385,792 · 1,174,479 · 1,053,180 · 298,328 (3,978,209, 40.65 %) | **identical, per layer** |
+| instances / cell area | 332,661 · 12,903,897.53 µm² | **332,661 · 12,903,897.53 µm²** |
+| step wall (`runtime.txt`) | 246.830 s | 274.061 s |
+| `GRT-0303` routing runtime | 217 s | 244 s |
+| step − `GRT-0303` (setup) | 29.8 s | 30.1 s |
+| per sweep (`GRT-0303` / sweeps) | 27.1 s | 30.5 s |
+
+Equality on the congestion table is the strong form of this check: the two hosts,
+the same OpenROAD build, the same database and knobs, and every one of the five
+layers' resource and demand identical — so the earlier "cleaner arm64 route" was
+the arm64 netlist (+10 instances, +0.022 % cell area) and nothing else.
+
+### And the same failure, to the net
+
+| | x86 `die01` | arm64 `diea6401` |
+|---|---|---|
+| jumpers inserted | 3,846 for 2,080 nets | **3,846 for 2,080 nets** |
+| diodes inserted | 2,522 | **2,522** |
+| abort | `GRT-0183`, `antenna_repair.tcl` line 27 | **same** |
+| net named | `_167563_` | **`_167563_`** |
+| `CheckAntennas` wall | 8:51.478 | 8:26.654 (2,643 net + 4,323 pin violations) |
+
+The replay's result is read from `ws/logs/predrt_diea6401.log`: the container's own
+stdout is empty because `die_predrt_exec.sh` redirects the flow into that file,
+which is also where the chain's report takes its quote from.
+
+### What it does to the per-sweep claim
+
+Equal work is the comparison this note could not make before, and it goes the
+other way: 244 s for eight sweeps against x86's 217 s — 30.5 s against 27.1 s per
+sweep, +12 %. The earlier 25.0 s/sweep was five sweeps on a lighter route, not a
+faster host. So the 7.8 % in "The per-iteration cost control" is withdrawn as a
+statement about the hosts; what survives is that the 37 % wall gap of the
+full-flow pair is the sweep count.
+
 ## What this establishes, and what it does not
 
-- **Establishes:** on this die, with this config and this engine build, arm64
-  global routing produces a *cleaner* route than the x86 reference — fewer
-  sweeps, less wire, fewer vias, zero overflow — and the pre-DRT path fails at
-  the same place for the same reason. ARM is a usable substitute for the x86
-  flow box at this stage, at roughly the same single-core cost per sweep.
-- **Does not establish:** that the two netlists are identical (they are not, by
+- **Establishes:** fed the same database, arm64 and x86 global routing produce
+  the same route — same sweep count, wirelength, vias, per-layer resource and
+  demand, zero overflow — and the pre-DRT path fails at the same place, on the
+  same net, after the same insertions. The "cleaner" arm64 route in the
+  full-flow comparison was the arm64 netlist (+10 instances, +0.022 % cell area)
+  and nothing else. ARM is a usable substitute for the x86 flow box at this
+  stage.
+- **Does not establish:** that the two *netlists* are identical (they are not, by
   10 instances); that arm64 reaches DRT or closes it; that this reproduces on a
-  second seed or a second ARM host; or that per-sweep cost generalises beyond
-  GRT's one-thread workload.
-- **The clean falsifier**, if the netlist variable ever needs removing: replay
-  `ws_v3/36-openroad-stamidpnr-2/state_out.json` through the ARM box with the
-  same resume path `die01` used. That feeds both architectures byte-identical
-  databases, and then a sweep count other than 8 would implicate the engine
-  rather than the netlist. It is a ~30 min measurement (resume + 4 min GRT).
+  second seed or a second ARM host; or any per-sweep cost advantage — on equal
+  work the ARM box's sweep loop was 12 % slower, and one run each on a shared
+  vCPU does not resolve host variance either way.
+- **What would falsify it:** the same replay on a second ARM host, or the arm64
+  netlist's state run on x86 (it now exists only on the ARM box, as
+  `ws_arm64_v1/36-openroad-stamidpnr-2/state_out.json`). Neither is needed for
+  the equivalence above; each would test it.
 
 ## Reproduction
 
@@ -184,9 +262,22 @@ DIE_TAG=die01 nohup bash build/die_drt_chain.sh > /dev/null 2>&1 &
 tail -f ws/logs/predrt_die01.log
 ```
 
+```
+# arm64 box; the replay — the die's own step-36 state and the 10 files it names
+MEMWATCH_FORCE=1 DIE_DIO_TAG=diea6401 \
+  nohup bash build/die_diode_flow_chain.sh > /dev/null 2>&1 &
+# it records ARM_ENGINE ... class=image and writes
+# drt_fast/verdict/die_diode_flow_arm.md
+```
+
+`MEMWATCH_FORCE=1` is not a tuning knob: this box has no swap and `memwatch`'s
+preflight floor is `SwapFree 512 MB`, so every chain there refuses without it. The
+override is recorded as `preflight FORCED` in `mem_audit/preflight.log`.
+
 Numbers above come from, on each box,
 `runs/<tag>/37-openroad-globalrouting/{openroad-globalrouting.log,runtime.txt,or_metrics_out.json}`
-and `runs/<tag>/40-openroad-repairantennas/1-openroad-diodeinsertion/` (plus
-`01-openroad-globalrouting` and `04-…` respectively on `die01`, which is a
-resume tree). `resolved.json` in each run tree records the four knobs; the
-engine identities are from `openroad -version` and `yosys -V` inside each image.
+and `runs/<tag>/40-openroad-repairantennas/1-openroad-diodeinsertion/` — for `die01`
+and `diea6401`, which are resume trees, those two steps are
+`01-openroad-globalrouting` and `04-openroad-repairantennas/1-openroad-diodeinsertion`.
+`resolved.json` in each run tree records the four knobs; the engine identities are
+from `openroad -version` and `yosys -V` inside each image.

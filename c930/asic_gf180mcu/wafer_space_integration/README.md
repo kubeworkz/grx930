@@ -172,16 +172,25 @@ So the measurement above runs on the post-GlobalRouting database with
 engine pin remains the fix for both. Report: `Claude outputs/die_drt_at01.md`; the full
 register: `Claude outputs/ws_run3_readiness_gaps.md` §1b.
 
-**And the same step on arm64, measured (2026-10-25).** A full flow from RTL on an
-`aarch64` box, same engine commit and same 0.1 config, reproduces both results:
-GRT completes with 0 overflow on every layer in **5** extra iterations against the
-x86 resume's 8, on 3.25 % less wire and 1.94 % fewer vias (Metal2–Metal5 resources
-identical on both sides; the demand is 3.28 % lower), and `DiodeInsertion` then
-aborts with the same `GRT-0183` after 4,187 jumpers and 2,688 diodes. Per-sweep
-cost is 25.0 s against 27.1 s, so the step's 37 % wall gap is the sweep count, not a
-slower host — the 5/8 comparison is an equivalence check, and it also means an ARM
-arm is not a way around the engine pin. Report:
-[`arm64_grt_equivalence.md`](arm64_grt_equivalence.md).
+**The timing number, reconciled.** The die's post-repair STA was re-run on the pinned engine
+(`dcf36133`) through LibreLane itself: it reads **−0.0640 ns** where the 26Q4 build reads
+**−8.646 ns**, and the replicating control (the post-resizer database, where the flow's own step 36
+says −0.0999734 ns) comes back identical to five figures. The whole difference sits on one net —
+`split25`, a `clkbuf_16` driving 2,132 loads with a 21–47 ns transition against a 3 ns limit — so
+the data paths close at 40 ns while the reset distribution does not. The pinned build cannot even
+open the 26Q4 ODB (schema 0.141 > 0.126); the comparison runs through the repair step's own DEF.
+Report: [`sta_engine_reconciliation.md`](sta_engine_reconciliation.md).
+
+**And the same step on arm64, measured.** A full flow from RTL on an `aarch64` box,
+same engine commit and same 0.1 config, completes GRT with 0 overflow on every
+layer and then `DiodeInsertion` aborts with the same `GRT-0183` after 4,187 jumpers
+and 2,688 diodes — an ARM arm is not a way around the engine pin. That run needed
+5 extra iterations against the x86 resume's 8, on 3.25 % less wire; replaying the
+die's own database on the ARM box (2026-10-26, `diea6401`) shows that difference
+was the netlist, not the host: same 8 sweeps, same 39,459,512 µm, same 1,656,170
+vias and the same per-layer demand as x86, and the same `GRT-0183` net `_167563_`.
+Per-sweep cost favours neither host on that evidence (244 s against 217 s for the
+sweep loop). Report: [`arm64_grt_equivalence.md`](arm64_grt_equivalence.md).
 
 ## Watching the routing verdict
 
