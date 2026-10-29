@@ -198,14 +198,132 @@ much design the router has to fit (2.76 × wirelength, 2.9 × total utilisation,
 26 %) and what the post-CTS repair costs, but not whether global routing converges — both columns
 reach zero overflow in five extra iterations with no `GRT-0115` or `GRT-0183`.
 
+## DetailedRouting and the antenna repair (tag `ffctl01`, continued)
+
+The comparison above stops where the chain's limit was. The same tag was then resumed with
+`-F OpenROAD.CheckAntennas -T OpenROAD.DetailedRouting` (`ws/logs/ws_chain.drt_ffctl01.nohup`,
+23:02 UTC), so the database GRT wrote is the one the antenna repair and DRT read: no re-run and no
+second placement. `MEMWATCH_FORCE=1` was needed again (no swap on this box); 186 GB was free at
+launch.
+
+### The antenna repair terminates on this netlist
+
+`OpenROAD.CheckAntennas` (5:24) found **2,673 net and 4,797 pin violations** after GRT, which
+`OpenROAD.RepairAntennas` then worked in six iterations:
+
+| iteration | inserted | violations after |
+|---|---|---|
+| 1 | 4,314 jumpers, 2,211 nets | 1,261 |
+| 2 | 2,897 diodes | 1,337 |
+| 3 | 1,786 jumpers, 1,095 nets | 448 |
+| 4 | 919 diodes | 364 |
+| 5 | 713 jumpers, 343 nets | 62 |
+| 6 | 104 diodes | — recheck: **47 net / 69 pin** |
+
+23:33 of insertion plus 4:58 of recheck = 28:32 for the step, with 6,813 jumpers and **3,920
+diodes** (1.2 % of the 333,118 instances GRT saw). The recheck leaves 47 net (1.8 %) and 69 pin
+(1.4 %): the repair clears 98.2 % / 98.6 % and stops with a bounded residue.
+
+Two details, because both were misread while the die runs were being diagnosed:
+
+- **`GRT-0243 Unable to repair antennas on net with diodes` appears exactly once** in the
+  insertion log and is not a step failure. It names the nets that iteration's diode pass cannot
+  fix; the loop continues, adds jumpers, and converges. The die run that never converged has the
+  same single warning. What separates a converged repair from a failing one is not the warning but
+  whether the count keeps falling — 2,963 → 1,261 → 1,337 → 448 → 364 → 62 here.
+- The counts are large, but they land *before* routing on a database that still has free tracks.
+  The repair that costs is the one over a finished route, below.
+
+### DetailedRouting: pin access is not what fails
+
+Pin access takes 33 s (`DRT-0165` → `DRT-0166`; 8:15 of CPU across 24 threads), the first track
+assignment places 616,335 vertical and 963,759 horizontal wires, and neither the step log nor
+`warning.log` contains a single `PA-*` message. Metal2 at 56.20 % does not stop pins from getting
+an access pattern.
+
+Iterations, read at 02:12 UTC on 29 Oct with pass 4 still in flight (90 %):
+
+| pass | violations | Metal2 markers | M2 shorts | M3 | M4 | M1 | M5 | wall |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 727,148 | 544,595 (74.9 %) | 497,770 | 121,082 | 27,849 | 31,618 | 1,058 | 15:51 |
+| 1 | 522,249 | 397,562 (76.1 %) | 363,469 | 90,503 | 24,564 | 8,358 | 1,080 | 14:20 |
+| 2 | 501,062 | 378,319 (75.5 %) | 346,026 | 86,532 | 27,110 | 7,774 | 1,170 | 14:15 |
+| 3 | 329,768 | 221,370 (67.1 %) | 202,337 | 73,986 | 26,566 | 4,536 | 3,080 | 48:05 |
+| 4 | 302,184 at 90 % | — | — | — | — | — | — | — |
+
+What the table says:
+
+- **Three quarters of the DRC is Metal2, and 91 % of that is shorts** (497,770 of 544,595 in pass
+  0). At 56.20 % the layer does not overflow at GRT, but it has no room left to escape in, so the
+  router's first answer is to short and its next ones are to pull wire back off Metal2: M2
+  wirelength falls 12,425,735 → 10,933,388 µm (−12 %) between pass 0 and pass 3 while its markers
+  fall 59 %, and M3–M5 gain markers as the wire moves up (M5 1,058 → 3,080).
+- **The curve flattens the way a saturated layer makes it flatten**: 727 k → 522 k → 501 k → 330 k,
+  and pass 3 costs 48:05 against pass 1–2's ~14 min because the cheap shorts are gone and what is
+  left is rip-up. Pass 4 also stalls *inside* itself — 302,784 at 70 %, then 302,184 at both 80 %
+  and 90 % — so the count is no longer responding within a pass either. Peak memory 9.8 GB, so the
+  28 GB headroom was never the limit.
+- Whether it converges inside the step's remaining passes is not known yet. The useful reference is
+  the die netlist at the same knobs (`dielb01`, old box): 493,072 at pass 0 to 75,459 at pass 8,
+  and even that residue did not survive the next paragraph. `ffctl01`'s pass 4 is running at
+  302 k where the die's pass 4 finished at 115,794, so its first route is not heading for 75 k.
+
+### The wall after the first route
+
+LibreLane's DRT step does not stop when `detailed_route` converges. It runs `check_antennas` on the
+routed database, repairs what the *routing itself* created, and then re-routes the whole design
+with those diodes in place. `dielb01` (die netlist, old box, same DRT step) is the measured
+example of what that costs:
+
+| | first route | after the post-route repair |
+|---|---|---|
+| pass 0 | 493,072 | 577,541 |
+| pass 1 | 273,018 | 297,670 |
+| pass 2 | 251,238 | 275,717 |
+| pass 3 | 145,610 | 258,713 |
+| pass 4 | 115,794 | 252,020 |
+| pass 5 | 100,323 | 246,719 |
+| pass 6 | 89,865 | 242,753 |
+| pass 7 | 83,375 | 239,227 |
+| pass 8 | 75,459 (`DRT-0198 Complete detail routing`) | in flight, 60 % at 238,120 when the arm was stopped |
+
+Between the two routes: `ANT-0002/0001 Found 1,055 net / 1,341 pin violations` — created by the
+routing, not inherited from GRT — then `GRT-0012 Found 1,269`, one `GRT-0243`, `Inserted 1,710
+diodes`.
+
+The second route starts **above** the first (577,541 against 493,072) from a database that already
+holds a converged 75,459 route. Its pass 4 finishes at 252,020 where the first route finished at
+115,794; pass 7 ends at 239,227; and pass 8 is still at 238,120 when it is 60 % done — the count
+has stopped responding to rip-up. That is the wall, and it is the one the die arms spent days
+against: the first route is the cheap part, the second is the expensive one because every diode
+is a new cell whose pin needs Metal2 on a net that was already over the antenna ratio. `ffctl01`
+has not reached it — it is in pass 4 of the first route — and if its first route converges at all
+it will arrive at the second with more to repair than the die had.
+
+### What this changes
+
+- **Antenna repair is not the blocker the die runs made it look like.** On this netlist it
+  converges in six iterations and 28:32 to a 47/69 residue. The repair that fails is the one over
+  a finished route, not the one over the GRT database.
+- **5LM pin access is proven at Metal2 56.20 %.** Every pin gets an access pattern; no `PA-*` in
+  the log or in `warning.log`.
+- **Metal2 at 56.20 % is not, however, a routing-viable utilisation.** Three quarters of the DRC is
+  Metal2, 91 % of that is shorts, one pass costs 48 minutes, and the curve is roughly twice the
+  die's at the same pass. That is the macro bank's case made by DRT rather than by GRT headroom:
+  `sram03` sits at Metal2 25.89 % / 13.44 % total and has the room this column does not.
+
 ## What this does not prove
 
 - **Scale.** Eight macros in one bank is not 320 tiled across four cores. It proves the plumbing,
   not the floorplan of the quad-core.
 - **Placement quality.** The bank is fixed by hand in a corner; nothing here says that is where a
   real memory should go, only that a corner bank of this size can be placed, strapped and routed.
-- **DRT, antenna repair and 5LM pin access.** Those live in steps this run has not reached. The
-  macro's pins are Metal2, which is also where DRT has to jog and escape, so that is the next
-  real risk, not a formality.
+- **The macro column past global routing.** `ffctl01` has now been through antenna repair and into
+  DRT (above); `sram03` has not. Nothing here says a macro bank at Metal2 25.89 % routes cleanly —
+  only that it has the headroom the FF column did not. That comparison needs `sram03` resumed the
+  same way, with the same two patches and the same `-F`/`-T` pair.
+- **A finished DRT on either column.** `ffctl01` is in pass 4 of its first route; the die's
+  post-route re-route never converged at all. The second-route wall is measured on the die netlist,
+  not on either of these two tags.
 - **The macro's own DRC/LVS.** The flow reads the PDK's GDS/LEF for the macro; the macro itself is
   the foundry's, so what is unproven is our stitching, not the cell.
