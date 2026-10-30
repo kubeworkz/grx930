@@ -243,9 +243,28 @@ jobs:
         run: |
           sudo mkdir -p /opt/pdk
           cd /tmp
-          git clone --depth 1 https://github.com/google/skywater-pdk.git
+          # No --depth 1: the PDK's scripts/make/git.mk computes its version with
+          # `git describe --long`, which needs the tag and an ancestor to count
+          # from. A shallow clone has neither and stops the make with "Version
+          # value could not be determined", which is what killed this step. The
+          # whole history is 12 MB, so there was nothing to gain by truncating it.
+          git clone -q https://github.com/google/skywater-pdk.git
           cd skywater-pdk
           make timing
+          # `make timing` exits 0 having built nothing: the libraries it converts
+          # are git submodules this step never initialises, so the loop finds no
+          # `cells` directory and skips every library. Assert on the tree it is
+          # supposed to produce rather than on make's exit code, so the failure
+          # names its cause instead of surfacing as a cp error four lines down.
+          if [ ! -d libs.ref/sky130_fd_sc_hd ]; then
+            echo "::error::make timing produced no libs.ref/sky130_fd_sc_hd"
+            echo "The library trees under libraries/sky130_fd_sc_hd/* are submodules and are"
+            echo "empty here, so there were no cells to convert -- and the conversion runs"
+            echo "through the conda environment in third_party/make-env, which this step"
+            echo "does not create either. Either initialise the submodules and provide that"
+            echo "environment, or install the sky130A PDK prebuilt instead."
+            exit 1
+          fi
           sudo cp -r libs.ref/sky130_fd_sc_hd /opt/pdk/sky130A/
           sudo cp -r libs.tech/magic /opt/pdk/sky130A/
           sudo cp -r libs.tech/openroad /opt/pdk/sky130A/
