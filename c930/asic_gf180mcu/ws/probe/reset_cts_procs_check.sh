@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_cts_procs_check.sh -- run the code that ws/tools/librelane_reset_cts_patch.py
 # installs, against a database, without a flow.
 #

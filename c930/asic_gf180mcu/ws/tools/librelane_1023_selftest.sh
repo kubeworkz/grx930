@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # librelane_1023_selftest.sh -- run INSIDE the flow image: apply the #1023
 # io.tcl backport twice against the image's installed LibreLane and check both
 # the apply and the idempotence, then print the patched region for eyeballing.

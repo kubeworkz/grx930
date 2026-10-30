@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_timing_compare.cc - Verilator vs Icarus timing comparison.
 //
 // Measures wall-clock time for Verilator to simulate the full firmware

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_repair_fix.sh -- container side of reset_repair_fix.tcl.
 #
 # Runs the image's own openroad (the pinned build, dcf36133 -- the same commit the

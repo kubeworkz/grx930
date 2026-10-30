@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // c930_soc_verilator.sv -- Verilator harness top for the single-core SoC.
 //
 // Exposes the UART pins (o_uart_txd / i_uart_rxd) and the DDR testbench

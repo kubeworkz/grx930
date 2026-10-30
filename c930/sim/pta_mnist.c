@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /*
  * pta_mnist.c - gate C1(a): the D3 network through the PTA tile's C reference.
  *

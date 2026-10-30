@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_gf180mcu.tcl — Netgen LVS for GRX930 test chip → GF180MCU
 #
 # Usage:

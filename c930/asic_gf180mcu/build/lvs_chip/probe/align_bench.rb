@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # align_bench.rb -- time the netlist comparison without the 67-minute extraction in front of it.
 #
 # The die's deck reaches `align` and stops there: 5 h 45 min in the run that was killed at 22:00Z

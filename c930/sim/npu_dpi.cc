@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // npu_dpi.cc - DPI functions for NPU CSR and DDR memory access.
 // Called from the SystemVerilog wrapper via DPI imports.
 // C++ code drives the AXI4-Lite signals through a shared state struct.

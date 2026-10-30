@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # stage_tapeout_watch_selftest.sh -- the watcher's trigger, debounce, refusal and bound
 # logic, exercised against a fixture tree with a stubbed staging job.
 #

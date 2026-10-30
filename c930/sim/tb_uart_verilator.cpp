@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /**
  * GRX930 UART Test — Verilator Simulation
  *

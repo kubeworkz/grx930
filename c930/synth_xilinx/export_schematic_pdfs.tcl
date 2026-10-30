@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ====================================================================
 # export_schematic_pdfs.tcl
 # Run inside Vivado GUI's Tcl Console (not batch mode).

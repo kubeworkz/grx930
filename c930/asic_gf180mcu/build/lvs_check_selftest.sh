@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_check_selftest.sh -- the LVS gate's own test: does it still tell the three answers apart?
 #
 #   bash build/lvs_check_selftest.sh      # 0 = the gate holds, 1 = it drifted

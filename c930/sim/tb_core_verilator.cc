@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // Verilator harness for c930_npu_core.
 //
 // Drives the core's data-plane preload port directly, so it reaches the full

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_fast_path_real_work.sh -- the real work the push fast path has to be able to
 # finish: build the SoC models and drive the simulations to their own end.
 #

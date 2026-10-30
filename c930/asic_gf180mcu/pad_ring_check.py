@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Verify c930/asic_gf180mcu/pad_ring.cfg against independently derived geometry.
 
 Re-derives the ring layout from the slot numbers (die 3930x5120, seal 26,

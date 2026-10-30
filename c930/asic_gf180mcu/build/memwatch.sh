@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # memwatch.sh -- always-on memory tripwire for the flow box.
 #
 # WHY THIS EXISTS (all measured on this box, 2026-10-12)

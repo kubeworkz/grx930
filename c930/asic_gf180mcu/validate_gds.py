@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Validate GRX930 test chip GDS for wafer.space 1x1 slot submission."""
 import klayout.db as db
 import sys

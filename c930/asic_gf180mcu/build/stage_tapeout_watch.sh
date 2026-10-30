@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # stage_tapeout_watch.sh -- host side: keep the staged tapeout configuration describing the
 # CURRENT measurements, by re-running build/stage_tapeout_config.sh whenever the evidence
 # its block quotes moves.

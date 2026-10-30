@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 module \$_MUX_ (A, B, S, Y);
   input A, B, S;
   output Y;

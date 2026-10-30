@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # librelane_1023_io_patch.py -- backport LibreLane PR #1023's io.tcl scene
 # handling into the flow image's installed LibreLane, in-container.
 #

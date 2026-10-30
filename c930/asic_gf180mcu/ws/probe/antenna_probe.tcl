@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # antenna_probe.tcl -- run OpenROAD's own repair_antennas on the die's pre-repair
 # database, with the argument list LibreLane's antenna_repair.tcl builds from its
 # four config variables (GRT_ANTENNA_REPAIR_ITERS / _MARGIN / _JUMPER_ONLY /

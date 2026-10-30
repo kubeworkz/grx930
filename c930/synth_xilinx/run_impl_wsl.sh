@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # run_impl_wsl.sh  --  Run the Vivado impl flow from WSL, surviving terminal exit.
 #

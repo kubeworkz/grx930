@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # GRX930 RISC-V 64 Firmware Makefile
 # Builds the command processor firmware for the GRX930 chip
 

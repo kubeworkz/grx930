@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # sram_surrogate_exec.sh -- container side: run the wafer.space template flow
 # with grx930's SRAM built from the foundry macro instead of a flip-flop array
 # (scope §7 step 3, the macro-flow surrogate).

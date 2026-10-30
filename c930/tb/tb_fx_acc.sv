@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_fx_acc.sv — standalone test for c930_fx_acc
 module tb_fx_acc;
   logic [47:0] ps_in, ps_out;

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # mac_watchdog.sh -- run as root inside WSL. The Hyper-V vSwitch intermittently
 # reverts eth0 to the epoch's random MAC ("does not allow mac spoofing"), which

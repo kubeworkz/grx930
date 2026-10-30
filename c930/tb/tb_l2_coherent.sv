@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_l2_coherent.sv - standalone verification of the shared L2:
 //   read miss/refill, hit, write-through + readback, and coherence
 //   invalidation (a write to a line invalidates its L1 sharers).

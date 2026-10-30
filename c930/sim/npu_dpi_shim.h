@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // npu_dpi_shim.h - Standalone NPU register/DDR shim for grxcp testing.
 //

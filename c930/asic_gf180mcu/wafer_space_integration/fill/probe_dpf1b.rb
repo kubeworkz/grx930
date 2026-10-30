@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ly = RBA::Layout::new
 ly.dbu = 0.001
 top = ly.create_cell("probe")

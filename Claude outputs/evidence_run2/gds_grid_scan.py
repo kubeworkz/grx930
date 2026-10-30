@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Scan a GDSII stream for coordinates off the 5 nm manufacturing grid.
 
 Walks records linearly; attributes off-grid XY records to (layer, datatype)

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """def_fanout_probe.py -- per-net load counts and drivers, read from a DEF.
 
 Why this exists

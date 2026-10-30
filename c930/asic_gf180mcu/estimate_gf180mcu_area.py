@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 estimate_gf180mcu_area.py — Estimate GRX930 test chip area on GF180MCU
 

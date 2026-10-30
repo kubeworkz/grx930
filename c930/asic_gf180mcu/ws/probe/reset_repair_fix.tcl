@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_repair_fix.tcl -- the repair_design half of the reset fix, applied to the
 # die's own post-antenna-repair database (the one the -8.6457 ns / -0.0640 ns pair
 # was measured on).

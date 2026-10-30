@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_fetch_pdk_subset.sh -- materialise the pinned LVS deck + the fixture family, for CI or a
 # fresh box.
 #

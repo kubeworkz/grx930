@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ws_synth_chain.sh -- host side: wait for a DRT-free window, then run the
 # wafer.space template flow up to the Yosys synthesis checks, and dump the
 # netlist inventory next to the OL2 one for comparison.

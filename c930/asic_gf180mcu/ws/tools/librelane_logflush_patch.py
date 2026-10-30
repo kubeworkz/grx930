@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # librelane_logflush_patch.py -- make LibreLane's step logs line-buffered, so a
 # step log is readable while the step is running instead of every 8 KB.
 #

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_disk_guard.sh -- keep the flow volume from filling under the DRT
 # antenna-repair loop, while that loop is still producing route databases.
 #

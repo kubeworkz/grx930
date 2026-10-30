@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ws_chain.sh -- host side: run the wafer.space template flow for grx930 in the
 # pre-check image and leave the run tree behind. Runs on the flow box
 # (ubuntu@49.13.6.8), like drt_fast/*_chain.sh.

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # harvest_died26q4.sh -- wait for the diode-flow arm to exit, then freeze what it produced
 # into one file. The arm's own chain writes drt_fast/verdict/die_diode_flow_arm.md at exit,
 # but that report carries the pre-DRT repair lines and the DRT curve; the numbers the antenna

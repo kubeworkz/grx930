@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 open_project build/vivado/c930_artix7.xpr
 open_run synth_1
 

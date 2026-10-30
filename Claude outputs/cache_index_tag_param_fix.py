@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Apply the cache index/tag parameterization (the openlane2_rtl/src fix) to
 every cache source copy under rv64imac/, so no cache instantiation at any
 INDEX_WIDTH can serve a wrong line.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Replace Test 4 in tb_c930_soc_full.sv with mixed-precision varying-shape test.
 
 Queues 3 GEMMs with different precisions AND asymmetric shapes:

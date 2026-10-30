@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # run_yosys_xilinx.sh  --  Run Yosys synth_xilinx for C930 SoC
 #

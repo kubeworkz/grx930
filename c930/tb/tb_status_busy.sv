@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_status_busy.sv — Prove RTL drives STATUS.BUSY
 //
 // Boots the C930 SoC, loads the NPU test firmware, and monitors

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_verilator.cc - C930 SoC Verilator test harness
 // Firmware is embedded in the DDR stub via initial block.
 // This harness clocks the design and checks NPU completion.

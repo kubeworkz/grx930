@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ws_exec.sh -- container side: run the wafer.space template flow with the grx930
 # core inside it, in the pre-check image (LibreLane >= 3 + the gf180mcuD PDK).
 #

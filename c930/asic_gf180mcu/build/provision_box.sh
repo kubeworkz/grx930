@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # provision_box.sh -- bring a fresh Ubuntu box to the state the chains assume.
 #
 # On the box itself, with no checkout and no scp (the repo is public and this

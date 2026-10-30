@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_check.sh -- container side of reset_check.tcl.
 #
 #   CHECK_ODB=<odb> sh reset_check.sh

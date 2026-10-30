@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 set -e
 cd /mnt/c/Users/kubew/grx930/c930/build/verilator
 VERI_INC=/mnt/c/Users/kubew/grx930/c930/toolchain/oss-cad-suite/share/verilator/include

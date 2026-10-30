@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # antenna_recon2.sh -- who passes which antenna-repair flag, and with what script.
 # The first probe found the four config variables; this one asks which of the two
 # sub-steps inside OpenROAD.RepairAntennas sets them, because that decides whether a

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # openroad_engine.sh -- the engine wrapper for whichever host this is.
 #
 #   x86_64 / amd64  ->  ws/tools/openroad_26q4.sh   (the pinned 26Q4 extraction)

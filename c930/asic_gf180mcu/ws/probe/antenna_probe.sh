@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # antenna_probe.sh -- container side: try the antenna repair's own argument list,
 # one variant per OpenROAD process, against the die's pre-repair database.
 #

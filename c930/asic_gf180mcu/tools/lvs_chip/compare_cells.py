@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Derive the die's layer map by comparing the same cells in two files.
 
 The PDK library GDS uses the documented numbering (comp 22/0, poly2 30/0, contact 33/0,

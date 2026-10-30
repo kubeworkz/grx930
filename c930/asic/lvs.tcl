@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs.tcl — Netgen LVS script for GRX930 → SKY130
 #
 # Usage:

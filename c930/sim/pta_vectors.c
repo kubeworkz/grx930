@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /*
  * pta_vectors.c -- a frozen conformance suite for the PTA error model (G0).
  *

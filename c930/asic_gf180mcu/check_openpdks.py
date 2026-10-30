@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Check fossi-foundation/open-pdks and efabless for GF180MCU releases"""
 import urllib.request
 import json

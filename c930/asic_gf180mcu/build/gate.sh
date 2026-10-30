@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # gate.sh -- the pre-launch gate, written ONCE and sourced by every flow chain.
 #
 # WHY THIS FILE EXISTS

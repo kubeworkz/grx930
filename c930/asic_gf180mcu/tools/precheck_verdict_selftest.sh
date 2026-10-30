@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # precheck_verdict_selftest.sh -- the parser's verdict logic, exercised off the box against
 # fixture logs built from the real ones' line shapes.
 #

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Download GF180MCU PDK from volare releases and set up for OpenLane2"""
 import urllib.request
 import json

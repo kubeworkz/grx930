@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # antenna_probe_chain.sh -- host side: find out whether any antenna-repair setting
 # gets the DIE past the fatal GRT-0183, without paying a 30-minute flow resume per
 # setting.

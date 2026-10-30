@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 gen_tb4_suite_fw.py -- extract the Test-4 Phase-1 (fw) and Phase-2 (vfw)
 firmware word arrays from tb/tb_c930_soc_full.sv and emit them as

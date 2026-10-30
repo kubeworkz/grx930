@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Build the client-facing PDF from the one-pager's HTML.
 #
 #   build/pdf/build.sh            -> c930/asic_gf180mcu/wafer_space_status_onepager.pdf

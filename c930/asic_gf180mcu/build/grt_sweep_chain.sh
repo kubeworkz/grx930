@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # grt_sweep_chain.sh -- fill in the middle of the GRT_ADJUSTMENT range (0.1, 0.2).
 #
 # Why: 0.0 -> 0.3 bought a 2.19x drop in DRT violations (418,633 -> 191,578) but

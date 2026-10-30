@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_tree_fix.sh -- container side of reset_tree_fix.tcl: tree the reset cone of
 # a database with the flow's own CTS settings, and write the result out.
 set -u

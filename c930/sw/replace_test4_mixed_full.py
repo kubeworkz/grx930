@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Replace Test 4 in tb_c930_soc_full.sv with mixed-precision varying-shape test
 that verifies ALL 21 C elements of GEMM1 via CPU D-cache reads.
 

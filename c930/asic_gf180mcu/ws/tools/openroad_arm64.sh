@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # openroad_arm64.sh -- the arm64 host's engine wrapper: the flow image's OWN
 # openroad (the nix build LibreLane already resolves), run under `stdbuf -oL` so
 # its progress lines reach the step log one line at a time.

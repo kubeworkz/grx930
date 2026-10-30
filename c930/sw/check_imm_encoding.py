@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Formal property check: signed 12-bit immediate encoding correctness.
 
 Verifies that for any target address, the lui+addi encoding produces the

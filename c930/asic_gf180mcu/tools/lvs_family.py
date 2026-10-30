@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Build, and compare, the family evidence -- one committed file for a whole fixture family.
 
 Why this exists

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // act_csr.c -- A-CSR: S_ACT reached from the host, gated on the SoC
 // (grxcp pta_program_plan.md, track A; doc/npu_act_stage_design_note.md 4).

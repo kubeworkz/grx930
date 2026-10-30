@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_db_compare_chain.sh -- host side: route the die's GRT-derived databases
 # through the fast DRT loop, one database per arm, so that what differs between
 # two arms' curves is the database (and, for one arm, the engine) and nothing

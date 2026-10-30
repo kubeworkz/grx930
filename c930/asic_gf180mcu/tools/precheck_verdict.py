@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """precheck_verdict.py -- read a wafer.space gf180mcu precheck run and state the verdict in JSON.
 
 Why this exists

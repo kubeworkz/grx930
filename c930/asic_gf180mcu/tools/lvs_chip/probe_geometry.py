@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Where is the geometry in the die GDS? Per-cell polygon counts, and the std cells' own shapes.
 
 The single-cell LVS probe came back with "comp has 0 polygons" for a child cell. Either that

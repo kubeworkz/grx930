@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Recovery v3 stage 2 - runs in a PLAIN container (no bind-mounted script
 # patches; the RepairAntennas step is already done and will be skipped by
 # the flow resume).

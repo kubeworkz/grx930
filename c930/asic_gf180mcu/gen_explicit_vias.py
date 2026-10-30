@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Generate explicit VIA definitions from VIARULEGEN in the tech LEF.
 The VIARULEGEN rules specify ENCLOSURE values for metal layers and RECT for via cuts.
 We need to compute the metal RECT as via_rect expanded by enclosure values."""

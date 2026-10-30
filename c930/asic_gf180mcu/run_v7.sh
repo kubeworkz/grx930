@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v7: resume Classic flow -F OpenROAD.DetailedRouting, seeded from
 # 52-openroad-globalrouting/state_out.json (GRT redone with
 # RT_MIN_LAYER=Metal1 + GRT_ADJUSTMENT=0.0).

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # run_impl_native.sh  --  Run Vivado impl from the WSL NATIVE filesystem copy.
 #

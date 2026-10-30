@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # run_bitstream_direct.sh  --  Run ONLY write_bitstream (single Vivado pass).
 #

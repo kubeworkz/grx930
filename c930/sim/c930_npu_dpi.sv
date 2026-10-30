@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // Standalone NPU DPI wrapper for grxcp backend testing.
 // Instantiates the NPU, provides a flat 64KB DDR array, and exposes
 // DPI functions for CSR access and DDR memory read/write.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_check.sh -- the LVS row of the tapeout gate table.
 #
 # WHY THIS EXISTS

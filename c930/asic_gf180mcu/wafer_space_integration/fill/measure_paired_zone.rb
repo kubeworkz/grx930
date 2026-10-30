@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Where does the dummy COMP lose its Poly2 partner? For each DPF exclusion, how much of the
 # paired area it removes, and how much of the legal zone is still empty (i.e. could carry more
 # dummy COMP, and with it more dummy Poly2).

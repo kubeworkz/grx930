@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Probe: count overlapping standard-cell/macro instances in the placement.
 # Hypothesis: the DPL-0036 recovery in step 44 left diode/instances
 # overlapping, which would explain millions of DRT shorts + capped

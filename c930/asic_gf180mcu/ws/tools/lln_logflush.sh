@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lln_logflush.sh -- source this before `librelane` in a flow exec script.
 #
 #   . /work/ws/tools/lln_logflush.sh

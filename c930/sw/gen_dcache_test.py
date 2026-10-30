@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Generate minimal D-cache stress test firmware that fits in ONE 32-byte I-cache line."""
 
 def enc_lui(rd, imm20):

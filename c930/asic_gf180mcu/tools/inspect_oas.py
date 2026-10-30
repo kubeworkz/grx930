@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Dump the structure of a wafer.space example layout (GDS/OAS).
 
 Run inside the OpenLane 2 image (klayout bindings) with the tools dir mounted:

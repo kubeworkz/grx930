@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # disk_guard.sh -- start and stop the DRT disk guard from a chain, written ONCE
 # and sourced by every chain that launches a flow arm.
 #

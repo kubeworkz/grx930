@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # probe_grt.sh -- container side: rerun ONLY OpenROAD.GlobalRouting against a
 # frozen run's own pre-GRT state, with GRT knobs read from the staged config (or
 # overridden one arm at a time), so a wrong knob costs ~7 minutes instead of a

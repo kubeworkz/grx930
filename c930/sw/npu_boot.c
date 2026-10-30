@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // npu_boot.c - tiny NPU GEMM kick-off firmware for the SYNTH DDR stub.
 //

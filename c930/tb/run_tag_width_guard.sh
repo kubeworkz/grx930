@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_tag_width_guard.sh [RTL_DIR] [OUT_DIR]
 #
 # Negative control for the cache controllers' tag-width guard. Asserts:

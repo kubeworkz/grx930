@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Makefile — GRX930 test chip for wafer.space GF180MCU shuttle
 #
 # Targets wafer.space 1×1 slot (3.93mm × 5.12mm, 12.92 mm² core)

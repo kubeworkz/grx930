@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Gridworkz */
 /* test_chip_boot.S -- boot firmware for the GRX930 1x1 GF180MCU test chip.
  *
  * Memory map of the chip (see asic_gf180mcu/openlane2_rtl/src/grx930_test_chip.sv):

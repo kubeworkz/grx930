@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # sram_surrogate_chain.sh -- host side: stage and run the macro-flow surrogate
 # (scope §7 step 3) on the flow box, and leave the run tree behind.
 #

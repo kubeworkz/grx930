@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Dummy COMP fill for the wafer.space 1x1 template.
 #
 # Copied from the GF180MCU PDK's libs.tech/klayout/tech/scripts/fill_comp.rb (Apache-2.0,

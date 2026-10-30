@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Build a one-cell LVS fixture out of the real die: one std cell from the GDS, its PDK CDL.
 
 Why: before spending hours extracting 20 mm^2, check the harness on a *real* cell of the

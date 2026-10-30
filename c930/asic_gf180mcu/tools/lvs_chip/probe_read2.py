@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 import klayout.db as db
 GDS="/work/c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds"
 CELL="gf180mcu_fd_sc_mcu7t5v0__clkinv_1"

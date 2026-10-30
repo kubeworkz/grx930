@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Compress the OLD campaign run's bulky files in place (run as root inside
 the openlane container; host user cannot rewrite the root-owned bind files).
 Keeps data: foo.odb -> foo.odb.zst. Only the pre-campaign runs listed in

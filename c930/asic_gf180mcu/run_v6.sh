@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v6: GRT redo #2 - RT_MIN_LAYER=Metal1 (in addition to GRT_ADJUSTMENT=0.0).
 # Why: after the adjustment fix, GRT still finished at 102.95% total usage
 # (M2 105%, M3 106%) on a placement that is 84.4% dense (722,223 instances,

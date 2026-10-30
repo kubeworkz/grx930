@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_collect.sh -- wait for the chip LVS run to finish, then judge it into the evidence dir.
 #
 #   build/lvs_chip_check.sh writes the artifact (the stream-out) and runs the deck on it; on this

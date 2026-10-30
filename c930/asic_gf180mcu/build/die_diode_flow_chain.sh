@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # die_diode_flow_chain.sh -- host side: run the die's FLOW END TO END on a
 # diode-repaired database, and measure the flow's own DetailedRouting step (step
 # 06) on it. This is the arm that replaces the one the die currently has -- a

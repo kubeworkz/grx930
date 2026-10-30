@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // perf_only.c — Minimal firmware: just run the NPU perf_bench.
 // Skips dcache_stress, trap_test, and run_gemm entirely.
 // Used with tb_perf_quick.sv to isolate the MMIO bridge issue.

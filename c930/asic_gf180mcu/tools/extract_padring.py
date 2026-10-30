@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Extract the pad-ring table and seal-ring inventory from a wafer.space layout.
 
 Run inside the OpenLane 2 image (klayout bindings):

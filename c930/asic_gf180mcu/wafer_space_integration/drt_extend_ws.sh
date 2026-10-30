@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_extend_ws.sh -- the second half of the cap-cost measurement: re-route the
 # pre-DRT database with the iterations DRT_OPT_ITERS withheld, and write what they
 # actually cost. Launched automatically by watch_drt_curve.sh when the

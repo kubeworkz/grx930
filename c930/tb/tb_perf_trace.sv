@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 `timescale 1ns/1ps
 module tb_perf_trace;
   reg clk = 0, rst_n = 0;

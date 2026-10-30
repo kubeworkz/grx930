@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 act_table_gen.py -- transfer tables for the NPU activation stage, S_ACT.
 

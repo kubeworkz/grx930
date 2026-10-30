@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_check.tcl -- what the reset distribution looks like in a database, before
 # or after a repair. Read-only: prints, writes nothing.
 #

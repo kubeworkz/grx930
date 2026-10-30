@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Gridworkz */
 /* mul_store_test.S - nine instructions that used to hang the c930's CPU.
  *
  * The M unit's booth and non-restoring datapaths present their result for

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # build_soc4_verilator_wsl.sh [run [mode]] -- compile (and optionally run)
 # the generated Verilator C++ for the 4-core SoC harness with WSL g++.  The
 # oss-cad-suite verilator_bin.exe only generates C++; the model itself is a

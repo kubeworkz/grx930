@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """A small LVS probe with real geometry: a new top cell containing one std cell from the die.
 
 Why this and not `--topcell <std cell>`: asking the deck for a child cell of a 237-cell GDS

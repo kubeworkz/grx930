@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """drc_lib_exposure.py -- how much of a rule's exposure lives inside the shipped cell libraries.
 
 WHY THIS EXISTS

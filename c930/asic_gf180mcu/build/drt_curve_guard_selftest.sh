@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_curve_guard_selftest.sh -- drive build/drt_curve_guard.sh through every
 # branch that can stop a run, and prove the ones that must not stop one do not.
 #

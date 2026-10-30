@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lb_probe2.sh -- read the LibreLane facts off the pre-check image: its CLI
 # semantics for --from/--to/--only/--initial-state, the Chip flow's step ids and
 # order, and the detailed-routing step's own tcl and flags. The die pre-DRT

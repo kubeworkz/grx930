@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """crop.py -- clip the die to a square window. MEASURED NOT TO BE A TIMING PROXY; kept for what it
 proved about `Layout#clip_into`.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 import glob
 import klayout.db as db
 files = sorted(glob.glob("/work/c930/asic_gf180mcu/build/*.gds") + glob.glob("/work/c930/asic_gf180mcu/wafer_space_submission/*.gds"))

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # pdn_cfg_grx930_sram.tcl -- pdn_cfg_grx930.tcl plus macro grids for the eight
 # byte-sliced SRAM macros of the macro-flow surrogate (scope §7 step 3).
 #

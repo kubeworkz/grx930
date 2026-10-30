@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # build_grx930_verilator.sh -- server-side Verilator build of the GRX930 SoC
 # single-core harness (c930_soc_verilator.sv), mirroring the Windows
 # Makefile's verilate-soc4 filelist but with the smaller single-core wrapper.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // pta_sweep.c -- C4(c): grxcp pta_cpu_integration.md section 6.2's sweep, run on
 // the SoC from a RISC-V program through MMIO.

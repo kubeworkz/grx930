@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # run_full_wsl.sh  --  Fresh full Vivado flow for the CURRENT C930 SoC:
 # project create (re-globbed RTL) + synthesis + implementation + bitstream.

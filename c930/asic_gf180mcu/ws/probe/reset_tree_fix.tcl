@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_tree_fix.tcl -- the CTS half, applied on top of the repaired die database.
 #
 # repair_design bound the reset from 2,132 loads to 172 (three levels, +12,139

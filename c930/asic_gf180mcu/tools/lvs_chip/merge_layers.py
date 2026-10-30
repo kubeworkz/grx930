@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """merge_layers.py -- merge each layer's shapes once, so the netter unions fewer objects.
 
 WHY

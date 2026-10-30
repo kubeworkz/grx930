@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Quick schematic export — paste into Vivado Tcl Console
 # Prerequisites: Vivado GUI open with c930_artix7.xpr project
 # This generates per-subsystem utilization + timing reports

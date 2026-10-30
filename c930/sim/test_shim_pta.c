@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /*
  * test_shim_pta.c -- npu_dpi_shim as a build WITH the tile.
  *

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_cts_probe.tcl -- can CTS build a tree on the reset net?
 #
 # The question the flow cannot answer today: `clock_tree_synthesis` takes a net

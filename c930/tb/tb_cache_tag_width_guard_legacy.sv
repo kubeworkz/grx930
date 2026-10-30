@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_cache_tag_width_guard_legacy.sv -- negative control for the tag-width
 // guard, generation-independent: the guard lives in the controllers and only
 // needs INDEX_WIDTH / TAG_WIDTH, so the controllers are instantiated with

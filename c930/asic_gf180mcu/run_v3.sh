@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Recovery v3 - GRX930 OL2 resume, process-split to avoid OOM.
 #  inv1: OpenROAD.RepairAntennas only (patched antenna_repair.tcl: catches
 #        DPL-0036, skips the redundant first GRT, and has NO in-process

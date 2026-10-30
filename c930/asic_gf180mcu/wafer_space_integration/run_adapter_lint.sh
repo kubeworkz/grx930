@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_adapter_lint.sh -- elaborate the wafer.space chip_core adapter together
 # with the tapeout RTL and run its pad-map checks. Seconds, no PDK, no flow.
 #

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_disk_guard_selftest.sh -- every branch of build/drt_disk_guard.sh, through
 # the real script, with `docker` stubbed and the free-space reading pinned.
 #

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // npu_dpi_test.cc - Standalone NPU DPI test for grxcp backend.
 //
 // This test uses the NPU DPI wrapper to demonstrate CSR configuration

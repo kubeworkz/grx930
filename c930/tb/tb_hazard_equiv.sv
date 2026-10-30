@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_hazard_equiv.sv - dual-DUT equivalence gate for the forwarding-select
 // retiming in riscv_core_hazard_unit.
 //

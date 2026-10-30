@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_cell_check.sh -- LVS a handful of the artifact's own cells, in seconds.
 #
 # WHY THIS EXISTS

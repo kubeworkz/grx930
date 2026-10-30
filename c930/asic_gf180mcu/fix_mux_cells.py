@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Replace $_MUX_ cells with gf180mcu_fd_sc_mcu7t5v0__mux2_1 in synthesized Verilog."""
 
 import re

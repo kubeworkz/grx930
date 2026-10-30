@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // c930_l2.sv - Shared L2 cache + coherence directory (MSI-lite, write-through).
 //

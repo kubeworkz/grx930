@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_grx930_test_chip.sv -- chip-level boot testbench for grx930_test_chip.
 //
 // This is the testbench asic_gf180mcu/Makefile's `sim` target compiles

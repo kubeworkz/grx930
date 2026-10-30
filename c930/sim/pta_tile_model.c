@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /*
  * pta_tile_model.c - C reference for the PTA tile's error model (phase C1).
  * See pta_tile_model.h and doc/pta_error_model_design_note.md section 4.

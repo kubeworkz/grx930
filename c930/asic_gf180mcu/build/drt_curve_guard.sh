@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_curve_guard.sh -- stop a detailed-routing pass that has stopped paying for
 # itself: one iteration still running past its wall-clock budget, a whole pass
 # over its budget, a count that gives back a quarter of the best route this pass

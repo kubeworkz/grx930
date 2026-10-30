@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # probe_step31.sh -- container side: rerun ONLY the step that killed ws_v2
 # (OpenROAD.RepairDesignPostGPL) against ws_v2's own frozen pre-repair state, so
 # a wrong knob costs 30-60 min instead of another full flow.

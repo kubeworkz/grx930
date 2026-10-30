@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # ooc_synth.tcl -- out-of-context synthesis, place and route of one module,
 # for a real utilization and Fmax number rather than an estimate.

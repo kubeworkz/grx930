@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # curve_guard.sh -- start and stop the DRT curve guard from a chain, written ONCE
 # and sourced by every chain that launches a flow DRT container.
 #

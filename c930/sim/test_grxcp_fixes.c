@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 #define NPU_DDR_ALLOC_IMPL
 #include "npu_dpi_shim.h"
 #include "npu_ddr_alloc.h"

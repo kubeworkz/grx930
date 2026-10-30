@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // npu_dpi.h - C++ API for NPU register access and DDR memory.
 // Include this in grxcp backend code to test against RTL.
 

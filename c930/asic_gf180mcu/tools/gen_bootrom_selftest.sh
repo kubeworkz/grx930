@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # gen_bootrom_selftest.sh -- prove the committed boot ROM is a reproducible build
 # product of the committed firmware hex, so a clone can rebuild it without guessing.
 #

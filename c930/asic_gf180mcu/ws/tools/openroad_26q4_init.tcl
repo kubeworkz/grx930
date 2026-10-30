@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # openroad_26q4_init.tcl -- copied to $HOME/.openroad by ws/tools/openroad_26q4.sh.
 #
 # WHY THIS IS NEEDED

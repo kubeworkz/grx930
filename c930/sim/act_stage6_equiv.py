@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Is the shortened stage 6 the same function as the one in the RTL?
 
 The RTL computes, every cycle, in one combinational cone:

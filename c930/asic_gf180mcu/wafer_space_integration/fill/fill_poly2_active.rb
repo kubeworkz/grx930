@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Dummy Poly2 fill, generated from the dummy COMP the COMP step just placed.
 #
 # Replacement for the GF180MCU PDK's libs.tech/klayout/tech/scripts/fill_poly2.rb (Apache-2.0,

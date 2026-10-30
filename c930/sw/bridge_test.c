@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // bridge_test.c — Minimal firmware: just one NPU GEMM via the CPU's MMIO path.
 // Tests if the dcache → bridge → CSR path works for a single kick.
 // No stress tests, no perf_bench, no traps — just CSR writes + poll.

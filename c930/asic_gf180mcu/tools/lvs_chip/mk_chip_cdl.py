@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Turn the routed Verilog into the chip CDL the LVS deck reads.
 
 Two things the flat netlist needs done to it:

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # die_launch_selftest.sh -- the die arm's launch handshake: does the parent wait
 # for the arm's own decision, and can it start a second arm over a live one?
 #

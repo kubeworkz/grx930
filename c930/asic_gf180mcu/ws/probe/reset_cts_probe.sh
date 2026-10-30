@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_cts_probe.sh -- container side of reset_cts_probe.tcl.
 #
 # Runs the image's own openroad (the engine LibreLane resolves in this image, the

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # repair_sdc.tcl -- chip_top.sdc with the design-wide limits raised and the RESET
 # NETS left at the design's own fanout limit, for the repair_design run in
 # reset_repair_fix.tcl.

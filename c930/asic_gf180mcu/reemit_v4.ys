@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reemit_v4.ys — Map ALL cells to GF180MCU using custom techmap
 read_json build/grx930_test_chip_synth.json
 

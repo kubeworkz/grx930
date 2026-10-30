@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_chip_core_grx930.sv -- elaboration + pad-wiring check for the wafer.space
 // chip_core adapter. Not a functional test (the core has its own boot test in
 // c930/tb/tb_grx930_test_chip.sv); this one exists so that a pad-count or

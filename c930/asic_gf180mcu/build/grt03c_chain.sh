@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # grt03c_chain.sh -- arm SLOTCORE-0.3: flow segment -> geometry gate -> fast DRT.
 #
 # Serialized behind whatever DRT run is currently on the box (drt_core, the

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Fast DRT-only experiment runner. Runs inside the openlane2 image with the
 # workspace bind-mounted at /work. Uses only bash builtins so it does not depend
 # on what the image places on PATH (sed, ls, mkdir etc. are not all present).

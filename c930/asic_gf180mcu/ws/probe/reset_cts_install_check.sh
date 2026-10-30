@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reset_cts_install_check.sh -- does ws/tools/lln_reset_cts.sh actually install the
 # CTS patch in THIS image? Run it as a container command, the same way ws_exec.sh is:
 #

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # librelane_reset_cts_patch.py -- give CTS the reset nets, so the reset reaches the
 # post-CTS resizer as a tree instead of as one net with thousands of loads.
 #

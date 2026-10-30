@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Build the Fraunhofer IIS / EUROPRACTICE NDA pack from the two published templates.
 
 Inputs -- exactly as published, kept unmodified in this directory:

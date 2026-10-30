@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Add Test 5: 6 back-to-back GEMMs of increasing size to stress command queue.
 
 CMD_QUEUE_DEPTH = 4, so we queue 4 GEMMs (fill queue), poll to drain,

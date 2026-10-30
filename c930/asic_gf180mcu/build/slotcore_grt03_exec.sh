@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # arm SLOTCORE-0.3 (container side) -- the one variant the 2026-10-11 DRT
 # investigation named as worth running but never ran: stock GRT_ADJUSTMENT=0.3
 # on the slot-core layout.

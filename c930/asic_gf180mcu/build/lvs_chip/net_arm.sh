@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # net_arm.sh -- run the LVS deck's netlist phase on one layout, with a hard cap, and record what it did.
 #
 # The comparison this exists for: the same die before and after `tools/lvs_chip/merge_layers.py`, with
