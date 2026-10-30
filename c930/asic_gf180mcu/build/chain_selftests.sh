@@ -23,8 +23,9 @@
 #   die_drt_chain.sh, gate.sh, drt_disk_guard.sh (with disk_guard.sh, the helper
 #   the chains call), drt_curve_guard.sh (with curve_guard.sh, likewise),
 #   drt_extend_ws.sh, stage_tapeout_config.sh,
-#   stage_tapeout_watch.sh, lvs_check.sh, tools/lvs_switch_check.py and
-#   tools/lvs_chip/net_compare.py. None of them routes anything or launches a
+#   stage_tapeout_watch.sh, lvs_check.sh, tools/lvs_switch_check.py,
+#   tools/lvs_chip/net_compare.py, and ws/tools/lln_fanout_split_selftest.sh (the
+#   patch that puts a fanout limit on the post-CTS resizer, and its wrapper). None of them routes anything or launches a
 #   container: docker is a stub first on PATH and every call is recorded, which is
 #   what makes "it launched nothing" an assertion rather than a hope. What they
 #   check is the part that has no other witness -- that each chain still calls the
@@ -73,7 +74,7 @@
 #
 # A BOX RUN IS THE SAME RUN
 #
-#   bash c930/asic_gf180mcu/build/chain_selftests.sh                 # all ten
+#   bash c930/asic_gf180mcu/build/chain_selftests.sh                 # all eleven
 #   bash c930/asic_gf180mcu/build/chain_selftests.sh --list          # names only
 #   bash c930/asic_gf180mcu/build/chain_selftests.sh --only gate-wiring
 #   CHAIN_SELFTEST_TIMEOUT=600 bash ...                    # per test, seconds
@@ -108,6 +109,7 @@ stage-tapeout-config|c930/asic_gf180mcu|bash build/stage_tapeout_config_selftest
 lvs-gate-statuses|c930/asic_gf180mcu|bash build/lvs_check_selftest.sh|^LVS_CHECK_SELFTEST pass=[1-9][0-9]* fail=0|bash python3
 lvs-switches|c930/asic_gf180mcu|bash build/lvs_switch_check_selftest.sh|^LVS_SWITCH_CHECK_SELFTEST pass=[1-9][0-9]* fail=0|bash python3
 lvs-net-compare|c930/asic_gf180mcu|bash build/lvs_chip_net_compare_selftest.sh|^net_compare_selftest: [1-9][0-9]* passed, 0 failed|bash python3
+fanout-split|c930/asic_gf180mcu|bash ws/tools/lln_fanout_split_selftest.sh|^FANOUT_SPLIT_SELFTEST pass=[1-9][0-9]* fail=0|bash python3
 EOF
 )
 

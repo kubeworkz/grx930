@@ -10,6 +10,17 @@
 #   WS_LIMIT=Checker.LintWarnings   optional: stop after a step. Use it for the
 #                             first run, which only proves the config loads and
 #                             the RTL parses with the pad ring in place.
+#   WS_FANOUT_SPLIT=1          optional: arm the post-CTS fanout pass (see the
+#                             docker run below and ws/tools/lln_fanout_split.sh).
+#                             WS_FANOUT_SPLIT_PASSES bounds the repair_design calls.
+#   WS_FROM=Odb.DiodesOnPorts optional: continue an existing tag at this step
+#                             instead of starting one. Name the step AFTER the
+#                             last one that finished -- -F re-runs the step it
+#                             names against the tag's latest state_out.json, so
+#                             naming the producer of that state feeds it its own
+#                             output (sram02's second rail set: 57 s -> 15 min).
+#                             The guards, the watcher and the gate are the same
+#                             as a fresh arm's; only LibreLane's start step moves.
 #
 # The image's entrypoint (scripts/dev-shell) wraps the command in the nix
 # LibreLane shell, which is the whole point of using this image: LibreLane >= 3
@@ -37,7 +48,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-say "WS_CHAIN_START tag=$TAG limit=${WS_LIMIT:-none}"
+say "WS_CHAIN_START tag=$TAG from=${WS_FROM:-fresh} limit=${WS_LIMIT:-none}"
 
 # Gate, shared with the other chains (gate.sh). Mount and floor are passed
 # explicitly here because this chain's run tree is on /, not /home, and 10 GB was
@@ -52,8 +63,16 @@ gate 9000 ws_chain 10 / || { say "ABORT_$GATE_REASON"; exit 1; }
 test -d $WS/template/asic_core || { say "ABORT_NOT_STAGED (run the staging step first)"; exit 1; }
 
 docker rm -f ws_flow >/dev/null 2>&1
+# WS_FANOUT_SPLIT=1 arms the post-CTS fanout pass (ws/tools/lln_fanout_split.sh):
+# repair_design with the slew/cap limits raised, so MAX_FANOUT_CONSTRAINT is
+# enforced on data nets for the first time in this flow. Empty = off, which is what
+# every earlier arm ran with, so an arm launched without it stays comparable.
 docker run -d --name ws_flow --user 0:0 -e HOME=/root \
-  -v $ROOT:/work -e "WS_TAG=$TAG" -e "WS_LIMIT=${WS_LIMIT:-}" \
+  -v $ROOT:/work -e "WS_TAG=$TAG" -e "WS_FROM=${WS_FROM:-}" -e "WS_LIMIT=${WS_LIMIT:-}" \
+  -e "WS_FANOUT_SPLIT=${WS_FANOUT_SPLIT:-}" \
+  -e "WS_FANOUT_SPLIT_PASSES=${WS_FANOUT_SPLIT_PASSES:-}" \
+  -e "WS_ANTENNA_CATCH=${WS_ANTENNA_CATCH:-}" \
+  -e "WS_OVERRIDE=${WS_OVERRIDE:-}" \
   $IMG /work/ws/ws_exec.sh >/dev/null
 say "WS_FLOW_LAUNCHED"
 # The step number is discovered by the guards (runs/<tag>/*-openroad-detailedrouting),
