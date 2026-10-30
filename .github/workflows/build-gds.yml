@@ -26,6 +26,14 @@ env:
   BUILD_DIR: c930/asic/build
   PDK_ROOT: /opt/pdk/sky130A
   OSSCAD_DIR: /opt/oss-cad-suite
+  # oss-cad-suite dates its releases twice, in two different spellings: the
+  # release *tag* is YYYY-MM-DD and the *asset* filename is YYYYMMDD. They are
+  # not interchangeable. This file used to build the download URL out of the
+  # asset spelling, i.e. .../download/20260916/..., which has never existed:
+  # the tag is 2026-09-16. wget -q turned that 404 into a bare "exit code 8"
+  # three seconds into the job, and the job stayed red for a month.
+  OSSCAD_TAG: '2026-09-16'          # release tag, YYYY-MM-DD
+  OSSCAD_BUILD: '20260916'          # release asset date, YYYYMMDD
 
 jobs:
   build-gds:
@@ -44,28 +52,86 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /opt/oss-cad-suite
-          key: oss-cad-suite-linux-x64-20260916
+          key: oss-cad-suite-linux-x64-${{ env.OSSCAD_BUILD }}
 
-      # ── Install oss-cad-suite (Yosys, OpenROAD, Magic, etc.) ─
+      # ── Install oss-cad-suite (Yosys, iverilog, sby, ...) ────
       - name: Install oss-cad-suite
         if: steps.cache-oss.outputs.cache-hit != 'true'
         run: |
+          set -u
+          url="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${OSSCAD_TAG}/oss-cad-suite-linux-x64-${OSSCAD_BUILD}.tgz"
+          echo "Fetching $url"
+          # curl, not `wget -q`: -q prints nothing on a 404, which is how a
+          # mistyped tag cost a month of unreadable failures. --retry covers the
+          # release CDN's occasional 502 on a 700 MiB asset.
+          code=$(curl --silent --show-error --location \
+                      --retry 3 --retry-all-errors \
+                      --output /tmp/oss-cad-suite.tgz \
+                      --write-out '%{http_code}' "$url") || code=000
+          if [ "$code" != 200 ]; then
+            echo "::error::oss-cad-suite download failed with HTTP $code from $url"
+            echo "Tag and asset are spelled differently on purpose: tag=$OSSCAD_TAG asset=*$OSSCAD_BUILD.tgz"
+            echo "Check with: gh api repos/YosysHQ/oss-cad-suite-build/releases/tags/$OSSCAD_TAG"
+            exit 1
+          fi
+          ls -l /tmp/oss-cad-suite.tgz
           sudo mkdir -p /opt
-          cd /tmp
-          wget -q https://github.com/YosysHQ/oss-cad-suite-build/releases/download/20260916/oss-cad-suite-linux-x64-20260916.tgz
-          tar xzf oss-cad-suite-linux-x64-20260916.tgz -C /opt/
-          echo "/opt/oss-cad-suite/bin" >> $GITHUB_PATH
+          # Explicit, not left to the runner's `bash -e`: a partial extraction must
+          # fail here, at the step that owns it.
+          tar xzf /tmp/oss-cad-suite.tgz -C /opt/ || {
+            echo "::error::tar failed extracting oss-cad-suite $OSSCAD_BUILD"
+            exit 1
+          }
+          rm -f /tmp/oss-cad-suite.tgz
+          # Prove the extraction produced a usable suite rather than trusting tar's exit code.
+          test -x "$OSSCAD_DIR/bin/yosys" || {
+            echo "::error::extraction produced no $OSSCAD_DIR/bin/yosys"
+            ls -l /opt
+            exit 1
+          }
+          echo "oss-cad-suite $OSSCAD_BUILD installed at $OSSCAD_DIR"
 
-      # ── Verify tools are available ───────────────────────────
-      - name: Verify tool installation
+      # ── Put the suite on PATH ─────────────────────────────────
+      # This has to run on both paths. It used to sit inside the install step,
+      # which is skipped on a cache hit -- so the *second* run would have failed
+      # every tool check with "command not found", looking like a broken cache.
+      - name: Add oss-cad-suite to PATH
+        run: echo "$OSSCAD_DIR/bin" >> $GITHUB_PATH
+
+      # ── Verify the suite is callable ─────────────────────────
+      - name: Verify oss-cad-suite
         run: |
-          echo "=== Tool versions ==="
+          echo "=== oss-cad-suite tools ==="
           yosys --version
-          openroad -version
-          magic --version
-          netgen -version
-          opensta -version
           iverilog -V | head -1
+
+      # ── Verify the ASIC tools the flow steps need ────────────
+      # oss-cad-suite is an FPGA/formal suite: yosys, nextpnr, iverilog,
+      # verilator, ghdl, sby, the formal solvers and the bitstream programmers.
+      # It ships no OpenROAD, Magic, Netgen or OpenSTA -- checked against the
+      # 2026-09-16 tag, whose rule set has no such package. So the P&R, DRC and
+      # LVS steps below have never had their tools, and a bare "command not
+      # found" from them said so far too late to act on. Fail here, by name.
+      - name: Verify ASIC toolchain
+        run: |
+          missing=""
+          for tool in openroad magic netgen opensta; do
+            if path=$(command -v "$tool" 2>/dev/null); then
+              printf '  %-9s %s\n' "$tool" "$path"
+            else
+              printf '  %-9s MISSING\n' "$tool"
+              missing="$missing $tool"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::ASIC tools missing:$missing"
+            echo "oss-cad-suite does not ship OpenROAD, Magic, Netgen or OpenSTA, so the"
+            echo "Place & Route, DRC and LVS steps cannot run. Install them from another"
+            echo "source (a full-stack ASIC image, or the OpenROAD prebuilt .deb plus"
+            echo "Magic/Netgen/OpenSTA source builds) or retire those steps."
+            exit 1
+          fi
+          echo "ASIC toolchain present"
 
       # ── Install SKY130 PDK ──────────────────────────────────
       - name: Cache SKY130 PDK
