@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Gridworkz */
 // ---------------------------------------------------------------------------
 // start_bringup.S - minimal boot entry point for DDR3L bring-up firmware
 //

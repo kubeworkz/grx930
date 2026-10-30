@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # flow_openroad_gf180mcu_cts.tcl — OpenROAD P&R with CTS
 # Metal2 I-pin stubs on clock buffers fix DRT-0073 pin access issue
 

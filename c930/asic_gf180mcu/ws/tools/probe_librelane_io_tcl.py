@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # probe_librelane_io_tcl.py -- read the INSTALLED LibreLane's io.tcl and the
 # get_script_dir()/SCRIPTS_DIR wiring, so the #1023 backport can be written
 # against the file that is actually there rather than against the diff's

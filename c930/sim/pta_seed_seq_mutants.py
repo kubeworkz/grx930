@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Non-vacuity check for pta_mnist's selftest check 3b, the seed sequence.
 
 Check 3b holds every issued tile command's PTA_SEED, in order, to the derivation

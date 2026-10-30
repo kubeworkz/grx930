@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 export XILINX_VIVADO=/mnt/c/Users/kubew/Vivaldo/2026.1/Vivado
 source /mnt/c/Users/kubew/Vivaldo/2026.1/Vivado/settings64.sh
 cd /mnt/c/Users/kubew/grx930/c930/build/vivado

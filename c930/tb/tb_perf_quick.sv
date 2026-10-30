@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_perf_quick.sv — Quick test: boot core, wait for DONE, then directly
 // program the NPU CSR via AXI to re-trigger a GEMM and check completion.
 // Bypasses the C driver's perf_bench to isolate the NPU re-trigger bug.

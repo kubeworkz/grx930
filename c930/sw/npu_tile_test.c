@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // npu_tile_test.c - Tiling test firmware for the C930 NPU.
 //

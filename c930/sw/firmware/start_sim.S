@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Gridworkz */
 /* -----------------------------------------------------------------------------
  * start_sim.S - entry point for the Verilator SoC simulation.
  *

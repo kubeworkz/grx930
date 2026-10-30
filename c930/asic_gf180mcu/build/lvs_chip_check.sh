@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_check.sh -- LVS for the die itself (plan S2), on the artifact we actually have.
 #
 # WHY THIS EXISTS

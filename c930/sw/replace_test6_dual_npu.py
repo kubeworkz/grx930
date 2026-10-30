@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Add Test 6: Dual-NPU different-shape stress test.
 
 NPU0: 4x4x4 INT8 all 1s -> C[m][n] = 4 for all elements (16 elements)

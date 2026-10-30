@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // =============================================================================
 // c930_aplic.sv — Minimal RISC-V AIA APLIC (Advanced PLIC)
 //

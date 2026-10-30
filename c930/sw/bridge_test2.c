@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // bridge_test2.c — Two consecutive GEMMs via CPU MMIO path.
 // Simulates the perf_bench re-trigger scenario: first GEMM completes,
 // then immediately program and kick again.

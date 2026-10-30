@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_probe_deck.sh -- a copy of the pruned deck whose phase boundaries write to their own file.
 #
 # WHY THIS EXISTS, AND WHY IT CHANGED

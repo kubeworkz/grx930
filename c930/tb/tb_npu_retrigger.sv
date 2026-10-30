@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_npu_retrigger.sv — Direct NPU re-trigger test.
 // Drives the NPU's AXI4-Lite CSR port directly (no CPU) to test
 // whether the NPU can complete back-to-back GEMMs.

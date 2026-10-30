@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # klayout_lvs.sh -- run the GF180MCU KLayout LVS deck on a layout/schematic pair, from the host.
 #
 # Why this exists: the deck cannot produce a verdict through its own documented interface. Its

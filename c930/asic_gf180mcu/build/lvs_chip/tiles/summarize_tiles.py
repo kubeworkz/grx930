@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """summarize_tiles.py -- one table of every netlist arm, tile and die, from the artifacts.
 
 Reads `build/lvs_chip/net_arms/<label>/arm.json` (written by `net_arm.sh`) plus each arm's

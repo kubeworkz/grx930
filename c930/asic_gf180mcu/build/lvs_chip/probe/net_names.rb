@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # net_names.rb -- does the streamed die carry the labels that would let the comparer align by name?
 #
 # The LVS engine has `consider_net_names(f)` ("the netlist comparer shall use net names") and an

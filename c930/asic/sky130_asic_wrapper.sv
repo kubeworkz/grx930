@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // sky130_asic_wrapper.sv — ASIC-compatible replacements for Xilinx primitives
 // For use with Yosys + SKY130 std-cell library (open-source flow)
 //

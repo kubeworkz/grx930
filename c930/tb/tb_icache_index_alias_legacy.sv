@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_icache_index_alias_legacy.sv
 //
 // Legacy-generation twin of tb_icache_index_alias.sv: the same literal

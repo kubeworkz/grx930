@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 Generate firmware for the APLIC integration test (SoC Test 10).
 

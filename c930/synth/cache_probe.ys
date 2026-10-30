@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Probe: synthesize ONLY the two cache hierarchies (controller + memory) to
 # measure their LUT/FF contribution to the 423K-LUT total.
 read_verilog -sv ../rv64imac/RTL/riscv_core_icache_top.sv

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Recovery v3 stage 4 - the host rebooted during DRT (swap exhaustion ->
 # sshd starved, hard reboot). 47-openroad-detailedrouting never produced
 # state_out.json; 46-openroad-stamidpnr-3/state_out.json is the latest

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // pta_test.c - Firmware smoke test for the PTA register block (phase C4(a)).
 //

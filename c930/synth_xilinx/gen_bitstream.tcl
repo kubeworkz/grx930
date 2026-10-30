@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## -------------------------------------------------------------------
 ## gen_bitstream.tcl -- Generate bitstream + .bin from routed checkpoint
 ##

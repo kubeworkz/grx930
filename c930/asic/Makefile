@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Makefile — GRX930 ASIC flow for SKY130
 #
 # Usage:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // c930_ddr_verilator.sv -- Verilator-friendly DDR stub
 //
 // Same ports as c930_ddr (synth stub) but uses a flat byte array instead of

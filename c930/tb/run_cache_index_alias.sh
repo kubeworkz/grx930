@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_cache_index_alias.sh [RTL_DIR] [OUT_DIR]
 #
 # Compiles and runs the two cache index/tag alias regressions against RTL_DIR

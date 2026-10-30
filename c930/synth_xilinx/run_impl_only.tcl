@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## run_impl_only.tcl -- Re-run implementation with updated XDC constraints
 ## Usage: vivado -mode batch -source synth_xilinx/run_impl_only.tcl
 

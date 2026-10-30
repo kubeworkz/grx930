@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Standalone TritonRoute experiment driver for the preserved pre-DRT database.
 # The ODB is self-contained (tech + cells), so no LEF/PDK files are read.
 set out "$::env(FAST_OUT)"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /**
  * tb_uart_echo.cc -- UART testbench for the GRX930 single-core SoC
  * Verilator model (c930_soc_verilator.sv).

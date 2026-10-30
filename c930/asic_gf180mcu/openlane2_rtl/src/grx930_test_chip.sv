@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // grx930_test_chip.sv
 //

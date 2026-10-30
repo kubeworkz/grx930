@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # C930 SoC ECP5 synthesis + place-and-route resource/Fmax/latch report.
 #

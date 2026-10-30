@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // tb_npu_double_buffer.sv
 //

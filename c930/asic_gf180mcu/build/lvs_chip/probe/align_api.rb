@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # align_api.rb -- what the comparison engine actually exposes.
 #
 # The chip run's silent stretch is somewhere at or around `align`, and the deck's own log cannot

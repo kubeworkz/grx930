@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # heal_mac.sh -- run as root inside WSL. Restores the node-locked-license MAC
 # on eth0 (fix-wsl-mac.sh can lose the boot race on a fresh VM) and repairs

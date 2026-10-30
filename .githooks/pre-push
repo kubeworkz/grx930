@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # pre-push -- run the chip gates before a push that could break them.
 #
 # WHY THIS EXISTS NOW

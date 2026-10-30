@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_ar_withdraw.sv -- directed regression for the abandoned-AR fixes.
 //
 // The NPU DMA can withdraw arvalid before a slave accepts it (its phase

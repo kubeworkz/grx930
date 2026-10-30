@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // c930_ddr_stub_flat.sv  -- SYNTH-ONLY flat-memory DDR stub for ECP5 synthesis.
 //

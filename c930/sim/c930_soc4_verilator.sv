@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // c930_soc4_verilator.sv -- Verilator harness top for the FULL 4-core SoC
 // with the shared L2 cache ACTIVE (no BYPASS_L2).
 //

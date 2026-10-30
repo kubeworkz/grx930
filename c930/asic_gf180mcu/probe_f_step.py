@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 import inspect
 import openlane.flow as F
 import openlane.flows as Fl

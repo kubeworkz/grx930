@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // l2_coh_test.c -- the L2 directory's blind spot, as firmware meets it.
 //

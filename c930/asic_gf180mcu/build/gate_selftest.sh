@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # gate_selftest.sh -- the shared gate's own test: does it still behave, and are
 # the chains still calling it instead of growing their own copy?
 #

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # klayout_lvs_selftest.sh -- prove the LVS verdict discriminates before believing any green.
 #
 # Why this exists: a "Congratulations! Netlists match" line is worth nothing until something is

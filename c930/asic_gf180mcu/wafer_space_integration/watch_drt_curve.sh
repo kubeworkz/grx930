@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # watch_drt_curve.sh -- watch a LibreLane OpenROAD.DetailedRouting step's own
 # iteration curve and write the verdict automatically: CONVERGING / STALLED /
 # DIVERGED / CLEAN. Runs on the flow box (host side, reading the mounted run

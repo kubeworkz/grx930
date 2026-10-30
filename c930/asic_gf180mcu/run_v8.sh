@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v8: FRESH full OL2 run (no --run-tag, no -F resume) from the Option B RTL:
 #   - grx930_sram_64kb DEPTH 1024 -> 256   (8 KB -> 2 KB FF SRAM)
 #   - ICACHE/DCACHE_INDEX_WIDTH 5 -> 4     (data arrays 1 KB -> 512 B each)

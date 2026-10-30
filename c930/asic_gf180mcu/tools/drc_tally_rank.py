@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """drc_tally_rank.py -- rank the precheck's KLayout DRC tally, and say what each rule means.
 
 WHY THIS EXISTS

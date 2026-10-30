@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Rebuild the September die into a stream LVS can extract: real cells, PDK layer numbers.
 
 What the die is

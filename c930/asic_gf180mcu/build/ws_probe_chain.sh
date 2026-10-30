@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ws_probe_chain.sh -- host side: run the isolated step-31 probe and record
 # whether the capped repair gets past the point that killed ws_v2.
 #

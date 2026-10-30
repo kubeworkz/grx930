@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # build_core_objs.sh -- compile and link the core bench, inside WSL.
 #

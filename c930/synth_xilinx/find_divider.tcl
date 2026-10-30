@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # find_divider.tcl -- Discover the actual divider FF and core clock net in the synth checkpoint
 open_checkpoint build/vivado/c930_artix7.runs/synth_1/c930_soc_top.dcp -quiet
 

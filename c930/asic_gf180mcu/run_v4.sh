@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v4: GRT redo with GRT_ADJUSTMENT=0.0.
 # Root cause of the DRT divergence: inv2 GRT (step 45) finished with
 # GRT-0115 overflow at 143.72% usage (4.57M overflow units, 7.13M vias)

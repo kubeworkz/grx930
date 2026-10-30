@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 Seal Ring Generator for wafer.space GF180MCU submission
 Creates a seal ring around the die edge for protection

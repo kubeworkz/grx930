@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_dcache_mmio.sv
 //
 // Minimal: dcache MMIO store -> bridge -> CSR. No instrumentation inside RTL.

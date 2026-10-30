@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Check that every switch line of the LVS manifest is the one the PDK's config asks for.
 
 Why this exists: build/lvs_fixtures.tsv claims its switch column is not ours. Each line is

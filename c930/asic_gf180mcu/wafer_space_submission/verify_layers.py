@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 Layer verification script for wafer.space GF180MCU submission
 Verifies GDS layers match foundry requirements

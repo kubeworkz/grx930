@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # arm CORE (container side) -- slot-core floorplan experiment.
 #
 # CORE_AREA 441 441 3489 4679 = 3048 x 4238 um = 12.92 mm2, the core that sits

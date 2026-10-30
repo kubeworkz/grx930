@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reemit_v3.ys — Fix both $_MUX_ and FF mapping
 read_json build/grx930_test_chip_synth.json
 

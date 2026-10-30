@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## ---------------------------------------------------------------------------
 ## write_bitstream_only.tcl  --  Run ONLY the write_bitstream step.
 ##

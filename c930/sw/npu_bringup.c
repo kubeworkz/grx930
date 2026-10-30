@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // npu_bringup.c - board bring-up firmware for Arty A7-100T + DDR3L
 //

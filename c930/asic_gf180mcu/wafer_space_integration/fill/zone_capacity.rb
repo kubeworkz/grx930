@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # How much room is left for dummy COMP in the zone where dummy Poly2 can be paired with it?
 # One region-algebra pass, no per-rule queries, so it is quick.
 #

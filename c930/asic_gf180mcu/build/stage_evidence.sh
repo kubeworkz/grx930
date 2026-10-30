@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # stage_evidence.sh -- sourced include: what "the measurements" are, and their fingerprint.
 #
 # Two jobs need this answer and must not be allowed to disagree about it:

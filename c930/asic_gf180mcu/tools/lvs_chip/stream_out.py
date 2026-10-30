@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Stream out the die the way the flow should have: DEF placements, library layouts, PDK numbers.
 
 The artifact's problems, and what this does about each:

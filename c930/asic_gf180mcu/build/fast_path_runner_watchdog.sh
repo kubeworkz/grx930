@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # fast_path_runner_watchdog.sh -- keep the push fast path's runner up, and say so.
 #
 # WHAT THIS WATCHES

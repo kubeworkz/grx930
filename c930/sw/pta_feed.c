@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // pta_feed.c -- F2: the feed's options at the Pockels points, measured on the
 // SoC (grxcp pta_program_plan.md, track F).

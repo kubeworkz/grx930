@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # pdn_cfg_grx930.tcl -- the template's pdn_cfg.tcl without its SRAM stripe grid,
 # for the grx930 chip-top run.
 #

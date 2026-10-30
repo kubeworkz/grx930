@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Recovery v3 stage 3 - resume the Classic flow from OpenROAD.STAMidPNR-3
 # (4th STAMidPNR instance, right after the gated-off ResizerTimingPostGRT),
 # so the run continues DRT -> fill -> GDS seeded from the latest

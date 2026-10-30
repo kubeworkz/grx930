@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_refresh_evidence.sh -- re-run the LVS fixture family against the pinned PDK and compare the
 # result with the committed evidence, so a stale verdict cannot sit in the tree unnoticed.
 #

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # grt_sweep_exec.sh -- container side of the GRT_ADJUSTMENT sweep.
 #
 # Resumes runs/slotcore_v1 from OpenROAD.GlobalRouting to OpenROAD.RepairAntennas

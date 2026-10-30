@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # retire_volume_swap.sh -- remove the redundant swapfile on the Hetzner volume.
 #
 # WHY (measured 2026-10-12, flow box ubuntu@49.13.6.8)

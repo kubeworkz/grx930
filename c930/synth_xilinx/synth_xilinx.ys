@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## ---------------------------------------------------------------------------
 ## synth_xilinx.ys  --  Yosys synth_xilinx for C930 SoC (resource estimate)
 ##

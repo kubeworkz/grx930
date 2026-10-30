@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # openroad_26q4.sh -- the fixed OpenROAD, usable from inside the pinned flow image.
 #
 # WHY

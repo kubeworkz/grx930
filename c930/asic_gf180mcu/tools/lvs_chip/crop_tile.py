@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """crop_tile.py -- cut a window out of a flat layout, keeping the layer table and top-level shapes.
 
 WHY

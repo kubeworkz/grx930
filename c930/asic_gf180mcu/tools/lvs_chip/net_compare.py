@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Do the routed database and the schematic netlist connect the same pins? Answer it directly.
 
 The deck's answer for the die is its netter plus `align`, and on this design that has not

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_db_compare_selftest.sh -- proves build/drt_db_compare_chain.sh's post-launch
 # path with docker STUBBED: the launch arguments it builds, the harvest, the row it
 # assembles, the report it rewrites, and the warning it owes when a router log has

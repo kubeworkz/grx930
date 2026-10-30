@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_hazard_csrflush.sv - standalone checks for the hazard unit:
 //   * the CSR flush source of flush_ex is deferred while the pipeline is
 //     stalled (same rule as pcsrc),

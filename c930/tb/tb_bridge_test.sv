@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_bridge_test.sv — Loads bridge_test.hex, boots core, monitors the full
 // CPU → dcache → MMIO bridge → NPU CSR path for a single GEMM kick.
 // Diagnoses why the CPU-path MMIO writes stall on re-trigger.

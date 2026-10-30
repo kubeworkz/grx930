@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // Minimal testbench: program NPU via AXI-Lite, verify command queue dispatch
 module tb_csr_queue;
   logic clk = 0;

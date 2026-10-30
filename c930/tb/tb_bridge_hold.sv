@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_bridge_hold.sv
 //
 // Minimal bridge+CSR test that mimics the dcache behavior: i_mmio_write_valid

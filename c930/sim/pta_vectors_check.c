@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 /*
  * pta_vectors_check.c -- the gate on G0's conformance suite.
  *

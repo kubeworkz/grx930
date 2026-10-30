@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // npu_ddr_alloc.h - Reference memory allocator for the C930 NPU's 64KB DDR.
 //

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_soc4.cc -- Verilator harness for the FULL 4-core SoC with the shared
 // L2 cache ACTIVE (the path Icarus cannot simulate at usable speed).
 //

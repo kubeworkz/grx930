@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # build_core_verilator_wsl.sh -- generate the core bench's C++ on Windows and
 # build it with WSL g++, the way synth_xilinx/build_soc4_verilator_wsl.sh does

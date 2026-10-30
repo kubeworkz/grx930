@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Convert a raw binary image to one 32-bit little-endian hex word per line.
 
 The RV64IMAC core fetches 4-byte little-endian instructions from DDR starting

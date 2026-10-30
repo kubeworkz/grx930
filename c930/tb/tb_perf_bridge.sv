@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_perf_bridge.sv — Test the MMIO bridge with minimal perf firmware.
 // Loads perf_only.hex (skips all stress tests) and monitors the NPU.
 

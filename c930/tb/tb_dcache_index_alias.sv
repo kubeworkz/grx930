@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_dcache_index_alias.sv
 //
 // D-cache twin of tb_icache_index_alias.sv: the same literal addr[11:5] tag set

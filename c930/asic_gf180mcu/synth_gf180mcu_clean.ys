@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # synth_gf180mcu_clean.ys — Re-run synthesis with clean gate-level output
 
 # ============================================================

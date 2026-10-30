@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # chip_gates.sh -- every chip gate this repo has, in one command, for the flow
 # box and for CI alike.
 #

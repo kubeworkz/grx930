@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Why did the deck see 0 polygons for a child cell? Compare the two read paths.
 
 The deck calls `source(input, topcell)`. KLayout's read-with-cellname is supposed to keep the

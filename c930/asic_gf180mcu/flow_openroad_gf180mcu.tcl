@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # flow_openroad_gf180mcu.tcl — OpenROAD P&R for GRX930 test chip
 # wafer.space 1x1 slot: Die 3.93mm x 5.12mm, Core 12.92 mm2
 

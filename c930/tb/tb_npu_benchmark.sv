@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_npu_benchmark.sv — NPU performance benchmark.
 // Drives the NPU CSR directly via hierarchical poke to measure cycle counts
 // and compute TOPS across INT8/INT16/FP16 precisions and GEMM sizes.

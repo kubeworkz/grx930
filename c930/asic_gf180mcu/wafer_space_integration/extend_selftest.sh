@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # extend_selftest.sh -- drives the automatic cap-cost extension end to end with
 # docker (and memwatch) stubbed: no container is launched, nothing is routed, and
 # nothing is written outside a temp dir.

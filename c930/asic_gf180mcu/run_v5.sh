@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v5: resume Classic flow -F OpenROAD.DetailedRouting, seeded from
 # 50-openroad-globalrouting/state_out.json (the GRT redone with
 # GRT_ADJUSTMENT=0.0: total usage 102.95%, overflow 1.73M vs the old

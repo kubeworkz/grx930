@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """One real PDK cell, on its own, for a harness sanity run.
 
 The die's cells turned out to be LEF abstracts (pins, wells, boundary -- no comp, no poly), so

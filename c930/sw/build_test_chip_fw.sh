@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # build_test_chip_fw.sh [OUT_HEX] -- build the grx930_test_chip boot firmware.
 #
 # Toolchain: riscv64-unknown-elf-gcc (or riscv64-linux-gnu-gcc / riscv-none-elf-gcc);

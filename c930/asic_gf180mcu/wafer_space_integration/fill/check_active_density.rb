@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 require 'etc'
 
 # Fast DCF.1b / PL.8 check on a filled GDS, without running the whole DRC deck.

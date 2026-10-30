@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # -----------------------------------------------------------------------------
 # run_bitstream_native.sh  --  Generate the Arty A7-100T .bit from the WSL
 # native-filesystem work copy (see run_impl_native.sh for why native FS).

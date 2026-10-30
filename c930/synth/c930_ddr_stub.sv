@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // c930_ddr_stub.sv  -- SYNTH-ONLY small synthesizable placeholder for c930_ddr.
 //

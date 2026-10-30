@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reclaim_disk.sh -- free space on the flow box after the GRT_ADJUSTMENT sweep.
 #
 # /home was at 89 % (17 GB free) with the next flow run still to come. Every

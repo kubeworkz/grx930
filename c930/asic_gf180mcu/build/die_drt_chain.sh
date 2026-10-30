@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # die_drt_chain.sh -- host side: measure the DIE's own detailed-routing cost at
 # the landed GRT_ADJUSTMENT (0.1) in the fast DRT loop, so the price the landing
 # comment pays stops being an extrapolation from the slot core.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # MIG 7 Series IP configuration for Arty A7-100T DDR3L
 #

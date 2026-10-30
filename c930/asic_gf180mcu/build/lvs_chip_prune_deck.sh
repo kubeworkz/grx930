@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_prune_deck.sh -- make a deck copy that does not pay for device classes the die has no
 # geometry for, and prove the skip on the run's own log.
 #

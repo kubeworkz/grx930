@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lvs_chip_net_compare_selftest.sh -- does the DEF-vs-CDL connectivity check actually check?
 #
 # The tool answers a question about two 75 MB and 8 MB files, and its first two runs were wrong

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lb_probe4.sh -- what gates LibreLane's antenna-repair steps, and what command
 # they run. Needed to state the measurement's pre-DRT arm in the flow's own terms
 # (the unmodified run dies inside OpenROAD.DiodeInsertion on the pinned build).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_npu_retrigger2.sv — Direct AXI retrigger (proven working) but
 // also monitors the CPU path to see if the bridge stalls.
 // We run 3 GEMMs via direct AXI, then let the CPU try a 4th via firmware.

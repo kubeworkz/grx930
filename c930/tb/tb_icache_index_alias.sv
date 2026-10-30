@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_icache_index_alias.sv
 //
 // Regression for the cache index/tag decomposition bug. With INDEX_WIDTH < 7 the

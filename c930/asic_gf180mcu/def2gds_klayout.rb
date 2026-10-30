@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # KLayout script: DEF to GDS conversion for GRX930 test chip
 # Usage: klayout -b -r def2gds_klayout.rb
 

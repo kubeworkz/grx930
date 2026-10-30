@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # watch_ws_run.sh -- host side: a step-level heartbeat for a wafer.space flow run,
 # plus a FINAL block with the landing. Detached on purpose, so the record
 # survives the SSH session that started the run:

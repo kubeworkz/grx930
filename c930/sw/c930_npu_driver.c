@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // -----------------------------------------------------------------------------
 // c930_npu_driver.c - Host-side driver for the C930 NPU command queue.
 //

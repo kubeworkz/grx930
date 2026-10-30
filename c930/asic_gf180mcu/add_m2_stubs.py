@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Add Metal2 RECT stubs to clock buffer I pins in the cell LEF.
 This gives DRT a Metal2 access point so it can route clock buffer inputs."""
 

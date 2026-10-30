@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # reemit_v2.ys — Fix FF mapping: dfflibmap then re-emit
 read_json build/grx930_test_chip_synth.json
 

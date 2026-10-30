@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # arm_verdict_capture.sh -- wait for both fast-DRT arms, write their comparison.
 #
 # The two arms are hours apart (arm 1 held drt_core from 00:50, arm 2 is

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # stage_tapeout_config_selftest.sh -- the rung logic and the write path of
 # build/stage_tapeout_config.sh, exercised off the box against a fake tree.
 #

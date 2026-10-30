@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # compress_old_run.sh -- second pass: finish archiving the OLD campaign run.
 #
 # The run is the Sept-24 campaign (RUN_2026-09-24_04-18-20), which lives on the

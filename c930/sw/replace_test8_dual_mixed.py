@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Add Test 8: Dual-NPU mixed-precision test.
 
 NPU0: FP16 3x3x4

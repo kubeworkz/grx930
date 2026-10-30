@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Gridworkz */
 // -----------------------------------------------------------------------------
 // start.S - bare-metal entry point for the RV64IMAC core.
 //

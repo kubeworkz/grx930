@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Cut single cells out of the shipped stream-out so the deck can LVS them one at a time.
 
 Why: the chip run is hours long, and most of what it has to prove is not the routing. The

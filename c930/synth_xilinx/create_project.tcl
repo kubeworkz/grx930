@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## ---------------------------------------------------------------------------
 ## create_project.tcl  --  Create a Vivado project for the C930 SoC
 ##

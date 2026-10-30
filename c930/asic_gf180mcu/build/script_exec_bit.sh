@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # script_exec_bit.sh [REPO] [--fix]
 #
 # The exec-bit gate: every shell script tracked in this repository must be mode

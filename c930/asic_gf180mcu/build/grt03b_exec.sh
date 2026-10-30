@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # arm GRT03 (container side) -- isolate the GlobalRouting headroom variable.
 #
 # Resumes the v8 run from OpenROAD.GlobalRouting with the STOCK

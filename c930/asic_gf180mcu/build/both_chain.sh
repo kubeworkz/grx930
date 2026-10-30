@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # both_chain.sh -- two routing experiments, serialized on the 8-core box.
 #
 #   arm CORE  : slot-core floorplan (CORE_AREA 441 441 3489 4679, 12.92 mm2,

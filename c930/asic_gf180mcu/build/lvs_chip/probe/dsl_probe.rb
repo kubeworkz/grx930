@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # probe: which tiling/threading directives does the LVS DSL expose?
 puts "PROBE threads? #{respond_to?(:threads).inspect}"
 puts "PROBE tiles? #{respond_to?(:tiles).inspect}"

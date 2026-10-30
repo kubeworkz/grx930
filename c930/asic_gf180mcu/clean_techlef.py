@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Create a clean tech LEF that:
 1. Removes PROPERTY LEF58_EOLENCLOSURE (not supported)
 2. Removes ENCLOSURE from VIARULEGEN blocks (no CUTCLASS support)

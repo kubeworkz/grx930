@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # stage_tapeout_config.sh -- host side: make the die's TAPEOUT configuration a
 # measured decision, by reading the arm results and writing them next to the knobs.
 #

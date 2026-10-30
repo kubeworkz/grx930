@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # chain_selftests.sh -- the selftests behind the chains and the gates, in one
 # command, for CI on every push.
 #

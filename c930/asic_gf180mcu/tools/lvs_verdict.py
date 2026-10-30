@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Judge a KLayout LVS verdict file. One line, one exit status, no opinion about layouts.
 
 Why this exists: the tapeout gate table (build/chip_gates.sh) branches on an exit status and a

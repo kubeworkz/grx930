@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # Makefile  --  Vivado batch synthesis + implementation for C930 SoC
 #

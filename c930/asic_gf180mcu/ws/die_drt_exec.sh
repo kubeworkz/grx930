@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # die_drt_exec.sh -- container side: the die's own fast-DRT arm at the landed
 # GRT_ADJUSTMENT (0.1). Runs drt_fast/run_drt.sh with FAST_TCL pointed at
 # drt_fast/die_drt.tcl: the same protocol the slot-core arms ran (2 iterations,

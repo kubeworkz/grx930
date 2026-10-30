@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # free_space.sh -- compress regenerable derived artifacts of the SUPERSEDED
 # pre-Option-B runs (Sept 22-23) so the two queued flow arms have disk headroom.
 # Nothing is deleted; all three file types regenerate from RTL:

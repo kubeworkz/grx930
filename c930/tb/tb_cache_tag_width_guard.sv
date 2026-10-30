@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_cache_tag_width_guard.sv -- negative control for the sim-only tag-width
 // guard in riscv_core_icache_controller.sv / riscv_core_dcache_controller.sv.
 //

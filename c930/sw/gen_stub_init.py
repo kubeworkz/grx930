@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Generate the embedded firmware init block for c930/synth/c930_ddr_stub.sv.
 
 Reads a raw binary image (sw/npu_boot.bin), pads it to the 512-byte stub

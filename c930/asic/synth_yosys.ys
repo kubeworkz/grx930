@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # synth_yosys.ys — Yosys synthesis script for GRX930 → SKY130
 #
 # Usage:

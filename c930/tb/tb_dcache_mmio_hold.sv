@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_dcache_mmio_hold.sv
 //
 // An MMIO load's data has to survive a frozen pipeline.

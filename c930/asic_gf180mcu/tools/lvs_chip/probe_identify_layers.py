@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Name the die GDS's layers from the inside: geometry, not the submission's own list.
 
 The die's stream numbers (1/1, 5/0, 6/0 ... 14/0) are not the PDK's (comp 22/0, metal1 34/0,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """
 Cycle-accurate model of the c930 systolic GEMM dataflow.
 

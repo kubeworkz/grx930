@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // chip_core_grx930.sv -- grx930 test chip inside the wafer.space project template.
 //
 // This file *replaces* the template's src/chip_core.sv (a 42-bit counter demo).

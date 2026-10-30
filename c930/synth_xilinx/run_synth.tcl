@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 ## ---------------------------------------------------------------------------
 ## run_synth.tcl  --  Vivado batch synthesis + implementation + timing
 ##

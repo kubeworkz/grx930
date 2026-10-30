@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 import klayout.db as db
 ly = db.Layout(); ly.read("/work/c930/asic_gf180mcu/build/lvs_chip/stream_out.gds")
 top = ly.top_cell()

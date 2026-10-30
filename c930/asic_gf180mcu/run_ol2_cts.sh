@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Run OpenLane2 full flow for GRX930 test chip with CTS
 # Uses GF180MCU PDK via volare
 

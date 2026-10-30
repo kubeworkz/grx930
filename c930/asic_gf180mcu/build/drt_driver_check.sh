@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # drt_driver_check.sh -- the DRT runner opens the driver script it was asked for,
 # and that script is the one its image can actually load.
 #

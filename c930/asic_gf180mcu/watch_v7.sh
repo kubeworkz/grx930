@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Watcher for OL2 DRT step 53 (container ol2_grx930_v7).
 # stdout of the log is 4 KB-block-buffered: "Completing X%" lines appear in
 # bursts. This loop watches for NEW flushed lines, appends them (with a

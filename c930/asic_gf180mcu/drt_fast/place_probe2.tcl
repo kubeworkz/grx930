@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 read_db $::env(FAST_ODB)
 set block [[[ord::get_db] getChip] getBlock]
 set d [$block getDieArea]

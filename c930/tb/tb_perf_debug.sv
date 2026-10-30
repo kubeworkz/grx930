@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_perf_debug.sv — Minimal testbench to debug NPU perf_bench failure.
 // Runs the full C driver (which includes perf_bench after DONE) and
 // monitors NPU internal signals when the core is stuck polling.

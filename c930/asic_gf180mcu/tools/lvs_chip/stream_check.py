@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Is this GDS a stream-out a foundry tool could read? Check it, do not assume it.
 
 The September artifact passed the only check in the tree (`wafer_space_submission/verify_layers.py`)

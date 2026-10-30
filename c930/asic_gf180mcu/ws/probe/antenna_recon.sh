@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # antenna_recon.sh -- what is actually in the pinned image, for the antenna-repair
 # abort. Read-only: prints versions, the step's own script, and every config
 # variable LibreLane declares for it. The point is that the lever list is measured

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // ---------------------------------------------------------------------------
 // tb_xsim.sv  --  Minimal Vivado xsim smoke test for C930 SoC
 //

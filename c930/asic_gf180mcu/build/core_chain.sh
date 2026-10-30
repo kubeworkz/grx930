@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # core_chain.sh -- arm CORE: slot-core floorplan vs the 33.4%-util baseline.
 #
 #   CORE_AREA 441 441 3489 4679 (3048 x 4238 = 12.92 mm2, the pad-ring channel

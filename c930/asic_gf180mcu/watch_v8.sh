@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # v8 watcher - fresh Option B run (ol2_grx930_v8).
 #   * heartbeat every 60 s            -> $HEART
 #   * GRT gate: when a NEW-RUN globalrouting log shows the final congestion

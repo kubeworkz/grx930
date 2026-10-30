@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # ---------------------------------------------------------------------------
 # create_and_synth.sh  --  Create Vivado project and run synth for full SoC
 #

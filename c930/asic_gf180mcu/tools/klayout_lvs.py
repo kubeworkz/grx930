@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """KLayout LVS on a GF180MCU layout/schematic pair, with a verdict that can be trusted.
 
 Why this exists

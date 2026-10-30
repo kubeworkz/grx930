@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_cache_index_alias_legacy.sh <tree-dir> <caches|atomic|fpga> [out-dir]
 #
 # Compiles and runs the generation-appropriate cache index/tag regressions

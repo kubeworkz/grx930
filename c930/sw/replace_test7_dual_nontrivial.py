@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Add Test 7: Dual-NPU non-trivial data test.
 
 NPU0: 3x4x2 INT8 with specific weights/activations

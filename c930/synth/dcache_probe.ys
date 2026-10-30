@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Probe: synthesize ONLY the dcache hierarchy to measure its LUT/FF contribution.
 read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_top.sv
 read_verilog -sv ../rv64imac/RTL/riscv_core_dcache_controller.sv

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lb_probe3.sh -- second probe: which shell/binaries exist in the pre-check
 # image, and the exact drt.tcl LibreLane's DetailedRouting step runs (sed is not
 # on PATH there, so python3 reads the file out).

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # run_cache_split_lockstep.sh [ROOT]
 #
 # Holds *every* hand-maintained copy of the rv64imac cache sources to one

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # lb_probe5.sh -- how LibreLane enforces the Metal1-Metal5 routing range, since
 # this OpenROAD build rejects detailed_route's deprecated -bottom/-top_routing_layer
 # flags (DRT-0509) and the flow's own drt.tcl passes none.

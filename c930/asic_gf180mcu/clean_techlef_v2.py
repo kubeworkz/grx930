@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """Create a clean tech LEF:
 1. Parse original VIARULEGEN blocks (with ENCLOSURE) to generate explicit VIAs
 2. Remove ENCLOSURE from VIARULEGEN blocks (DRT doesn't support LEF58_ENCLOSURE)

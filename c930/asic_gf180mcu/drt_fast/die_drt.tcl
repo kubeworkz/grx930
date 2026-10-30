@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # Standalone TritonRoute driver for the DIE's pre-DRT database, for the router
 # build the ws flow runs (the pre-check image's OpenROAD). It differs from
 # drt_fast.tcl in exactly the place that build forced, and states why in its own

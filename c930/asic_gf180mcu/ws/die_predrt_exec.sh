@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 # die_predrt_exec.sh -- container side: build the DIE's pre-DRT database at the
 # landed GRT_ADJUSTMENT (0.1), by resuming ws_v3's frozen step-36 state into a
 # fresh run tag and running the Chip flow from GlobalRouting through STAMidPNR-3.

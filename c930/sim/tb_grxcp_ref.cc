@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Gridworkz
 // tb_grxcp_ref.cc - GRXCP-NPU Integration Reference Test
 //
 // This test demonstrates the complete grxcp → NPU RTL integration flow:

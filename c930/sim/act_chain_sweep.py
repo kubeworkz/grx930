@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
 """A3's sweep: the reset-interval-versus-photons curve.
 
 npu_act_stage_design_note.md section 6, A3. The question is how many all-optical
