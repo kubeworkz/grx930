@@ -323,4 +323,9 @@ For gate-level PDFs (individual LUTs, FFs, BRAMs):
 
 ## License
 
-Proprietary — kubeworkz. See repository settings for access control.
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Gridworkz.
+
+Vendored third-party trees keep their own terms: the wafer.space pre-check tool and project
+template under `c930/asic_gf180mcu/tools/`, the OpenROAD/openLane-derived scripts under
+`c930/asic_gf180mcu/openlane2_rtl/`, and the GF180MCU PDK, which the flow configs reference at run
+time rather than ship.
