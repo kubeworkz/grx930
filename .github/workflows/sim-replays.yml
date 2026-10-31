@@ -1,0 +1,159 @@
+# sim-replays.yml — run the simulations gridworkz.com replays, and publish what
+# they said to the `sim-results` branch.
+#
+# WHY A HOSTED RUNNER
+#
+#   Every workload here needs only iverilog, vvp, make and python3, so a GitHub-
+#   hosted runner can finish it from a clean checkout. That leaves the one
+#   self-hosted gates runner to pushes and the hourly canary, which is what it is
+#   sized for. The simulator comes from the same oss-cad-suite release
+#   build-gds.yml pins (OSSCAD_TAG / OSSCAD_BUILD), so both workflows agree on
+#   which iverilog the design is checked with.
+#
+# WHAT IT PUBLISHES
+#
+#   c930/tb/publish_sim_results.sh writes results.json and one log per workload.
+#   This job force-pushes them as a single commit to the orphan branch
+#   `sim-results`, so the branch always holds exactly the latest run and its
+#   history stays one commit long. The site reads
+#   https://raw.githubusercontent.com/kubeworkz/grx930/sim-results/results.json
+#   at build time -- no token, no artifact API.
+#
+#   Results are published whether the simulations passed or failed: a replay
+#   page that only ever shows green would be a brochure. The run still goes red
+#   on a failure, after publishing, so a person is told.
+#
+# REFRESHING THE SITE
+#
+#   Optional: set a repository secret NETLIFY_BUILD_HOOK to the site's Netlify
+#   build hook URL and the last step asks Netlify to rebuild. Without it, the
+#   site picks the results up on its next deploy.
+
+name: Simulation replays
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/tb/**'
+      - 'c930/Makefile'
+      - 'rv64imac/**'
+      - '.github/workflows/sim-replays.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write         # push the sim-results branch
+
+concurrency:
+  group: sim-replays
+  cancel-in-progress: true   # only the latest run is published, so an older one need not finish
+
+env:
+  OSSCAD_DIR: /opt/oss-cad-suite
+  # Keep these two in step with build-gds.yml. Tag and asset are spelled
+  # differently on purpose -- see the comment there.
+  OSSCAD_TAG: '2026-09-16'
+  OSSCAD_BUILD: '20260916'
+
+jobs:
+  replays:
+    name: Run and publish the replayed simulations
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache oss-cad-suite
+        id: cache-oss
+        uses: actions/cache@v4
+        with:
+          path: /opt/oss-cad-suite
+          key: oss-cad-suite-linux-x64-${{ env.OSSCAD_BUILD }}
+
+      - name: Install oss-cad-suite
+        if: steps.cache-oss.outputs.cache-hit != 'true'
+        run: |
+          set -u
+          url="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${OSSCAD_TAG}/oss-cad-suite-linux-x64-${OSSCAD_BUILD}.tgz"
+          code=$(curl --silent --show-error --location --retry 3 --retry-all-errors \
+                      --output /tmp/oss-cad-suite.tgz --write-out '%{http_code}' "$url") || code=000
+          if [ "$code" != 200 ]; then
+            echo "::error::oss-cad-suite download failed with HTTP $code from $url"
+            exit 1
+          fi
+          sudo mkdir -p /opt
+          tar xzf /tmp/oss-cad-suite.tgz -C /opt/ || { echo "::error::tar failed extracting oss-cad-suite"; exit 1; }
+          rm -f /tmp/oss-cad-suite.tgz
+          test -x "$OSSCAD_DIR/bin/iverilog" || { echo "::error::no $OSSCAD_DIR/bin/iverilog after extraction"; exit 1; }
+
+      # On both paths: a cache hit skips the install step above.
+      - name: Put oss-cad-suite on PATH
+        run: |
+          echo "$OSSCAD_DIR/bin" >> "$GITHUB_PATH"
+          # The Makefile and the real-work script call `python`.
+          mkdir -p "$RUNNER_TEMP/python-shim"
+          ln -sf "$(command -v python3)" "$RUNNER_TEMP/python-shim/python"
+          echo "$RUNNER_TEMP/python-shim" >> "$GITHUB_PATH"
+
+      - name: Toolchain
+        run: |
+          iverilog -V | head -1
+          vvp -V | head -1
+          python --version
+
+      # continue-on-error so a failing simulation is still published below.
+      - name: Run the simulations
+        id: sims
+        continue-on-error: true
+        run: bash c930/tb/publish_sim_results.sh "$RUNNER_TEMP/sim-results"
+
+      - name: Publish to the sim-results branch
+        if: always()
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/sim-results"
+          test -f "$out/results.json" || { echo "::error::no results.json was written"; exit 1; }
+          cat > "$out/README.md" <<MD
+          # sim-results
+
+          Written by \`.github/workflows/sim-replays.yml\`, force-pushed on every run.
+          It holds the latest run only: \`results.json\` and one log per simulation.
+          Source commit: ${GITHUB_SHA}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          MD
+          cd "$out"
+          git init -q -b sim-results
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Simulation results for ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" sim-results
+          echo "published $(jq -r '.runs | length' results.json) runs to sim-results"
+
+      - name: Keep the logs with the run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-results
+          retention-days: 30
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/sim-results
+
+      - name: Ask Netlify to rebuild gridworkz.com
+        if: always()
+        env:
+          HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          if [ -z "${HOOK:-}" ]; then echo "NETLIFY_BUILD_HOOK not set; the site updates on its next deploy"; exit 0; fi
+          curl --silent --show-error --fail -X POST -d '{}' "$HOOK" && echo "Netlify rebuild requested"
+
+      - name: Verdict
+        if: always()
+        run: |
+          if [ "${{ steps.sims.outcome }}" != "success" ]; then
+            echo "::error::at least one simulation failed or timed out -- see results.json on the sim-results branch"
+            exit 1
+          fi
+          echo "all replayed simulations passed"
