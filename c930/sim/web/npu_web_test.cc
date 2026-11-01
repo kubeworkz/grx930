@@ -64,7 +64,7 @@ int main() {
     npu_web_csr_write(0x14, A_BASE); npu_web_csr_write(0x18, B_BASE); npu_web_csr_write(0x1C, C_BASE);
     npu_web_csr_write(0x20, p.code);
     npu_web_csr_write(0x00, 1);
-    int cyc = npu_web_run(2000000);
+    int cyc = npu_web_run(200000);
     uint32_t st = npu_web_csr_read(0x04), cy = npu_web_csr_read(0x24), op = npu_web_csr_read(0x2C),
              stall = npu_web_csr_read(0x30), dma = npu_web_csr_read(0x28);
     int miss = 0; uint32_t h = 2166136261u;

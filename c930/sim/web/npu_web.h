@@ -14,7 +14,7 @@ int      npu_web_csr_write(uint32_t addr, uint32_t v); // cycles the write took,
 uint32_t npu_web_csr_read(uint32_t addr);              // 0xFFFFFFFF on timeout
 void     npu_web_mem_write32(uint32_t byte_addr, uint32_t v);
 uint32_t npu_web_mem_read32(uint32_t byte_addr);
-int      npu_web_run(int max_cycles);                  // clock until the command finishes; cycles, -1 if not
+int      npu_web_run(int max_cycles);                  // clock and poll STATUS until DONE&!BUSY or ERROR; cycles, -1 if not
 int      npu_web_step(int cycles);                     // clock this many cycles
 uint64_t npu_web_cycles(void);                         // cycles since reset
 uint32_t npu_web_pins(void);                           // bit 0 busy, 1 done, 2 error, 3 irq
