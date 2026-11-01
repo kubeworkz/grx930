@@ -7,7 +7,7 @@
 # WHAT IT WRITES
 #
 #   $OUT/results.json   one record per workload: target, what it checks, exit
-#                       status, wall time, counts of [PASS] / [FAIL] lines, the
+#                       status, wall time, counts of PASS / FAIL verdict lines, the
 #                       testbench's own `$finish` line, and the log's file name
 #   $OUT/logs/<id>.log  the full output of each workload, trimmed to its first and
 #                       last 2,000 lines if it is longer than 4,000
@@ -17,7 +17,7 @@
 #
 # WHAT COUNTS AS A PASS
 #
-#   Exit status 0 AND no `$fatal` / [FAIL] line. A testbench that finishes with a
+#   Exit status 0 AND no `$fatal` / FAIL verdict line. A testbench that finishes with a
 #   [FAIL] it did not turn into a non-zero exit is still a failure here: the
 #   verdict lines are what a person reads, so they are what the record believes.
 #
@@ -61,8 +61,12 @@ for w in "${WORKLOADS[@]}"; do
   (cd "$ROOT/c930" && timeout "$TIMEOUT" bash -c "$cmd") > "$log" 2>&1
   rc=$?
   secs=$(( $(date +%s) - t0 ))
-  passes=$(grep -c '\[PASS\]' "$log" || true)
-  fails=$(grep -cE '\[FAIL\]|^FATAL|\$fatal|Fatal:' "$log" || true)
+  # Verdicts come in two spellings: tb_c930_npu prints "[PASS] ...", while
+  # tb_npu_float_prec ("GEMM FP16 2x3x5  PASS") and the real-work script
+  # ("WORK quad-four-core: PASS") print the bare word. Count both; \b keeps
+  # "PASSED" and "failed" out of it.
+  passes=$(grep -cE '\[PASS\]|\bPASS\b' "$log" || true)
+  fails=$(grep -cE '\[FAIL\]|\bFAIL\b|^FATAL|\$fatal|Fatal:' "$log" || true)
   finish=$(grep -m1 -oE '\$finish called at [0-9]+ *\([^)]*\)|\$finish called at [0-9]+' "$log" || true)
   trim "$log"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$cmd" "$what" "$rc" "$secs" "$passes" "$fails" "$finish" >> "$records"
