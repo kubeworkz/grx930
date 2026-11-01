@@ -1,0 +1,122 @@
+# npu-web.yml -- the NPU's RTL as a browser module, checked and published.
+#
+# c930/sim/web/build.sh Verilates c930_npu_top as the SoC builds it and compiles
+# the model with g++ and em++; compare.sh runs 46 GEMMs natively, as the
+# WebAssembly build of the same test, and through the browser module itself,
+# and fails unless all three pass and print the same bytes.
+#
+# On main (and on demand) a passing build is force-pushed as one commit to the
+# orphan branch `npu-web`: the module, transcript.txt, and manifest.json (source
+# commit, digests of the RTL it was built from, tool versions, file digests).
+# A page loads it from raw.githubusercontent.com with no token. A build that
+# fails or differs is never published. Pull requests check and publish nothing.
+name: NPU web module
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/sim/web/**'
+      - '.github/workflows/npu-web.yml'
+  pull_request:
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/sim/web/**'
+      - '.github/workflows/npu-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write         # push the npu-web branch
+
+concurrency:
+  group: npu-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bounded: a stalled mirror gives up and retries rather than eating the job.
+      - name: Verilator
+        timeout-minutes: 10
+        run: |
+          APT="-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get install -y $APT verilator || { sudo apt-get update $APT; sudo apt-get install -y $APT verilator; }
+
+      - name: Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+
+      - name: Build
+        run: bash c930/sim/web/build.sh "$RUNNER_TEMP/npu-web"
+
+      - name: Compare native, WebAssembly and the browser module
+        run: bash c930/sim/web/compare.sh "$RUNNER_TEMP/npu-web"
+
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP/npu-web/summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Keep the build and transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npu-web
+          retention-days: 30
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/npu-web/web
+            ${{ runner.temp }}/npu-web/native.txt
+            ${{ runner.temp }}/npu-web/wasm.txt
+            ${{ runner.temp }}/npu-web/web.txt
+            ${{ runner.temp }}/npu-web/summary.md
+
+      # Only after the comparison passed (no always()), and never from a pull request.
+      - name: Publish to the npu-web branch
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          set -eu
+          web="$RUNNER_TEMP/npu-web/web"
+          cp "$RUNNER_TEMP/npu-web/summary.md" "$web/"
+          python3 - "$web" <<'PY'
+          import glob, hashlib, json, os, subprocess, sys, datetime
+          web = sys.argv[1]
+          sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
+          first = lambda cmd: subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()[0]
+          rtl = sorted(glob.glob('c930/rtl/c930_*.sv')) + ['c930/sim/web/npu_web_top.sv', 'c930/sim/web/npu_web.cc']
+          last = open(os.path.join(web, 'transcript.txt')).read().strip().splitlines()[-1]
+          doc = dict(
+              repo=os.environ['GITHUB_REPOSITORY'], commit=os.environ['GITHUB_SHA'],
+              run_url=f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+              verilator=first(['verilator', '--version']), emcc=first(['emcc', '--version']),
+              parameters=dict(NUM_ROWS=8, NUM_COLS=8, DIN_W=16, ACC_W=48, MAX_M=8, MAX_K=16, MAX_N=12, MEM_BYTES=65536),
+              sources={p: sha(p) for p in rtl if os.path.exists(p)},
+              files={f: dict(bytes=os.path.getsize(os.path.join(web, f)), sha256=sha(os.path.join(web, f)))
+                     for f in sorted(os.listdir(web)) if f != 'manifest.json'},
+              transcript=last, identical_to_native=True,
+          )
+          json.dump(doc, open(os.path.join(web, 'manifest.json'), 'w'), indent=2)
+          PY
+          cat > "$web/README.md" <<MD
+          # npu-web
+
+          Written by \`.github/workflows/npu-web.yml\` and force-pushed on every passing build:
+          \`c930_npu_top\` Verilated and compiled to WebAssembly, with the API in
+          \`c930/sim/web/npu_web.h\`. Its transcript (\`transcript.txt\`) was printed byte for byte
+          the same natively, by the WebAssembly C test and through this module.
+          Source commit: ${GITHUB_SHA}.
+          MD
+          cd "$web"
+          git init -q -b npu-web
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "NPU web module for ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" npu-web
+          echo "published $(ls | wc -l) files to npu-web"
