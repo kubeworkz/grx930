@@ -6,10 +6,20 @@
 #   Every workload here needs only iverilog, vvp, make and python3, so a GitHub-
 #   hosted runner can finish it from a clean checkout. That leaves the one
 #   self-hosted gates runner to pushes and the hourly canary, which is what it is
-#   sized for. The simulator comes from the same oss-cad-suite release
-#   build-gds.yml pins (OSSCAD_TAG / OSSCAD_BUILD), so both workflows agree on
-#   which iverilog the design is checked with.
+#   sized for.
 #
+# WHY UBUNTU'S ICARUS 12, NOT OSS-CAD-SUITE'S
+#
+#   The canary and the push gates run "Icarus Verilog version 12.0 (stable)",
+#   Ubuntu's package, and that is the simulator these testbenches are known to
+#   pass on. This workflow's first run used the oss-cad-suite build build-gds.yml
+#   pins, which is Icarus 14.0 (devel): it refuses a signal used before its
+#   declaration (c930_npu_csr.sv's fifo_empty / fifo_head, riscv_core_csr_unit.sv's
+#   intr_trap_pc, ...) and every workload failed to elaborate. ubuntu-24.04's
+#   apt package is the same 12.0 the canary reports, so the replays check the
+#   design with the simulator the repo is actually checked with. The Toolchain
+#   step prints the version, and results.json records it.
+
 # WHAT IT PUBLISHES
 #
 #   c930/tb/publish_sim_results.sh writes results.json and one log per workload.
@@ -49,50 +59,21 @@ concurrency:
   group: sim-replays
   cancel-in-progress: true   # only the latest run is published, so an older one need not finish
 
-env:
-  OSSCAD_DIR: /opt/oss-cad-suite
-  # Keep these two in step with build-gds.yml. Tag and asset are spelled
-  # differently on purpose -- see the comment there.
-  OSSCAD_TAG: '2026-09-16'
-  OSSCAD_BUILD: '20260916'
-
 jobs:
   replays:
     name: Run and publish the replayed simulations
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache oss-cad-suite
-        id: cache-oss
-        uses: actions/cache@v4
-        with:
-          path: /opt/oss-cad-suite
-          key: oss-cad-suite-linux-x64-${{ env.OSSCAD_BUILD }}
-
-      - name: Install oss-cad-suite
-        if: steps.cache-oss.outputs.cache-hit != 'true'
+      # Ubuntu 24.04's iverilog is 12.0 (stable), the canary's simulator.
+      - name: Install Icarus Verilog
         run: |
-          set -u
-          url="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${OSSCAD_TAG}/oss-cad-suite-linux-x64-${OSSCAD_BUILD}.tgz"
-          code=$(curl --silent --show-error --location --retry 3 --retry-all-errors \
-                      --output /tmp/oss-cad-suite.tgz --write-out '%{http_code}' "$url") || code=000
-          if [ "$code" != 200 ]; then
-            echo "::error::oss-cad-suite download failed with HTTP $code from $url"
-            exit 1
-          fi
-          sudo mkdir -p /opt
-          tar xzf /tmp/oss-cad-suite.tgz -C /opt/ || { echo "::error::tar failed extracting oss-cad-suite"; exit 1; }
-          rm -f /tmp/oss-cad-suite.tgz
-          test -x "$OSSCAD_DIR/bin/iverilog" || { echo "::error::no $OSSCAD_DIR/bin/iverilog after extraction"; exit 1; }
-
-      # On both paths: a cache hit skips the install step above.
-      - name: Put oss-cad-suite on PATH
-        run: |
-          echo "$OSSCAD_DIR/bin" >> "$GITHUB_PATH"
+          sudo apt-get update -q
+          sudo apt-get install -y -q iverilog
           # The Makefile and the real-work script call `python`.
           mkdir -p "$RUNNER_TEMP/python-shim"
           ln -sf "$(command -v python3)" "$RUNNER_TEMP/python-shim/python"
