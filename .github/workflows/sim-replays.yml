@@ -70,10 +70,19 @@ jobs:
         uses: actions/checkout@v4
 
       # Ubuntu 24.04's iverilog is 12.0 (stable), the canary's simulator.
+      #
+      # Bounded on purpose: the second run sat in `apt-get update` for the job's
+      # whole 60 minutes when a mirror stalled mid-download. Now a stalled fetch
+      # gives up after 30s and retries, the step gives up after 10 minutes, and
+      # the runner image's own package lists are tried before refreshing them.
       - name: Install Icarus Verilog
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q iverilog
+          APT="-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          if ! sudo apt-get install -y $APT iverilog; then
+            sudo apt-get update $APT
+            sudo apt-get install -y $APT iverilog
+          fi
           # The Makefile and the real-work script call `python`.
           mkdir -p "$RUNNER_TEMP/python-shim"
           ln -sf "$(command -v python3)" "$RUNNER_TEMP/python-shim/python"
@@ -133,6 +142,10 @@ jobs:
       - name: Verdict
         if: always()
         run: |
+          if [ "${{ steps.sims.outcome }}" = "skipped" ]; then
+            echo "::error::the simulations did not run: a setup step failed first (see above); sim-results still holds the previous run"
+            exit 1
+          fi
           if [ "${{ steps.sims.outcome }}" != "success" ]; then
             echo "::error::at least one simulation failed or timed out -- see results.json on the sim-results branch"
             exit 1
