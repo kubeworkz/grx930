@@ -32,7 +32,9 @@ echo "== WebAssembly"
 em++ --version | head -1
 # Verilator's runtime knows each CPU's spin-wait hint but not WebAssembly's;
 # the model is single-threaded and never spins, so the no-op it offers is right.
-EMFLAGS="-std=c++17 -O2 -sALLOW_MEMORY_GROWTH=1 -DVL_IGNORE_UNKNOWN_ARCH"
+# Its vltstd/svdpi.h uses uint8_t without including <stdint.h>, which glibc's
+# headers happen to supply natively and Emscripten's do not.
+EMFLAGS="-std=c++17 -O2 -sALLOW_MEMORY_GROWTH=1 -DVL_IGNORE_UNKNOWN_ARCH -include stdint.h"
 em++ $EMFLAGS $INC -sEXIT_RUNTIME=1 -o "$OUT/npu_web_test.js" $SRCS "$HERE/npu_web.cc" "$HERE/npu_web_test.cc"
 FUNCS='["_npu_web_reset","_npu_web_csr_write","_npu_web_csr_read","_npu_web_mem_write32","_npu_web_mem_read32","_npu_web_run","_npu_web_step","_npu_web_cycles","_npu_web_pins"]'
 em++ $EMFLAGS -O3 $INC -sMODULARIZE=1 -sEXPORT_NAME=NpuWeb -sENVIRONMENT=web,worker,node \
