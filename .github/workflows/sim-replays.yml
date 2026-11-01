@@ -50,13 +50,21 @@ on:
       - 'c930/Makefile'
       - 'rv64imac/**'
       - '.github/workflows/sim-replays.yml'
+  # A pull request runs the same simulations as a check; only main publishes.
+  pull_request:
+    paths:
+      - 'c930/rtl/**'
+      - 'c930/tb/**'
+      - 'c930/Makefile'
+      - 'rv64imac/**'
+      - '.github/workflows/sim-replays.yml'
   workflow_dispatch:
 
 permissions:
   contents: write         # push the sim-results branch
 
 concurrency:
-  group: sim-replays
+  group: sim-replays-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: true   # only the latest run is published, so an older one need not finish
 
 jobs:
@@ -101,7 +109,7 @@ jobs:
         run: bash c930/tb/publish_sim_results.sh "$RUNNER_TEMP/sim-results"
 
       - name: Publish to the sim-results branch
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         run: |
           set -eu
           out="$RUNNER_TEMP/sim-results"
@@ -132,7 +140,7 @@ jobs:
           path: ${{ runner.temp }}/sim-results
 
       - name: Ask Netlify to rebuild gridworkz.com
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         env:
           HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
         run: |
@@ -147,7 +155,7 @@ jobs:
             exit 1
           fi
           if [ "${{ steps.sims.outcome }}" != "success" ]; then
-            echo "::error::at least one simulation failed or timed out -- see results.json on the sim-results branch"
+            echo "::error::at least one simulation failed or timed out -- see the logs in the sim-results artifact (and, on main, results.json on the sim-results branch)"
             exit 1
           fi
           echo "all replayed simulations passed"

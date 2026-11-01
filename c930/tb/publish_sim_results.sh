@@ -38,6 +38,7 @@ mkdir -p "$OUT/logs"
 WORKLOADS=(
   "npu|make npu|NPU integer GEMM: every matrix shape in tb_c930_npu, INT8/INT16/INT4, plus the PTA register block"
   "npu_float|make npu_float|NPU FP16 and BF16 GEMM after integer GEMMs (tb_npu_float_prec)"
+  "npu_queue|make cal_queue refused_dispatch|NPU command queue: STARTs during a calibration queue, a refused command does not wedge the dispatcher, QUEUE_STAT's layout"
   "hazard|make hazard|CPU hazard unit: CSR flush and load-use stalls (tb_hazard_csrflush)"
   "hazard_equiv|make hazard_equiv|Hazard unit against a reference model, 300K random cycles"
   "arb_equiv|make arb_equiv|DMA arbiter B-skid against a reference model, 1,200+ transactions"

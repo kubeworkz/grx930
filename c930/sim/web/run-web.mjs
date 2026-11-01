@@ -77,8 +77,24 @@ for (const p of PRECS) for (const [M, N, K] of SHAPES) {
 }
 reset();
 csrW(0x08, 4); csrW(0x0C, 4); csrW(0x10, 20); csrW(0x20, 0); csrW(0x00, 1);
-const cyc = run(200), st = csrR(0x04), ok = (st & 4) !== 0;
+let cyc = run(200), st = csrR(0x04), ok = (st & 4) !== 0;
 out(`INT8  M=4 N= 4 K=20  run=${pad(cyc, 6)} cycles  STATUS=${st} (dims past MAX_K: ERROR expected)  ${ok ? 'PASS' : 'FAIL'}`);
+bad += ok ? 0 : 1; n++;
+csrW(0x10, 4); csrW(0x14, A_BASE); csrW(0x18, B_BASE); csrW(0x1C, C_BASE);
+csrW(0x00, 1);
+cyc = run(20000); st = csrR(0x04); ok = cyc > 0 && st === 2;
+out(`INT8  M=4 N= 4 K= 4  run=${pad(cyc, 6)} cycles  STATUS=${st} (the command after the refused one: runs)  ${ok ? 'PASS' : 'FAIL'}`);
+bad += ok ? 0 : 1; n++;
+reset();
+csrW(0x08, 8); csrW(0x0C, 12); csrW(0x10, 16); csrW(0x20, 0);
+csrW(0x14, A_BASE); csrW(0x18, B_BASE); csrW(0x1C, C_BASE);
+for (let i = 0; i < 5; i++) csrW(0x00, 1);
+const q4 = csrR(0x38);
+csrW(0x00, 1);
+const q5 = csrR(0x38);
+const hex2 = (v) => (v >>> 0).toString(16).toUpperCase().padStart(2, '0');
+ok = q4 === 0x14 && q5 === 0x14;
+out(`QUEUE_STAT one running, four queued: 0x${hex2(q4)}, after a fifth START: 0x${hex2(q5)} (0x14 expected)  ${ok ? 'PASS' : 'FAIL'}`);
 bad += ok ? 0 : 1; n++;
 out(`npu_web_test: ${n - bad} of ${n} passed`);
 process.stdout.write(lines.join('\n') + '\n');

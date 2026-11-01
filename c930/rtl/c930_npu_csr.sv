@@ -568,6 +568,12 @@ module c930_npu_csr
   // D_IDLE:   engine idle. If FIFO non-empty, pop and dispatch from head.
   //           If FIFO empty, dispatch immediately from live CSRs.
   // D_WAIT:   engine busy — wait for done, then return to D_IDLE.
+  //           A command the DMA refuses (dimensions past the limits) raises
+  //           ERROR in P_IDLE and never makes the DMA busy, so D_WAIT also
+  //           returns to D_IDLE when, a cycle after the dispatch, the DMA is
+  //           still idle with ERROR set.  Without that exit the dispatcher
+  //           waited for a busy that never came and took no further command
+  //           until reset.  tb/tb_npu_refused_dispatch.sv is the regression.
   //
   // pending_start: latches a START that arrived while D_WAIT.  Without this,
   // a rapid back-to-back START (CTA1 + CTA2 within one DMA registration
@@ -586,6 +592,8 @@ module c930_npu_csr
   logic        pending_start;  // START captured while dispatcher is in D_WAIT
   logic        pending_pushed; // one-shot: set once do_push fires for pending_start
   logic        was_busy;       // DMA was busy — prevents spurious double DRAIN
+  logic        wait_seen;      // a D_WAIT cycle has passed: i_busy and i_error now describe the dispatched command
+  logic        retry_start;    // a START that arrived while a refused command was in D_WAIT, dispatched from D_IDLE
 
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
@@ -595,6 +603,8 @@ module c930_npu_csr
       pending_start <= 1'b0;
       pending_pushed <= 1'b0;
       was_busy      <= 1'b0;
+      wait_seen     <= 1'b0;
+      retry_start   <= 1'b0;
       cur_dim_m     <= 16'd0;
       cur_dim_n     <= 16'd0;
       cur_dim_k     <= 16'd0;
@@ -632,7 +642,8 @@ module c930_npu_csr
           end else if (pending_start && fifo_empty) begin
             // Pending start but FIFO push hasn't registered yet.
             // Wait one cycle for do_push to update fifo_count.
-          end else if (start_requested) begin
+          end else if (start_requested || retry_start) begin
+            retry_start <= 1'b0;
             if (!fifo_empty) begin
               // FIFO has queued commands — dispatch from head
               cur_dim_m     <= fifo_head[15:0];
@@ -709,6 +720,21 @@ module c930_npu_csr
             pending_start  <= 1'b0;
             pending_pushed <= 1'b0;
             was_busy       <= 1'b0;
+            wait_seen      <= 1'b0;
+          end else if (!wait_seen) begin
+            // The DMA takes start_pulse at the edge that ends this cycle, so
+            // its busy and error only describe the new command from the next.
+            wait_seen <= 1'b1;
+          end else if (!was_busy && !i_busy && i_error) begin
+            // Refused: the DMA set ERROR without leaving P_IDLE.  Nothing
+            // will make it busy, so go back to D_IDLE now.  A START that
+            // arrived meanwhile was never pushed (the engine was not busy),
+            // so it is dispatched from D_IDLE rather than lost.
+            disp_state     <= D_IDLE;
+            retry_start    <= (pending_start && !pending_pushed) || (start_requested && !do_push);
+            pending_start  <= 1'b0;
+            pending_pushed <= 1'b0;
+            wait_seen      <= 1'b0;
           end
         end
 
@@ -1029,7 +1055,10 @@ module c930_npu_csr
           A_NPU_AROW_CT:   s_axi_rdata <= i_arow_stall_count;
           ADDR_DMA_CT:     s_axi_rdata <= i_dma_cycle_count;
           ADDR_DMA_LAST:   s_axi_rdata <= i_dma_last_count;
-          ADDR_QUEUE_STAT: s_axi_rdata <= {28'd0, fifo_full, fifo_count[$clog2(CMD_QUEUE_DEPTH):0]};
+          // [3:0] occupancy and bit 4 full at every depth, as the driver
+          // reads them (QUEUE_MAX's [3:0] already bounds the depth at 15).
+          // Packing fifo_count at its own width put full at bit 3 at depth 4.
+          ADDR_QUEUE_STAT: s_axi_rdata <= {27'd0, fifo_full, 4'(fifo_count)};
           ADDR_QUEUE_MAX:  s_axi_rdata <= {28'd0, CMD_QUEUE_DEPTH[3:0]};
           // 20 + 5 + 1 + 2 + 3 + 1 = 32.  The old form concatenated to 31 and
           // relied on the zero-extension; MB's bits are not going on top of that,

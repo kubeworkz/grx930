@@ -9,7 +9,8 @@ and compiled to WebAssembly, so a browser can run the real design.
   writes and reads over AXI4-Lite, memory, and `npu_web_run`, which polls
   STATUS as `c930_npu_driver.c` does
 - `npu_web_test.cc`: 45 GEMMs (INT8, INT16, INT4, FP16, BF16; nine shapes up to
-  8x12x16) checked exactly against a reference, and a refused command
+  8x12x16) checked exactly against a reference; a refused command and the
+  command after it, which must still run; and QUEUE_STAT with the queue full
 - `run-web.mjs`: the same test through the browser module's exports
 - `build.sh OUT`: Verilate once; build the test natively and as WebAssembly, and
   the browser module
