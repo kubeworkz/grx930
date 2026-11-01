@@ -1,0 +1,69 @@
+{
+  "repo": "kubeworkz/grx930",
+  "commit": "7b732ec0232daed3c0f2f7a443a38c728ae624b4",
+  "run_url": "https://github.com/kubeworkz/grx930/actions/runs/41357209894",
+  "generated_at": "2026-11-01T22:30:11+00:00",
+  "verilator": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
+  "emcc": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5)",
+  "parameters": {
+    "NUM_ROWS": 8,
+    "NUM_COLS": 8,
+    "DIN_W": 16,
+    "ACC_W": 48,
+    "MAX_M": 8,
+    "MAX_K": 16,
+    "MAX_N": 12,
+    "MEM_BYTES": 65536
+  },
+  "sources": {
+    "c930/rtl/c930_aplic.sv": "4b12fbadb0d5baddbd62e940ef51452e81f3e9904a2acbce597a587fbfacafd5",
+    "c930/rtl/c930_axi_cache_adapter.sv": "e4f10f919a97233f4c2159ae2554da498286dda5a7f515eb532e13a6757d7cae",
+    "c930/rtl/c930_axi_crossbar.sv": "8255ac6903248320e8ea54f4f604e3472dfd8fd5a031c70463a7af4be70a2b0e",
+    "c930/rtl/c930_axi_dma_arb.sv": "39db35dada8fe8df47feca1e4cc2942cd24285dcd4438e690337eaac108037e3",
+    "c930/rtl/c930_bf16_mul.sv": "08ce15e3054749c6117e4c56e36d1d3916912141e4641afc79178739b6c46cbf",
+    "c930/rtl/c930_bootrom.sv": "0db9bac29640567f7465d33719cadf906b46eaca0783d22fdc68afd772ad2300",
+    "c930/rtl/c930_cla_comp.sv": "32552a54469f1de44782157a211e42ec8fe0ef7341d5b397c3acd6ca5618d2af",
+    "c930/rtl/c930_cla_sub.sv": "5fdd0d03e2e77bdf079de2e1294aea8341bce36dfcab9045fdb545e4279855f9",
+    "c930/rtl/c930_ddr.sv": "291decbd9d998edb2db14c16e971318ed0251bd64d7f208f19c999a43e2b5635",
+    "c930/rtl/c930_ddr3l.sv": "a3ac2cd9b8b42e4477b08cc171c829f759b448756362ac34e6d6269548564939",
+    "c930/rtl/c930_fp16_acc.sv": "232e822f01f07d096f5b6f8b6bc1cfede747fd46d3124590317fbb288b4d0d60",
+    "c930/rtl/c930_fp16_mul.sv": "c9ed0dd3ed0dc06c87a47fdd8d7ed8c47f363c395c935e6ebf5fd2e07e9c30cc",
+    "c930/rtl/c930_fp32_acc.sv": "3c833bef57b0cd820e6d0e2455505ce88727438ff4dd60094ef8066c83ea3142",
+    "c930/rtl/c930_fp_mul.sv": "19c4ac302d37e7243801ade11bc7cd2e190550e1dc2551abd5666ba27ddf05b1",
+    "c930/rtl/c930_fx_acc.sv": "2118e9c5fc05f3a4b5006dedbe1630c5e90515d18458a8b702cf88e08764a945",
+    "c930/rtl/c930_l2.sv": "96d7b1d87172bcb606cfff2abd4e41e31229815c451df47662d97fc076334fd9",
+    "c930/rtl/c930_mmio_arb.sv": "1ce4d0f956e8b9ccbadcbd0d24e5048435b73becd1024d8be37e6d77294423a2",
+    "c930/rtl/c930_mmio_bridge.sv": "394b1e50ed182446b8fb3a12e99c5864f1c39427ee9dbf13d4dc2e49ab96cd90",
+    "c930/rtl/c930_npu_act.sv": "8bd36d61b3645eddbfabdc3a016ba6a36d8131eb813c21795759aaa087a3ed3a",
+    "c930/rtl/c930_npu_core.sv": "bb93fc8eac99784d34b3a38ac354bf959e793daa6aa9a032020b07198ba6a9af",
+    "c930/rtl/c930_npu_csr.sv": "d906ef760f900a493d288803b789700b5e3ac4ee2fbfcf3a6430c04a9bb797aa",
+    "c930/rtl/c930_npu_dma.sv": "107943aaf57044676b7db402c4b2db87ba72c6e80c15517d51ef7f204c9fc6a7",
+    "c930/rtl/c930_npu_top.sv": "e0bbe963958e8bd0902667f03b5a63a9a0309a2cfead13615a817bd15b1d0519",
+    "c930/rtl/c930_soc_top.sv": "c84c25d9cd0b8fd123387d67841cca1416091eed8ea483e1220ce0d44c8632c6",
+    "c930/rtl/c930_systolic_array.sv": "2dc51889fd9e6a72de3b998e6ac9dce44f0ac348a7c1f7952103f3bfbd06f2e1",
+    "c930/rtl/c930_tensor_pe.sv": "390598297e025f68a88019660fcfc3afd84b664e04fe409728578067f3cba0ef",
+    "c930/rtl/c930_uart.sv": "12c13ebd66a4ad6dcafd83fe333e3ed2591bd5b18acd6f94a15f3b169cfe0d01",
+    "c930/sim/web/npu_web_top.sv": "c641e9701a0323f3813bd999d189afa1072411c71754767f86fadd2356ab80c5",
+    "c930/sim/web/npu_web.cc": "2808f532c6d0b53a6dd0c24ae6510897fdba8405d3b7ce7d950b57010de21766"
+  },
+  "files": {
+    "npu_web.js": {
+      "bytes": 17951,
+      "sha256": "500f516caa11565e94b786ae6fd19d4887d4fe4e925833a442aec8c77d45464f"
+    },
+    "npu_web.wasm": {
+      "bytes": 544290,
+      "sha256": "0994ffda23c56dbf5ab21806b4d6cb20bd4b36645610d6a4e68d176afa7c7f7c"
+    },
+    "summary.md": {
+      "bytes": 223,
+      "sha256": "d47e9f3f3cabc2522d949ea5955b1f70aca6a2eca2b5567d7bb97e14e2f7957e"
+    },
+    "transcript.txt": {
+      "bytes": 5806,
+      "sha256": "6b55a1a736fa1f19ebdd13eddc4fb2cf72740f2908feab17dbd27cac478913bb"
+    }
+  },
+  "transcript": "npu_web_test: 48 of 48 passed",
+  "identical_to_native": true
+}
