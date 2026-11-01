@@ -1,0 +1,50 @@
+# npu-web-spike.yml -- can a browser run the GRX930 NPU's RTL, and get the same answers?
+#
+# c930/sim/web/build.sh Verilates c930_npu_top as the SoC builds it and compiles
+# the model with g++ and em++; compare.sh runs 46 GEMMs through both, checks C
+# against a reference, and fails unless the two transcripts are byte-identical.
+# Runs only on pushes to its own branch and on demand.
+name: NPU web spike
+
+on:
+  push:
+    branches: [spike/npu-web]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verilator
+        timeout-minutes: 10
+        run: |
+          APT="-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get install -y $APT verilator || { sudo apt-get update $APT; sudo apt-get install -y $APT verilator; }
+      - name: Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+      - name: Build
+        run: bash c930/sim/web/build.sh "$RUNNER_TEMP/npu-web"
+      - name: Compare
+        run: bash c930/sim/web/compare.sh "$RUNNER_TEMP/npu-web"
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP/npu-web/summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - name: Keep the build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npu-web
+          retention-days: 30
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/npu-web/web
+            ${{ runner.temp }}/npu-web/native.txt
+            ${{ runner.temp }}/npu-web/wasm.txt
+            ${{ runner.temp }}/npu-web/summary.md
