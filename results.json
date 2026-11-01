@@ -1,0 +1,94 @@
+{
+  "repo": "kubeworkz/grx930",
+  "commit": "7b732ec0232daed3c0f2f7a443a38c728ae624b4",
+  "ref": "main",
+  "run_url": "https://github.com/kubeworkz/grx930/actions/runs/41357209998",
+  "generated_at": "2026-11-01T22:28:23+00:00",
+  "simulator": "Icarus Verilog version 12.0 (stable) ()",
+  "runs": [
+    {
+      "id": "npu",
+      "command": "make npu",
+      "checks": "NPU integer GEMM: every matrix shape in tb_c930_npu, INT8/INT16/INT4, plus the PTA register block",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 14,
+      "pass_lines": 43,
+      "fail_lines": 0,
+      "finish": "$finish called at 480345 (1s)",
+      "log": "logs/npu.log"
+    },
+    {
+      "id": "npu_float",
+      "command": "make npu_float",
+      "checks": "NPU FP16 and BF16 GEMM after integer GEMMs (tb_npu_float_prec)",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 6,
+      "pass_lines": 24,
+      "fail_lines": 0,
+      "finish": "$finish called at 184425 (1s)",
+      "log": "logs/npu_float.log"
+    },
+    {
+      "id": "npu_queue",
+      "command": "make cal_queue refused_dispatch",
+      "checks": "NPU command queue: STARTs during a calibration queue, a refused command does not wedge the dispatcher, QUEUE_STAT's layout",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0,
+      "pass_lines": 31,
+      "fail_lines": 0,
+      "finish": "$finish called at 2455000 (1ps)",
+      "log": "logs/npu_queue.log"
+    },
+    {
+      "id": "hazard",
+      "command": "make hazard",
+      "checks": "CPU hazard unit: CSR flush and load-use stalls (tb_hazard_csrflush)",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0,
+      "pass_lines": 1,
+      "fail_lines": 0,
+      "finish": "$finish called at 240 (1s)",
+      "log": "logs/hazard.log"
+    },
+    {
+      "id": "hazard_equiv",
+      "command": "make hazard_equiv",
+      "checks": "Hazard unit against a reference model, 300K random cycles",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 16,
+      "pass_lines": 1,
+      "fail_lines": 0,
+      "finish": "$finish called at 3000050 (1s)",
+      "log": "logs/hazard_equiv.log"
+    },
+    {
+      "id": "arb_equiv",
+      "command": "make arb_equiv",
+      "checks": "DMA arbiter B-skid against a reference model, 1,200+ transactions",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 6,
+      "pass_lines": 2,
+      "fail_lines": 0,
+      "finish": "$finish called at 1504875000 (1ps)",
+      "log": "logs/arb_equiv.log"
+    },
+    {
+      "id": "soc_real_work",
+      "command": "bash tb/run_fast_path_real_work.sh",
+      "checks": "Full SoC: L2 coherence, AR withdraw, and four harts each running a GEMM on two NPUs",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 11,
+      "pass_lines": 4,
+      "fail_lines": 0,
+      "finish": "$finish called at 2055000 (1ps)",
+      "log": "logs/soc_real_work.log"
+    }
+  ]
+}

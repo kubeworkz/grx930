@@ -1,0 +1,373 @@
+iverilog -g2012 -Wall -I rtl/pta -o build/tb_c930_npu.vvp rtl/c930_fp16_mul.sv rtl/c930_bf16_mul.sv rtl/c930_fp_mul.sv rtl/c930_fp16_acc.sv rtl/c930_cla_sub.sv rtl/c930_cla_comp.sv rtl/c930_fx_acc.sv rtl/c930_tensor_pe.sv rtl/c930_systolic_array.sv rtl/c930_npu_act.sv rtl/c930_npu_core.sv rtl/c930_npu_csr.sv rtl/c930_npu_dma.sv rtl/c930_npu_top.sv tb/tb_c930_npu.sv
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:150: warning: Part select [15:0] is selecting after the vector i_a_in[7:0].
+rtl/c930_tensor_pe.sv:150:        : Replacing the out of bound bits with 'bx.
+rtl/c930_tensor_pe.sv:151: warning: Part select [15:0] is selecting after the vector w[7:0].
+rtl/c930_tensor_pe.sv:151:        : Replacing the out of bound bits with 'bx.
+rtl/c930_npu_act.sv:187: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:357: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:357: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:393: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_dma.sv:800: warning: System task ($display) cannot be synthesized in an always_ff process.
+vvp build/tb_c930_npu.vvp
+VCD info: dumpfile tb_c930_npu.vcd opened for output.
+[TEST] deterministic 1x2x2
+[PASS] GEMM M=1 N=2 K=2 verified
+[TEST] INT4 standalone M=3 N=4 K=5
+[PASS] INT4 M=3 N=4 K=5 verified
+[TEST] INT4/INT8 queue: INT8 -> INT8 -> INT4 -> INT8
+[PASS] Q0-INT8  M=8 N=12 K=16 verified
+[PASS] Q1-INT8  M=8 N=12 K=16 verified
+[PASS] Q2-INT4  M=2 N=4 K=4 verified
+[PASS] Q3-INT8  M=3 N=3 K=4 verified
+[TEST] random M=1 N=1 K=1 (seed 1001)
+[PASS] GEMM M=1 N=1 K=1 verified
+[TEST] random M=2 N=3 K=1 (seed 1002)
+[PASS] GEMM M=2 N=3 K=1 verified
+[TEST] random M=8 N=12 K=1 (seed 1003)
+[PASS] GEMM M=8 N=12 K=1 verified
+[TEST] random M=1 N=4 K=4 (seed 1004)
+[PASS] GEMM M=1 N=4 K=4 verified
+[TEST] random M=8 N=4 K=4 (seed 1005)
+[PASS] GEMM M=8 N=4 K=4 verified
+[TEST] random M=3 N=4 K=8 (seed 1006)
+[PASS] GEMM M=3 N=4 K=8 verified
+[TEST] random M=8 N=4 K=12 (seed 1007)
+[PASS] GEMM M=8 N=4 K=12 verified
+[TEST] random M=2 N=3 K=16 (seed 1008)
+[PASS] GEMM M=2 N=3 K=16 verified
+[TEST] random M=1 N=2 K=5 (seed 1009)
+[PASS] GEMM M=1 N=2 K=5 verified
+[TEST] random M=5 N=4 K=6 (seed 1010)
+[PASS] GEMM M=5 N=4 K=6 verified
+[TEST] random M=8 N=5 K=16 (seed 1011)
+[PASS] GEMM M=8 N=5 K=16 verified
+[TEST] random M=3 N=8 K=4 (seed 1012)
+[PASS] GEMM M=3 N=8 K=4 verified
+[TEST] random M=8 N=12 K=16 (seed 1013)
+[PASS] GEMM M=8 N=12 K=16 verified
+[TEST] random M=1 N=12 K=1 (seed 1014)
+[PASS] GEMM M=1 N=12 K=1 verified
+[TEST] random M=4 N=7 K=13 (seed 2000)
+[PASS] GEMM M=4 N=7 K=13 verified
+[TEST] random M=7 N=1 K=2 (seed 2001)
+[PASS] GEMM M=7 N=1 K=2 verified
+[TEST] random M=4 N=12 K=5 (seed 2002)
+[PASS] GEMM M=4 N=12 K=5 verified
+[TEST] random M=7 N=12 K=15 (seed 2003)
+[PASS] GEMM M=7 N=12 K=15 verified
+[TEST] random M=5 N=11 K=8 (seed 2004)
+[PASS] GEMM M=5 N=11 K=8 verified
+[TEST] random M=7 N=5 K=1 (seed 2005)
+[PASS] GEMM M=7 N=5 K=1 verified
+[TEST] random M=8 N=4 K=3 (seed 2006)
+[PASS] GEMM M=8 N=4 K=3 verified
+[TEST] random M=3 N=3 K=4 (seed 2007)
+[PASS] GEMM M=3 N=3 K=4 verified
+[TEST] random M=5 N=11 K=2 (seed 2008)
+[PASS] GEMM M=5 N=11 K=2 verified
+[TEST] random M=7 N=5 K=13 (seed 2009)
+[PASS] GEMM M=7 N=5 K=13 verified
+[TEST] random M=3 N=12 K=2 (seed 2010)
+[PASS] GEMM M=3 N=12 K=2 verified
+[TEST] random M=4 N=11 K=7 (seed 2011)
+[PASS] GEMM M=4 N=11 K=7 verified
+[TEST] random M=3 N=10 K=13 (seed 2012)
+[PASS] GEMM M=3 N=10 K=13 verified
+[TEST] random M=7 N=8 K=4 (seed 2013)
+[PASS] GEMM M=7 N=8 K=4 verified
+[TEST] random M=7 N=8 K=13 (seed 2014)
+[PASS] GEMM M=7 N=8 K=13 verified
+[TEST] random M=6 N=3 K=14 (seed 2015)
+[PASS] GEMM M=6 N=3 K=14 verified
+[PTA] the register block at 0x100
+[PTA]   [PASS] PTA_ID, and CAPS c0802008 00000200 00020000, read-only
+[PTA]   [PASS] the decode, and 0x00-0x3C untouched
+[PTA]   [PASS] MODEL_RST clears the correction
+[PTA]   [PASS] SHOT_CT +0, WLOAD_CT +2, C exact at 16
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+[PTA]   [PASS] MZM_NL refused, and the next valid start cleared it
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+  [DMA] WATCHDOG TIMEOUT: core did not respond within 2048 cycles
+[PTA]   [PASS] CAPS1 0000000 agrees with the starts: 7 of 7 refused
+[PASS] all NPU tests passed
+tb/tb_c930_npu.sv:969: $finish called at 480345 (1s)

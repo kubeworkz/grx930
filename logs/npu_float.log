@@ -1,0 +1,59 @@
+iverilog -g2012 -Wall -I rtl/pta -o build/tb_npu_float_prec.vvp rtl/c930_fp16_mul.sv rtl/c930_bf16_mul.sv rtl/c930_fp_mul.sv rtl/c930_fp16_acc.sv rtl/c930_cla_sub.sv rtl/c930_cla_comp.sv rtl/c930_fx_acc.sv rtl/c930_tensor_pe.sv rtl/c930_systolic_array.sv rtl/c930_npu_act.sv rtl/c930_npu_core.sv rtl/c930_npu_csr.sv rtl/c930_npu_dma.sv rtl/c930_npu_top.sv tb/tb_npu_float_prec.sv
+tb/tb_npu_float_prec.sv:386: warning: Static variable initialization requires explicit lifetime in this context.
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_fp16_mul.sv:53: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:187: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:274: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:314: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:357: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:357: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_act.sv:393: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+rtl/c930_npu_dma.sv:800: warning: System task ($display) cannot be synthesized in an always_ff process.
+vvp build/tb_npu_float_prec.vvp
+UART GEMM sweep, replayed on c930_npu_top:
+  GEMM INT8   1x 1x 1  PASS
+  GEMM INT8   1x 1x16  PASS
+  GEMM INT8   1x12x 8  PASS
+  GEMM INT8   2x 3x 5  PASS
+  GEMM INT8   4x 4x 4  PASS
+  GEMM INT8   5x 7x 9  PASS
+  GEMM INT8   8x 1x 4  PASS
+  GEMM INT8   8x 4x 1  PASS
+  GEMM INT8   8x12x16  PASS
+  GEMM INT8   3x 9x11  PASS
+  GEMM INT16  4x 4x 4  PASS
+  GEMM FP16   4x 4x 4  PASS
+  GEMM BF16   4x 4x 4  PASS
+  GEMM INT4   4x 4x 4  PASS
+  GEMM INT16  2x 3x 5  PASS
+  GEMM FP16   2x 3x 5  PASS
+  GEMM BF16   2x 3x 5  PASS
+  GEMM INT4   2x 3x 5  PASS
+Float across K tiles:
+  GEMM FP16   5x 7x 9  PASS
+  GEMM BF16   5x 7x 9  PASS
+  GEMM FP16   3x 9x11  PASS
+  GEMM BF16   3x 9x11  PASS
+  GEMM FP16   8x12x16  PASS
+  GEMM BF16   8x12x16  PASS
+  total 24/24
+tb/tb_npu_float_prec.sv:412: $finish called at 184425 (1s)

@@ -1,0 +1,9 @@
+ROOT      /home/runner/work/grx930/grx930
+IVERILOG  Icarus Verilog version 12.0 (stable) ()
+LOGS      /home/runner/work/grx930/grx930/c930/build/real_work/<workload>.log
+
+WORK l2-coherent: PASS (ALL L2 TESTS PASSED; $finish called at 2055000 (1ps); 0s, model 117 KB)
+WORK ar-withdraw: PASS (ALL AR/AW-WITHDRAW TESTS PASSED (180 checks); $finish called at 5115000 (1ps); 0s, model 274 KB)
+WORK quad-four-core: PASS (QUAD-ISOLATED TEST PASSED; all four cores verified their C matrices on-core; TB readback: all 50 C elements across 4 GEMMs correct; $finish called at 88905000 (1ps); 11s, model 13 MB)
+REAL WORK: PASS -- 3 finished, 0 failed, 0 blocked (of 3 run, 11s of build and simulation)
+SUMMARY   /home/runner/work/grx930/grx930/c930/build/real_work/real_work_summary.md

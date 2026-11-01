@@ -1,0 +1,160 @@
+iverilog -g2012 -Wall -I rtl/pta -o build/tb_hazard_equiv.vvp ../rv64imac/RTL/data_mem_top.sv ../rv64imac/RTL/main_mem.sv ../rv64imac/RTL/mem_shifter.sv ../rv64imac/RTL/riscv_core_64bit_adder.sv ../rv64imac/RTL/riscv_core_alu.sv ../rv64imac/RTL/riscv_core_alu_decoder.sv ../rv64imac/RTL/riscv_core_amo_alu.sv ../rv64imac/RTL/riscv_core_booth.sv ../rv64imac/RTL/riscv_core_branch_unit.sv ../rv64imac/RTL/riscv_core_compressed_decoder.sv ../rv64imac/RTL/riscv_core_csr_control_signals.sv ../rv64imac/RTL/riscv_core_csr_unit.sv ../rv64imac/RTL/riscv_core_dcache_controller.sv ../rv64imac/RTL/riscv_core_dcache_memory.sv ../rv64imac/RTL/riscv_core_dcache_top.sv ../rv64imac/RTL/riscv_core_div_in.sv ../rv64imac/RTL/riscv_core_div_out.sv ../rv64imac/RTL/riscv_core_hazard_unit.sv ../rv64imac/RTL/riscv_core_icache_controller.sv ../rv64imac/RTL/riscv_core_icache_memory.sv ../rv64imac/RTL/riscv_core_icache_top.sv ../rv64imac/RTL/riscv_core_immextend.sv ../rv64imac/RTL/riscv_core_ldextend.sv ../rv64imac/RTL/riscv_core_main_decoder.sv ../rv64imac/RTL/riscv_core_main_decoder_top.sv ../rv64imac/RTL/riscv_core_mul_div.sv ../rv64imac/RTL/riscv_core_mul_div_ctrl.sv ../rv64imac/RTL/riscv_core_mul_in.sv ../rv64imac/RTL/riscv_core_mul_out.sv ../rv64imac/RTL/riscv_core_mux2x1.sv ../rv64imac/RTL/riscv_core_mux3x1.sv ../rv64imac/RTL/riscv_core_mux4x1.sv ../rv64imac/RTL/riscv_core_mux_2to1.sv ../rv64imac/RTL/riscv_core_non_restoring.sv ../rv64imac/RTL/riscv_core_pcsrc.sv ../rv64imac/RTL/riscv_core_pipe.sv ../rv64imac/RTL/riscv_core_rf.sv ../rv64imac/RTL/riscv_core_top.sv tb/riscv_core_hazard_unit_ref.sv tb/tb_hazard_equiv.sv
+../rv64imac/RTL/riscv_core_csr_control_signals.sv:32: warning: Numeric constant truncated to 6 bits.
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/mem_shifter.sv:14: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_controller.sv:199: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_memory.sv:99: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_memory.sv:99: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_icache_memory.sv:99: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:34: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_main_decoder.sv:59: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_main_decoder.sv:59: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_main_decoder.sv:59: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_main_decoder.sv:214: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_main_decoder.sv:236: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_control_signals.sv:23: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_control_signals.sv:23: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_immextend.sv:6: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_alu.sv:29: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_alu.sv:29: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_alu.sv:29: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_alu.sv:29: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_div_ctrl.sv:543: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_in.sv:39: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_in.sv:39: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_booth.sv:42: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_mul_out.sv:35: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_in.sv:43: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_in.sv:43: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_non_restoring.sv:43: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_non_restoring.sv:43: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_div_out.sv:46: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:288: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:288: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:303: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:303: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:851: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_controller.sv:895: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_memory.sv:98: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_memory.sv:98: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_memory.sv:98: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_memory.sv:163: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_dcache_memory.sv:163: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_ldextend.sv:13: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_csr_unit.sv:304: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_top.sv:1987: warning: Instantiating module riscv_core_hazard_unit with dangling input port 17 (i_hazard_unit_illegal_instr) floating.
+../rv64imac/RTL/riscv_core_top.sv:1297: sorry: constant selects in always_* processes are not currently supported (all bits will be included).
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:40: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:42: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:123: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:183: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:232: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:289: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_compressed_decoder.sv:372: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_dcache_memory.sv:103: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+../rv64imac/RTL/riscv_core_dcache_memory.sv:164: vvp.tgt sorry: Case unique/unique0 qualities are ignored.
+vvp build/tb_hazard_equiv.vvp
+[PASS] tb_hazard_equiv: 300000 cycles, 1095 forward-active cycles, all outputs bit-equal
+tb/tb_hazard_equiv.sv:279: $finish called at 3000050 (1s)

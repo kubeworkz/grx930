@@ -1,0 +1,100 @@
+iverilog -g2012 -Wall -I rtl/pta  -s tb_npu_cal_queue -o build/tb_npu_cal_queue.vvp rtl/c930_npu_csr.sv tb/tb_npu_cal_queue.sv
+warning: Some design elements have no explicit time unit and/or
+       : time precision. This may cause confusing timing results.
+       : Affected design elements are:
+       :   -- module c930_npu_csr declared here: rtl/c930_npu_csr.sv:110
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 35 (i_arow_stall_count) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 37 (i_dma_last_count) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 76 (i_act_count) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 77 (i_act_sat_count) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 78 (i_act_cycles) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 92 (i_pta_cal_valid) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 93 (i_pta_drift_alarm) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 94 (i_pta_cal_err) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 95 (i_pta_cal_ct) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 96 (i_pta_cal_cyc) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 97 (i_pta_shot_ct) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 98 (i_pta_wload_ct) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 99 (i_pta_sat_count) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 100 (i_pta_err_max) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 101 (i_pta_err_found) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 102 (i_pta_caps0) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 103 (i_pta_caps1) floating.
+tb/tb_npu_cal_queue.sv:49: warning: Instantiating module c930_npu_csr with dangling input port 104 (i_pta_caps2) floating.
+vvp build/tb_npu_cal_queue.vvp
+[CQ1] a command with the tile free
+  [PASS] dispatched and the queue drained
+[CQ2] three commands while CAL_BUSY is set
+  after START 1: occupancy 1, full 0, STATUS.BUSY 0
+  [PASS] occupancy is 1
+  [PASS] occupancy == 0 && busy == 0 is false
+  after START 2: occupancy 2, full 0, STATUS.BUSY 0
+  [PASS] occupancy is 2
+  [PASS] occupancy == 0 && busy == 0 is false
+  after START 3: occupancy 3, full 0, STATUS.BUSY 0
+  [PASS] occupancy is 3
+  [PASS] occupancy == 0 && busy == 0 is false
+  [PASS] nothing dispatched into the calibration
+[CQ3] the tile comes back
+  [PASS] all three dispatched
+  [PASS] the queue drained
+  [PASS] and now the predicate says finished
+[CQ4] a calibration on top of a running command
+  [PASS] the second command queued
+  [PASS] both ran
+  [PASS] no dispatch ever reached a calibrating tile
+=== tb_npu_cal_queue: 14 PASSED, 0 FAILED ===
+tb/tb_npu_cal_queue.sv:204: $finish called at 2455000 (1ps)
+iverilog -g2012 -Wall -I rtl/pta -s tb_npu_refused_dispatch -o build/tb_npu_refused_dispatch.vvp rtl/c930_npu_csr.sv tb/tb_npu_refused_dispatch.sv
+warning: Some design elements have no explicit time unit and/or
+       : time precision. This may cause confusing timing results.
+       : Affected design elements are:
+       :   -- module c930_npu_csr declared here: rtl/c930_npu_csr.sv:110
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 35 (i_arow_stall_count) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 37 (i_dma_last_count) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 76 (i_act_count) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 77 (i_act_sat_count) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 78 (i_act_cycles) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 92 (i_pta_cal_valid) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 93 (i_pta_drift_alarm) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 94 (i_pta_cal_err) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 95 (i_pta_cal_ct) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 96 (i_pta_cal_cyc) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 97 (i_pta_shot_ct) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 98 (i_pta_wload_ct) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 99 (i_pta_sat_count) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 100 (i_pta_err_max) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 101 (i_pta_err_found) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 102 (i_pta_caps0) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 103 (i_pta_caps1) floating.
+tb/tb_npu_refused_dispatch.sv:50: warning: Instantiating module c930_npu_csr with dangling input port 104 (i_pta_caps2) floating.
+vvp build/tb_npu_refused_dispatch.vvp
+[RD1] a good command, so the bench itself is sound
+  [PASS] it ran and the queue drained
+  [PASS] STATUS: DONE set, ERROR clear
+[RD2] K past MAX_K: refused with ERROR
+  [PASS] the DMA refused it
+  [PASS] STATUS: ERROR set, BUSY clear
+[RD3] a good command after the refused one runs
+  dispatched 2, completed 2, STATUS 0x2, QUEUE_STAT 0x0
+  [PASS] dispatched and completed
+  [PASS] ERROR cleared by the good command
+[RD4] refused, refused, then three good ones back to back
+  [PASS] both refused
+  [PASS] all three ran
+[RD5] QUEUE_STAT at depth 4: occupancy [3:0], full bit 4
+  [PASS] QUEUE_MAX reads 4
+  after queued START 1: QUEUE_STAT 0x00000001
+  [PASS] occupancy 1 in [3:0], full (bit 4) 0
+  after queued START 2: QUEUE_STAT 0x00000002
+  [PASS] occupancy 2 in [3:0], full (bit 4) 0
+  after queued START 3: QUEUE_STAT 0x00000003
+  [PASS] occupancy 3 in [3:0], full (bit 4) 0
+  after queued START 4: QUEUE_STAT 0x00000014
+  [PASS] occupancy 4 in [3:0], full (bit 4) 1
+  [PASS] a full queue reads 0x14, as the driver header says
+  [PASS] a START against a full queue changes nothing
+  [PASS] the four queued commands ran, the dropped one did not
+  [PASS] no start ever reached a busy DMA
+=== tb_npu_refused_dispatch: 17 PASSED, 0 FAILED ===
+tb/tb_npu_refused_dispatch.sv:217: $finish called at 7135000 (1ps)

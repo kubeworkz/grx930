@@ -1,0 +1,17 @@
+iverilog -g2012 -Wall -I rtl/pta -o build/tb_arb_bskid_equiv.vvp rtl/c930_axi_dma_arb.sv tb/c930_axi_dma_arb_ref.sv tb/tb_arb_bskid_equiv.sv
+tb/tb_arb_bskid_equiv.sv:429: warning: Static variable initialization requires explicit lifetime in this context.
+tb/tb_arb_bskid_equiv.sv:430: warning: Static variable initialization requires explicit lifetime in this context.
+tb/tb_arb_bskid_equiv.sv:487: warning: Static variable initialization requires explicit lifetime in this context.
+tb/tb_arb_bskid_equiv.sv:490: warning: Static variable initialization requires explicit lifetime in this context.
+tb/tb_arb_bskid_equiv.sv:491: warning: Static variable initialization requires explicit lifetime in this context.
+warning: Some design elements have no explicit time unit and/or
+       : time precision. This may cause confusing timing results.
+       : Affected design elements are:
+       :   -- module c930_axi_dma_arb declared here: rtl/c930_axi_dma_arb.sv:17
+       :   -- module c930_axi_dma_arb_ref declared here: tb/c930_axi_dma_arb_ref.sv:17
+vvp build/tb_arb_bskid_equiv.vvp
+[PASS-strict] 1200 txns, both units 1200 B/master, order+payload exact
+[INFO] aw_txns=1200 ref: aw=4014 B=4014 | dut: aw=4023 B=4023
+[INFO] completeness (withdrawal-affected): DUT 4023/4023 B/AW, REF 4014/4014
+[PASS] tb_arb_bskid_equiv: strict DUT completeness exact, random-mode common-prefix order+payload exact vs pristine ref       1200
+tb/tb_arb_bskid_equiv.sv:508: $finish called at 1504875000 (1ps)
