@@ -359,8 +359,8 @@ module tb_c930_npu;
       @(posedge clk);
       if (o_done) dpulses = dpulses + 1;
       if (dpulses >= expected_pulses && !o_busy) begin
-        axi_read(32'h38, q);             // QUEUE_STAT: [2:0] = queue depth
-        if (q[2:0] == 0) drained = 1'b1;
+        axi_read(32'h38, q);             // QUEUE_STAT: [3:0] occupancy
+        if (q[3:0] == 0) drained = 1'b1;
       end
     end
   endtask

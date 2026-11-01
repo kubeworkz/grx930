@@ -1,7 +1,8 @@
 # npu-web.yml -- the NPU's RTL as a browser module, checked and published.
 #
 # c930/sim/web/build.sh Verilates c930_npu_top as the SoC builds it and compiles
-# the model with g++ and em++; compare.sh runs 46 GEMMs natively, as the
+# the model with g++ and em++; compare.sh runs 48 checks (45 GEMMs, a refused command, the
+# command after it, and a full queue) natively, as the
 # WebAssembly build of the same test, and through the browser module itself,
 # and fails unless all three pass and print the same bytes.
 #

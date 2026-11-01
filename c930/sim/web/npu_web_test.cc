@@ -98,6 +98,28 @@ int main() {
   bool ok = (st & 4) != 0;
   printf("INT8  M=4 N= 4 K=20  run=%6d cycles  STATUS=%u (dims past MAX_K: ERROR expected)  %s\n", cyc, st, ok ? "PASS" : "FAIL");
   bad += !ok; n++;
+  // The next command still runs: a refused START must not leave the
+  // dispatcher waiting for a BUSY that never comes.
+  npu_web_csr_write(0x10, 4); npu_web_csr_write(0x14, A_BASE); npu_web_csr_write(0x18, B_BASE); npu_web_csr_write(0x1C, C_BASE);
+  npu_web_csr_write(0x00, 1);
+  cyc = npu_web_run(20000);
+  st = npu_web_csr_read(0x04);
+  ok = cyc > 0 && st == 2;
+  printf("INT8  M=4 N= 4 K= 4  run=%6d cycles  STATUS=%u (the command after the refused one: runs)  %s\n", cyc, st, ok ? "PASS" : "FAIL");
+  bad += !ok; n++;
+  // QUEUE_STAT at the SoC's depth of 4: one GEMM running and four queued read
+  // 0x14 (bit 4 full, [3:0] four, as c930_npu_driver.h has it), and a fifth
+  // START against the full queue changes nothing.
+  npu_web_reset();
+  npu_web_csr_write(0x08, 8); npu_web_csr_write(0x0C, 12); npu_web_csr_write(0x10, 16); npu_web_csr_write(0x20, 0);
+  npu_web_csr_write(0x14, A_BASE); npu_web_csr_write(0x18, B_BASE); npu_web_csr_write(0x1C, C_BASE);
+  for (int i = 0; i < 5; i++) npu_web_csr_write(0x00, 1);
+  uint32_t q4 = npu_web_csr_read(0x38);
+  npu_web_csr_write(0x00, 1);
+  uint32_t q5 = npu_web_csr_read(0x38);
+  ok = q4 == 0x14 && q5 == 0x14;
+  printf("QUEUE_STAT one running, four queued: 0x%02X, after a fifth START: 0x%02X (0x14 expected)  %s\n", q4, q5, ok ? "PASS" : "FAIL");
+  bad += !ok; n++;
   printf("npu_web_test: %d of %d passed\n", n - bad, n);
   return bad ? 1 : 0;
 }

@@ -99,7 +99,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu npu_float npu_feed ptm_c_lockstep hazard synth synth-fit wave clean bringup tile_test driver_test
+.PHONY: all sw soc soc_full npu npu_float npu_feed ptm_c_lockstep refused_dispatch hazard synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -209,6 +209,18 @@ $(OUT_CAL_QUEUE): rtl/c930_npu_csr.sv tb/tb_npu_cal_queue.sv
 
 cal_queue: $(OUT_CAL_QUEUE)
 	$(VVP) $(OUT_CAL_QUEUE)
+
+# A command the DMA refuses (dimensions past the limits) must not wedge the
+# dispatcher, and QUEUE_STAT must read [3:0] occupancy, bit 4 full at depth 4,
+# as c930_npu_driver.h has it.
+OUT_REFUSED := $(BUILD_DIR)/tb_npu_refused_dispatch.vvp
+
+$(OUT_REFUSED): rtl/c930_npu_csr.sv tb/tb_npu_refused_dispatch.sv
+	@mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(GFLAGS) -s tb_npu_refused_dispatch -o $@ rtl/c930_npu_csr.sv tb/tb_npu_refused_dispatch.sv
+
+refused_dispatch: $(OUT_REFUSED)
+	$(VVP) $(OUT_REFUSED)
 
 # ---------------------------------------------------------------------------
 # Hazard-unit unit test (flush deferral under stalls)
