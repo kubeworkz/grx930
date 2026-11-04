@@ -11,7 +11,7 @@
 #   make npu_feed   operand-feed measurement at M=64 N=8 K=256, run twice (tb_npu_feed)
 #   make ptm_c_lockstep  PTM-C against the systolic array, cycle for cycle
 #   make hazard     build + run the hazard-unit flush/stall unit test
-#   make uart_baud  program the UART divisor and measure the TX bit period
+#   make uart_baud  program the UART divisor, measure the TX bit period, inject RX frames
 #   make wave       simulate the SoC and print the waveform location
 #   make synth      ECP5 synthesis resource/latch report (oss-cad-suite; real design)
 #   make synth-fit   ECP5 synthesis + P&R Fmax (cache-shrunk fit test)
@@ -319,6 +319,20 @@ ar_withdraw: $(ARW_OUT)
 # rate was fixed at its reset value -- and this bench is the simulation that
 # covers the path the fix restored.  Mutation-checked: with the ADDR_CTRL write
 # removed every measured period stays at the reset value's 864 clocks.
+#
+# The same baud_tick generates the receive sample grid, so the bench then
+# injects frames on i_uart_rxd at the programmed divisor (one at divisor 7,
+# four sweeping the start edge across a whole tick at divisor 3) and checks
+# each decodes to the driven byte and leaves the RX FIFO empty after a single
+# read.  Mutation-checked: un-gating the FIFO store and write pointer from
+# baud_tick makes one frame fill the FIFO and the empty-after-one-read check
+# fail, and pinning the reload to the reset divisor decodes nothing.
+#
+# IRQ_EN[1] is covered as well: one frame raises o_irq exactly once (counted on
+# rising edges), the level holds while the byte is unread and clears when
+# RX_DATA is read, and with the enable clear the byte is still received with no
+# interrupt.  Mutation-checked: dropping the RX term from o_irq, ignoring the
+# enable, and swapping the two IRQ_EN bits are each caught.
 UART_BAUD_OUT := $(BUILD_DIR)/tb_uart_baud.vvp
 $(UART_BAUD_OUT): rtl/c930_uart.sv tb/tb_uart_baud.sv
 	$(IVERILOG) $(GFLAGS) -o $@ rtl/c930_uart.sv tb/tb_uart_baud.sv

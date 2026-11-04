@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Gridworkz
 // =============================================================================
-// tb_uart_baud.sv — standalone unit test for c930_uart's baud divisor
+// tb_uart_baud.sv — unit test for c930_uart's baud divisor (TX and RX)
 //
 // CTRL[15:0] (offset 0x0C) is the register a double `always_ff` driver used to
 // cost the synthesised netlist: the baud generator and the AXI register block
@@ -12,7 +12,10 @@
 // The fix left the AXI block as the single owner.  This bench drives that
 // register over the AXI4-Lite slave and measures the TX bit period on
 // o_uart_txd, so the path the fix restored is simulated rather than only
-// checked for a single driver.
+// checked for a single driver.  The same baud_tick generates the receive
+// sample grid, so the bench also injects frames on i_uart_rxd at the
+// programmed divisor, checks each one decodes into the RX FIFO exactly once,
+// and checks the RX interrupt reports it exactly once when enabled.
 //
 // Bit period is 16 * (DIVISOR + 1) core clocks: `baud_cnt` counts DIVISOR down
 // to 0 and reloads, so a tick lands every DIVISOR + 1 clocks, and the TX FSM
@@ -31,6 +34,17 @@
 //   5. Data integrity: the byte is 0x55, so the measured segment levels must be
 //      start=0, then 1,0,1,0,1,0,1,0, stop=1 — the timing test cannot pass on a
 //      stuck or wrongly shifted line.
+//   6. Receive: a frame injected on i_uart_rxd at divisor 7 decodes to the
+//      driven byte and leaves exactly one entry in the RX FIFO — it is empty
+//      again after a single read.  The RX FIFO store is tick-gated because
+//      rx_fifo_we is held high for a whole tick; without that gate one frame
+//      used to push ~divisor copies.  Four more frames at divisor 3 sweep the
+//      start edge across the whole baud tick, so the decode has to work at
+//      every detection phase rather than one lucky one.
+//   7. Receive interrupt: with IRQ_EN[1] set, one frame raises o_irq exactly
+//      once (counted on rising edges), the level holds while the byte is
+//      unread and falls when RX_DATA is read, and with the enable clear the
+//      frame is still received but the interrupt stays quiet.
 // =============================================================================
 `timescale 1ns/1ps
 
@@ -43,15 +57,17 @@ module tb_uart_baud;
   localparam int DEFAULT_D = CLK_FREQ / (BAUD_RATE * 16) - 1;   // 53
 
   localparam [31:0] ADDR_TX_DATA = 32'h00;
+  localparam [31:0] ADDR_RX_DATA = 32'h04;
   localparam [31:0] ADDR_STATUS  = 32'h08;
   localparam [31:0] ADDR_CTRL    = 32'h0C;
+  localparam [31:0] ADDR_IRQ_EN  = 32'h10;
 
   logic clk   = 1'b0;
   logic rst_n = 1'b0;
   always #5 clk = ~clk;
 
   logic txd, irq;
-  logic rxd = 1'b1;   // RX line idle high; only TX timing is under test here
+  logic rxd = 1'b1;   // RX line, idle high between injected frames
 
   // AXI4-Lite slave side
   logic [31:0] awaddr = '0;
@@ -101,6 +117,17 @@ module tb_uart_baud;
   // a clock edge, so differences of this counter are exact bit periods.
   int cyc = 0;
   always @(posedge clk) cyc <= cyc + 1;
+
+  // IRQ rising-edge counter.  The RX interrupt is a level on "unread byte",
+  // so "asserts once per frame" is a claim about edges: a stuck-high or
+  // double-asserting line is invisible to a final-level check but shows here.
+  int   irq_rises = 0;
+  logic irq_prev  = 1'b0;
+  always @(posedge clk) begin
+    irq_prev <= irq;
+    if (irq && !irq_prev)
+      irq_rises <= irq_rises + 1;
+  end
 
   // ---------------------------------------------------------------------------
   // Checks
@@ -257,10 +284,42 @@ module tb_uart_baud;
   endtask
 
   // ---------------------------------------------------------------------------
+  // Frame injection
+  //
+  // Drives one 8N1 frame onto i_uart_rxd at the programmed divisor: start bit,
+  // 8 data bits LSB first, stop bit, each exactly 16 * (divisor + 1) clocks.
+  // Edges land on negedge so they are a clean half cycle away from the posedge
+  // where the DUT's synchroniser samples the pin.  Both bytes used below have
+  // bit 7 = 0, so a stop sample that drifts back into the last data bit reads
+  // 0 and drops the frame instead of accepting it silently.
+  // ---------------------------------------------------------------------------
+  task automatic rx_send_byte(input int d, input [7:0] byte_val, input int phase_clk);
+    int period;
+    int i;
+    begin
+      period = 16 * (d + 1);
+      rxd = 1'b1;                        // idle high, line settled
+      // phase_clk shifts the start edge relative to the free-running baud
+      // counter, which picks where in a tick the receiver detects the frame.
+      repeat (2 * period + phase_clk) @(negedge clk);
+      rxd = 1'b0;                        // start bit
+      repeat (period) @(negedge clk);
+      for (i = 0; i < 8; i++) begin      // data, LSB first
+        rxd = byte_val[i];
+        repeat (period) @(negedge clk);
+      end
+      rxd = 1'b1;                        // stop bit
+      repeat (period) @(negedge clk);
+    end
+  endtask
+
+  // ---------------------------------------------------------------------------
   // Stimulus
   // ---------------------------------------------------------------------------
   initial begin : main
     logic [31:0] r;
+    int ph;
+    int rises_before;
 
     rst_n = 1'b0;
     repeat (8) @(posedge clk);
@@ -289,7 +348,103 @@ module tb_uart_baud;
     check_val("CTRL reads back the reprogrammed divisor 7", int'(r), 7);
     measure_frame(7, 8'h55);
 
-    // 4. Byte strobes select the half of the divisor register that is written.
+    // 4. Receive path.  RX shares baud_tick with TX, so the programmed divisor
+    //    sets the receive sample grid too: this frame is driven at
+    //    16 * (7 + 1) = 128 clocks per bit.  A receiver still on the reset
+    //    divisor would sample in the wrong places and decode nothing.
+    //    CTRL is already 7 from the TX section; rewrite it so this section
+    //    does not depend on that.
+    axi_write(ADDR_CTRL, 32'd7, 4'hF);
+    rx_send_byte(7, 8'h55, 0);
+
+    // The RX FIFO store is tick-gated and happens one baud tick after the stop
+    // sample, so give it a few ticks before looking at STATUS.
+    repeat (4 * 8) @(posedge clk);
+    axi_read(ADDR_STATUS, r);
+    check("RX: decoded frame is present (STATUS rx_empty = 0)", r[1], 1'b0);
+
+    axi_read(ADDR_RX_DATA, r);
+    check_val("RX: divisor 7 decoded 0x55", int'(r[7:0]), 8'h55);
+
+    // Exactly one entry.  rx_fifo_we stays high for a whole tick period, so
+    // the store has to be gated on baud_tick; with the store and the write
+    // pointer both ungated one frame fills the FIFO with ~divisor copies and
+    // a single read leaves it non-empty.
+    axi_read(ADDR_STATUS, r);
+    check("RX: one frame pushes exactly one byte (empty after one read)", r[1], 1'b1);
+
+    // Second, at a different divisor (64 clocks per bit) and all-zero data:
+    // after the start edge the stop bit is the only high level the receiver
+    // sees, so accepting the frame shows the stop sample is inside the stop
+    // bit.
+    //
+    // The sample grid is anchored to whichever baud tick first sees the start
+    // bit, so the start edge's position within a tick decides where every
+    // sample lands.  The sweep moves it across a whole tick (4 clocks at
+    // divisor 3) and every phase has to decode, so the receiver cannot be
+    // relying on one lucky alignment.  It does not prove the old cnt==7
+    // stop sample is gone: that sample falls exactly on the stop bit's start
+    // edge, so which value it sees turns on the sub-cycle phase, and
+    // reintroducing it still passes these phases (measured).
+    axi_write(ADDR_CTRL, 32'd3, 4'hF);
+    for (ph = 0; ph < 4; ph++) begin
+      rx_send_byte(3, 8'h00, ph);
+      repeat (4 * 4) @(posedge clk);
+      axi_read(ADDR_STATUS, r);
+      check($sformatf("RX: d=3 phase %0d frame present", ph), r[1], 1'b0);
+
+      axi_read(ADDR_RX_DATA, r);
+      check_val($sformatf("RX: d=3 phase %0d decoded 0x00", ph), int'(r[7:0]), 8'h00);
+
+      axi_read(ADDR_STATUS, r);
+      check($sformatf("RX: d=3 phase %0d pushed exactly one byte", ph), r[1], 1'b1);
+    end
+
+    // A read with nothing queued must not invent a byte or change the level.
+    axi_read(ADDR_RX_DATA, r);
+    axi_read(ADDR_STATUS, r);
+    check("RX: read on empty FIFO leaves it empty", r[1], 1'b1);
+
+    // 5. Receive interrupt.  IRQ_EN[1] gates a level on "RX FIFO not empty",
+    //    so one frame has to raise o_irq exactly once, hold it until the byte
+    //    is consumed, and drop it when RX_DATA is read (the read pops the
+    //    entry).  IRQ_EN[0] (TX done) stays clear so this is RX only.
+    axi_write(ADDR_IRQ_EN, 32'h0000_0002, 4'hF);
+    axi_read(ADDR_IRQ_EN, r);
+    check_val("IRQ_EN reads back RX-enable only (0x2)", int'(r), 32'h2);
+    check("IRQ: clear before a frame arrives", irq, 1'b0);
+
+    rises_before = irq_rises;
+    rx_send_byte(3, 8'hA5, 0);
+    repeat (4 * 4) @(posedge clk);
+    check("IRQ: high once the received byte lands", irq, 1'b1);
+    check_val("IRQ: one rising edge for one frame", irq_rises - rises_before, 1);
+
+    // A level, not a one-cycle pulse: an ISR that is slow to get there must
+    // still see it, and the wait itself must not produce another edge.
+    repeat (8 * 4) @(posedge clk);
+    check("IRQ: still high with the byte unread", irq, 1'b1);
+    check_val("IRQ: no extra edge while the byte sits", irq_rises - rises_before, 1);
+
+    axi_read(ADDR_RX_DATA, r);
+    check_val("IRQ: the byte behind the interrupt is 0xA5", int'(r[7:0]), 8'hA5);
+    repeat (2) @(posedge clk);
+    check("IRQ: clears when RX_DATA is read", irq, 1'b0);
+
+    // Gated by IRQ_EN[1]: with the enable clear the frame is still received,
+    // but the interrupt must stay quiet.
+    axi_write(ADDR_IRQ_EN, 32'd0, 4'hF);
+    rx_send_byte(3, 8'h3C, 0);
+    repeat (4 * 4) @(posedge clk);
+    check("IRQ: disabled, a frame raises nothing", irq, 1'b0);
+    check_val("IRQ: disabled, no rising edge either", irq_rises - rises_before, 1);
+
+    axi_read(ADDR_RX_DATA, r);
+    check_val("IRQ: disabled, the byte is still received", int'(r[7:0]), 8'h3C);
+    axi_read(ADDR_STATUS, r);
+    check("IRQ: second byte consumed, FIFO empty", r[1], 1'b1);
+
+    // 6. Byte strobes select the half of the divisor register that is written.
     axi_write(ADDR_CTRL, 32'h0000_BEEF, 4'hF);
     axi_read(ADDR_CTRL, r);
     check_val("full write sets CTRL = 0xBEEF", int'(r), 32'hBEEF);
@@ -300,7 +455,7 @@ module tb_uart_baud;
     axi_read(ADDR_CTRL, r);
     check_val("WSTRB=0010 writes CTRL[15:8] only", int'(r), 32'h2211);
 
-    // Status is readable and TX is idle again by now.
+    // 7. Status is readable and TX is idle again by now.
     axi_read(ADDR_STATUS, r);
     check("STATUS: TX FIFO empty and not full", (r[0] === 1'b0) && (r[1] === 1'b1), 1'b1);
 
