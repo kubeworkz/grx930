@@ -35,96 +35,61 @@ endmodule
 // implement the subset the GRX930 actually uses.
 
 module DSP48E1 #(
-    parameter integer NUM_RECREG  = 1,
-    parameter integer NUM_PCREG   = 1,
-    parameter integer USE_DPORT   = "FALSE",
-    parameter integer USE_MULT    = "NONE",
-    parameter integer AREG        = 1,
-    parameter integer BREG        = 1,
-    parameter integer [47:0] ACASCREG = 1,
-    parameter integer [47:0] BCASCREG = 1
+    // Attributes are accepted and ignored: this stub models the one mode the
+    // GRX930 uses (OPMODE 7'b0110011, all internal registers bypassed).
+    parameter A_INPUT = "DIRECT",  parameter B_INPUT = "DIRECT",
+    parameter USE_DPORT = "FALSE", parameter USE_MULT = "NONE",
+    parameter USE_SIMD = "ONE48",  parameter AUTORESET_PATDET = "NO_RESET",
+    parameter [47:0] MASK = 48'h3fffffffffff, parameter [47:0] PATTERN = 48'h0,
+    parameter SEL_MASK = "MASK",   parameter SEL_PATTERN = "PATTERN",
+    parameter USE_PATTERN_DETECT = "NO_PATDET",
+    parameter ACASCREG = 0, ADREG = 0, ALUMODEREG = 0, AREG = 0,
+    parameter BCASCREG = 0, BREG = 0, CARRYINREG = 0, CARRYINSELREG = 0,
+    parameter CREG = 0, DREG = 0, INMODEREG = 0, MREG = 0, OPMODEREG = 0,
+    parameter PREG = 0
 )(
-    // A port (48-bit, used as 30-bit input in GRX930)
-    input  logic [29:0] A,
-    // B port (18-bit)
-    input  logic [17:0] B,
-    // C port (48-bit, used as carry input)
-    input  logic [47:0] C,
-    // D port (25-bit, unused in GRX930)
-    input  logic [24:0] D,
-    // Control
-    input  logic        CLK,
-    input  logic        CEA1, CEA2,
-    input  logic        CEB1, CEB2,
-    input  logic        CEC, CED, CEM, CEP,
-    input  logic        CEALUMODE, CEMULTIPLYIN, CEMULTIPLYOUT,
-    input  logic        CECARRYIN, CECINSUB, CECTRL,
-    input  logic        RSTA, RSTB, RSTC, RSTD, RSTM, RSTP,
-    input  logic        RSTCTRL, RSTCARRYIN, RSTDITHER, RSTMULTIPLYIN,
-    input  logic        RSTMULTIPLYOUT, RSTPATTERNDETECT, RSTPATTERNSYNC,
-    input  logic        RSTPIPEMODE, RSTSIMPLE, RSTSYNC_IN, RSTSYNC_OUT,
-    input  logic        RSTDRECCLK,
-    // Cascade
-    input  logic [29:0] ACIN,
-    input  logic [17:0] BCIN,
-    input  logic        CARRYCASCIN,
-    input  logic        MULTSIGNIN,
-    input  logic [47:0] PCIN,
-    // Mode
-    input  logic [3:0]  ALUMODE,
-    input  logic [2:0]  CARRYINSEL,
-    input  logic        CARRYIN,
-    // Output enable
-    input  logic        OPMODE,
-    // Pattern detect
-    input  logic        PATTERNDETECT,
-    input  logic        PATTERNSYNC,
-    // Underflow/overflow
-    input  logic        UNDERFLOW,
-    input  logic        OVERFLOW,
-    input  logic        AUTORESTORE_PATTRN,
-    // Ports (direct input)
-    input  logic [6:0]  OPMODE_IN,
-    // Output
     output logic [29:0] ACOUT,
     output logic [17:0] BCOUT,
     output logic        CARRYCASCOUT,
     output logic        MULTSIGNOUT,
     output logic [47:0] PCOUT,
+    output logic        OVERFLOW,
+    output logic        PATTERNBDETECT,
+    output logic        PATTERNDETECT,
+    output logic        UNDERFLOW,
+    output logic [3:0]  CARRYOUT,
     output logic [47:0] P,
-    output logic        PATTERNDETECT_OUT,
-    output logic        PATTERNSYNC_OUT,
-    output logic        OVERFLOW_OUT,
-    output logic        UNDERFLOW_OUT,
-    output logic        CARRYOUT,
-    output logic [3:0]  CARRYOUT_OUT
+
+    input  logic [29:0] ACIN,
+    input  logic [17:0] BCIN,
+    input  logic        CARRYCASCIN,
+    input  logic        MULTSIGNIN,
+    input  logic [47:0] PCIN,
+    input  logic [3:0]  ALUMODE,
+    input  logic [2:0]  CARRYINSEL,
+    input  logic        CLK,
+    input  logic [4:0]  INMODE,
+    input  logic [6:0]  OPMODE,
+    input  logic [29:0] A,
+    input  logic [17:0] B,
+    input  logic [47:0] C,
+    input  logic        CARRYIN,
+    input  logic [24:0] D,
+    input  logic        CEA1, CEA2, CEAD, CEALUMODE, CEB1, CEB2, CEC, CECARRYIN,
+    input  logic        CECTRL, CED, CEINMODE, CEM, CEP,
+    input  logic        RSTA, RSTALLCARRYIN, RSTALUMODE, RSTB, RSTC, RSTCTRL,
+    input  logic        RSTD, RSTINMODE, RSTM, RSTP
 );
+    // X = A:B, Z = C (OPMODE 0110011). ALUMODE 0001 is X - Z - 1 with CARRYIN
+    // added back, which is how c930_fp16_acc gets an exact subtract out of it.
+    wire [47:0] x = {A, B};
+    wire [47:0] p_add = x + C + {47'b0, CARRYIN};
+    wire [47:0] p_sub = x - C - 48'd1 + {47'b0, CARRYIN};
 
-    // GRX930 only uses this as a 48-bit adder: P = A + B + C
-    // A is sign-extended from 30 to 48 bits
-    logic [47:0] a_ext;
-    logic [47:0] b_ext;
-
-    assign a_ext = {{18{A[29]}}, A};
-    assign b_ext = {{30{B[17]}}, B};
-
-    always_ff @(posedge CLK) begin
-        if (CEP) begin
-            P <= a_ext + b_ext + C;
-        end
-    end
-
-    // Unused outputs tied to zero
-    assign ACOUT = '0;
-    assign BCOUT = '0;
-    assign CARRYCASCOUT = '0;
-    assign MULTSIGNOUT = '0;
-    assign PCOUT = '0;
-    assign PATTERNDETECT_OUT = '0;
-    assign PATTERNSYNC_OUT = '0;
-    assign OVERFLOW_OUT = '0;
-    assign UNDERFLOW_OUT = '0;
-    assign CARRYOUT = '0;
-    assign CARRYOUT_OUT = '0;
-
+    assign P        = ALUMODE[0] ? p_sub : p_add;
+    assign ACOUT    = A;
+    assign BCOUT    = B;
+    assign PCOUT    = P;
+    assign CARRYOUT = 4'b0;
+    assign {CARRYCASCOUT, MULTSIGNOUT, OVERFLOW, PATTERNBDETECT, PATTERNDETECT, UNDERFLOW} = 6'b0;
 endmodule

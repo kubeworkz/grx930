@@ -74,3 +74,8 @@ c930/asic_gf180mcu/lvs_runs/
 # Python bytecode from the tools/ scripts
 __pycache__/
 *.pyc
+
+# LibreLane run trees and the boot-image overlay run_librelane.sh writes beside
+# the design config (it has to live in that directory for `dir::` to resolve).
+c930/asic/librelane/runs/
+c930/asic/librelane/boot_hex.yaml

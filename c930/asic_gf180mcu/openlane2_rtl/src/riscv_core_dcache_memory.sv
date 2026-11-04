@@ -63,7 +63,38 @@ localparam BLOCK_SIZE  = 2**BLOCK_OFFSET ;
 // data/AMO write writes the decoded lane range (see be_all below). Reads are
 // REGISTERED (EBR reads have no combinational path); the controller stalls
 // the core one cycle on every cache read (see riscv_core_dcache_controller).
+`ifdef USE_SKY130_SRAM
+// Foundry SRAM (SKY130 ASIC flow): eight sky130_sram_1kbyte_1rw1r_32x256_8, one
+// per 32-bit slice of the line.  The write port takes the same per-byte enables
+// the flop array did (be_all, inverted because the macro's mask is active low);
+// the read port re-reads the line at the same address and its registered output
+// occupies the cycle window `read_data_reg <= DATA_MEM[addr]` used to, so
+// read_data_reg is wired straight to it.
+wire [AXI_DATA_WIDTH-1 : 0] dcache_line_q;
+
+genvar gs;
+generate
+    for (gs = 0; gs < AXI_DATA_WIDTH/32; gs++) begin : g_line_slice
+        sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (
+            .clk0   (i_clk),
+            .csb0   (~i_wr_en),
+            .web0   (~i_wr_en),
+            .wmask0 (~be_all[gs*4 +: 4]),
+            .addr0  (i_addr_from_core[5 +: INDEX_WIDTH]),
+            .din0   (wr_data_all[gs*32 +: 32]),
+            .dout0  (),
+            .clk1   (i_clk),
+            .csb1   (1'b0),
+            .addr1  (i_addr_from_core[5 +: INDEX_WIDTH]),
+            .dout1  (dcache_line_q[gs*32 +: 32])
+        );
+    end
+endgenerate
+
+assign read_data_reg = dcache_line_q;
+`else
 logic [AXI_DATA_WIDTH-1 : 0] DATA_MEM [0: CACHE_DEPTH-1];
+`endif
 
 // Registered read word: the full 256-bit line read one cycle after o_rd_en.
 logic [AXI_DATA_WIDTH-1 : 0] read_data_reg;
@@ -73,11 +104,13 @@ logic [AXI_DATA_WIDTH-1 : 0] read_data_reg;
 // NOTE: the array is intentionally NOT reset in the always_ff -- EBR storage
 // has no reset, and the controller's VALID_MEM gates every read, so stale
 // data is never observable. This is what allows BRAM inference.
+`ifndef USE_SKY130_SRAM
 initial begin
     for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
         DATA_MEM[i] = 'b0;
     end
 end
+`endif
 
 ///////////////////////////////////////////////
 //    DECODED BYTE-LANE WRITE ENABLES        //
@@ -135,6 +168,7 @@ end
 // EBR storage has no reset, and yosys's memory pass demotes any array written
 // from an async-reset-sensitive block to registers (killing BRAM inference).
 // VALID_MEM (controller) gates every read, so stale data is never observable.
+`ifndef USE_SKY130_SRAM
 always_ff @( posedge i_clk ) begin : FLUSH_WRITE_REPLACEMENT_BLOCK
     if (i_wr_en) begin
         // Single write port at the line address with per-byte enables.
@@ -144,6 +178,7 @@ always_ff @( posedge i_clk ) begin : FLUSH_WRITE_REPLACEMENT_BLOCK
         end
     end
 end
+`endif
 
 
 ///////////////////////////////////////////////
@@ -153,12 +188,14 @@ end
 // Registered read: captures the addressed line one cycle after o_rd_en. The
 // controller holds the core (o_stall) during the read cycle and the core
 // samples o_data_to_core in the following (LOAD_DONE) cycle.
+`ifndef USE_SKY130_SRAM
 always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
     if (!i_rst_n)
         read_data_reg <= 'b0;
     else if (i_rd_en)
         read_data_reg <= DATA_MEM [ i_addr_from_core[5 +: INDEX_WIDTH] ];
 end
+`endif
 
 always_comb begin : READ_SIZE_SELECT
     unique case (i_size)

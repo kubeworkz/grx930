@@ -1,0 +1,182 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
+# config.yaml -- LibreLane configuration for the SKY130 chip (c930_soc_top).
+#
+# This replaces c930/asic/synth_yosys.ys + flow_openroad.tcl, which drove Yosys
+# and OpenROAD by hand against a sky130A that CI built with the skywater-pdk
+# conda flow. Both scripts read PDK paths that no sky130A layout has
+# ($PDK_ROOT/sky130_fd_sc_hd/...) and call a 2020-era OpenROAD API (add_ring,
+# add_stripe, legalize_placement), so neither could run against the PDK or the
+# engine this repo installs.
+#
+# PDK handling is the GF180 arms' handling: the same engine in the same image,
+# `--manual-pdk` against a prebuilt tree, and nothing here redefines a PDK
+# variable. run_librelane.sh fetches that tree with ciel at the commit this
+# engine pins in its own pdk_hashes.yaml; the release carries its configuration
+# in libs.tech/librelane/config.tcl, which is where PDN_VPITCH, PDN_VOFFSET and
+# KLAYOUT_DEF_LAYER_MAP come from. (The 2022-era tag that was fetched before this
+# port only had libs.tech/openlane/, the LibreLane 2 layout, so LibreLane 3
+# reported every one of those variables as undefined.)
+#
+# meta version 3 for the same reason: version 2 is the engine that reads the
+# old layout.
+#
+# The source list starts from the SoC as it is simulated. Two groups differ:
+#   * c930_ddr.sv is a behavioural DDR model with a testbench write port; the
+#     synthesis stub c930_ddr_stub.sv is what the FPGA build maps, and it
+#     declares the same module, so only the stub is listed.
+#   * the CPU core and caches come from asic_gf180mcu/openlane2_rtl/src, the
+#     copies the GF180 arms synthesize (see the note above that block).
+# The SoC's boot image reaches Yosys through SYNTH_PARAMETERS, not through a
+# parameter in this file: $readmemh resolves a relative HEX_FILE against the
+# *step's* working directory (librelane/runs/<tag>/05-yosys-jsonheader and
+# .../06-yosys-synthesis), so the path has to be absolute, and only the launcher
+# knows where the tree is mounted. run_librelane.sh writes that list beside this
+# file as boot_hex.yaml -- BOOT_INIT_FILE first, then any caller-supplied
+# SYNTH_PARAMETERS (NAME=VALUE) -- and passes it after this config.
+meta:
+  version: 3
+  flow: Classic
+
+DESIGN_NAME: c930_soc_top
+
+# Paths are relative to this file (c930/asic/librelane/).
+VERILOG_FILES:
+  # ASIC-only replacement for the FPGA primitive shims (BUFG / DSP48E1).
+  - dir::../sky130_asic_wrapper.sv
+  # The SoC as simulated (c930/rtl).
+  - dir::../../rtl/c930_aplic.sv
+  - dir::../../rtl/c930_axi_cache_adapter.sv
+  - dir::../../rtl/c930_axi_crossbar.sv
+  - dir::../../rtl/c930_axi_dma_arb.sv
+  - dir::../../rtl/c930_bf16_mul.sv
+  - dir::../../rtl/c930_bootrom.sv
+  - dir::../../rtl/c930_cla_comp.sv
+  - dir::../../rtl/c930_cla_sub.sv
+  - dir::../../rtl/c930_ddr3l.sv
+  - dir::../../rtl/c930_fp16_acc.sv
+  - dir::../../rtl/c930_fp16_mul.sv
+  - dir::../../rtl/c930_fp32_acc.sv
+  - dir::../../rtl/c930_fp_mul.sv
+  - dir::../../rtl/c930_fx_acc.sv
+  - dir::../../rtl/c930_l2.sv
+  - dir::../../rtl/c930_mmio_arb.sv
+  - dir::../../rtl/c930_mmio_bridge.sv
+  - dir::../../rtl/c930_npu_act.sv
+  - dir::../../rtl/c930_npu_core.sv
+  - dir::../../rtl/c930_npu_csr.sv
+  - dir::../../rtl/c930_npu_dma.sv
+  - dir::../../rtl/c930_npu_top.sv
+  - dir::../../rtl/c930_soc_top.sv
+  - dir::../../rtl/c930_systolic_array.sv
+  - dir::../../rtl/c930_tensor_pe.sv
+  - dir::../../rtl/c930_uart.sv
+  - dir::../../rtl/pta/c930_fp32_add.sv
+  - dir::../../rtl/pta/c930_pta_cal.sv
+  - dir::../../rtl/pta/c930_ptm_b.sv
+  - dir::../../rtl/pta/c930_ptm_c.sv
+  # CPU core and caches: the copies the GF180 arms synthesize. Reading the cache
+  # files from rv64imac/RTL/caches/ beside the rv64imac/RTL core top joins two
+  # revisions of that interface -- the top binds .i_inv_valid / .i_inv_addr /
+  # .o_inv_ack on the caches and the older cache copies have no such ports, so the
+  # invalidation path is dropped silently. Verilator reports it as PINNOTFOUND.
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_64bit_adder.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_alu.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_alu_decoder.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_amo_alu.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_booth.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_branch_unit.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_compressed_decoder.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_csr_control_signals.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_csr_unit.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_dcache_controller.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_dcache_memory.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_dcache_top.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_div_in.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_div_out.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_hazard_unit.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_icache_controller.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_icache_memory.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_icache_top.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_immextend.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_ldextend.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_main_decoder.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_main_decoder_top.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mul_div.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mul_div_ctrl.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mul_in.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mul_out.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mux2x1.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mux3x1.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mux4x1.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_mux_2to1.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_non_restoring.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_pcsrc.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_pipe.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_rf.sv
+  - dir::../../asic_gf180mcu/openlane2_rtl/src/riscv_core_top.sv
+  # DDR stub: the ASIC has no DDR PHY, only the register interface.
+  - dir::../../synth/c930_ddr_stub.sv
+# The SoC clock; the same period flow_openroad.tcl used (100 MHz).
+CLOCK_PORT: i_clk
+CLOCK_PERIOD: 10.0
+
+VDD_NETS:
+- VDD
+GND_NETS:
+- VSS
+
+# This design has never been through a real SKY130 P&R run, so keep the router's
+# default behaviour rather than tightening it on a guess.
+GRT_ALLOW_CONGESTION: true
+
+# ---------------------------------------------------------------------------
+# Storage in foundry SRAM instead of flip-flops (`USE_SKY130_SRAM`)
+# ---------------------------------------------------------------------------
+# Yosys never finished this design with the storage as flop arrays: the L2's 16
+# data planes alone are 524,288 flops
+# (NUM_WAYS x WORDS_PER_LINE banks of NUM_SETS x DATA_WIDTH) and the run was
+# killed twice at 20.4 GB of RAM after 33 and 20 minutes inside elaboration,
+# with the log's last line a `Replacing memory \valid_mem with list of registers`.
+# The arrays are now built from the PDK's own SRAM macros -- two
+# sky130_sram_2kbyte_1rw1r_32x512_8 per L2 data plane (512 x 32, one read-write
+# and one independent read port, registered outputs: the bank's exact read/write
+# cycle shape) and eight sky130_sram_1kbyte_1rw1r_32x256_8 per 256-bit cache line
+# in the L1 I and D caches.
+#
+# The define is flow-scoped: `make sim` and the FPGA build never set it, so they
+# keep the flop arrays, and they are what the RTL is simulated against.
+VERILOG_DEFINES:
+  - USE_SKY130_SRAM
+
+# Declared so Yosys reads each macro's Verilog model with `read_verilog -lib`
+# (blackbox: ports only, no logic) instead of trying to synthesize the OpenRAM
+# model's `initial`-loaded array. Paths come from the PDK tree, so nothing is
+# vendored here.
+#
+# No `instances` block: placement is not configured yet, so this run stops at
+# synthesis. Any P&R attempt needs a die size and a location for each of the 48
+# macro instances before it can floorplan.
+MACROS:
+  sky130_sram_2kbyte_1rw1r_32x512_8:
+    gds:
+      - pdk_dir::libs.ref/sky130_sram_macros/gds/sky130_sram_2kbyte_1rw1r_32x512_8.gds
+    lef:
+      - pdk_dir::libs.ref/sky130_sram_macros/lef/sky130_sram_2kbyte_1rw1r_32x512_8.lef
+    vh:
+      - pdk_dir::libs.ref/sky130_sram_macros/verilog/sky130_sram_2kbyte_1rw1r_32x512_8.v
+    lib:
+      "*":
+        - pdk_dir::libs.ref/sky130_sram_macros/lib/sky130_sram_2kbyte_1rw1r_32x512_8_TT_1p8V_25C.lib
+
+  sky130_sram_1kbyte_1rw1r_32x256_8:
+    gds:
+      - pdk_dir::libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds
+    lef:
+      - pdk_dir::libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef
+    vh:
+      - pdk_dir::libs.ref/sky130_sram_macros/verilog/sky130_sram_1kbyte_1rw1r_32x256_8.v
+    lib:
+      "*":
+        - pdk_dir::libs.ref/sky130_sram_macros/lib/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib
+

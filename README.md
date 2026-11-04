@@ -315,6 +315,57 @@ For gate-level PDFs (individual LUTs, FFs, BRAMs):
 - Clock tree synthesis and physical design
 - Tapeout ($10K–$30K MPW shuttle, $100K+ full mask set)
 
+### SKY130 flow
+
+The SKY130 side now runs on LibreLane 3 in the same pre-check image as the GF180 arms
+(`ghcr.io/wafer-space/gf180mcu-precheck`), and gets its PDK the same way they do: a prebuilt
+sky130A fetched once by `ciel` and handed to the flow with `--manual-pdk`, so no step of the run
+reaches for a PDK and nothing is built from `skywater-pdk` at run time. The version is not chosen
+by the launcher — it is read from the engine's own `pdk_hashes.yaml`, the commit the running
+LibreLane release pins, so a PDK the engine was not tested against cannot be picked by accident.
+
+```sh
+cd c930/asic
+SKY130_PDK_ROOT=/path/to/pdk ./run_librelane.sh --fetch-pdk   # once; ~2.2 GB
+SKY130_PDK_ROOT=/path/to/pdk ./run_librelane.sh -T Yosys.Synthesis
+```
+
+`make pdk`, `make synth`, `make pnr` and `make signoff` in `c930/asic` are the same entry points.
+Runs land under `c930/asic/librelane/runs/<tag>/`. `librelane/config.yaml` carries the design
+configuration; the source list is the one the SoC simulates, with the CPU core and caches taken
+from the GF180 tree because `rv64imac/RTL`'s core top and `rv64imac/RTL/caches` are two revisions
+of the same interface.
+
+The SoC's generics reach Yosys through LibreLane's `SYNTH_PARAMETERS` (a `chparam` list):
+`run_librelane.sh` writes it beside the config with `BOOT_INIT_FILE` first — the ROM's `$readmemh`
+resolves against the Yosys step directory, so that path has to be absolute — and appends whatever
+the caller passes, e.g. `make synth SYNTH_PARAMETERS="ENABLE_NPU1=0"`.
+
+The `synth_yosys.ys` and `flow_openroad.tcl` pair is superseded: it read PDK paths no sky130A
+layout has and called a 2020-era OpenROAD API.
+
+`make mapped` stops `Yosys.Synthesis` immediately after `dfflibmap` and writes
+`librelane/runs/<tag>/final/nl/c930_soc_top.nl.v`. It is the checkpoint before ABC's strategy/dch
+pass, which does not converge on this SoC: the flops are sky130 cells, the combinational network is
+still Yosys `$_` gates, so the result is for inspection and counting, not P&R. The stop is a small
+LibreLane plugin in `c930/asic/librelane/plugin/` that the launcher puts on `PYTHONPATH` only for
+this target: LibreLane discovers it as `librelane_plugin_sky130_mapped`, and it hands the synthesis
+step a patched copy of `synthesize.py` that writes the netlist and exits before the ABC strategy
+pass. It only takes effect together with `-T Yosys.Synthesis`; the launcher refuses the combination
+with any other stopping point.
+
+Storage is foundry SRAM rather than flip-flops in this build (`VERILOG_DEFINES:
+[USE_SKY130_SRAM]`): two `sky130_sram_2kbyte_1rw1r_32x512_8` per L2 data plane and eight
+`sky130_sram_1kbyte_1rw1r_32x256_8` per 256-bit L1 line, all declared in the config's `MACROS`
+from the PDK tree. The define is flow-scoped — `make sim`, the FPGA build and the GF180 arms keep
+the flop arrays. The two cache memories synthesize to eight macro instances each (17 cells,
+26 MB peak, 0.05 s) in place of 32K flops (175 MB, 3.8 s). The L2's *directory* (4×512×50 tag
+registers and 4×512×16 sharer registers, written at dynamic per-element indices) is still flops
+and is what keeps `Yosys.JsonHeader` from completing: the frontend demotes those arrays to
+registers and the run passes 13 GB before it is killed, so `make synth` does not finish yet.
+Making the tag and sharer banks inferable as memories (per-way read ports inside the generate
+blocks) or moving them to macros with a one-cycle-earlier read is the next step.
+
 ## Git Workflow
 
 - **`main`** — Production branch, FPGA-synthesized, timing-closed

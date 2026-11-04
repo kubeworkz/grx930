@@ -37,7 +37,44 @@ localparam BLOCK_SIZE  = 2**BLOCK_OFFSET_WIDTH ;
 logic [ADDR_WIDTH-1      : 0] i_addr_from_core_1 , i_addr_from_core_2 , i_addr_from_core_3; //internal adresses
 //      INTERNAL REGISTERS AND MEMORIES      //
 // One 256-bit cache line per index (flattened from [BLOCK][BYTE] for Icarus).
+`ifdef USE_SKY130_SRAM
+// Foundry SRAM (SKY130 ASIC flow): eight sky130_sram_1kbyte_1rw1r_32x256_8, one
+// per 32-bit slice of the line.  The macro's registered read output lands in the
+// same cycle window the flop array's `read_data_reg <= INSTR_MEM[addr]` did, so
+// read_data_reg is wired straight to it rather than registered again.
+//
+// Ports: the read-only port serves the main fetch (addr1), and the read-write
+// port serves the cross-line second read (addr0) except on a fill cycle, where
+// it writes.  rd_en and wr_en are mutually exclusive in the controller, so the
+// fill never displaces a second read.
+wire [AXI_DATA_WIDTH-1 : 0] instr_line_a;
+wire [AXI_DATA_WIDTH-1 : 0] instr_line_b;
+
+genvar gs;
+generate
+    for (gs = 0; gs < AXI_DATA_WIDTH/32; gs++) begin : g_line_slice
+        wire wr = i_wr_en && i_block_replace;
+        sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (
+            .clk0   (i_clk),
+            .csb0   (~(wr || i_rd_en)),
+            .web0   (~wr),
+            .wmask0 (4'b0000),
+            .addr0  (wr ? i_fill_addr[5 +: INDEX_WIDTH] : i_addr_from_core_2[5 +: INDEX_WIDTH]),
+            .din0   (i_block_from_axi[gs*32 +: 32]),
+            .dout0  (instr_line_b[gs*32 +: 32]),
+            .clk1   (i_clk),
+            .csb1   (1'b0),
+            .addr1  (i_addr_from_core[5 +: INDEX_WIDTH]),
+            .dout1  (instr_line_a[gs*32 +: 32])
+        );
+    end
+endgenerate
+
+assign read_data_reg   = instr_line_a;
+assign read_data_reg_2 = instr_line_b;
+`else
 logic [AXI_DATA_WIDTH-1 : 0] INSTR_MEM [0:CACHE_DEPTH-1];
+`endif
 
 // Registered read line: the full 256-bit line captured one cycle after
 // o_rd_en, so the array is a single-port registered read (the EBR DP16KD
@@ -54,11 +91,13 @@ logic [AXI_DATA_WIDTH-1 : 0] read_data_reg_2;
 // has no reset, and the controller's VALID_MEM gates every read (o_rd_en is
 // only asserted on a tag hit), so stale data is never observable. This is
 // what allows BRAM inference.
+`ifndef USE_SKY130_SRAM
 initial begin
     for ( int i = 0 ; i < CACHE_DEPTH  ; i=i+1 ) begin
         INSTR_MEM[i] = 'b0;
     end
 end
+`endif
 //          assign internal addresses   //
 assign i_addr_from_core_1 = i_addr_from_core + 1'b1;
 assign i_addr_from_core_2 = i_addr_from_core + 2'b10;
@@ -68,12 +107,14 @@ assign i_addr_from_core_3 = i_addr_from_core + 2'b11;
 // EBR storage has no reset, and yosys's memory pass demotes any array written
 // from an async-reset-sensitive block to registers (killing BRAM inference).
 // VALID_MEM (controller) gates every read, so stale data is never observable.
+`ifndef USE_SKY130_SRAM
 always_ff @( posedge i_clk ) begin : FLUSH_WRITE_REPLACEMENT_BLOCK
     // BLOCK REPLACEMENT: a full 256-bit line is written at the fill address
     if (i_wr_en && i_block_replace) begin
         INSTR_MEM [ i_fill_addr[5 +: INDEX_WIDTH] ] <= i_block_from_axi;
     end
 end
+`endif
 //          READ FROM MEMORY BLOCK           //
 // Registered read: captures the addressed line one cycle after o_rd_en. The
 // controller holds the fetch (o_stall) during the read cycle and the core
@@ -86,6 +127,7 @@ end
 // fill_s2); the read must capture BOTH lines so the word select can assemble
 // the cross-line word instead of selecting off the end of the 256-bit line
 // (which produced a garbage instruction and silently corrupted execution).
+`ifndef USE_SKY130_SRAM
 always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
     if (!i_rst_n) begin
         read_data_reg   <= 'b0;
@@ -95,6 +137,7 @@ always_ff @( posedge i_clk , negedge i_rst_n ) begin : READ_MEMORY_BLOCK
         read_data_reg_2 <= INSTR_MEM [ i_addr_from_core_2[5 +: INDEX_WIDTH] ];
     end
 end
+`endif
 
 always_comb begin : READ_WORD_SELECT
     // READ WORD: the four bytes at byte offset addr[4:0] (little-endian),
