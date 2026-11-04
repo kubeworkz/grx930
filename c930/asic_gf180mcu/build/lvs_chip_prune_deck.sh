@@ -46,8 +46,15 @@
 #                                 Nothing else in the deck is touched -- not the derivations, not
 #                                 the connectivity, not the comparison.
 #
-#   The copy is generated, not committed: `git diff` on the tree stays clean and the three
-#   changes above are the whole of it.
+#   It also adds `-rd write_netlist=false`, which skips the deck's TARGET NETLIST block. The die's
+#   extracted netlist is ~176 GB (measured 2026-11-01: 176,599,826,432 bytes before ENOSPC) and the
+#   deck writes it in `_finish`, after the verdict; a comparison-only run does not need it, and no
+#   path guard works (KLayout renames an existing target to `~backup` and writes anyway). The two
+#   `target_netlist(...)` calls are renamed to a wrapper that honours the switch, so with no switch
+#   the vendor behaviour is unchanged.
+#
+#   The copy is generated, not committed: `git diff` on the tree stays clean and the changes above
+#   are the whole of it.
 #
 #   bash build/lvs_chip_prune_deck.sh
 #   bash build/lvs_chip_check.sh --no-reconstruct --deck build/lvs_chip/deck_pruned/gf180mcu.lvs
@@ -58,7 +65,9 @@ set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/../../.." && pwd)
 SRC=$ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs
-DST=$HERE/lvs_chip/deck_pruned
+# A second generated copy can sit beside the first (the running baseline must not be deleted under
+# a live container): DECK_OUT=build/lvs_chip/deck_pruned_vertex bash build/lvs_chip_prune_deck.sh
+DST=${DECK_OUT:-$HERE/lvs_chip/deck_pruned}
 
 [ -f "$SRC/gf180mcu.lvs" ] || { echo "prune: CANNOT-RUN no deck at $SRC/gf180mcu.lvs" >&2; exit 2; }
 
@@ -102,6 +111,14 @@ def guarded_extract_devices(*args)
   end
   extract_devices(*args)
 end
+
+# The deck writes the extracted netlist unconditionally in its TARGET NETLIST block. That write is
+# 176 GB on the die and happens in `_finish`, after the verdict, so a comparison-only run cannot
+# afford it. Both call sites are renamed to this wrapper; with no switch it forwards unchanged.
+def target_netlist_if_enabled(*args)
+  return if $write_netlist == 'false'
+  target_netlist(*args)
+end
 #=== end of guard =============================================================================
 RUBY
 
@@ -137,12 +154,22 @@ PY
 # matching (KLayout LVS reference: "maximum branch complexity for ambiguous net matching",
 # "maximum search depth for net match deduction"). They are only touched when named, so an
 # unswitched run is still the vendor deck's behaviour plus the threads line.
+#
+# max_vertex_count is the layout-vs-schematic engine's polygon-complexity limit (default 16, measured
+# with build/lvs_chip/probe/vertex_api.lvs: `dsl_default: 16`, setter `max_vertex_count=`). It is set
+# only when named, and the block refuses to continue if the deck cannot reach it -- a silently
+# ignored switch would look exactly like a null result.
 THREADS_BLOCK='
 #=== LVS THREADS AND COMPARISON BOUNDS (inserted by build/lvs_chip_prune_deck.sh) =================
 threads(($threads || 1).to_i) if respond_to?(:threads)
 self.threads = ($lvs_threads || $threads || 1).to_i if respond_to?(:threads=)
 max_branch_complexity($max_branch_complexity.to_i) if $max_branch_complexity && respond_to?(:max_branch_complexity)
 max_depth($max_depth.to_i) if $max_depth && respond_to?(:max_depth)
+if $max_vertex_count
+  raise "max_vertex_count is not reachable on #{self.class}" unless respond_to?(:max_vertex_count=)
+  self.max_vertex_count = $max_vertex_count.to_i
+  logger.info("NETTER polygon limit: max_vertex_count=#{max_vertex_count}")
+end
 #=== end of LVS threads and comparison bounds ====================================================
 '
 "$PY" - "$DST/gf180mcu.lvs" "$THREADS_BLOCK" <<'PY' || exit 2
@@ -175,6 +202,17 @@ done
 
 # A rename that did not take, or a deck that kept a bare call next to an empty body, would look
 # exactly like a fast run. Check both before saying the copy is usable.
+# The netlist dump: both TARGET NETLIST call sites go through the wrapper.
+"$PY" - "$DST/gf180mcu.lvs" <<'PY' || exit 2
+import re, sys
+p = sys.argv[1]
+t = open(p, encoding='utf-8').read()
+t2, n = re.subn(r'(?m)^([ \t]*)target_netlist\((?!\*args\))', r'\1target_netlist_if_enabled(', t)
+if n != 2:
+    sys.exit(f"prune: CANNOT-RUN expected 2 target_netlist call sites, found {n}")
+open(p, 'w', encoding='utf-8', newline='').write(t2)
+PY
+
 left=$(grep -c '^\s*extract_devices(' "$DST"/rule_decks/*_extraction.lvs 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
 guarded=$(grep -ho 'guarded_extract_devices(' "$DST"/rule_decks/*_extraction.lvs | wc -l | tr -d ' ')
 if [ "$left" != 0 ] || [ "$guarded" != "$calls" ]; then
@@ -191,9 +229,24 @@ grep -q '^max_branch_complexity(' "$DST/gf180mcu.lvs" || {
     echo "prune: FAIL the branch-complexity line is not in the deck" >&2; exit 1; }
 grep -q '^max_depth(' "$DST/gf180mcu.lvs" || {
     echo "prune: FAIL the depth line is not in the deck" >&2; exit 1; }
+grep -q 'def target_netlist_if_enabled' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL the netlist-dump wrapper is not in the deck" >&2; exit 1; }
+# Exactly one bare call may remain: the wrapper's own forward, `target_netlist(*args)`. A second
+# one is a TARGET NETLIST call site that bypasses the switch.
+bare=$(grep -cE '^[[:space:]]*target_netlist\(' "$DST/gf180mcu.lvs")
+[ "$bare" = 1 ] && grep -q 'target_netlist(\*args)' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL $bare bare target_netlist call(s); only the wrapper's forward is allowed" >&2
+    exit 1; }
+wrapped=$(grep -c 'target_netlist_if_enabled(' "$DST/gf180mcu.lvs")
+[ "$wrapped" -ge 3 ] || {
+    echo "prune: FAIL only $wrapped target_netlist_if_enabled occurrence(s)" >&2; exit 1; }
+grep -q 'self.max_vertex_count = ' "$DST/gf180mcu.lvs" || {
+    echo "prune: FAIL the vertex-count line is not in the deck" >&2; exit 1; }
 
 echo "deck_pruned: $calls extraction call sites guarded, 0 left bare"
 echo "deck_pruned: threads from -rd threads=<n> for every run mode (default 1)"
 echo "deck_pruned: comparison bounds from -rd max_branch_complexity=<n> -rd max_depth=<n>"
+echo "deck_pruned: netter polygon limit from -rd max_vertex_count=<n> (default: the vendor's 16)"
+echo "deck_pruned: no extracted-netlist dump with -rd write_netlist=false (default: the vendor's write)"
 echo "deck_pruned: $DST/gf180mcu.lvs"
-echo "  run: bash build/lvs_chip_check.sh --no-reconstruct --deck build/lvs_chip/deck_pruned/gf180mcu.lvs"
+echo "  run: bash build/lvs_chip_check.sh --no-reconstruct --deck ${DST#"$HERE/"}/gf180mcu.lvs"

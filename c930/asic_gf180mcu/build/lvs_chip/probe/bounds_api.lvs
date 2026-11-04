@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
+# probe: are the netlist comparer's ambiguity bounds reachable from the LVS DSL, what are their
+# defaults, and does a value written to them land where `compare` reads it? Run with
+# -rd input=<a small GDS>.
+#
+# Both DSL calls take exactly one argument (setter-only), so "reachable" is not enough: the value
+# has to end up on the object the comparer is configured from. `lvs_data` is that object.
+if $topcell
+  source($input, $topcell)
+else
+  source($input)
+end
+report_lvs
+
+BOUNDS = [[:max_branch_complexity, 10_000_000], [:max_depth, 3]]
+
+puts "PROBE engine_class: #{self.class}"
+puts "PROBE lvs_data_class: #{lvs_data.class}"
+puts "PROBE dsl_methods: #{BOUNDS.map { |n, _| [n, respond_to?(n)] }.inspect}"
+puts "PROBE dsl_arity: #{BOUNDS.map { |n, _| [n, (method(n).arity rescue 'n/a')] }.inspect}"
+puts "PROBE lvs_data_bounds: #{BOUNDS.map { |n, _| [n, lvs_data.respond_to?(n) ? (lvs_data.send(n) rescue 'err') : 'n/a'] }.inspect}"
+
+BOUNDS.each do |name, value|
+  unless respond_to?(name)
+    puts "PROBE #{name}: NOT-REACHABLE (no DSL method)"
+    next
+  end
+  begin
+    send(name, value)
+  rescue StandardError => e
+    puts "PROBE #{name}_set_error: #{e.class}: #{e.message}"
+    next
+  end
+  landed = lvs_data.respond_to?(name) ? (lvs_data.send(name) rescue 'err') : 'n/a'
+  puts "PROBE #{name}_set_#{value}_on_lvs_data: #{landed.inspect}"
+end
+
+if defined?(RBA::NetlistComparer)
+  c = RBA::NetlistComparer.new
+  puts "PROBE comparer_defaults: #{BOUNDS.map { |n, _| [n, c.respond_to?(n) ? c.send(n) : 'n/a'] }.inspect}"
+end

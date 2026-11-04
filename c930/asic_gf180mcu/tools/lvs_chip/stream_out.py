@@ -12,8 +12,12 @@ The artifact's problems, and what this does about each:
     metal5 81/0, labels on *10);
   * **195 instances the design never places** (one of every unused library cell, `filltie`
     among them) -> placements come from the DEF's COMPONENTS instead of the artifact's instance
-    list, and the artifact's own placements are reported orientation by orientation: they are
-    exact for N, one row high for FS, and somewhere else for FN and S;
+    list. A DEF position is the cell's *box* corner, so a mirrored/rotated copy has to be anchored
+    at the opposite corner: `FS` one row up, `S` one row up and one width right, `FN` one width
+    right. The artifact already does this (the offsets its author reported as defects are the
+    anchors) and this script now reproduces them; placing every orientation at the raw DEF point
+    put 30,097 of the 53,745 cells one row or column into a neighbour, which is the die's
+    171,109-device extraction instead of 691,010 (doc/lvs_plan.md, 2026-11-02);
   * **no single top cell after a naive rebuild** -> only cells reachable from the top are kept.
 
 Routing geometry and the via cells come from the artifact itself: it is the writer's own output
@@ -59,6 +63,24 @@ def parse_def_units(path):
         if line.strip().startswith("COMPONENTS"):
             break
     return 0
+
+
+def parse_def_rows(path):
+    """[(row name, y, orient, sites, step)] from ROW -- the DEF's own row grid.
+
+    The placement gate used to infer the pitch from the components' own y values, which only works
+    while every row carries a cell. A DEF with a filler pass still has empty rows, and the first
+    two placed rows can then be two pitches apart, so the grid must come from the ROW statements.
+    """
+    rows = []
+    for line in open(path, errors="replace"):
+        m = re.match(r"ROW\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\w+)\s+DO\s+(\d+)\s+BY\s+1\s+STEP\s+(\d+)",
+                     line.strip())
+        if m:
+            rows.append((m.group(1), int(m.group(4)), m.group(5), int(m.group(6)), int(m.group(7))))
+        if line.strip().startswith("COMPONENTS"):
+            break
+    return rows
 
 
 def parse_def_components(path):
@@ -166,8 +188,11 @@ def copy_shapes(src_layout, src_cell, dst_layout, dst_cell, keep_only_routing):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--def", dest="def_file", default=DEF,
+                    help="DEF to stream (default: the routed die)")
     ap.add_argument("--out", default=DEFAULT_OUT)
     args = ap.parse_args()
+    def_path = args.def_file
 
     try:
         import klayout.db as db
@@ -175,7 +200,7 @@ def main():
         print("stream_out: CANNOT-RUN klayout.db is required")
         return 2
 
-    def_units = parse_def_units(DEF)
+    def_units = parse_def_units(def_path)
     art = db.Layout()
     art.read(ART)
     art_top = art.cell("grx930_test_chip")
@@ -188,7 +213,7 @@ def main():
     print(f"units: DEF {def_units}/um, layout dbu {art.dbu} um, scale {scale:g}")
 
     comps = [(inst, cell, int(round(x / scale)), int(round(y / scale)), orient)
-             for inst, cell, x, y, orient in parse_def_components(DEF)]
+             for inst, cell, x, y, orient in parse_def_components(def_path)]
     print(f"DEF: {len(comps)} components over {len({c[1] for c in comps})} cell types")
 
     # The DEF is authoritative for where a cell goes; the artifact's own instance list is not,
@@ -198,18 +223,22 @@ def main():
     if unknown:
         print(f"REFUSED  unknown DEF orientations: {unknown}")
         return 2
-    ys = sorted({c[3] for c in comps})
-    row = ys[1] - ys[0]
-    for _inst, _cell, _x, y, _orient in comps:
-        if y % row:
-            print(f"REFUSED  component at y={y} is off the {row} dbu row grid")
+    def_rows = parse_def_rows(def_path)
+    if not def_rows:
+        print("REFUSED  no ROW statements in the DEF, so the row grid is unknown")
+        return 2
+    row_grid = {int(round(r[1] / scale)) for r in def_rows}
+    for inst, _cell, _x, y, _orient in comps:
+        if y not in row_grid:
+            print(f"REFUSED  {inst} at y={y} is not on a DEF ROW")
             return 2
     box = art_top.bbox()
     for inst, cell, x, y, _orient in comps:
         if not (box.left <= x <= box.right and box.bottom <= y <= box.top):
             print(f"REFUSED  {inst} at ({x},{y}) is outside the die {box}")
             return 2
-    print(f"placements: {len(comps)} components, all on the {row} dbu row grid and inside {box}")
+    print(f"placements: {len(comps)} components, all on one of the {len(row_grid)} DEF rows "
+          f"and inside {box}")
 
     # What the artifact did instead, orientation by orientation -- reported, never copied.
     artifact_pts = {}
@@ -239,7 +268,7 @@ def main():
     # Net-name labels. Names are hints for the comparer, not connectivity: the deck extracts what
     # the geometry connects, and a label can only name a net the layout already has. The DEF's
     # names are sanitised exactly as mk_chip_cdl.py sanitises them, so the two sides agree.
-    labels = parse_def_net_labels(DEF)
+    labels = parse_def_net_labels(def_path)
     written = 0
     for name, layer, x, y in labels:
         text = name.lstrip("\\").replace(" ", "")
@@ -286,20 +315,68 @@ def main():
                   f"{die.width()} x {die.height()}: a unit error, not a design")
             return 2
 
+    # The row box is the cell boundary layer, not the GDS bbox: the cells draw their wells 0.43 um
+    # beyond the boundary so neighbouring wells merge, which makes the drawn bbox 0.86 um larger in
+    # both axes. Anchoring on the bbox would open a gap at every cell edge.
+    box_layer = out.find_layer(0, 0)
+    if box_layer < 0:
+        print("REFUSED  the library GDS has no layer 0/0 cell boundary, so the row box is unknown")
+        return 2
+
     used = Counter()
+    shifted = Counter()
+    boxes = []
+    sizes = {}
     for _inst, cell, x, y, orient in comps:
         target = lib_cells.get(cell)
         if target is None:
             print(f"REFUSED  {cell} is not in the library GDS")
             return 2
+        size = sizes.get(cell)
+        if size is None:
+            sb = target.bbox(box_layer)
+            if sb is None or sb.empty():
+                print(f"REFUSED  {cell} has no layer 0/0 box in the library GDS")
+                return 2
+            size = sizes[cell] = (sb.width(), sb.height())
+        w, h = size
         angle, mirror = ORIENT[orient]
         trans = db.Trans(angle, mirror)
-        trans.disp = db.Vector(x, y)
+        # Mirroring about the origin moves the w x h box to the lower-left of the DEF point for
+        # FS/S/FN. Translate it back so the box lands on the row the DEF names.
+        corners = [trans * db.Point(px, py) for px in (0, w) for py in (0, h)]
+        trans.disp = db.Vector(x - min(p.x for p in corners), y - min(p.y for p in corners))
+        if trans.disp != db.Vector(x, y):
+            shifted[orient] += 1
+        abs_box = trans * db.Box(0, 0, w, h)
+        boxes.append((abs_box.bottom, abs_box.top, abs_box.left, abs_box.right, cell))
         top.insert(db.CellInstArray(target.cell_index(), trans))
         used[cell] += 1
     print(f"cells: {sum(used.values())} placed over {len(used)} types "
           f"(was {sum(1 for i in art_top.each_inst() if i.cell.name.startswith('gf180mcu_fd_sc'))}"
           f" in the artifact)")
+    print(f"anchors: {sum(shifted.values())} of {len(comps)} copies moved off the raw DEF point"
+          + "".join(f", {o} {n}" for o, n in sorted(shifted.items())))
+
+    # The invariant the raw-anchor version broke: with every copy's box on its DEF row, no two boxes
+    # overlap. Refuse rather than write a file that is silently a row off.
+    rows = {}
+    for y0, _y1, x0, x1, cell in boxes:
+        rows.setdefault(y0, []).append((x0, x1, cell))
+    for y0, items in rows.items():
+        items.sort()
+        for (a0, a1, ac), (b0, _b1, bc) in zip(items, items[1:]):
+            if b0 < a1:
+                print(f"REFUSED  {ac} and {bc} overlap in the row at y={y0} ({a1 - b0} dbu)")
+                return 2
+    extent = {}
+    for y0, y1, _x0, _x1, _cell in boxes:
+        extent[y0] = max(extent.get(y0, y1), y1)
+    levels = sorted(extent.items())
+    for (y0, y1), (ny0, _ny1) in zip(levels, levels[1:]):
+        if ny0 < y1:
+            print(f"REFUSED  the rows at y={y0} (to {y1}) and y={ny0} overlap")
+            return 2
 
     # Keep only what the top needs: one reachable set, one top cell.
     reachable = set()

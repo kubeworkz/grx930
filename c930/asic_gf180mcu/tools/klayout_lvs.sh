@@ -51,6 +51,7 @@ TOPCELL=""
 DECK=${LVS_DECK:-$LVS/gf180mcu.lvs}
 PORT_ARGS=()
 SWITCH_ARGS=()
+RUNNER_ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -67,6 +68,7 @@ while [ $# -gt 0 ]; do
         --deck)         DECK=$2; shift 2 ;;
         --deck=*)       DECK=${1#*=}; shift ;;
         --no-port-check) PORT_ARGS+=(--no-port-check); shift ;;
+        --no-extracted-netlist) RUNNER_ARGS+=(--no-extracted-netlist); shift ;;
         --implicit-connect) PORT_ARGS+=(--implicit-connect); shift ;;
         --switch)       SWITCH_ARGS+=(--switch "$2"); shift 2 ;;
         --switch=*)     SWITCH_ARGS+=(--switch "${1#*=}"); shift ;;
@@ -133,6 +135,7 @@ ARGS=("$C_RUNNER" --deck "$C_DECK" --layout "$C_LAYOUT" --netlist "$C_NETLIST" -
 [ -n "$TOPCELL" ] && ARGS+=(--topcell "$TOPCELL")
 ARGS+=("${SWITCH_ARGS[@]+"${SWITCH_ARGS[@]}"}")
 ARGS+=("${PORT_ARGS[@]+"${PORT_ARGS[@]}"}")
+ARGS+=("${RUNNER_ARGS[@]+"${RUNNER_ARGS[@]}"}")
 
 mkdir -p "$OUT"
 MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w /work "$IMAGE" python3 "${ARGS[@]}"

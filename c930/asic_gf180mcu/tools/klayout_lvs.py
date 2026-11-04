@@ -134,6 +134,14 @@ def main():
     ap.add_argument("--topcell", default=None, help="top cell name; defaults to the schematic's first .SUBCKT")
     ap.add_argument("--no-port-check", action="store_true", help="report the device verdict alone")
     ap.add_argument(
+        "--no-extracted-netlist",
+        action="store_true",
+        help="do not pass target_netlist to the deck. The deck then writes its default "
+        "<topcell>_extracted.cir in its own directory, which is still ~176 GB on the die and still "
+        "happens after the verdict, but stays out of --out. Pair with --no-port-check: the port "
+        "check reads that netlist.",
+    )
+    ap.add_argument(
         "--implicit-connect",
         action="store_true",
         help="deck switch the PDK's per-device config asks for on some fixtures (e.g. pfet_05v0)",
@@ -214,8 +222,14 @@ def main():
         schematic=args.netlist,
         topcell=topcell,
         report=lvsdb,
-        target_netlist=extracted,
     )
+    # The deck writes target_netlist in `_finish`, i.e. after the verdict: on the die that is a
+    # 176 GB flat netlist (measured 2026-11-01: 176,599,826,432 bytes before ENOSPC). Leaving the
+    # switch out does not skip that write -- the deck then uses its default
+    # `<topcell>_extracted.cir` -- but it keeps the file out of --out, and a run only needs the
+    # verdict, not the dump.
+    if not args.no_extracted_netlist:
+        switches["target_netlist"] = extracted
     for key, value in switches.items():
         cmd += ["-rd", f"{key}={value}"]
 

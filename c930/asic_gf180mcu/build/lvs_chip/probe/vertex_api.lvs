@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Gridworkz
+# probe: is the netter's polygon-complexity limit reachable from the LVS DSL, what is its default,
+# and does a value written to it read back? Run with -rd input=<a small GDS>.
+if $topcell
+  source($input, $topcell)
+else
+  source($input)
+end
+report_lvs
+
+puts "PROBE dsl_responds: #{respond_to?(:max_vertex_count).inspect}"
+puts "PROBE dsl_default: #{respond_to?(:max_vertex_count) ? max_vertex_count.inspect : 'n/a'}"
+puts "PROBE dsl_vertex_methods: #{methods.grep(/vertex/i).sort.inspect}"
+puts "PROBE engine_class: #{self.class}"
+puts "PROBE engine_instance_methods: #{self.class.instance_methods.map(&:to_s).grep(/vertex|netter/i).sort.inspect}"
+if respond_to?(:max_vertex_count=)
+  self.max_vertex_count = 64
+  puts "PROBE dsl_setter_readback: #{max_vertex_count.inspect}"
+elsif respond_to?(:max_vertex_count)
+  begin
+    max_vertex_count(64)
+    puts "PROBE dsl_call_readback: #{max_vertex_count.inspect}"
+  rescue StandardError => e
+    puts "PROBE dsl_call_error: #{e.class}: #{e.message}"
+  end
+else
+  puts "PROBE dsl_no_knob"
+end
+if defined?(RBA::Netter)
+  puts "PROBE Netter_methods: #{RBA::Netter.instance_methods.map(&:to_s).grep(/vertex|max|thread/i).sort.inspect}"
+end
