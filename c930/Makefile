@@ -11,6 +11,7 @@
 #   make npu_feed   operand-feed measurement at M=64 N=8 K=256, run twice (tb_npu_feed)
 #   make ptm_c_lockstep  PTM-C against the systolic array, cycle for cycle
 #   make hazard     build + run the hazard-unit flush/stall unit test
+#   make uart_baud  program the UART divisor and measure the TX bit period
 #   make wave       simulate the SoC and print the waveform location
 #   make synth      ECP5 synthesis resource/latch report (oss-cad-suite; real design)
 #   make synth-fit   ECP5 synthesis + P&R Fmax (cache-shrunk fit test)
@@ -99,7 +100,7 @@ OUT_NPU    := $(BUILD_DIR)/tb_c930_npu.vvp
 OUT_SOC    := $(BUILD_DIR)/tb_c930_soc.vvp
 OUT_SOC_FULL := $(BUILD_DIR)/tb_c930_soc_full.vvp
 
-.PHONY: all sw soc soc_full npu npu_float npu_feed ptm_c_lockstep hazard synth synth-fit wave clean bringup tile_test driver_test
+.PHONY: all sw soc soc_full npu npu_float npu_feed ptm_c_lockstep hazard uart_baud synth synth-fit wave clean bringup tile_test driver_test
 
 all: sw soc
 
@@ -309,6 +310,20 @@ $(ARW_OUT): rtl/c930_axi_crossbar.sv rtl/c930_axi_dma_arb.sv tb/tb_ar_withdraw.s
 	$(IVERILOG) $(GFLAGS) -o $@ tb/tb_ar_withdraw.sv rtl/c930_axi_crossbar.sv rtl/c930_axi_dma_arb.sv
 ar_withdraw: $(ARW_OUT)
 	$(VVP) $(ARW_OUT)
+
+# UART baud divisor: writes CTRL through the AXI4-Lite slave and measures the
+# resulting TX bit period on o_uart_txd (16 * (divisor + 1) core clocks per
+# bit), at the reset divisor and at two programmed ones.  CTRL[15:0] is the
+# register a double always_ff driver used to cost the netlist -- Yosys resolved
+# the conflict by dropping it, so ADDR_CTRL writes reached nothing and the baud
+# rate was fixed at its reset value -- and this bench is the simulation that
+# covers the path the fix restored.  Mutation-checked: with the ADDR_CTRL write
+# removed every measured period stays at the reset value's 864 clocks.
+UART_BAUD_OUT := $(BUILD_DIR)/tb_uart_baud.vvp
+$(UART_BAUD_OUT): rtl/c930_uart.sv tb/tb_uart_baud.sv
+	$(IVERILOG) $(GFLAGS) -o $@ rtl/c930_uart.sv tb/tb_uart_baud.sv
+uart_baud: $(UART_BAUD_OUT)
+	$(VVP) $(UART_BAUD_OUT)
 
 wave: soc
 	@echo "Waveform written to $(BUILD_DIR)/tb_c930_soc.vcd (open with GTKWave)"
