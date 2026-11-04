@@ -1,0 +1,111 @@
+# sky130-test-chip.yml — harden the GRX930 test chip core on SKY130.
+#
+# Runs LibreLane's Classic flow (synthesis through signoff) on the tapeout RTL in
+# c930/asic_gf180mcu/openlane2_rtl/src, with c930/asic_sky130_test_chip/config.json,
+# in LibreLane's own image. LibreLane fetches the SKY130 PDK revision it pins
+# (ciel), so the PDK and the tools move together when the image tag changes.
+#
+# The core is hardened on its own (no pad ring): the die size comes from the
+# netlist at FP_CORE_UTIL, which is the number this job exists to measure. The
+# area, timing and DRC/LVS results are printed to the log and the job summary,
+# and the final GDS, netlist and reports are uploaded.
+
+name: Sky130 test chip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'c930/asic_sky130_test_chip/**'
+      - 'c930/asic_gf180mcu/openlane2_rtl/src/**'
+      - '.github/workflows/sky130-test-chip.yml'
+  pull_request:
+    paths:
+      - 'c930/asic_sky130_test_chip/**'
+      - 'c930/asic_gf180mcu/openlane2_rtl/src/**'
+      - '.github/workflows/sky130-test-chip.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: sky130-test-chip-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LIBRELANE_IMAGE: ghcr.io/librelane/librelane:3.0.17
+  DESIGN_DIR: c930/asic_sky130_test_chip
+  RUN_TAG: ci
+
+jobs:
+  harden:
+    name: Harden (sky130_fd_sc_hd)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The image and the PDK together need more than the runner's free space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h / | tail -1
+
+      - name: Pull LibreLane
+        run: docker pull -q "$LIBRELANE_IMAGE"
+
+      - name: Run the flow
+        run: |
+          mkdir -p "$HOME/.ciel"
+          set +e
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/work" -v "$HOME/.ciel:/pdk" \
+            -w "/work/$DESIGN_DIR" "$LIBRELANE_IMAGE" \
+            python3 -m librelane --pdk-root /pdk --pdk sky130A --scl sky130_fd_sc_hd \
+              --flow classic \
+              --run-tag "$RUN_TAG" -j "$(nproc)" config.json \
+            2>&1 | tee flow.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Report
+        if: always()
+        run: |
+          run="$DESIGN_DIR/runs/$RUN_TAG"
+          m="$run/final/metrics.json"
+          if [ -f "$m" ]; then
+            {
+              echo "## SKY130 test chip: $( [ "${status:-1}" = 0 ] && echo passed || echo "flow exited ${status:-?}")"
+              echo
+              echo "| metric | value |"
+              echo "|---|---|"
+              jq -r 'to_entries[] | select(.key | test("^(design__instance__(count|area)(__stdcell)?|design__die__(bbox|area)|design__core__(bbox|area)|design__instance__utilization|timing__setup__ws|timing__hold__ws|timing__setup__tns|clock__skew__worst_setup|route__drc_errors|route__wirelength|magic__drc_error__count|klayout__drc_error__count|design__lvs_error__count|antenna__violating__(nets|pins)|power__total|design__lint_(error|warning)__count)$")) | "| \(.key) | \(.value) |"' "$m"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "== all metrics (per-corner entries omitted)"
+            jq -r 'to_entries[] | select(.key | contains("corner:") | not) | "\(.key) = \(.value)"' "$m"
+          else
+            echo "No final metrics: the flow stopped before signoff." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          # The step that stopped the flow, and the end of its log.
+          last=$(ls -d "$run"/*/ 2>/dev/null | sort -V | tail -1)
+          if [ -n "$last" ]; then
+            echo "Last step: $last"
+            for f in $(ls -t "$last"*.log 2>/dev/null | head -1); do echo "== $f"; tail -60 "$f"; done
+          fi
+          echo "== flow.log"; tail -80 flow.log || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sky130-test-chip
+          path: |
+            ${{ env.DESIGN_DIR }}/runs/${{ env.RUN_TAG }}/final/
+            ${{ env.DESIGN_DIR }}/runs/${{ env.RUN_TAG }}/*/*.log
+            ${{ env.DESIGN_DIR }}/runs/${{ env.RUN_TAG }}/*/reports/
+            flow.log
+          if-no-files-found: warn
+
+      - name: Verdict
+        run: exit "${status:-1}"
