@@ -252,6 +252,15 @@ module c930_soc_top
   logic         npu_rvalid;
   logic         npu_rready;
 
+  // The NPU's DMA port carries no AWID/ARID: c930_npu_top has no ID outputs,
+  // and c930_axi_dma_arb does not read a master's ID either -- it re-stamps
+  // every request with {ARB_ID_BASE, owner} on the shared crossbar port.  The
+  // arbiter still declares m0_awid/m0_arid as inputs, so without these two the
+  // wires were read but never driven (Yosys `check`: 8 bits "used but has no
+  // driver"); zero is what the re-stamped transaction carries anyway.
+  assign npu_awid = '0;
+  assign npu_arid = '0;
+
   // =========================================================================
   // NPU1 AXI4-Lite CSR slave (from MMIO bridge, address 0x4000_0040+)
   // =========================================================================
@@ -305,6 +314,10 @@ module c930_soc_top
   logic         npu1_rlast;
   logic         npu1_rvalid;
   logic         npu1_rready;
+
+  // Same for NPU1: no IDs on its DMA port, and the arbiter stamps its own.
+  assign npu1_awid = '0;
+  assign npu1_arid = '0;
 
   // =========================================================================
   // DMA arbiter output (shared M2 port to crossbar)
@@ -1128,6 +1141,17 @@ module c930_soc_top
   logic         ddr_rlast;
   logic         ddr_rvalid;
   logic         ddr_rready;
+
+  // c930_ddr is a single-outstanding AXI4 slave with no BID/RID channel at all:
+  // its only ID-carrying ports are on the address channels, and B/R return no
+  // ID.  Nothing is lost by that -- the L2 answers the crossbar with the ID it
+  // latched from the request (s_bid = wr_id, s_rid = rd_id) rather than with
+  // m_bid/m_rid, which it declares but never reads -- but those two L2 inputs
+  // still need a driver, and in the BYPASS_L2 path these wires are what the
+  // crossbar sees as S1's response IDs.  Zero is the AXI-legal answer for a
+  // slave that interleaves nothing.
+  assign ddr_bid = '0;
+  assign ddr_rid = '0;
 
   // MMIO slave signals (from crossbar slave 2, for future peripherals)
   logic [3:0]   mmio_sl_awid;

@@ -76,10 +76,14 @@ module c930_uart
 
   assign baud_tick = (baud_cnt == 0);
 
+  // baud_divisor is owned by the AXI register block below (it resets it to
+  // DEFAULT_DIVISOR and writes it through ADDR_CTRL); this block only counts
+  // against it.  Resetting it here as well made it a register with two always_ff
+  // drivers, which Yosys `check` reported as 16 conflicting drivers -- one
+  // $adff per bit -- and which left the netlist's reset value ambiguous.
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       baud_cnt     <= DEFAULT_DIVISOR[15:0];
-      baud_divisor <= DEFAULT_DIVISOR[15:0];
     end else begin
       if (baud_cnt == 0)
         baud_cnt <= baud_divisor;
