@@ -169,33 +169,140 @@ module c930_l2
   endfunction
 
   // ---------------------------------------------------------------------------
+  // FSM state
+  // ---------------------------------------------------------------------------
+  // Declared ahead of the storage section because each directory bank's write
+  // port is expressed inside that bank's own generate block, and a generate
+  // block's names are resolved in declaration order by Yosys and iverilog.
+  localparam logic [3:0] RD_IDLE       = 4'd0;
+  localparam logic [3:0] RD_LOOKUP     = 4'd1;
+  localparam logic [3:0] RD_EVICT_INV  = 4'd2;
+  localparam logic [3:0] RD_BYPASS_AR  = 4'd3;
+  localparam logic [3:0] RD_BYPASS_R   = 4'd4;
+  localparam logic [3:0] RD_REFILL_AR  = 4'd5;
+  localparam logic [3:0] RD_REFILL_R   = 4'd6;
+  localparam logic [3:0] RD_REFILL_CHK = 4'd7;
+  localparam logic [3:0] RD_HIT_SERVE  = 4'd8;
+  localparam logic [3:0] RD_ALLOC      = 4'd9;
+
+  localparam logic [3:0] WR_IDLE   = 4'd0;
+  localparam logic [3:0] WR_LOOKUP = 4'd4;  // directory lookup for one line of the burst
+  localparam logic [3:0] WR_INV    = 4'd1;
+  localparam logic [3:0] WR_FWD    = 4'd2;
+  localparam logic [3:0] WR_B      = 4'd3;
+
+  localparam logic [NUM_SRC-1:0] SRC_ONE = 1;
+
+  logic [3:0] rd_state;
+  logic [ADDR_WIDTH-1:0]  rd_addr;
+  logic [ID_WIDTH-1:0]    rd_id;
+  logic [7:0]             rd_len;
+  logic [3:0]             rd_src;
+  logic [SET_BITS-1:0]    rd_set;
+  logic [TAG_BITS-1:0]    rd_tag;
+  logic [WAY_BITS-1:0]    rd_way;
+  logic [INV_PORTS-1:0]   rd_evict_mask;
+  logic [DATA_WIDTH-1:0]  rd_stage [0:WORDS_PER_LINE-1];
+  logic [DATA_WIDTH-1:0]  rd_serve_q;  // registered serve data (keeps rd_stage
+                                        // off every combinational path: a comb
+                                        // read of rd_stage makes iverilog
+                                        // re-evaluate the read-output block on
+                                        // every capture write, which is
+                                        // pathologically slow)
+  logic [7:0]             rd_seq_floor;
+  logic [2:0]             rd_beat;
+  int                     rd_wait_entry;   // write-log entry we wait on
+  logic                   rd_wait_wr;
+
+  // Lookup result - REGISTERED at AR-accept time (RD_IDLE) so no
+  // combinational block reads the valid/tag arrays (keeps iverilog fast:
+  // an always_comb reading a dynamic-indexed array is re-evaluated on every
+  // element write, which is pathologically slow under load).
+  logic [NUM_WAYS-1:0]    rd_hit_way;
+  logic                   rd_hit;
+  // The miss path reused an entry that was already this tag (dir-only, its
+  // sharers are the earlier writer's).  The alloc ORs into the sharer vector
+  // only in that case; see the sharer-write commands below.
+  logic                   rd_same_tag;
+
+  logic [3:0] wr_state;
+  logic [ADDR_WIDTH-1:0]  wr_addr;
+  logic [ID_WIDTH-1:0]    wr_id;
+  logic [7:0]             wr_len;
+  logic [SET_BITS-1:0]    wr_set;
+  logic [TAG_BITS-1:0]    wr_tag;
+  logic [WAY_BITS-1:0]    wr_way;
+  logic [INV_PORTS-1:0]   wr_inv_mask;
+  logic [7:0]             wr_entry;
+  logic                   aw_ok;         // AW accepted by the DDR side
+
+  // Multi-line invalidate walk.  A single write burst can span many 32-byte
+  // lines, and EVERY line it overwrites must have its L1 sharers invalidated
+  // (and the L2 copy dropped).  Clearing only the line containing awaddr
+  // leaves every L1 holding a stale copy of the rest of the burst, so a
+  // DMA write-back of a multi-line buffer reads back as the PREVIOUS
+  // buffer's contents in the CPU.
+  logic [7:0]             wr_nlines;      // 32B lines touched by this burst
+  logic [7:0]             wr_line_idx;    // line currently being invalidated
+  logic [ADDR_WIDTH-1:0]  wr_cur_line;    // 32B-aligned address of that line
+  logic                   wr_hit;         // that line was resident in the L2
+  logic [7:0]             wr_nlines_c;
+  logic [31:0]            wr_bytes_c, wr_off_end_c;
+
+  // ---------------------------------------------------------------------------
   // Storage
   // ---------------------------------------------------------------------------
-  // Tag storage: NUM_WAYS independent 2-D distributed-RAM banks (one per
-  // way) exposed through the tag_mem wire alias below.  As flops this was
-  // NUM_WAYS*NUM_SETS*TAG_BITS = 105K registers whose 512:1 read muxes cost
-  // ~200K LUTs (the MUXF7/F8 storm); as LUTRAM it is ~2K LUT-equivalents.
-  // Both reads are asynchronous (rd-hit compare on the incoming s_araddr at
-  // RD_IDLE, wr-hit compare on s_awaddr at WR_IDLE), and the only write is
-  // the RD_ALLOC tag update - so distributed RAM (async read) is the right
-  // primitive.  valid_mem stays in flops: it needs the bulk reset flush and
-  // is only 4x512 bits, and it gates every tag compare, so X-init of the
-  // banks is harmless (no hit until a line is allocated).
+  // Tag storage: one memory per way, one whole-word write port and two
+  // addressed read ports.  That shape is what makes Yosys infer a memory; the
+  // previous form did not, and the SKY130 run died because of it:
+  //
+  //   * the banks were read through a per-set wire alias
+  //     (`for (gs) assign tag_mem[gt][gs] = tag_bank[gs]`), which is 512
+  //     constant-indexed reads, not one addressed read.  Yosys never emitted a
+  //     memory at all -- it materialised NUM_SETS*TAG_BITS registers per way,
+  //     each with its own write decoder, and the run was killed at 13 GB while
+  //     still inside the frontend/opt block.
+  //
+  // Two read ports, because the read and write FSMs are independent and can
+  // look up different sets in the same cycle: the read FSM compares the way's
+  // tag against the incoming AR (and again against rd_tag for the same-tag
+  // reuse test), the write FSM against the line its burst is currently on.
+  //
+  // The banks are not reset.  Every compare is gated by valid_mem/dir_mem, so
+  // an unallocated entry's tag is unreachable, and a reset leaves both gates
+  // clear.  (A clocked reset over an array is itself a construct Yosys answers
+  // by expanding the array to registers -- see valid_mem below.)
+  //
+  // As LUTRAM on the FPGA this is ~2K LUT-equivalents; as a register file on
+  // SKY130 it is NUM_WAYS x 512 x 50 flops behind the read muxes.
+  wire [SET_BITS-1:0]  tag_rd_addr_r;
+  wire [TAG_BITS-1:0]  tag_rd_r [0:NUM_WAYS-1];
+  wire [TAG_BITS-1:0]  tag_rd_w [0:NUM_WAYS-1];
+  // The read path asks for the AR's set while idle and for the same set -- now
+  // registered in rd_set -- for the rest of the transaction, so one port serves
+  // both halves of the lookup.
+  assign tag_rd_addr_r = (rd_state == RD_IDLE) ? s_araddr[OFF_BITS +: SET_BITS] : rd_set;
+  // The write FSM looks up the set of the line its burst is currently on.
+  wire [SET_BITS-1:0]  tag_rd_addr_w = wr_cur_line[OFF_BITS +: SET_BITS];
+
   genvar gt, gs;
   generate
     for (gt = 0; gt < NUM_WAYS; gt++) begin : g_tag
+      // `initial` is memory initialisation ($meminit), not a clocked reset: it
+      // keeps simulation deterministic without giving the array a reset port.
       (* ram_style = "distributed" *)
       logic [TAG_BITS-1:0] tag_bank [0:NUM_SETS-1];
+      initial begin
+        for (int s = 0; s < NUM_SETS; s++) tag_bank[s] = '0;
+      end
       always_ff @(posedge i_clk) begin
         if (rd_state == RD_ALLOC && !rd_hit && rd_way == gt[WAY_BITS-1:0])
           tag_bank[rd_set] <= rd_tag;
       end
+      assign tag_rd_r[gt] = tag_bank[tag_rd_addr_r];
+      assign tag_rd_w[gt] = tag_bank[tag_rd_addr_w];
     end
-    for (gt = 0; gt < NUM_WAYS; gt++)
-      for (gs = 0; gs < NUM_SETS; gs++)
-        assign tag_mem[gt][gs] = g_tag[gt].tag_bank[gs];
   endgenerate
-  wire [TAG_BITS-1:0]            tag_mem    [0:NUM_WAYS-1][0:NUM_SETS-1];
   logic                          valid_mem  [0:NUM_WAYS-1][0:NUM_SETS-1];
   // The directory's own validity, separate from the data's.  A write-through
   // leaves the L2 without the line's data but with an L1 that still holds it, so
@@ -230,6 +337,61 @@ module c930_l2
   // on the shared clock edge is the standard SDP behaviour; the two events
   // never coincide anyway (RD_IDLE read issue vs RD_ALLOC write, disjoint
   // FSM states).
+`ifdef USE_SKY130_SRAM
+  // Foundry SRAM (`USE_SKY130_SRAM`, the SKY130 ASIC flow): the same 16 banks,
+  // built from the PDK's sky130_sram_2kbyte_1rw1r_32x512_8 -- 512 words x 32
+  // bits, one read-write port and one independent read port, both with
+  // registered outputs.  Two macros side by side make the 64-bit word;
+  // NUM_SETS must be 512 and DATA_WIDTH a multiple of 32 (asserted below).
+  //
+  // Timing is the flop array's own, not an approximation of it: the read port
+  // samples s_araddr and returns that set's word on the next cycle, which is
+  // exactly when the old `data_q <= bank[s_araddr[...]]` register presented it
+  // (RD_LOOKUP).  The write port is the old `bank[rd_set] <= rd_stage[gb]`
+  // edge-qualified write.  A read and a write in the same cycle hit different
+  // ports, and the read returns the pre-write word -- what the nonblocking
+  // read did when both addresses were equal.  The two events never coincide
+  // anyway (RD_IDLE read issue vs RD_ALLOC write).
+  //
+  // din0/wmask0 are active low on the macro: wmask0 all-zero writes all four
+  // bytes, and csb0 low with web0 low is the write.
+  wire [DATA_WIDTH-1:0] data_q [0:NUM_WAYS-1][0:WORDS_PER_LINE-1];
+
+  genvar gw, gb;   // `gs` is declared with the tag banks above
+  generate
+    if (NUM_SETS > 512 || (DATA_WIDTH % 32) != 0) begin : g_bad_geometry
+      initial begin
+        $error("USE_SKY130_SRAM needs NUM_SETS <= 512 and DATA_WIDTH a multiple of 32");
+      end
+    end
+    for (gw = 0; gw < NUM_WAYS; gw++) begin : g_way
+      for (gb = 0; gb < WORDS_PER_LINE; gb++) begin : g_word
+        wire wr = (rd_state == RD_ALLOC) && (rd_way == gw);
+        // 9-bit macro addresses: the set field is narrower on a smaller cache
+        // (tb_l2_coherent runs 16 sets) and zero-extends into the unused rows.
+        wire [8:0] a_wr  = rd_set;
+        wire [8:0] a_rd  = s_araddr[OFF_BITS +: SET_BITS];
+        for (gs = 0; gs < DATA_WIDTH/32; gs++) begin : g_slice
+          wire [31:0] dout;
+          sky130_sram_2kbyte_1rw1r_32x512_8 u_sram (
+            .clk0   (i_clk),
+            .csb0   (~wr),
+            .web0   (1'b0),
+            .wmask0 (4'b0000),
+            .addr0  (a_wr),
+            .din0   (rd_stage[gb][gs*32 +: 32]),
+            .dout0  (),
+            .clk1   (i_clk),
+            .csb1   (1'b0),
+            .addr1  (a_rd),
+            .dout1  (dout)
+          );
+          assign data_q[gw][gb][gs*32 +: 32] = dout;
+        end
+      end
+    end
+  endgenerate
+`else
   logic [DATA_WIDTH-1:0] data_q [0:NUM_WAYS-1][0:WORDS_PER_LINE-1];
 
   genvar gw, gb;
@@ -246,7 +408,89 @@ module c930_l2
       end
     end
   endgenerate
-  logic [NUM_SRC-1:0]            sharers    [0:NUM_WAYS-1][0:NUM_SETS-1];
+`endif
+  // Sharer vectors: one memory per way, the same shape as the tags -- one
+  // whole-word write port and two addressed read ports.  The old array was
+  // written a bit at a time (`sharers[w][set][src] <= 1`), which the frontend
+  // cannot express on a memory: it expanded to 32,768 registers with a 512-way
+  // address decoder each.
+  //
+  // The single-bit update (a hit adds the reader) is a read-modify-write here:
+  // the word comes back on the read FSM's own read port, which is addressed at
+  // rd_set for the whole transaction, so the OR is against the entry's current
+  // vector.  No reset, for the same reason as the tags: dir_mem gates every
+  // read, and the alloc replaces the vector unless it is reusing a live
+  // dir-only entry (rd_same_tag).
+  wire [NUM_SRC-1:0]    sh_rd_r [0:NUM_WAYS-1];   // addressed by rd_set
+  wire [NUM_SRC-1:0]    sh_rd_w [0:NUM_WAYS-1];   // addressed by the write burst's line
+  // One write command per way.  The read and write FSMs can update DIFFERENT
+  // ways in the same cycle (an alloc while a write-through drops another line),
+  // and the old single always_ff let both land; one shared command would lose
+  // one of them.  Where they target the SAME way the write path still wins,
+  // which is the order the old block gave by putting the write path last.
+  logic [NUM_WAYS-1:0]  sh_we;
+  logic [SET_BITS-1:0]  sh_wset [0:NUM_WAYS-1];
+  logic [NUM_SRC-1:0]   sh_wdat [0:NUM_WAYS-1];
+
+  generate
+    for (gt = 0; gt < NUM_WAYS; gt++) begin : g_sharer
+      (* ram_style = "distributed" *)
+      logic [NUM_SRC-1:0] sharer_bank [0:NUM_SETS-1];
+      initial begin
+        for (int s = 0; s < NUM_SETS; s++) sharer_bank[s] = '0;
+      end
+      always_ff @(posedge i_clk) begin
+        if (sh_we[gt]) sharer_bank[sh_wset[gt]] <= sh_wdat[gt];
+      end
+      assign sh_rd_r[gt] = sharer_bank[rd_set];
+      assign sh_rd_w[gt] = sharer_bank[wr_cur_line[OFF_BITS +: SET_BITS]];
+    end
+  endgenerate
+
+  // Sharer-vector write commands, lowest priority first, in exactly the order
+  // the statements they replace appeared in the old shared always_ff.
+  always_comb begin
+    for (int w = 0; w < NUM_WAYS; w++) begin
+      sh_we[w]   = 1'b0;
+      sh_wset[w] = rd_set;
+      sh_wdat[w] = '0;
+    end
+
+    // Read path: a hit adds the reader to the line's sharers.
+    if (rd_state == RD_LOOKUP && rd_hit) begin
+      for (int w = 0; w < NUM_WAYS; w++)
+        if (rd_hit_way[w]) begin
+          sh_we[w]   = 1'b1;
+          sh_wset[w] = rd_set;
+          sh_wdat[w] = sh_rd_r[w] | (SRC_ONE << rd_src);
+        end
+    end
+    // Read path: the evicted line's sharers are gone.
+    if (rd_state == RD_EVICT_INV && (i_inv_ack & rd_evict_mask) == rd_evict_mask) begin
+      sh_we[rd_way]   = 1'b1;
+      sh_wset[rd_way] = rd_set;
+      sh_wdat[rd_way] = '0;
+    end
+    // Read path: install the refilled line.  OR only when this way already held
+    // the same tag as a dir-only entry -- that vector belongs to the earlier
+    // writer, which still holds the line.  Any other way has been invalidated
+    // (or was free), so a replace is what keeps a stale vector from surviving a
+    // reset, which is no longer allowed to clear this array.
+    if (rd_state == RD_ALLOC && !rd_hit) begin
+      sh_we[rd_way]   = 1'b1;
+      sh_wset[rd_way] = rd_set;
+      sh_wdat[rd_way] = (rd_same_tag ? sh_rd_r[rd_way] : '0) | (SRC_ONE << rd_src);
+    end
+    // Write path: a write-through leaves the writer holding the line and nobody
+    // else; a writer with no invalidation port (the NPU's DMA) leaves the way
+    // genuinely free.
+    if (wr_state == WR_INV && wr_hit && (i_inv_ack & wr_inv_mask) == wr_inv_mask) begin
+      sh_we[wr_way]   = 1'b1;
+      sh_wset[wr_way] = wr_set;
+      sh_wdat[wr_way] = (inv_port_of_src[wr_id] != '0) ? (SRC_ONE << wr_id) : '0;
+    end
+  end
+
   logic [WAY_BITS-1:0]           victim_cnt [0:NUM_SETS-1];
 
   integer i, j;
@@ -255,7 +499,6 @@ module c930_l2
       for (j = 0; j < NUM_SETS; j++) begin
         valid_mem[i][j] = 1'b0;
         dir_mem[i][j]   = 1'b0;
-        sharers[i][j]   = '0;
       end
     // Round-robin victim pointers must start defined (X indices on first
     // miss would silently drop every allocation and force refill loops).
@@ -298,46 +541,6 @@ module c930_l2
   // ===========================================================================
   // READ PATH (independent FSM)
   // ===========================================================================
-  localparam logic [3:0] RD_IDLE       = 4'd0;
-  localparam logic [3:0] RD_LOOKUP     = 4'd1;
-  localparam logic [3:0] RD_EVICT_INV  = 4'd2;
-  localparam logic [3:0] RD_BYPASS_AR  = 4'd3;
-  localparam logic [3:0] RD_BYPASS_R   = 4'd4;
-  localparam logic [3:0] RD_REFILL_AR  = 4'd5;
-  localparam logic [3:0] RD_REFILL_R   = 4'd6;
-  localparam logic [3:0] RD_REFILL_CHK = 4'd7;
-  localparam logic [3:0] RD_HIT_SERVE  = 4'd8;
-  localparam logic [3:0] RD_ALLOC      = 4'd9;
-
-  logic [3:0] rd_state;
-  logic [ADDR_WIDTH-1:0]  rd_addr;
-  logic [ID_WIDTH-1:0]    rd_id;
-  logic [7:0]             rd_len;
-  logic [3:0]             rd_src;
-  logic [SET_BITS-1:0]    rd_set;
-  logic [TAG_BITS-1:0]    rd_tag;
-  logic [WAY_BITS-1:0]    rd_way;
-  logic [INV_PORTS-1:0]   rd_evict_mask;
-  logic [DATA_WIDTH-1:0]  rd_stage [0:WORDS_PER_LINE-1];
-  logic [DATA_WIDTH-1:0]  rd_serve_q;  // registered serve data (keeps rd_stage
-                                        // off every combinational path: a comb
-                                        // read of rd_stage makes iverilog
-                                        // re-evaluate the read-output block on
-                                        // every capture write, which is
-                                        // pathologically slow)
-  logic [7:0]             rd_seq_floor;
-  logic [2:0]             rd_beat;
-  int                     rd_wait_entry;   // write-log entry we wait on
-  logic                   rd_wait_wr;
-
-  // Lookup result - REGISTERED at AR-accept time (RD_IDLE) so no
-  // combinational block reads the valid/tag arrays (keeps iverilog fast:
-  // an always_comb reading a dynamic-indexed array is re-evaluated on every
-  // element write, which is pathologically slow under load).
-  logic [NUM_WAYS-1:0]    rd_hit_way;
-  logic                   rd_hit;
-
-
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
       rd_state       <= RD_IDLE;
@@ -362,14 +565,18 @@ module c930_l2
             rd_src  <= s_arid;               // stamped source id
             rd_set  <= s_araddr[OFF_BITS +: SET_BITS];
             rd_tag  <= s_araddr[ADDR_WIDTH-1 -: TAG_BITS];
+            rd_same_tag <= 1'b0;
             // Registered hit for the incoming address (used by RD_LOOKUP and
-            // the shared array-write block on the following cycle).
+            // the shared array-write block on the following cycle).  tag_rd_r
+            // is this set's tag on each way: the bank read port is addressed
+            // by s_araddr while the FSM is idle, so the compare is still
+            // against the AR being accepted.
             begin
               logic [NUM_WAYS-1:0] hitw;
               hitw = '0;
               for (int w = 0; w < NUM_WAYS; w++)
                 if (valid_mem[w][s_araddr[OFF_BITS +: SET_BITS]] &&
-                    tag_mem[w][s_araddr[OFF_BITS +: SET_BITS]] == s_araddr[ADDR_WIDTH-1 -: TAG_BITS])
+                    tag_rd_r[w] == s_araddr[ADDR_WIDTH-1 -: TAG_BITS])
                   hitw[w] = 1'b1;
               rd_hit_way <= hitw;
               rd_hit     <= |hitw;
@@ -391,8 +598,8 @@ module c930_l2
 
         RD_LOOKUP: begin
           if (rd_hit) begin
-            // Capture the line into the staging register; sharer recorded in
-            // the shared array-write block.
+            // Capture the line into the staging register; the reader is added
+            // to the line's sharers by the write-command block.
             for (int w = 0; w < NUM_WAYS; w++)
               if (rd_hit_way[w]) begin
                 rd_way <= w[WAY_BITS-1:0];
@@ -415,20 +622,24 @@ module c930_l2
               logic                same_tag;
               same_tag = 1'b0;
               pick     = victim_cnt[rd_set];
+              // The bank read port is addressed at rd_set from the cycle after
+              // the AR was accepted, so tag_rd_r/sh_rd_r are this set's entries
+              // here.
               for (int w = 0; w < NUM_WAYS; w++)
-                if (dir_mem[w][rd_set] && tag_mem[w][rd_set] == rd_tag) begin
+                if (dir_mem[w][rd_set] && tag_rd_r[w] == rd_tag) begin
                   same_tag = 1'b1;
                   pick     = w[WAY_BITS-1:0];
                 end
-              rd_way <= pick;
+              rd_way      <= pick;
+              rd_same_tag <= same_tag;
               // Either kind of entry occupies a way it is taking over.  A
               // dir-only line holds no data but does hold a sharer, and reusing
               // its way for another tag without invalidating that sharer loses
               // the entry exactly as the write-through used to.
               if (!same_tag &&
                   (valid_mem[pick][rd_set] || dir_mem[pick][rd_set]) &&
-                  sharers[pick][rd_set] != '0) begin
-                rd_evict_mask <= inv_mask_of_sharers(sharers[pick][rd_set]);
+                  sh_rd_r[pick] != '0) begin
+                rd_evict_mask <= inv_mask_of_sharers(sh_rd_r[pick]);
                 rd_state      <= RD_EVICT_INV;
               end else begin
                 rd_state <= RD_REFILL_AR;
@@ -540,33 +751,27 @@ module c930_l2
   end
 
   // ---------------------------------------------------------------------------
-  // Shared array writes (single always_ff: read path + write path)
+  // Shared directory-validity writes (single always_ff: read path + write path)
   // ---------------------------------------------------------------------------
+  // Only the two 2048-bit arrays live here now.  They keep their clocked bulk
+  // reset: they are one bit wide each, so Yosys expanding them to flops is what
+  // is wanted, and a reset that reboots firmware from DDR (rewritten behind the
+  // L2's back by a loader/bootrom) must not let the L2 serve stale lines from
+  // the previous boot.  The tag and sharer banks are memories and deliberately
+  // have no reset -- these two gates make their stale entries unreachable.
   always_ff @(posedge i_clk or negedge i_rst_n) begin
     if (!i_rst_n) begin
-      // Flush the L2 on reset.  The L1 caches clear their valid bits on reset
-      // too, so a reset that reboots firmware from DDR (rewritten behind the
-      // L2's back by a loader/bootrom) must not let the L2 serve stale lines
-      // from the previous boot.  (valid/sharers were previously cleared only
-      // by the initial block, so a mid-test reset left the directory holding
-      // lines whose memory content had changed.)
       for (int w = 0; w < NUM_WAYS; w++)
         for (int j = 0; j < NUM_SETS; j++) begin
           valid_mem[w][j] <= 1'b0;
           dir_mem[w][j]   <= 1'b0;
-          sharers[w][j]   <= '0;
         end
     end else begin
-      // Read path
-      if (rd_state == RD_LOOKUP && rd_hit) begin
-        for (int w = 0; w < NUM_WAYS; w++)
-          if (rd_hit_way[w])
-            sharers[w][rd_set][rd_src] <= 1'b1;
-      end
+      // Read path.  The sharer vectors are written by the command block above;
+      // only the validity bits are written here.
       if (rd_state == RD_EVICT_INV && (i_inv_ack & rd_evict_mask) == rd_evict_mask) begin
         valid_mem[rd_way][rd_set] <= 1'b0;
         dir_mem[rd_way][rd_set]   <= 1'b0;
-        sharers[rd_way][rd_set]   <= '0;
       end
       // Install a refilled line.  Only a miss allocates.  A hit reaches
       // RD_ALLOC too -- every serve ends there -- but its line is already
@@ -581,13 +786,12 @@ module c930_l2
       if (rd_state == RD_ALLOC && !rd_hit) begin
         valid_mem[rd_way][rd_set] <= 1'b1;
         dir_mem[rd_way][rd_set]   <= 1'b1;
-        // OR, not replace.  When this way already held the tag as a dir-only
-        // entry, its sharer is the earlier writer and still holds the line, so
-        // dropping it here would put the original bug back one step removed.  A
+        // The sharer vector is installed by the command block: OR, not replace,
+        // when this way already held the tag as a dir-only entry (rd_same_tag) --
+        // that vector is the earlier writer's, which still holds the line.  A
         // way taken for a different tag has had its sharers invalidated and
         // cleared by RD_EVICT_INV before this runs, and a free way's set is
-        // already empty, so the OR costs those cases nothing.
-        sharers[rd_way][rd_set]   <= sharers[rd_way][rd_set] | (1 << rd_src);
+        // replaced outright.
         // Line data: written by the g_way/g_word generate banks (one bank
         // captures rd_stage[gb] when rd_way matches its way).
       end
@@ -602,14 +806,13 @@ module c930_l2
         // line in its L1 and nobody else does.  Clearing it here is what let a
         // later write invalidate nobody, so a driver that cleared C before a GEMM
         // read its own zeros back afterwards (CPU document 3.3).
+        // The matching sharer vector is written by the command block.
         if (inv_port_of_src[wr_id] != '0) begin
           dir_mem[wr_way][wr_set] <= 1'b1;
-          sharers[wr_way][wr_set] <= (1 << wr_id);
         end else begin
           // A writer with no L1 to invalidate -- the NPU's DMA -- is not worth an
           // entry, so the way is left genuinely free.
           dir_mem[wr_way][wr_set] <= 1'b0;
-          sharers[wr_way][wr_set] <= '0;
         end
       end
     end
@@ -673,36 +876,6 @@ module c930_l2
   // ===========================================================================
   // WRITE PATH (independent FSM)
   // ===========================================================================
-  localparam logic [3:0] WR_IDLE   = 4'd0;
-  localparam logic [3:0] WR_LOOKUP = 4'd4;  // directory lookup for one line of the burst
-  localparam logic [3:0] WR_INV    = 4'd1;
-  localparam logic [3:0] WR_FWD    = 4'd2;
-  localparam logic [3:0] WR_B      = 4'd3;
-
-  logic [3:0] wr_state;
-  logic [ADDR_WIDTH-1:0]  wr_addr;
-  logic [ID_WIDTH-1:0]    wr_id;
-  logic [7:0]             wr_len;
-  logic [SET_BITS-1:0]    wr_set;
-  logic [TAG_BITS-1:0]    wr_tag;
-  logic [WAY_BITS-1:0]    wr_way;
-  logic [INV_PORTS-1:0]   wr_inv_mask;
-  logic [7:0]             wr_entry;
-  logic                   aw_ok;         // AW accepted by the DDR side
-
-  // Multi-line invalidate walk.  A single write burst can span many 32-byte
-  // lines, and EVERY line it overwrites must have its L1 sharers invalidated
-  // (and the L2 copy dropped).  Clearing only the line containing awaddr
-  // leaves every L1 holding a stale copy of the rest of the burst, so a
-  // DMA write-back of a multi-line buffer reads back as the PREVIOUS
-  // buffer's contents in the CPU.
-  logic [7:0]             wr_nlines;      // 32B lines touched by this burst
-  logic [7:0]             wr_line_idx;    // line currently being invalidated
-  logic [ADDR_WIDTH-1:0]  wr_cur_line;    // 32B-aligned address of that line
-  logic                   wr_hit;         // that line was resident in the L2
-  logic [7:0]             wr_nlines_c;
-  logic [31:0]            wr_bytes_c, wr_off_end_c;
-
   always_comb begin
     // Bytes covered by the burst, from the incoming AW (awsize is in bytes as
     // a log2, so 1<<awsize is the beat size; beats = awlen+1).
@@ -769,13 +942,13 @@ module c930_l2
               // earlier write-through is still one whose sharers it must
               // invalidate.  That is the whole fix.
               if (dir_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] &&
-                  tag_mem[w][wr_cur_line[OFF_BITS +: SET_BITS]] == wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS]) begin
+                  tag_rd_w[w] == wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS]) begin
                 hit         = 1'b1;
                 wr_hit      <= 1'b1;
                 wr_way      <= w[WAY_BITS-1:0];
                 wr_set      <= wr_cur_line[OFF_BITS +: SET_BITS];
                 wr_tag      <= wr_cur_line[ADDR_WIDTH-1 -: TAG_BITS];
-                wr_inv_mask <= inv_mask_of_sharers(sharers[w][wr_cur_line[OFF_BITS +: SET_BITS]]) & ~inv_port_of_src[wr_id];
+                wr_inv_mask <= inv_mask_of_sharers(sh_rd_w[w]) & ~inv_port_of_src[wr_id];
               end
           end
           wr_state <= WR_INV;

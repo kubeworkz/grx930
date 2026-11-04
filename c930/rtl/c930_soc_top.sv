@@ -1592,9 +1592,10 @@ module c930_soc_top
     .s_axi_rready (aplic_rready)
   );
 
-  // Tie off unused AXI4 fields from APLIC
-  assign aplic_bid    = '0;
-  assign aplic_rid    = '0;
+  // The APLIC exposes no AXI4 ID channels (s_axi_bid / s_axi_rid), so there is
+  // nothing to tie off here. These two assignments named nets that were never
+  // declared; under Verilator they created implicit 1-bit wires that drive
+  // nothing, and under Yosys (`default_nettype none) they were an error.
 
 
 
