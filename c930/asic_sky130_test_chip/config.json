@@ -41,10 +41,14 @@
     "dir::../asic_gf180mcu/openlane2_rtl/src/riscv_core_top.sv"
   ],
   "CLOCK_PORT": "i_clk",
-  "CLOCK_PERIOD": 20.0,
+  "CLOCK_PERIOD": 40.0,
   "SYNTH_STRATEGY": "AREA 0",
   "FP_SIZING": "relative",
-  "FP_CORE_UTIL": 45,
+  "FP_CORE_UTIL": 40,
   "PL_TARGET_DENSITY_PCT": 55,
-  "SYNTH_HIERARCHY_MODE": "deferred_flatten"
+  "SYNTH_HIERARCHY_MODE": "deferred_flatten",
+  "SYNTH_PARAMETERS": [
+    "CLK_FREQ=25000000",
+    "BAUD_DIV=217"
+  ]
 }

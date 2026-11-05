@@ -14,17 +14,36 @@ modules, as the GF180 flow does.
 
 - **Harden the core on its own.** No pad ring yet: the pad frame, die size, I/O
   count and supply come from the SKY130 shuttle, and that is not chosen yet.
-- **Size the die from the netlist** (`FP_SIZING: relative`, `FP_CORE_UTIL: 45`).
+- **Size the die from the netlist** (`FP_SIZING: relative`, `FP_CORE_UTIL: 40`).
   The core area this produces is the number to compare against GF180, where the
   same netlist was 370,059 instances and 6.66 mm² of cell area.
-- **Target 50 MHz** (`CLOCK_PERIOD: 20`), the RTL's default `CLK_FREQ`, so the
-  UART baud divider matches the clock.
+- **Target 25 MHz** (`CLOCK_PERIOD: 40`), as the GF180 tapeout does, with
+  `CLK_FREQ=25000000` and `BAUD_DIV=217` passed to the top so the UART runs at
+  115,200 baud.
 - **Synthesize module by module** (`SYNTH_HIERARCHY_MODE: deferred_flatten`),
   then flatten for place and route. Synthesized flat, ABC runs on the whole
   design at once, flip-flop memories and their multiplexer trees included, and is
   killed for memory on a 16 GB CI runner.
 - **Keep lint on.** It reports no errors (153 warnings) and stops the flow on
   any new error. The GF180 runs skipped lint altogether.
+
+## Measured so far
+
+From the run with `CLOCK_PERIOD: 20` and `FP_CORE_UTIL: 45`, which stopped in
+global routing:
+
+| | SKY130 (`sky130_fd_sc_hd`) |
+|---|---|
+| Cells after synthesis | 147,558 |
+| Cell area | 2.00 mm² (GF180: 6.66 mm²) |
+| of which the 2 KB flip-flop SRAM | 1.06 mm² (53 %) |
+| Die at 45 % utilization | 2.12 × 2.13 mm |
+| Worst setup path | about 49 ns before repair, 30 ns after, ending in the EX stage (`alu_result_ex_mem`) |
+| Hold fixing | 32,355 buffers, +13 % area |
+| Global routing | 100 overflowing GCells (`GRT-0116`) |
+
+50 MHz is out of reach without pipeline changes, so the clock is 25 MHz, and the
+utilization is lowered to clear the routing overflow.
 
 ## Running it
 
@@ -52,7 +71,7 @@ flip-flop arrays too.
 
 | Lever | Available on SKY130 with open tools |
 |---|---|
-| Memories as SRAM macros instead of flip-flops | Yes: an OpenRAM SKY130 macro, or a DFFRAM-style compact array. Likely the largest saving. |
+| Memories as SRAM macros instead of flip-flops | Yes: an OpenRAM SKY130 macro, or a DFFRAM-style compact array. The 2 KB SRAM alone is 53 % of the cell area. |
 | High-density cells | `sky130_fd_sc_hd`, the densest SKY130 library, is already in use. |
 | Placement density and routability | Yes: `FP_CORE_UTIL` / `PL_TARGET_DENSITY_PCT`, with OpenROAD's routability-driven placement. |
 | Multibit flip-flops | No: SKY130's libraries have no multibit flops. |
