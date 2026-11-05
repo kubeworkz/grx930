@@ -19,8 +19,12 @@ modules, as the GF180 flow does.
   same netlist was 370,059 instances and 6.66 mm² of cell area.
 - **Target 50 MHz** (`CLOCK_PERIOD: 20`), the RTL's default `CLK_FREQ`, so the
   UART baud divider matches the clock.
-- **Report lint findings without stopping** (`ERROR_ON_LINTER_ERRORS: false`).
-  The GF180 runs skipped lint altogether.
+- **Synthesize module by module** (`SYNTH_HIERARCHY_MODE: deferred_flatten`),
+  then flatten for place and route. Synthesized flat, ABC runs on the whole
+  design at once, flip-flop memories and their multiplexer trees included, and is
+  killed for memory on a 16 GB CI runner.
+- **Keep lint on.** It reports no errors (153 warnings) and stops the flow on
+  any new error. The GF180 runs skipped lint altogether.
 
 ## Running it
 

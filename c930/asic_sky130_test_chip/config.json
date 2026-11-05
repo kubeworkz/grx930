@@ -46,5 +46,5 @@
   "FP_SIZING": "relative",
   "FP_CORE_UTIL": 45,
   "PL_TARGET_DENSITY_PCT": 55,
-  "ERROR_ON_LINTER_ERRORS": false
+  "SYNTH_HIERARCHY_MODE": "deferred_flatten"
 }
