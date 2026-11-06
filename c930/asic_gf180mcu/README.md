@@ -11,14 +11,16 @@ Stripped-down GRX930 test chip targeting the wafer.space GF180MCU shuttle.
 | Die size | 3.93mm × 5.12mm |
 | Core area | 12.92 mm² |
 | I/O pads | 56 default, up to 168 |
-| Clock | 50 MHz |
+| Clock | 25 MHz (40 ns) target — see [Timing](#timing) |
 | Supply | 5V |
 | Quantity | 1,000 bare dies |
 
 ## What's Included
 
 - **RV64IMAC core** — 5-stage in-order, compressed ISA, single core
-- **2KB I-cache + 2KB D-cache** — Tiny BRAM-based caches
+- **512 B I-cache + 512 B D-cache** — `INDEX_WIDTH 4` (16 sets × 32 B lines)
+  in flip-flop arrays, not BRAM; the shuttle netlist is built from
+  `openlane2_rtl/src`, whose cache widths are the authoritative ones
 - **2KB on-chip SRAM** — Boot/data memory (replaces DDR; the RTL is
   `grx930_sram_64kb`, shrunk to 256 × 64-bit words by the Plan B work)
 - **UART (16550)** — Debug output at 115200 baud
@@ -58,7 +60,36 @@ Stripped-down GRX930 test chip targeting the wafer.space GF180MCU shuttle.
 | APLIC | Yes | None | ~10K gates |
 | Cache coherency | Yes | None | ~5K gates |
 
+## Timing
+
+The target is **40 ns (25 MHz)** on `clk_pad`: the flow's `CLOCK_PERIOD: 40`,
+`grx930_overrides.yaml` and the adapter's `CLK_FREQ (25_000_000)` — which sets
+the ROM firmware's UART divisor — are all tied to it. The 26 October
+reconciliation measured the data paths at **−0.064 ns** on the pinned engine
+(−0.100 ns post-resizer before the antenna repair), so they close at 40 ns.
+Two items are open and neither is a frequency decision:
+
+- a `clkbuf_16` on the reset net drives **2,132 loads** at a 21–47 ns transition
+  against a 3 ns limit; the pinned and 26Q4 engines charge that net 8.6 ns
+  apart, which accounts for the disagreement between their WNS figures;
+- hold is **−2.44 ns** on both engines, so it is a resizer item.
+
+**50 MHz (20 ns) is not the target** and needs a re-floorplan; the earlier
+"50 MHz" here came from the pre-Plan-B `openlane2_design` configuration
+(`CLOCK_PERIOD: 20`), not from a timing result. Details:
+[`sta_engine_reconciliation.md`](wafer_space_integration/sta_engine_reconciliation.md)
+and the [26 October one-pager](wafer_space_status_onepager.md).
+
 ## Area Budget
+
+> **Pre-Plan-B estimate, kept for history.** It assumes the 64 KB SRAM and 2 KB
+> caches of the first cut. The current part has 2 KB SRAM and 512 B caches; note
+> that the 53,745-cell DEF under `build/lvs_chip/` is a *September* netlist
+> (14,494 flops, and no `rd_word`/SRAM contents at all) built before this RTL
+> entered the tree on 11 October, so its instance count describes neither the
+> flow's netlist nor `make synth`'s.
+> Current placement, utilisation and routing state are in the
+> [one-pager](wafer_space_status_onepager.md).
 
 | Component | Estimated Area |
 |-----------|---------------|
@@ -68,9 +99,6 @@ Stripped-down GRX930 test chip targeting the wafer.space GF180MCU shuttle.
 | **Total** | **6.6–8.8 mm²** |
 | **Available core** | **12.92 mm²** |
 | **Margin** | **32–49%** |
-| **Total** | **~4.3 mm²** |
-| **Available core** | **4.46 mm²** |
-| **Margin** | **~3%** |
 
 ## Memory Map
 
@@ -85,13 +113,13 @@ Stripped-down GRX930 test chip targeting the wafer.space GF180MCU shuttle.
 ```bash
 cd c930/asic_gf180mcu
 
-# Estimate gate count
+# What the part is (and the measured instance count)
 make gates
 
-# Synthesis
+# Synthesis -> build/grx930_test_chip_synth.v (tapeout tree, 25 MHz)
 make synth
 
-# Place & route
+# Place & route the netlist make synth just wrote
 make pnr
 
 # DRC + LVS
@@ -108,7 +136,7 @@ make submit
 ```bash
 cd c930/asic_gf180mcu
 make sim                                     # RTL boot test, ~18 s
-make sim SIM_CLK_FREQ=50000000               # at the part's real clock
+make sim SIM_CLK_FREQ=25000000               # at the part's real clock
 make sim SIM_PLUSARGS=+NO_PRELOAD            # ROM-only boot (matches silicon)
 make sim SIM_PLUSARGS=+NO_PRELOAD SIM_DEFS=-DROM_DISABLE   # negative control: must fail
 make sim_gate                                # same test on the netlist (needs the PDK cell models)
@@ -131,12 +159,12 @@ make check_rom                               # is the checked-in ROM in sync wit
   `.option norvc`, so a failure is never a compressed-decoder question, and it
   polls `STATUS.tx_fifo_full` before every character so the run exercises MMIO
   reads interleaved with I-cache fills.
-- The RTL is `openlane2_rtl/src` (the tapeout tree the OL2 flow reads), not
-  `../rv64imac/RTL` — the two differ by the cache index/tag and MMIO read-hold
-  fixes. **They also differ in chip top:** `make synth`/`make pnr` here still read
-  the root `grx930_test_chip.sv` with `../rv64imac/RTL`, which is the width-5
-  cache configuration, while the shuttle netlist is built from
-  `openlane2_rtl/src` at width 4. Worth unifying.
+- The RTL is `openlane2_rtl/src` — the tapeout tree the OL2 flow reads. There is
+  no second copy: the old root `grx930_test_chip.sv` (2 KB caches, 64 KB SRAM,
+  50 MHz, 0.5×1 slot) and the four `synth_*.ys` variants that read it are deleted,
+  so `make synth` and `make pnr` build the same netlist the flow does. See
+  [`wafer_space_submission/SUPERSEDED.md`](wafer_space_submission/SUPERSEDED.md)
+  for what that configuration was.
 
 ## wafer.space Submission Checklist
 
@@ -156,7 +184,8 @@ make check_rom                               # is the checked-in ROM in sync wit
 ### Verification
 - [ ] DRC clean (zero violations)
 - [ ] LVS clean (netlist matches layout)
-- [ ] Timing clean (setup/hold met at 50 MHz)
+- [ ] Timing clean at 40 ns (25 MHz) — data paths close; reset tree and hold
+      are still open (see [Timing](#timing))
 - [ ] Area within budget (≤12.92 mm² core)
 
 ### Submission

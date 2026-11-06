@@ -241,7 +241,9 @@ Data sources for every number above:
    (`rv64imac/RTL/`, `rv64imac/RTL/caches/`, `rv64imac/FPGA/src/`, and
    `asic_gf180mcu/grx930_test_chip.sv` at width 5) where it is *dormant* only
    because nothing instantiates them below `INDEX_WIDTH = 7`; they were left
-   unchanged. **Netlist impact:** the fix changes the RTL, so any pre-existing
+   unchanged. (That root top and the `synth_*.ys` scripts that read it were
+   deleted on 2026-11-04: `make synth`/`make pnr` now read `openlane2_rtl/src`,
+   so there is no width-5 copy left to keep in step.) **Netlist impact:** the fix changes the RTL, so any pre-existing
    synthesis result is a pre-fix netlist (the in-flight `slotcore_v1` run
    synthesized at 20:16:51, before these edits, and stays valid for the A/B);
    final PPA/DRC/LVS numbers need a fresh synthesis.

@@ -1,5 +1,12 @@
 # GRX930 Test Chip — GF180MCU Area Analysis (1×1 Slot)
 
+> **Superseded (30 September 2026).** The estimate below assumes 30K cells and a
+> 64 KB SRAM in 128 macros, against a netlist that synthesised to 520,182 cells
+> before Plan B and a final part with **2 KB SRAM and 512 B I/D caches**. It is
+> kept for history. Corrected review:
+> [`doc/gf180mcu_area_budget_review.md`](../../doc/gf180mcu_area_budget_review.md);
+> current figures: [the one-pager](wafer_space_status_onepager.md).
+
 ## Verdict: ✅ Design FITS in 1×1 Slot
 
 The stripped-down GRX930 test chip (1× RV64IMAC + UART + 64KB SRAM) fits in the wafer.space 1×1 slot with **32–49% margin**.
@@ -60,7 +67,7 @@ The GRX930 test chip is smaller than all Run 1 designs because we stripped it do
 ### What's on the Test Chip
 
 - ✅ 1× RV64IMAC core (64-bit, 5-stage in-order)
-- ✅ 2KB I-cache + 2KB D-cache (tiny, BRAM-based)
+- ✅ 512 B I-cache + 512 B D-cache (flop arrays; 2 KB each was the pre-Plan-B sizing)
 - ✅ 64KB on-chip SRAM (boot/data memory)
 - ✅ UART (16550, debug output)
 - ✅ Boot ROM (256 bytes)

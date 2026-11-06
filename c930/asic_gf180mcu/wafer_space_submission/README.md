@@ -1,5 +1,12 @@
 # GRX930 Test Chip - wafer.space Submission Package
 
+> **VOID — do not submit.** This package was built from the pre-fix 21 September
+> synthesis and is superseded in full; [SUPERSEDED.md](SUPERSEDED.md) says why.
+> The numbers below describe that artifact, not the current part: the target
+> clock is **25 MHz (40 ns)**, the caches are **512 B I + 512 B D** and the
+> final DEF is 53,745 instances. Current figures:
+> [the one-pager](../wafer_space_status_onepager.md).
+
 ## Chip Specifications
 
 | Property | Value |
@@ -10,7 +17,7 @@
 | **Core Area** | 3920 × 5100 µm (12.92 mm²) |
 | **Standard Cell Library** | gf180mcu_fd_sc_mcu7t5v0 |
 | **Metal Stack** | 5LM_1TM_11K |
-| **Cell Count** | 4,088 (after synthesis) |
+| **Cell Count** | 4,088 (after synthesis — the SRAM array was dead logic; see [SUPERSEDED.md](SUPERSEDED.md)) |
 | **Routing Violations** | 0 |
 | **Total Vias** | 409,399 |
 
@@ -25,7 +32,8 @@ The GRX930 is a 64-bit RISC-V processor (RV64IMAC) with:
 ## Clock Configuration
 
 - **Clock Port**: `i_clk`
-- **Target Frequency**: 50 MHz (20 ns period)
+- **Target Frequency**: 50 MHz (20 ns period) — as built for this void GDS;
+  the current part targets 25 MHz (40 ns)
 - **CTS Status**: Skipped (flat clock routing) to avoid DRT-0073 pin access limitation
 - **Clock Skew**: Not balanced (acceptable for test chip)
 

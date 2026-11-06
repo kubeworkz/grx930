@@ -35,7 +35,7 @@
 // exactly as it does in simulation:
 //   BAUD_DIV = 25e6 / 115200 = 217 clocks/bit = 115,207 baud (-0.006 %).
 //
-// The core itself is grx930_test_chip unchanged (RV64IMAC + 2 KB caches +
+// The core itself is grx930_test_chip unchanged (RV64IMAC + 512 B I/D caches +
 // 2 KB SRAM + UART + boot ROM at 0x0001_0000, which is CORE_RESET_PC, so the
 // part boots standalone from the ROM as verified by `make sim
 // SIM_PLUSARGS=+NO_PRELOAD`).

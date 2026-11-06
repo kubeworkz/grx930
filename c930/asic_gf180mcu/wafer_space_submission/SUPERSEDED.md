@@ -24,3 +24,10 @@ The GDS files in this directory (`grx930_test_chip_final.gds`,
 A corrected design (fixed arbiter/fill logic, 8 KB SRAM to fit the 1×1 die)
 is being taken through the full OpenLane2 flow **with CTS**. A new GDS will
 replace these files once validated.
+
+## What followed
+
+The corrected design did complete the flow, but with a smaller memory than the
+8 KB named above: **2 KB SRAM and 512 B I/D caches**, which is what leaves
+routing margin in the 12.92 mm² core, and a **25 MHz (40 ns)** target. Current
+status and figures: [the one-pager](../wafer_space_status_onepager.md).
