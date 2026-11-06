@@ -37,11 +37,11 @@
 // ---------------------------------------------------------------------------
 module grx930_test_chip
 #(
-  parameter int CLK_FREQ = 50_000_000,   // 50 MHz (conservative for 180nm)
+  parameter int CLK_FREQ = 25_000_000,   // 25 MHz — the shuttle's CLOCK_PERIOD 40
   parameter int BAUD_DIV = CLK_FREQ / 115200
 )
 (
-  input  logic i_clk,           // External clock (50 MHz)
+  input  logic i_clk,           // External clock (25 MHz on the shuttle)
   input  logic i_rst_n,         // Active-low reset
 
   // ---- UART ----
@@ -366,7 +366,7 @@ module grx930_test_chip
       heartbeat_cnt <= heartbeat_cnt + 1'b1;
   end
 
-  assign o_gpio = heartbeat_cnt[27:24];  // Toggles ~ every 1.3s at 50 MHz
+  assign o_gpio = heartbeat_cnt[27:24];  // Toggles ~ every 2.7s at 25 MHz
 
 endmodule
 

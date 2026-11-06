@@ -10,8 +10,9 @@ set STD_CELL    "gf180mcu_fd_sc_mcu7t5v0"
 # 1. Read design
 read_lef gf180mcu_pdk/libs.ref/${STD_CELL}/lef/${STD_CELL}.tlef
 read_lef gf180mcu_pdk/libs.ref/${STD_CELL}/lef/${STD_CELL}_combined_m2stub.lef
-read_lib gf180mcu_pdk/libs.ref/${STD_CELL}/lib/${STD_CELL}__tt_025C_1v80.lib
-read_verilog ${BUILD_DIR}/grx930_test_chip_synth_final.v
+read_lib gf180mcu_pdk/libs.ref/${STD_CELL}/lib/${STD_CELL}__tt_025C_5v00.lib
+# `make synth` output: the tapeout tree's netlist, not the old _final.v.
+read_verilog ${BUILD_DIR}/grx930_test_chip_synth.v
 link_design $DESIGN_NAME
 
 # 1b. Mark one_/zero_ nets as special
@@ -25,13 +26,13 @@ foreach _net_name {one_ zero_} {
 }
 
 # 2. Constraints
-create_clock -name i_clk -period 20.0 [get_ports i_clk]
+create_clock -name i_clk -period 40.0 [get_ports i_clk]
 set_input_delay  6.0 -clock i_clk [all_inputs]
 set_output_delay 6.0 -clock i_clk [all_outputs]
 set_false_path -from [get_ports i_rst_n]
 
 # 3. Floorplan
-initialize_floorplan -site GF018hv5v_mcu_sc7 -die_area {0 0 3930 5120} -core_area {10 10 3920 5110}
+initialize_floorplan -site GF018hv5v_mcu_sc7 -die_area {0 0 3932 5122} -core_area {441 441 3489 4679}
 
 # 3b. Routing tracks
 make_tracks Metal1 -x_offset 0.28 -x_pitch 0.56 -y_offset 0.28 -y_pitch 0.56
