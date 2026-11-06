@@ -3,9 +3,9 @@
 # Copyright 2026 Gridworkz
 set -e
 
-# Setup
+# Setup -- the netlist `make synth` now writes (tapeout tree, 25 MHz)
 mkdir -p openlane2_design/src
-cp build/grx930_test_chip_synth_final.v openlane2_design/src/
+cp build/grx930_test_chip_synth.v openlane2_design/src/
 
 # Ensure PDK is available
 volare enable gf180mcu 0.24.0 2>/dev/null || true

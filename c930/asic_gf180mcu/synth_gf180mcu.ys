@@ -4,57 +4,59 @@
 #
 # Usage:
 #   cd c930/asic_gf180mcu
-#   yosys -s synth_gf180mcu.ys 2>&1 | tee build/synth.log
+#   make synth
+#
+# Reads the tapeout tree, openlane2_rtl/src — the same 37 files the LibreLane
+# flow reads — not the old ../rv64imac/RTL copies, which carried the width-5
+# caches and 8 KB SRAM the shuttle does not build.  c930_bootrom.sv and
+# bootrom_wrapper.sv are omitted for the reason the flow drops them: nothing
+# instantiates them (the ROM is grx930_test_chip_rom.sv inside the top).
 
 # ============================================================
 # 1. Read RTL
 # ============================================================
-read_verilog -sv grx930_test_chip.sv
+read_verilog -sv openlane2_rtl/src/c930_uart.sv
+read_verilog -sv openlane2_rtl/src/grx930_test_chip.sv
+read_verilog -sv openlane2_rtl/src/grx930_test_chip_rom.sv
 
-# RISC-V CPU core (RV64IMAC, single core)
-read_verilog -sv ../../rv64imac/RTL/riscv_core_top.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_alu.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_alu_decoder.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_amo_alu.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_booth.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_branch_unit.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_compressed_decoder.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_control_signals.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_csr_unit.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_hazard_unit.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_immextend.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_main_decoder_top.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_div_ctrl.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_in.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mul_out.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_div_in.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_div_out.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_non_restoring.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_pcsrc.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_pipe.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_rf.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mux2x1.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mux3x1.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mux4x1.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_mux_2to1.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_64bit_adder.sv
+# RISC-V CPU core (RV64IMAC, single core, width-4 caches)
+read_verilog -sv openlane2_rtl/src/riscv_core_top.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_64bit_adder.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_alu.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_alu_decoder.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_amo_alu.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_booth.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_branch_unit.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_compressed_decoder.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_csr_control_signals.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_csr_unit.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_div_in.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_div_out.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_hazard_unit.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_immextend.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_ldextend.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_main_decoder.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_main_decoder_top.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mul_div.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mul_div_ctrl.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mul_in.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mul_out.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mux2x1.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mux3x1.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mux4x1.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_mux_2to1.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_non_restoring.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_pcsrc.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_pipe.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_rf.sv
 
-# Caches (reduced: tiny 2KB I/D caches)
-read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_controller.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_memory.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_icache_top.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_controller.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_memory.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_dcache_top.sv
-read_verilog -sv ../../rv64imac/RTL/riscv_core_ldextend.sv
-
-# UART (16550-compatible)
-read_verilog -sv ../../c930/rtl/c930_uart.sv
-
-# Boot ROM wrapper (defines BOOT_HEX_FILE)
-read_verilog -sv bootrom_wrapper.sv
+# Caches (512 B I + 512 B D: INDEX_WIDTH 4, flip-flop arrays)
+read_verilog -sv openlane2_rtl/src/riscv_core_icache_controller.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_icache_memory.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_icache_top.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_dcache_controller.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_dcache_memory.sv
+read_verilog -sv openlane2_rtl/src/riscv_core_dcache_top.sv
 
 # ============================================================
 # 2. Pre-synthesis elaboration
@@ -67,15 +69,33 @@ hierarchy -top grx930_test_chip -check
 synth -top grx930_test_chip -flatten
 
 # ============================================================
-# 4. Technology mapping (GF180MCU 7-track 5V, typical corner)
+# 4. Technology mapping (GF180MCU 7-track 5 V, typical corner)
 # ============================================================
-abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib
+# 5v00, not 1v80: this is the 5 V standard-cell library the part is built on.
+# dfflibmap runs before abc because plain `synth` leaves $_DFF_* internal
+# cells, which OpenROAD cannot place — the old script emitted those.
+#
+# Area mapping, not the constraint-driven one.  Measured on this design: plain
+# -liberty gives 125,210 cells (33,856 of them flops) in ~110 s; adding
+# -D 40000 gives the identical netlist in 3x the runtime; adding -constr (which
+# is what turns on ABC's `buffer; upsize; dnsize`) gives 137,319 cells — 12,173
+# extra buffers, 30 upsized — because at 40 ns nothing needs a stronger drive.
+dfflibmap -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
+abc -liberty gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
 
 # ============================================================
-# 5. Clean up
+# 5. Cleanup and naming
 # ============================================================
 clean
 stat
+
+# `synth -flatten` keeps every register's hierarchical name, and write_verilog
+# then emits a bit-select of an escaped identifier for each one
+# (`\u_cpu.u_riscv_core_csr_unit.medeleg [1]`).  OpenROAD's Verilog reader
+# rejects that as a syntax error (STA-0164) — the old flow worked around it by
+# hand-patching a `_final.v` netlist.  Hiding the names first makes write_verilog
+# emit plain `_N_` identifiers instead; ports keep their names.
+rename -hide
 
 # ============================================================
 # 6. Output

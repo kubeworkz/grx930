@@ -219,15 +219,17 @@ def main():
     if sigs != RTL_SIGNALS:
         fail(f"signal set mismatch: {sigs ^ RTL_SIGNALS}")
 
-    # ---- IN/OUT marks must match grx930_test_chip.sv port directions ----
-    rtl = CFG.parent / "grx930_test_chip.sv"
+    # ---- IN/OUT marks must match the chip top's port directions ----
+    # The tapeout top, i.e. the file the flow synthesises; the old root copy
+    # (width-5 caches, 64 KB SRAM) is gone.
+    rtl = CFG.parent / "openlane2_rtl" / "src" / "grx930_test_chip.sv"
     if not rtl.exists():
-        fail("grx930_test_chip.sv not found for direction check")
+        fail(f"{rtl} not found for direction check")
     else:
         src = rtl.read_text()
         mh = re.search(r"module\s+grx930_test_chip\b.*?\);", src, re.S)
         if not mh:
-            fail("top module header not found in grx930_test_chip.sv")
+            fail(f"top module header not found in {rtl.name}")
         else:
             rtl_dir = {}
             for m2 in re.finditer(

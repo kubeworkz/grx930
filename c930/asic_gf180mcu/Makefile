@@ -18,8 +18,9 @@
 
 TOP       = grx930_test_chip
 BUILD     = build
-RTL_DIR   = ../rtl
-RV_DIR    = ../rv64imac/RTL
+# The tapeout tree.  synth_gf180mcu.ys reads the same 37 files the LibreLane
+# flow does; there is no second chip top and no ../rv64imac/RTL copy any more.
+RTL_DIR   = openlane2_rtl/src
 
 # GF180MCU PDK (set in environment)
 PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
@@ -31,29 +32,23 @@ PDK_ROOT ?= /usr/local/share/pdk/gf180mcu
 all: gates
 
 # ============================================================
-# Gate count estimation
+# What the part is
 # ============================================================
+# ASCII only: this target is run on Windows consoles too.
 gates:
-	@echo "=== GRX930 Test Chip Gate Count Estimation ==="
-	@echo "Target: wafer.space 1×1 slot (12.92 mm² core)"
+	@echo "=== GRX930 Test Chip ==="
+	@echo "wafer.space 1x1 slot: die 3.932 x 5.122 mm, core 12.93 mm2"
 	@echo ""
-	@echo "Components:"
-	@echo "  RV64IMAC core (no AMO):    ~800K gates"
-	@echo "  2KB I-cache:               ~30K gates"
-	@echo "  2KB D-cache:               ~30K gates"
-	@echo "  64KB SRAM (on-chip):       ~200K gates (or SRAM macros)"
-	@echo "  UART (16550):              ~5K gates"
-	@echo "  Boot ROM:                  ~2K gates"
-	@echo "  Bus fabric:                ~10K gates"
-	@echo "  GPIO/heartbeat:            ~1K gates"
-	@echo "  ─────────────────────────────────"
-	@echo "  TOTAL:                     ~155K gates"
+	@echo "Components (openlane2_rtl/src):"
+	@echo "  1x RV64IMAC core (5-stage, compressed ISA, no AMO)"
+	@echo "  512 B I-cache + 512 B D-cache (INDEX_WIDTH 4, FF arrays)"
+	@echo "  2 KB on-chip SRAM + 1 KB boot ROM at 0x0001_0000"
+	@echo "  UART (16550), AXI4-Lite fabric, heartbeat"
 	@echo ""
-	@echo "Area estimate (GF180MCU 7t 5V, 8k-14k cells/mm2):"
-	@echo "  Logic:  11-19 mm² (depends on utilization)"
-	@echo "  SRAM:   2.9 mm² (64KB, 128 macros)"
-	@echo "  Routing: x1.3 overhead"
-	@echo "  TOTAL:  18-29 mm² (needs 1×1 slot, 12.92 mm² core)"
+	@echo "Clock: 40 ns (25 MHz)."
+	@echo "Run 'make synth' for the cell census.  Placed-instance and utilisation"
+	@echo "figures come from the LibreLane run, not from this tree; build/lvs_chip"
+	@echo "holds a September netlist that predates the 2 KB SRAM."
 
 # ============================================================
 # Yosys synthesis
