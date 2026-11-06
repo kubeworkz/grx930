@@ -37,6 +37,7 @@ one difference LVS cannot report on its own.
 Exit status: 0 written, 2 refused (a parse, name, cell or library check failed).
 """
 
+import argparse
 import hashlib
 import os
 import re
@@ -173,16 +174,23 @@ def parse_instances(path, lib):
 
 
 def main():
+    ap = argparse.ArgumentParser(
+        description="Turn a routed netlist into the chip CDL the LVS deck reads.")
+    ap.add_argument("--routed", default=ROUTED,
+                    help="routed netlist to convert (default: the canonical one)")
+    ap.add_argument("--out", default=OUT,
+                    help="CDL to write (default: the chip CDL the deck reads)")
+    args = ap.parse_args()
     try:
-        return generate()
+        return generate(args.routed, args.out)
     except Refused as err:
         print(f"REFUSED  {err}")
         return 2
 
 
-def generate():
+def generate(routed, out):
     lib = lib_subckts(LIBCDL)
-    top, ports, insts = parse_instances(ROUTED, lib)
+    top, ports, insts = parse_instances(routed, lib)
     # A bus port has to arrive at the deck as its bits: the layout's labels are literal
     # `o_gpio[3]` strings, and the port check compares those strings, not bus semantics.
     used = {n for _, _, c in insts for n in c.values()}
@@ -192,7 +200,7 @@ def generate():
                       key=lambda n: int(n[n.index("[") + 1:-1]))
         expanded.extend(bits or [port])
     ports = expanded
-    print(f"{os.path.basename(ROUTED)}: top {top}, {len(ports)} ports, {len(insts)} instances")
+    print(f"{os.path.basename(routed)}: top {top}, {len(ports)} ports, {len(insts)} instances")
 
     cells = sorted({c for c, _, _ in insts})
     print(f"{len(cells)} cell types, all in the library CDL")
@@ -237,7 +245,7 @@ def generate():
     block_sha = hashlib.sha256(block.encode()).hexdigest()
     lib_sha = hashlib.sha256(open(LIBCDL, "rb").read()).hexdigest()
 
-    with open(OUT, "w") as fh:
+    with open(out, "w") as fh:
         fh.write(f"* {top}: routed gate-level netlist, cells from the PDK library CDL\n")
         fh.write(f"* library: {os.path.basename(LIBCDL)} sha256 {lib_sha}\n")
         fh.write(f"* appended: {len(kept)} cell definitions, sha256 {block_sha}\n")
@@ -248,7 +256,7 @@ def generate():
         fh.write(".ENDS\n\n")
         fh.write(block)
 
-    print(f"wrote {OUT} ({os.path.getsize(OUT)} B): {len(insts)} X instances, "
+    print(f"wrote {out} ({os.path.getsize(out)} B): {len(insts)} X instances, "
           f"{len(nets)} nets, {len(kept)} cell definitions")
     print(f"library CDL sha256 {lib_sha}")
     print(f"appended definitions sha256 {block_sha}")
