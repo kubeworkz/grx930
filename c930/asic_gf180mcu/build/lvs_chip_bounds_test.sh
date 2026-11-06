@@ -26,6 +26,12 @@
 #     bash build/lvs_chip_bounds_test.sh bounds-mid --depth 25 --branch 1000 --threads 6
 #     bash build/lvs_chip_bounds_test.sh filled-b12300 --branch 12300 \
 #         --layout build/lvs_chip/stream_out_filled_metal1.gds
+#     bash build/lvs_chip_bounds_test.sh rebased-b12300 --branch 12300 \
+#         --layout build/rebased/stream_out_filled.gds \
+#         --netlist build/rebased/grx930_test_chip.cdl
+#
+#   --layout and --netlist default to the canonical build/ pair, so a run against new GDS and CDL
+#   can sit beside the old one without either being renamed.
 #
 #   Each run is a background process whose log is <run>/driver.log; the deck's own log is
 #   <run>/klayout.log and the runner's verdict is <run>/verdict.json.
@@ -44,13 +50,16 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/../../.." && pwd)
 WORK=$HERE/lvs_chip
 
-[ $# -ge 1 ] || { echo "usage: $0 <run-name> [--depth N] [--branch N] [--threads N] [--mode M] [--layout FILE]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: $0 <run-name> [--depth N] [--branch N] [--threads N] [--mode M] [--layout FILE] [--netlist FILE]" >&2; exit 2; }
 NAME=$1; shift
 DEPTH=""; BRANCH=""; THREADS=8; MODE=tiling; LAYOUT=$WORK/stream_out.gds
+NETLIST=$WORK/grx930_test_chip.cdl
 while [ $# -gt 0 ]; do
     case "$1" in
         --layout)  LAYOUT=$2; shift 2 ;;
         --layout=*) LAYOUT=${1#*=}; shift ;;
+        --netlist) NETLIST=$2; shift 2 ;;
+        --netlist=*) NETLIST=${1#*=}; shift ;;
         --depth)   DEPTH=$2; shift 2 ;;
         --depth=*) DEPTH=${1#*=}; shift ;;
         --branch)  BRANCH=$2; shift 2 ;;
@@ -71,7 +80,7 @@ done
 case $MODE in tiling|deep|flat) ;; *) echo "bounds_test: --mode must be tiling, deep or flat" >&2; exit 2 ;; esac
 
 [ -f "$LAYOUT" ] && [ -s "$LAYOUT" ] || { echo "bounds_test: no layout at $LAYOUT" >&2; exit 2; }
-[ -f "$WORK/grx930_test_chip.cdl" ] || { echo "bounds_test: no $WORK/grx930_test_chip.cdl" >&2; exit 2; }
+[ -f "$NETLIST" ] || { echo "bounds_test: no netlist at $NETLIST" >&2; exit 2; }
 [ -f "$WORK/deck_pruned/gf180mcu.lvs" ] || { echo "bounds_test: no pruned deck (run build/lvs_chip_prune_deck.sh)" >&2; exit 2; }
 grep -q '^max_depth(' "$WORK/deck_pruned/gf180mcu.lvs" || {
     echo "bounds_test: the deck has no max_depth line; the switch would be inert" >&2; exit 2; }
@@ -97,12 +106,12 @@ echo "bounds_test: layout $LAYOUT"
 echo "bounds_test: switches: ${sw[*]:-none}"
 nohup setsid bash "$HERE/../tools/klayout_lvs.sh" \
     --layout "$LAYOUT" \
-    --netlist "$WORK/grx930_test_chip.cdl" \
+    --netlist "$NETLIST" \
     --out "$RUN" \
     --deck "$WORK/deck_pruned/gf180mcu.lvs" \
     --switch metal_level=5LM --switch "run_mode=$MODE" --switch "threads=$THREADS" \
     "${sw[@]}" --switch write_netlist=false --no-extracted-netlist --no-port-check \
     > "$RUN/driver.log" 2>&1 < /dev/null &
 PID=$!
-echo "$NAME ${DEPTH:--} ${BRANCH:--} $THREADS $MODE $(basename "$LAYOUT")" > "$RUN/config"
+echo "$NAME ${DEPTH:--} ${BRANCH:--} $THREADS $MODE $(basename "$LAYOUT") $(basename "$NETLIST")" > "$RUN/config"
 echo "bounds_test: pid $PID  log $RUN/driver.log"
