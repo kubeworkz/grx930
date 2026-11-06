@@ -38,7 +38,7 @@ would change the device count that the census is measuring. `tiel`/`tieh` are no
 have a driven output pin and nothing here needs a tie net. Empty rows are left empty: they carry no
 cell, so a rail there would be a zero-terminal net and only inflate the net count.
 
-    python3 tools/lvs_chip/fill_def.py [--def FILE] [--out FILE] [--tap-um 20]
+    python3 tools/lvs_chip/fill_def.py [--def FILE] [--out FILE] [--tap-um 20] [--tie-anchors FILE]
 
 Exit status: 0 written, 2 refused (a parse, placement, or short check failed).
 """
@@ -328,7 +328,25 @@ def main():
     ap.add_argument("--out", default=OUT)
     ap.add_argument("--tap-um", type=float, default=20.0,
                     help="DF.13_LV: max distance from an nwell tap to p-diffusion")
+    ap.add_argument("--tie-anchors", dest="tie_anchors",
+                    help="file of `y xlo xhi` dbu: a well segment that must receive a filltie")
     args = ap.parse_args()
+
+    # The distance rule above is per cell and cannot see a merged well that no tap lands on: the
+    # 2026-11-05 trace found 21 nwell components on the die with no tap at all, 19 rows that each
+    # do carry taps. These anchors name one such segment as a `y xlo xhi` box; each must end up
+    # holding a filltie or the pass refuses, so a partial fix cannot be written by accident.
+    anchors = []
+    if args.tie_anchors:
+        for line in open(args.tie_anchors):
+            s = line.split("#")[0].split()
+            if len(s) == 3:
+                anchors.append([int(s[0]), int(s[1]), int(s[2]), len(anchors), False])
+        if not anchors:
+            return refuse(f"no `y xlo xhi` anchors in {args.tie_anchors}")
+    pending = defaultdict(list)
+    for a in anchors:
+        pending[a[0]].append(a)
 
     units, rows, comps, metal1, shapes = parse_def(args.def_file)
     sizes = lef_sizes(args.lef)
@@ -380,6 +398,7 @@ def main():
         return not routes.hits(x, y, x + w, y + cell_h)
 
     new = []
+    forced_all = []
     added = Counter()
     stats = Counter()
     ties = 0
@@ -389,9 +408,34 @@ def main():
         if not used:
             continue
         row_end = x0 + sites * row_step
-        tap_positions = []
+        forced = []
+        for a in pending.get(y, ()):
+            if a[4]:
+                continue
+            lo = max(a[1], used[0][0])
+            hi = min(a[2], used[-1][1])
+            k = x0 + ((lo - x0 + row_step - 1) // row_step) * row_step
+            spot = None
+            while k + TIE_SITES * row_step <= hi:
+                if not any(u0 < k + TIE_SITES * row_step and u1 > k for u0, u1, _ in used) and \
+                        box_clear(k, y, TIE_SITES * row_step) and \
+                        rails_clear(k, y, TIE_SITES * row_step):
+                    spot = k
+                    break
+                k += row_step
+            if spot is None:
+                continue
+            inst = f"FILL_{name}_TIE{a[3]:02d}"
+            forced.append((inst, TIE, spot, y, orient))
+            used.append((spot, spot + TIE_SITES * row_step, inst))
+            used.sort()
+            a[4] = True
+            added["forced-tie"] += 1
+            ties += 1
+        forced_all.extend(forced)
+        tap_positions = [f[2] for f in forced]
         seq = 0
-        last_tie = None
+        last_tie = max(tap_positions) if tap_positions else None
         for (a0, a1, _i0), (b0, _b1, _i1) in zip(used, used[1:]):
             if b0 <= a1:
                 continue
@@ -455,6 +499,12 @@ def main():
                     worst_cell = max(worst_cell, d / units)
         else:
             stats["rows_without_tap"] += 1
+
+    unplaced = [a[3] for a in anchors if not a[4]]
+    if unplaced:
+        return refuse(f"{len(unplaced)} well segments got no filltie: anchors {unplaced}")
+    for inst, cell, x, y, orient in forced_all:
+        new.append((inst, cell, x, y, orient))
 
     if not new:
         return refuse("no fillable sites: is this DEF already filled?")
