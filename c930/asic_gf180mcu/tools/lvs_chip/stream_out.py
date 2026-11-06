@@ -96,7 +96,7 @@ def parse_def_components(path):
             break
         if section != "comp":
             continue
-        m = re.match(r"-\s+(\S+)\s+(\S+)\s+\+\s+(?:PLACED|FIXED)\s+\(\s*(\d+)\s+(\d+)\s*\)\s+(\w+)",
+        m = re.match(r"-\s+(\S+)\s+(\S+)\s+.*?\b(?:PLACED|FIXED)\s+\(\s*(\d+)\s+(\d+)\s*\)\s+(\w+)",
                      s)
         if m:
             comps.append((m.group(1), m.group(2), int(m.group(3)), int(m.group(4)), m.group(5)))

@@ -80,7 +80,7 @@ FILLTIE = "gf180mcu_fd_sc_mcu7t5v0__filltie"
 
 ROW_RE = re.compile(r"^ROW\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\w+)\s+DO\s+(\d+)\s+BY\s+1"
                     r"\s+STEP\s+(\d+)")
-COMP_RE = re.compile(r"^-\s+(\S+)\s+(\S+)\s+\+\s+(?:PLACED|FIXED)\s+\(\s*(\d+)\s+(\d+)\s*\)"
+COMP_RE = re.compile(r"^-\s+(\S+)\s+(\S+)\s+.*?\b(?:PLACED|FIXED)\s+\(\s*(\d+)\s+(\d+)\s*\)"
                      r"\s+(\w+)")
 STRIPE_RE = re.compile(r"^(?:\+ ROUTED |NEW )?Metal3 (\d+) \+ SHAPE STRIPE \( (\d+) (\d+) \)"
                        r" \( (\d+) (\d+) \)")
