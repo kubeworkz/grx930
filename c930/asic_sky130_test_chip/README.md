@@ -51,6 +51,35 @@ CI runs it: [`.github/workflows/sky130-test-chip.yml`](../../.github/workflows/s
 Each run prints the area, timing, DRC and LVS results to the job log and the job
 summary, and uploads the GDS, netlist and reports.
 
+### On a self-hosted runner
+
+Detailed routing takes longer than the 6 hours a GitHub-hosted job may run, so a
+full run needs a self-hosted runner. The workflow uses one when the repository
+variable `SKY130_RUNNER` holds its label; there the job may run for 48 hours.
+Pull requests from forks always stay on a hosted runner, because this repository
+is public and a self-hosted runner must not run code from outside it.
+
+The machine needs:
+
+- Linux x86-64, with Docker, and the runner's user allowed to use it;
+- `jq`, for the job summary;
+- 8 or more cores and 32 GB of memory (16 GB is enough for synthesis, routing is
+  faster with more);
+- about 50 GB of free disk: the LibreLane image, the SKY130 PDK (kept in the
+  runner user's `~/.ciel` between runs) and a run directory.
+
+To set it up:
+
+1. Repository **Settings → Actions → Runners → New self-hosted runner**, and
+   follow its commands on the machine. When `./config.sh` asks for extra labels,
+   enter `sky130`. Install it as a service (`sudo ./svc.sh install && sudo ./svc.sh start`)
+   so it survives a reboot.
+2. **Settings → Secrets and variables → Actions → Variables → New repository
+   variable**: name `SKY130_RUNNER`, value `sky130`.
+3. **Actions → Sky130 test chip → Run workflow** on `main`.
+
+Removing the variable sends every run back to hosted runners.
+
 To run it locally, use the same image. LibreLane fetches the SKY130 PDK
 revision it pins into the mounted PDK directory:
 
