@@ -17,7 +17,35 @@ read_lef gf180mcu_pdk/libs.ref/${STD_CELL}/lef/${STD_CELL}_combined_clean.lef
 # 5v00 is the corner the tapeout flow runs (nom_tt_025C_5v00); 1v80 here would
 # time a 5 V part at the wrong voltage.
 read_lib gf180mcu_pdk/libs.ref/${STD_CELL}/lib/${STD_CELL}__tt_025C_5v00.lib
-read_verilog ${BUILD_DIR}/grx930_test_chip_synth.v
+# Netlist selection. Precedence: explicit SYNTH_NETLIST, intentional old
+# netlist opt-in, then the netlist produced by `make synth`. There is no
+# silent fallback: if none is selected, stop before PNR.
+set _explicit ""
+if {[info exists ::env(SYNTH_NETLIST)]} {
+    set _explicit $::env(SYNTH_NETLIST)
+}
+set _use_old 0
+if {[info exists ::env(USE_CHECKED_IN_SYNTH_FINAL)]} {
+    set _use_old [expr {$::env(USE_CHECKED_IN_SYNTH_FINAL) eq "1"}]
+}
+set _build_netlist ${BUILD_DIR}/grx930_test_chip_synth.v
+set _checked_in openlane2_design/src/grx930_test_chip_synth_final.v
+
+if {$_explicit ne ""} {
+    set SYNTH_NETLIST $_explicit
+} elseif {$_use_old} {
+    set SYNTH_NETLIST $_checked_in
+    puts "WARNING: USE_CHECKED_IN_SYNTH_FINAL=1; using $SYNTH_NETLIST"
+} elseif {[file exists $_build_netlist]} {
+    set SYNTH_NETLIST $_build_netlist
+} else {
+    error "No build netlist at $_build_netlist. Run make synth or set SYNTH_NETLIST=/path/to/netlist. To intentionally use the old checked-in netlist, set USE_CHECKED_IN_SYNTH_FINAL=1."
+}
+if {![file exists $SYNTH_NETLIST]} {
+    error "Selected netlist does not exist: $SYNTH_NETLIST"
+}
+puts "SYNTH_NETLIST: $SYNTH_NETLIST"
+read_verilog $SYNTH_NETLIST
 link_design $DESIGN_NAME
 
 # 1b. Mark one_/zero_ nets as special power/ground for DRT
