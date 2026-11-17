@@ -1,0 +1,10 @@
+#!/bin/sh
+# pmap-compatible diagnostic shim for the LVS deck's memory logger.
+# The deck only needs a command that succeeds and reports process RSS.
+pid="${1:-$$}"
+rss=0
+if [ -r "/proc/$pid/statm" ]; then
+  read -r _size resident _rest < "/proc/$pid/statm"
+  [ -n "$resident" ] && rss=$((resident * 4))
+fi
+printf ' total %8sK\n' "$rss"

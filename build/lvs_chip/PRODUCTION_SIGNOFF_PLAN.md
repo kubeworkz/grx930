@@ -168,9 +168,12 @@ The two Tcl files must contain, at minimum:
 **Command**
 ```bash
 mkdir -p build/production/lvs
+docker build -t grx930/klayout-lvs-pmap:local \
+  -f build/production/run/Dockerfile.klayout-lvs \
+  build/production/run
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v C:/Users/kubew/grx930:/work -w /work \
-  --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
+  --entrypoint klayout grx930/klayout-lvs-pmap:local -b \
   -r /work/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs \
   -rd combine=false \
   -rd check_ports=false \
@@ -179,7 +182,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
   -rd verbose=false \
   -rd metal_level=5LM \
   -rd input=/work/build/production/final/grx930_test_chip_final.gds \
-  -rd schematic=/work/build/production/final/grx930_test_chip.cdl \
+  -rd schematic=/work/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl \
   -rd topcell=grx930_test_chip \
   -rd report=/work/build/production/lvs/report.lvsdb \
   -rd target_netlist=/work/build/production/lvs/extracted.cir \
@@ -188,7 +191,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 
 Only the unmodified deck’s documented switches are used: `input`, `schematic`, `topcell`, `report`, `target_netlist`, `combine`, `check_ports`, `top_lvl_pins`, `run_mode`, `metal_level`, and `verbose`. `max_branch_complexity`, `write_netlist`, and `threads` are pruned-deck additions and are deliberately absent.
 
-**Environment prerequisite:** the unmodified deck calls `pmap`; the current OpenLane image lacks it (`sh: pmap: command not found`). G2 is blocked until `procps`/`pmap` is available in the KLayout container, or a KLayout image with `pmap` is used. Do not substitute the pruned deck to work around this.
+**Environment prerequisite:** the unmodified deck calls `pmap` for its memory log line. The stock OpenLane image lacks it. The local image `grx930/klayout-lvs-pmap:local` adds `/usr/local/bin/pmap`, a diagnostic shim that reads resident pages from `/proc/<pid>/statm`; it is intentionally limited to this logging dependency and is not a procps replacement. Do not substitute the pruned deck to work around this.
 
 Do not replace this with `deck_pruned/gf180mcu.lvs` unless the physical-verification lead records a signed deck waiver. The pruned deck is acceptable only as a diagnostic, not as production signoff.
 

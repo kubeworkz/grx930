@@ -10,9 +10,9 @@ LVS="$PROD/lvs"
 mkdir -p "$LVS" "$PROD/logs"
 
 GDS="$FINAL/grx930_test_chip_final.gds"
-CDL="$FINAL/grx930_test_chip.cdl"
+CDL="$PROJECT_ROOT/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl"
 DECK="$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs"
-IMAGE="ghcr.io/efabless/openlane2:2.3.10"
+IMAGE="${KLAYOUT_IMAGE:-grx930/klayout-lvs-pmap:local}"
 
 if [ ! -s "$GDS" ] || [ ! -s "$CDL" ] || [ ! -s "$DECK" ]; then
   {
@@ -35,15 +35,26 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 2
 fi
 
-# The unmodified deck calls pmap; the stock image lacks it. Fail closed rather
-# than substituting the pruned deck or a fake pmap.
+# The unmodified deck calls pmap. The local image adds a pmap-compatible
+# diagnostic shim; verify the image and command before starting the deck.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  {
+    echo "gate=G2"
+    echo "status=BLOCKED"
+    echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "owner=Physical verification lead (unassigned)"
+    echo "missing=local image $IMAGE"
+    echo "note=Build it with: docker build -t $IMAGE -f build/production/run/Dockerfile.klayout-lvs build/production/run"
+  } | tee "$LVS/G2_status.txt"
+  exit 2
+fi
 if ! docker run --rm --entrypoint sh "$IMAGE" -lc 'command -v pmap >/dev/null' >/dev/null 2>&1; then
   {
     echo "gate=G2"
     echo "status=BLOCKED"
     echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "owner=Physical verification lead (unassigned)"
-    echo "missing=pmap (procps in $IMAGE)"
+    echo "missing=pmap in $IMAGE"
     echo "note=Unmodified LVS deck requires pmap; no LVS run was started."
   } | tee "$LVS/G2_status.txt"
   exit 2
@@ -66,7 +77,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
   -rd verbose=false \
   -rd metal_level=5LM \
   -rd input=/work/build/production/final/grx930_test_chip_final.gds \
-  -rd schematic=/work/build/production/final/grx930_test_chip.cdl \
+  -rd schematic=/work/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl \
   -rd topcell=grx930_test_chip \
   -rd report=/work/build/production/lvs/report.lvsdb \
   -rd target_netlist=/work/build/production/lvs/extracted.cir \

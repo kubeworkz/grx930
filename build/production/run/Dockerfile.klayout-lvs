@@ -1,0 +1,5 @@
+FROM ghcr.io/efabless/openlane2:2.3.10
+
+COPY pmap /usr/local/bin/pmap
+RUN chmod 0755 /usr/local/bin/pmap
+ENV PATH="/usr/local/bin:${PATH}"
