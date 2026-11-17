@@ -38,26 +38,15 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # The unmodified deck calls pmap. The local image adds a pmap-compatible
-# diagnostic shim; verify the image and command before starting the deck.
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  {
-    echo "gate=G2"
-    echo "status=BLOCKED"
-    echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "owner=Physical verification lead (unassigned)"
-    echo "missing=local image $IMAGE"
-    echo "note=Build it with: docker build -t $IMAGE -f build/production/run/Dockerfile.klayout-lvs build/production/run"
-  } | tee "$LVS/G2_status.txt"
-  exit 2
-fi
+# diagnostic shim. This single probe covers both image availability and pmap.
 if ! docker run --rm --entrypoint sh "$IMAGE" -lc 'command -v pmap >/dev/null' >/dev/null 2>&1; then
   {
     echo "gate=G2"
     echo "status=BLOCKED"
     echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "owner=Physical verification lead (unassigned)"
-    echo "missing=pmap in $IMAGE"
-    echo "note=Unmodified LVS deck requires pmap; no LVS run was started."
+    echo "missing=pmap-capable image $IMAGE"
+    echo "note=Build it with: docker build -t $IMAGE -f build/production/run/Dockerfile.klayout-lvs build/production/run"
   } | tee "$LVS/G2_status.txt"
   exit 2
 fi
