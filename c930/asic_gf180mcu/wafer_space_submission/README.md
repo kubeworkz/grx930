@@ -1,20 +1,27 @@
 # GRX930 Test Chip - wafer.space Submission Package
 
-> **VOID — do not submit.** This package was built from the pre-fix 21 September
-> synthesis and is superseded in full; [SUPERSEDED.md](SUPERSEDED.md) says why.
-> The numbers below describe that artifact, not the current part: the target
-> clock is **25 MHz (40 ns)**, the caches are **512 B I + 512 B D** and the
-> final DEF is 53,745 instances. Current figures:
-> [the one-pager](../wafer_space_status_onepager.md).
+> **VOID — DO NOT SUBMIT.** This entire package is built from the pre-fix
+> 21 September synthesis and is superseded in full; [SUPERSEDED.md](SUPERSEDED.md)
+> says why. Its GDS, README, checklist and numbers are historical and must not
+> be used for the current part.
+>
+> **Current die-size authority:** `build/lvs_chip/rebased_grx930_test_chip.def`,
+> `DIEAREA ( 0 0 ) ( 7864000 10244000 )` at 2000 dbu/µm = **3932 × 5122 µm**.
+> The old **3930 × 5120 µm** figure is retired and is not the current die size.
+> Other current figures: [the one-pager](../wafer_space_status_onepager.md).
 
-## Chip Specifications
+## Chip Specifications — VOID ARTIFACT
+
+The table describes the void September artifact, not the current part. The current
+**die** is defined by the DEF `DIEAREA`: **3932 × 5122 µm** (see the banner above).
 
 | Property | Value |
 |----------|-------|
+| **Package status** | **VOID — DO NOT SUBMIT** |
 | **Design Name** | grx930_test_chip |
 | **Process** | GlobalFoundries GF180MCU (180nm) |
-| **Die Size** | 3930 × 5120 µm (wafer.space 1×1 slot) |
-| **Core Area** | 3920 × 5100 µm (12.92 mm²) |
+| **Die Size (current design authority)** | **3932 × 5122 µm** — from `build/lvs_chip/rebased_grx930_test_chip.def` `DIEAREA`; not a measurement of this VOID GDS |
+| **Core Area** | 3920 × 5100 µm (void-artifact figure; not current) |
 | **Standard Cell Library** | gf180mcu_fd_sc_mcu7t5v0 |
 | **Metal Stack** | 5LM_1TM_11K |
 | **Cell Count** | 4,088 (after synthesis — the SRAM array was dead logic; see [SUPERSEDED.md](SUPERSEDED.md)) |
