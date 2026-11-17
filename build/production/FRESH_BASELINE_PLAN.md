@@ -283,6 +283,53 @@ counts multi-terminal signal nets with no `Wire`/`SWire` and any net with fewer
 than two terminals; the audit DEF had 1,022 and 2 of that class. It is a loop over
 `ord::get_db_block`, not a new checker.
 
+**DEF-defined vias.** `stream_out.py` accepts only LEF `VIA` names, and a routed
+DEF may define its own vias in a `VIAS` section instead. The old DEF has two:
+`via3_4_3200_3200_3_3_1040_1040` and `via4_5_3200_6400_4_2_1240_1240`. Promote
+them into a supplemental LEF; do not relax `stream_out.py` and do not read the
+artifact. Build `promote_def_vias.py` (§4) and run it after route export:
+
+```bash
+runpy c930/asic_gf180mcu/tools/lvs_chip/promote_def_vias.py \
+  --def /work/build/production/baseline/routed.def \
+  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --out /work/build/production/baseline/routed_vias.lef
+```
+
+For every `VIAS` entry, require `+ VIARULE <name>` (naming a
+`VIARULE ... GENERATE` block in the LEF), `+ CUTSIZE w h`, `+ LAYERS lower cut
+upper`, `+ CUTSPACING sx sy`, `+ ENCLOSURE e1 e2 e3 e4`, and `+ ROWCOL rows cols`.
+Read the DEF's `UNITS DISTANCE MICRONS` (2000 here), convert to microns, and
+emit a fixed `VIA <name>` block:
+
+- `pitch_x = w + sx`, `pitch_y = h + sy`; DEF `CUTSPACING` is edge-to-edge, so
+  the pitch is cut size plus spacing. Cut centres are
+  `(i - (cols-1)/2) * pitch_x` and `(j - (rows-1)/2) * pitch_y`;
+- the lower-metal rect spans `cols*w + (cols-1)*sx + 2*e1` by
+  `rows*h + (rows-1)*sy + 2*e2`;
+- the upper-metal rect spans the cut field plus `2*e3` by `2*e4`;
+- one `RECT` per cut on the cut layer, one per metal.
+
+`e1`/`e2` enclose the lower metal in x/y and `e3`/`e4` the upper metal. This is
+the DEF convention, not the LEF `VIARULE` `ENCLOSURE` pair.
+
+`LAYERS` must name the same lower, cut, and upper layers as the named VIARULE
+(identified by role; the VIARULE block lists lower, upper, cut), and its cut RECT
+must equal `CUTSIZE`. The DEF's `CUTSPACING` and `ENCLOSURE` win over the
+VIARULE's generator defaults; the two old entries differ from
+`Via3_GEN_HH`/`Via4_GEN_HH`, so copying those defaults would silently change the
+via. Refuse with status 2 on a missing or unknown token, unknown VIARULE,
+layer-role or cut-size mismatch, non-positive dimension, `VIAS` count mismatch,
+or a name already defined in the LEF. A bare `VIARULE` name used as a via without
+a `VIAS` entry is still refused; the router must emit the `VIAS` definition or use
+a LEF via. Never fall back to the artifact.
+
+The formula reproduces the old DEF exactly: 9 cuts with 1.42 × 1.60 µm and
+1.60 × 1.42 µm metals, and 8 cuts with 1.60 × 2.24 µm and 1.00 × 2.58 µm metals.
+A `test_promote_def_vias.py` regression uses those two entries as fixtures,
+feeds the generated LEF through `stream_out.parse_lef_vias`, and checks every
+refusal; it reads no design or artifact.
+
 Then build the pre-ECO GDS in the documented order:
 
 ```bash
@@ -293,6 +340,7 @@ runpy c930/asic_gf180mcu/tools/lvs_chip/fill_def.py \
 runpy c930/asic_gf180mcu/tools/lvs_chip/stream_out.py \
   --def /work/build/production/baseline/filled.def \
   --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --lef /work/build/production/baseline/routed_vias.lef \
   --routing def --out /work/build/production/baseline/pre_eco_stream.gds
 runpy c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py \
   --def /work/build/production/baseline/filled.def \
@@ -308,19 +356,24 @@ runpy c930/asic_gf180mcu/tools/lvs_chip/stream_check.py \
 `stream_out.py` reads the PDK cell GDS for cell layouts and the LEF's `VIA`
 definitions for via cells; `--lef` is repeatable, and every via token the DEF
 names must be defined in one of them. The routed DEF must therefore use LEF vias
-only: a DEF `VIAS` section (a generated via with no LEF definition) is refused,
-not approximated from the old layout. Both inputs are pinned in Stage 0, and the
-artifact is not read in `--routing def` mode. If the router emits a `VIAS`
-section, stop at this gate and promote those vias to the project LEF (or route
-with LEF vias) before fill; do not fall back to the artifact.
+only: a DEF `VIAS` section is promoted above, not approximated from the old
+layout. The PDK GDS and base LEF are pinned in Stage 0; `routed_vias.lef` is
+generated here and hashed into G0. If the router emits no `VIAS` section, the
+promoter writes a header-only LEF and the command still passes both files. The
+supplemental file contains only `VIA` blocks, so layer widths stay from
+`cells.lef`; the promoter also refuses a name already in the base LEF, so
+`stream_out`'s first-definition-wins lookup cannot silently prefer the wrong
+geometry. The artifact is not read in `--routing def` mode.
 
-Output: `routed.def`, `grx930_test_chip_routed.v`, `grx930_test_chip.cdl`,
-`filled.def`, `pre_eco.gds`, `strap_report.json`, `net_compare.json`.
+Output: `routed.def`, `routed_vias.lef`, `grx930_test_chip_routed.v`,
+`grx930_test_chip.cdl`, `filled.def`, `pre_eco.gds`, `strap_report.json`,
+`net_compare.json`.
 
 Gate: `net_compare` MATCH; 0 unrouted signal nets and 0 zero/one-terminal nets
 from the OpenDB pass; the CDL top is `grx930_test_chip`, the same name the GDS top
-and the G2 deck use; `stream_out.py` built every via from a LEF definition and
-refused none; fill and stitch exit 0 with no refused island; stream check passes.
+and the G2 deck use; every DEF `VIAS` entry was promoted into `routed_vias.lef`,
+and `stream_out.py` built every via from a LEF definition and refused none; fill
+and stitch exit 0 with no refused island; stream check passes.
 
 ### Stage 5 — Derive the new ECO site list
 
@@ -446,12 +499,14 @@ files exist; `read_spef`/`diff_spef` succeeds.
 
 - Add environment overrides to `g0_freeze.sh` and `g2_lvs.sh` rather than editing
   constants per run: `G0_GDS`, `G0_CDL`, `G0_DEF`, `G0_SPEF`, `G0_BASE`,
-  `G0_DIE_W`, `G0_DIE_H`, `G0_DROPS`, `G0_SITES`, and the matching `G2_*`. Keep
-  the current paths as defaults, so the VOID package's state is unchanged. The
-  old row-300 rectangles in both checkers are removed rather than parameterized;
-  the site list is the only place that rule can be stated correctly.
+  `G0_DIE_W`, `G0_DIE_H`, `G0_DROPS`, `G0_SITES`, `G0_VIAS_LEF`, and the
+  matching `G2_*`. Keep the current paths as defaults, so the VOID package's
+  state is unchanged. The old row-300 rectangles in both checkers are removed
+  rather than parameterized; the site list is the only place that rule can be
+  stated correctly.
 - Run `g0_freeze.sh` with `G0_BASE=pre_eco.gds`, `G0_DROPS=<N>`,
-  `G0_SITES=eco_sites.csv`, and the new GDS/CDL/DEF/SPEF. Require
+  `G0_SITES=eco_sites.csv`, `G0_VIAS_LEF=routed_vias.lef`, and the new
+  GDS/CDL/DEF/SPEF. Require
   `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `def_gds_checks=PASS`,
   `no_void=PASS`, and a manifest hash.
 - Fill `G0_signoff.txt` with a **Gridworkz-authorized** signer. Do not fabricate it.
@@ -467,15 +522,20 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
    with a generalized VDD exclusion and no dependence on `$45264`.
 2. **ECO inserter** — one site list consumed by an OpenDB DEF/ODB writer and a
    KLayout GDS patcher.
-3. **All-site DRC/landing harness** — extend the 13-site checks to every row and
+3. **DEF `VIAS` promoter** — parse only the DEF `VIAS` section, cross-check each
+   `+ VIARULE` against the LEF, and write `routed_vias.lef` from the DEF's
+   cut/enclosure/rowcol values. It is a pure DEF+LEF transform and never reads
+   the artifact.
+4. **All-site DRC/landing harness** — extend the 13-site checks to every row and
    rail.
-4. **CDL top override** — a `--top` option for `mk_chip_cdl.py`, because the flow
+5. **CDL top override** — a `--top` option for `mk_chip_cdl.py`, because the flow
    top (`chip_top`) is not the GDS/deck top (`grx930_test_chip`).
-5. **Window-based `def_gds_checks.rb`** — `base` + `sites` instead of a
+6. **Window-based `def_gds_checks.rb`** — `base` + `sites` instead of a
    whole-die XOR and a fixed row-300 box.
-6. **SPEF extraction Tcl** — one corner per process, verified commands only.
-7. **G0/G2 parameterization** — die, count, paths, and site list via environment.
-8. **Baseline manifest and signoff form** — one pinned set of hashes from RTL to
+7. **SPEF extraction Tcl** — one corner per process, verified commands only.
+8. **G0/G2 parameterization** — die, count, paths, site list, and promoted LEF via
+   environment.
+9. **Baseline manifest and signoff form** — one pinned set of hashes from RTL to
    SPEF.
 
 ## 5. Compute and schedule risks
@@ -489,7 +549,7 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | Antenna repair abort | at 0.1 the die's `repair_antennas` can abort with `GRT-0183`; the landed arm relies on the catch | keep `lln_antenna_catch.sh`; archive the antenna log; do not read a caught abort as an antenna pass |
 | ECO count is not 8,168 | the old list depends on fix16 `sub` islands, old VSS rows, and the old `$45264` net (§1.1) | derive `N`; parameterize G0/checkers; retire 8,168 with the old identity |
 | CDL/GDS top mismatch | flow `DESIGN_NAME: chip_top`; `stream_out.py` writes the GDS top as `grx930_test_chip`; the deck takes `topcell=grx930_test_chip` | write the CDL with `--top grx930_test_chip` and gate on it before G0 |
-| Stream-out via coverage | `stream_out.py` builds via cells only from LEF `VIA` definitions; a DEF `VIAS`/generated via has none | run the stream-out on the routed DEF before fill; add a missing via to the project LEF; never fall back to the artifact |
+| DEF `VIAS` is not streamable as-is | `stream_out.py` accepts only LEF `VIA` names; the old DEF has two `VIAS` entries | run `promote_def_vias.py` after route export, pass `routed_vias.lef` as a second `--lef`, hash it in G0; refuse incomplete entries; never fall back to the artifact |
 | VOID artifact in the GDS path | `--routing def` no longer reads the artifact; only `--routing artifact` does, for re-checking the September die | keep `--routing artifact` out of the fresh-baseline stages |
 | DEF/GDS mismatch outside the ECO | `pdn_stitch` writes M2 straps to the GDS only | window-based check; do not gate on a whole-die Metal XOR |
 | ECO legality | 4,318 pre-existing full-chip DRC findings; 0-added requirement over all sites; 1.40 µm M2 keepout | all-site DRC, resites, generalized VDD exclusion |
@@ -507,7 +567,7 @@ available, and DRT converging in the historical 0.1 regime:
 - Stage 0–1: 1–2 days.
 - Stage 2 (RTL to pre-DRT): 1–3 days.
 - Stage 3 (DRT): 1–10+ days; the largest variance.
-- Stage 4 (QA + fill/stream/stitch/CDL): 1–2 days.
+- Stage 4 (VIAS promoter + QA + fill/stream/stitch/CDL): 2–3 days.
 - Stage 5 (ECO list): 3–5 days.
 - Stage 6 (ECO insert + all-site DRC): 1–2 weeks; the largest engineering risk.
 - Stage 7 (geometry checks): 1 day.
