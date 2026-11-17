@@ -1,6 +1,6 @@
 gate=G2
 status=BLOCKED
-generated_utc=2026-11-17T19:10:43Z
+generated_utc=2026-11-17T19:11:56Z
 owner=Physical verification lead (unassigned)
 missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip_final.gds
 missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip.spef

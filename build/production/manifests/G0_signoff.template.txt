@@ -1,0 +1,9 @@
+# G0 input-freeze signoff template.
+# Copy to build/production/manifests/G0_signoff.txt and fill every value.
+# Leave no field empty; the copied file must be reviewed by the design lead
+# and independent reviewer before G2 can run.
+gate=G0
+status=SIGNED
+signed_by=
+signed_utc=
+manifest_sha256=
