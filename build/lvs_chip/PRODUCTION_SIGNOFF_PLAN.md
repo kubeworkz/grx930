@@ -112,6 +112,7 @@ sha256sum \
 
 **Commands**
 ```bash
+mkdir -p build/production/dft
 # Tool and license must be installed first; the current environment has neither.
 command -v dftc
 command -v tetramax
@@ -166,6 +167,7 @@ The two Tcl files must contain, at minimum:
 
 **Command**
 ```bash
+mkdir -p build/production/lvs
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v C:/Users/kubew/grx930:/work -w /work \
   --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
@@ -176,9 +178,6 @@ MSYS_NO_PATHCONV=1 docker run --rm \
   -rd run_mode=tiling \
   -rd verbose=false \
   -rd metal_level=5LM \
-  -rd threads=8 \
-  -rd max_branch_complexity=12300 \
-  -rd write_netlist=true \
   -rd input=/work/build/production/final/grx930_test_chip_final.gds \
   -rd schematic=/work/build/production/final/grx930_test_chip.cdl \
   -rd topcell=grx930_test_chip \
@@ -186,6 +185,10 @@ MSYS_NO_PATHCONV=1 docker run --rm \
   -rd target_netlist=/work/build/production/lvs/extracted.cir \
   > build/production/lvs/lvs.log 2>&1
 ```
+
+Only the unmodified deck’s documented switches are used: `input`, `schematic`, `topcell`, `report`, `target_netlist`, `combine`, `check_ports`, `top_lvl_pins`, `run_mode`, `metal_level`, and `verbose`. `max_branch_complexity`, `write_netlist`, and `threads` are pruned-deck additions and are deliberately absent.
+
+**Environment prerequisite:** the unmodified deck calls `pmap`; the current OpenLane image lacks it (`sh: pmap: command not found`). G2 is blocked until `procps`/`pmap` is available in the KLayout container, or a KLayout image with `pmap` is used. Do not substitute the pruned deck to work around this.
 
 Do not replace this with `deck_pruned/gf180mcu.lvs` unless the physical-verification lead records a signed deck waiver. The pruned deck is acceptable only as a diagnostic, not as production signoff.
 
@@ -218,6 +221,7 @@ Do not replace this with `deck_pruned/gf180mcu.lvs` unless the physical-verifica
 
 **Command — complete deck, not a deck filter**
 ```bash
+mkdir -p build/production/drc
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v C:/Users/kubew/grx930:/work -w /work \
   --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
@@ -298,8 +302,9 @@ openroad -exit build/production/sta/power_ir.tcl \
   > build/production/sta/power_ir.log 2>&1
 ```
 
-`sta_mcorner.tcl` must read the LEF, the selected liberty, the frozen DEF, and the frozen SPEF, then apply:
+`sta_mcorner.tcl` must read the LEF, the selected liberty, the frozen DEF, and the frozen SPEF, then apply. The shell exports `CORNER`; the Tcl reads it explicitly:
 ```tcl
+set corner $::env(CORNER)
 create_clock -name i_clk -period 40.0 [get_ports i_clk]
 set_input_delay  6.0 -clock i_clk [all_inputs]
 set_output_delay 6.0 -clock i_clk [all_outputs]
