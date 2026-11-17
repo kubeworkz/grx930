@@ -16,10 +16,12 @@ Run from the repository root (Linux/macOS mount shown; on Windows use
 Exit status is unittest's: 0 pass, 1 failure.
 """
 
+import io
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 
 import klayout.db as db
 
@@ -78,26 +80,32 @@ class LefViaRegression(unittest.TestCase):
         self.assertEqual((m1_boxes[0].width(), m1_boxes[0].height()), (900, 780))
         self.assertEqual((m2_boxes[0].width(), m2_boxes[0].height()), (800, 900))
 
+    def assert_refused(self, call, message):
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as caught, redirect_stderr(stderr):
+            call()
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn(message, stderr.getvalue())
+
     def test_missing_via_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
-            stream_out.require_lef_via({}, VIA, ["fixture.lef"])
-        self.assertIn("no LEF", str(caught.exception))
+        self.assert_refused(
+            lambda: stream_out.require_lef_via({}, VIA, ["fixture.lef"]), "no LEF")
 
     def test_malformed_via_without_geometry_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
-            self.parse("VIA Broken\n LAYER Metal1 ;\nEND Broken\n")
-        self.assertIn("has no geometry", str(caught.exception))
+        self.assert_refused(
+            lambda: self.parse("VIA Broken\n LAYER Metal1 ;\nEND Broken\n"),
+            "has no geometry")
 
     def test_malformed_via_with_unknown_layer_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
-            stream_out.build_lef_via(
-                self.layout, db, "BadLayer", [("Via9", (0.0, 0.0, 1.0, 1.0))])
-        self.assertIn("no PDK GDS number", str(caught.exception))
+        self.assert_refused(
+            lambda: stream_out.build_lef_via(
+                self.layout, db, "BadLayer", [("Via9", (0.0, 0.0, 1.0, 1.0))]),
+            "no PDK GDS number")
 
     def test_empty_definition_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
-            stream_out.build_lef_via(self.layout, db, "Empty", [])
-        self.assertIn("empty LEF VIA definition", str(caught.exception))
+        self.assert_refused(
+            lambda: stream_out.build_lef_via(self.layout, db, "Empty", []),
+            "empty LEF VIA definition")
 
 
 if __name__ == "__main__":

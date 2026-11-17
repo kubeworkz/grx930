@@ -235,6 +235,12 @@ LEF_RECT_RE = re.compile(r"^\s*RECT\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?
 LEF_VIA_UNSUPPORTED = re.compile(r"^\s*(POLYGON|MASK|OFFSET)\b")
 
 
+def refuse(message):
+    """Print a refusal and exit with the documented status 2."""
+    print(f"REFUSED  {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def parse_lef_vias(path):
     """{name: [(LEF layer, (x0, y0, x1, y1))]} from the LEF's `VIA` blocks.
 
@@ -259,12 +265,12 @@ def parse_lef_vias(path):
             continue
         if s.startswith("END "):
             if not vias[name]:
-                raise SystemExit(f"REFUSED  {path}:{lineno}: VIA {name} has no geometry")
+                refuse(f"{path}:{lineno}: VIA {name} has no geometry")
             name = None
             layer = None
             continue
         if LEF_VIA_UNSUPPORTED.match(s):
-            raise SystemExit(f"REFUSED  {path}:{lineno}: VIA {name}: unsupported {s}")
+            refuse(f"{path}:{lineno}: VIA {name}: unsupported {s}")
         m = LEF_LAYER_RE.match(s)
         if m:
             layer = m.group(1)
@@ -279,21 +285,21 @@ def require_lef_via(lef_vias, name, lef_paths):
     """The LEF definition for a DEF via name, or a REFUSED exit."""
     definition = lef_vias.get(name)
     if definition is None:
-        raise SystemExit(f"REFUSED  the DEF uses via {name}, but no LEF in "
-                         f"{', '.join(lef_paths)} defines it as a VIA")
+        refuse(f"the DEF uses via {name}, but no LEF in "
+               f"{', '.join(lef_paths)} defines it as a VIA")
     return definition
 
 
 def build_lef_via(out_layout, db, name, definition):
     """A `VIA_<name>` cell from one LEF VIA definition, on PDK GDS layer numbers."""
     if not definition:
-        raise SystemExit(f"REFUSED  via {name}: empty LEF VIA definition")
+        refuse(f"via {name}: empty LEF VIA definition")
     cell = out_layout.create_cell(f"VIA_{name}")
     for lef_layer, (x0, y0, x1, y1) in definition:
         level = DEF_LAYER.get(lef_layer)
         target = REMAP.get((level, 0)) if level is not None else None
         if target is None:
-            raise SystemExit(f"REFUSED  via {name}: LEF layer {lef_layer} has no PDK GDS number")
+            refuse(f"via {name}: LEF layer {lef_layer} has no PDK GDS number")
         cell.shapes(out_layout.layer(*target)).insert(
             db.Box(int(round(x0 / out_layout.dbu)), int(round(y0 / out_layout.dbu)),
                    int(round(x1 / out_layout.dbu)), int(round(y1 / out_layout.dbu))))
