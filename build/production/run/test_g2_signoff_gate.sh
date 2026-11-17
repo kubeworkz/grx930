@@ -19,6 +19,9 @@ EXTRACTED="$PROD/lvs/extracted.cir"
 [ ! -e "$GDS" ] || { echo "SKIP: refusing to overwrite existing GDS"; exit 3; }
 [ ! -e "$SPEF" ] || { echo "SKIP: refusing to overwrite existing SPEF"; exit 3; }
 [ ! -e "$G0_SIGNOFF" ] || { echo "SKIP: refusing to overwrite existing signoff"; exit 3; }
+for artifact in "$LOG" "$REPORT" "$EXTRACTED"; do
+  [ ! -e "$artifact" ] || { echo "SKIP: refusing to remove existing $artifact"; exit 3; }
+done
 
 backup="$(mktemp)"
 cp "$G0_STATUS" "$backup"
@@ -44,7 +47,6 @@ run_case() {
   local label="$1"
   local signoff="$2"
   printf '%s\n' "$signoff" > "$G0_SIGNOFF"
-  rm -f "$LOG" "$REPORT" "$EXTRACTED"
   set +e
   bash "$G2" >/dev/null 2>&1
   local rc=$?
