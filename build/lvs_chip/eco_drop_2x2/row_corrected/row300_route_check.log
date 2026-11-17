@@ -1,0 +1,11 @@
+M1 pad area=702000 actual_overlap=560700
+M1 extension area=152100 actual_overlap=117000
+M3 pad area=720000 actual_overlap=720000
+M2 v0 bbox=3075.66,2794.51,3076.5,2796.7200000000003 foreign_overlap=0
+M2 h1 bbox=3075.66,2795.88,3077.62,2796.7200000000003 foreign_overlap=0
+M2 v1 bbox=3076.78,2796.3,3077.62,2799.8 foreign_overlap=702800
+M2 h2 bbox=3075.66,2799.38,3077.62,2800.2200000000003 foreign_overlap=148400
+M2 v2 bbox=3075.66,2799.8,3076.5,2803.41 foreign_overlap=0
+M2 dogleg total_foreign_overlap=851200
+M2 left_gap=0.28 um
+M2 right_gap=0.28 um

@@ -1,6 +1,6 @@
 # ECO plan — 2×2 VSS/VDD drop arrays
 
-**Status: BLOCKED on the original-row retry and missing 541 evidence source. The corrected 14-site surrogate was clean, but the no-duplicate original-row crop has 3 added findings at `sub_row_300`; this plan is not an approval.**
+**Status: PENDING net-ownership check and missing 541 evidence source. The no-duplicate original-row crop now has 0 added findings, including a routed row-300 M2 dogleg; this plan is not an approval.**
 
 ## Scope
 
@@ -33,7 +33,7 @@ The final ECO must use the **2×2 via arrays**, not the earlier single-via geome
 1. **Window gate:** 541/541 `sub` rows legal with the 2×2 arrays and 0.84 µm M2 strap.
 2. **Rail gate:** both `$45264` endpoints legal; current endpoints are `1487.97, 2979.20` and `1651.97, 2979.20` µm (164.0 µm apart).
 3. **Synthetic DRC gate:** 14 representative drop sites, PDK `metal1,metal2,metal3,via1,via2` decks, **0 violations**.
-4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **PARTIAL**: the first surrogate crop was clean (49/49, 0 added), but it cloned rows. The no-duplicate retry keeps all 14 sites on original rows and results in **276 before / 279 after, 3 added** (1× M1.2a, 2× M2.2a) at `sub_row_300`. The gate is **not met** until row 300 is resolved or waived.
+4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **MET for DRC**: the no-duplicate retry keeps all 14 sites on original rows and gives **253 before / 253 after, 0 added / 0 removed**, including the routed `sub_row_300`. The row-300 dogleg overlaps existing M2 inside the channel; DRC reports no added violation, but net ownership of that M2 is not available in this checkout.
 5. **Full-chip DRC:** unchanged pre-existing baseline; this plan does not claim full-chip DRC clean.
 6. **LVS:** not rerun by this ECO validation; prior residual remains 772 (770 with two NWELL taps).
 
@@ -95,8 +95,9 @@ Result on the available fix16 file:
 - `row_before.lyrdb` — `1728c42bfd0aa4897bce8cbb6889f4aa9bc853e7b8c7acda251a31599c67366e`
 - `row_after.lyrdb` — `09de4857991fe1d2c5faf7808c2d5a6e8fe1e9ee413185f6373c9daa0633fd1a`
 - `row_compare.json` — `83c5eaaa43b6b5b5d5e005ec70cb2a56c580aaa1c7e86e0504fd1f6a65966926`
-- **276 before, 279 after, 3 added / 0 removed**: 1× M1.2a, 2× M2.2a at `sub_row_300`.
-- The other original rows and both rail points pass the added-finding comparison.
+- **253 before, 253 after, 0 added / 0 removed**; all 14 original-row sites pass.
+- `sub_row_300` uses an explicit M2 dogleg: vertical at x=3076.08, right jog to x=3077.20 between y=2796.30/2799.80, then back to x=3076.08. The M2 width is 0.84 µm throughout.
+- The dogleg's test segments overlap **0.146 µm²** of existing M2 at x3076.22–3076.50; DRC reports no added M2.2a. This overlap is not proven same-net because no L2N/netlist mapping is present.
 
 ## 541/541 evidence status
 
@@ -106,7 +107,4 @@ The historical `541/541` validator (`validate_drop_windows_2x2.rb`) reads `c930/
 
 The Gridworkz signoff packet is
 `build/lvs_chip/eco_drop_2x2/GRIDWORKZ_SIGNOFF_PACKET.md`.
-It is **pending** because `sub_row_300` still adds 3 findings, the selected fix70
-and the historical 541 source GDS are absent, and no Gridworkz signoff connector is
-available in this session. The earlier duplicate-row surrogate crop had 0 added findings,
-but it is not valid 541-row evidence.
+It is **pending** because the row-300 dogleg's M2 overlap is not net-qualified, the selected fix70 and the historical 541 source GDS are absent, and no Gridworkz signoff connector is available in this session. The no-duplicate 14-site crop itself has **0 added findings**; the earlier duplicate-row surrogate is not valid 541-row evidence.
