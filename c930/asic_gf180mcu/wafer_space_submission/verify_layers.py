@@ -18,7 +18,7 @@ except ImportError:
 
 
 def read_def_die(def_path):
-    """Return (width, height) in microns from a DEF DIEAREA."""
+    """Return width, height, and (x1, y1, x2, y2) bounds from a DEF DIEAREA."""
     with open(def_path, "r", encoding="utf-8") as f:
         text = f.read()
     units = re.search(r"^UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", text, re.MULTILINE)
@@ -36,6 +36,7 @@ def read_def_die(def_path):
 
 def verify_gds(gds_path, def_path):
     """Verify GDS layers and die containment for the VOID package."""
+    print("Package status: VOID — DO NOT SUBMIT (diagnostic only)")
     print(f"Verifying GDS: {gds_path}")
     print("=" * 60)
     
@@ -62,7 +63,8 @@ def verify_gds(gds_path, def_path):
     die_width = bbox.width() * dbu  # Convert from DBU to microns
     die_height = bbox.height() * dbu
     
-    print(f"Die size: {die_width:.1f} × {die_height:.1f} µm")
+    print(f"VOID GDS top-cell bbox: {die_width:.3f} × {die_height:.3f} µm")
+    print(f"VOID GDS bounds: ({bbox.left * dbu:.3f}, {bbox.bottom * dbu:.3f}) to ({bbox.right * dbu:.3f}, {bbox.top * dbu:.3f}) µm")
     
     # The DEF DIEAREA is the die authority; the GDS top-cell bbox is only the
     # routed content extent and must fit inside that die.
@@ -75,7 +77,7 @@ def verify_gds(gds_path, def_path):
         print(f"ERROR: {exc}")
         return False
     print(f"DEF die: {def_width:.3f} × {def_height:.3f} µm (DIEAREA authority)")
-    print(f"GDS content bbox: {die_width:.3f} × {die_height:.3f} µm")
+    print(f"DEF die bounds: ({dx1:.3f}, {dy1:.3f}) to ({dx2:.3f}, {dy2:.3f}) µm")
     eps = 1e-6
     if (bbox.left * dbu < dx1 - eps or bbox.bottom * dbu < dy1 - eps or
             bbox.right * dbu > dx2 + eps or bbox.top * dbu > dy2 + eps):
@@ -132,8 +134,8 @@ def verify_gds(gds_path, def_path):
         print("✗ Package is VOID — DO NOT SUBMIT")
         return True
     else:
-        print("✗ GDS verification FAILED")
-        print("✗ Fix missing layers before submission")
+        print("✗ GDS layer verification FAILED")
+        print("✗ Package remains VOID — DO NOT SUBMIT")
         return False
 
 
