@@ -1,9 +1,14 @@
 # Builds the positive-control DEF/GDS pair for def_gds_checks.rb.
 # The pair is synthetic: it is not the production ECO list. It carries all
 # 8,168 approved 2x2 ECO via names at legal non-row-300 sites, with M1/M3
-# landings and an 0.84 um M2 strap. The GDS is written from the same site
-# table in micrometres, independently of the DEF's 2000 dbu/um text, so the
-# checker must parse, convert, and XOR two encodings.
+# landings, an 0.84 um M2 strap, and the real 2x2 Via1/Via2 cut arrays on GDS
+# layers 35/0 and 38/0. The GDS is written from the same site table in
+# micrometres, independently of the DEF's 2000 dbu/um text, so the checker
+# must parse, convert, and XOR two encodings.
+#
+# It also writes positive_missing_cuts.gds, which omits the Via1 cuts at site 0
+# and the Via2 cuts at site 1. The checker must fail on that file, proving the
+# cut check is not vacuous.
 #
 # Run inside the KLayout container:
 #   klayout -b -r make_def_gds_positive_fixture.rb \
@@ -18,6 +23,13 @@ DIE_H = 10_244_000
 VIA1 = "Via1_2X2_0_60_10_60_H_V"
 VIA2 = "Via2_2X2_0_60_10_60_V_H"
 EXPECTED = 8_168
+# 2x2 cut array offsets in GDS dbu: 0.26 um cuts on 0.52 um centers.
+CUT_BOXES = [
+  [-390, -390, -130, -130],
+  [130, -390, 390, -130],
+  [-390, 130, -130, 390],
+  [130, 130, 390, 390],
+].freeze
 
 # 136 x 60 grid plus 8 extras = 8,168 sites. The grid stops at x=2800 um and
 # y=1280 um; the extras sit at x=3200..3340 um, y=4000 um. None intersects the
@@ -33,6 +45,7 @@ raise "site count #{sites.length} != #{EXPECTED}" unless sites.length == EXPECTE
 
 def_file = File.join(out_dir, "positive.def")
 gds_file = File.join(out_dir, "positive.gds")
+mismatch_file = File.join(out_dir, "positive_missing_cuts.gds")
 
 File.open(def_file, "w") do |f|
   f.puts "VERSION 5.8 ;"
@@ -59,32 +72,51 @@ File.open(def_file, "w") do |f|
   f.puts "END DESIGN"
 end
 
-# GDS side: 1000 dbu/um, so every DEF coordinate is halved. The M2 strap is
-# the 1680-dbu (0.84 um) route widened by half-width 840 around its endpoints.
-layout = RBA::Layout.new
-layout.dbu = 0.001
-cell = layout.create_cell("grx930_test_chip")
-m1 = layout.layer(34, 0)
-m2 = layout.layer(36, 0)
-m3 = layout.layer(42, 0)
-m4 = layout.layer(46, 0)
-m5 = layout.layer(81, 0)
+def write_gds(path, sites, omit = {})
+  layout = RBA::Layout.new
+  layout.dbu = 0.001
+  cell = layout.create_cell("grx930_test_chip")
+  m1 = layout.layer(34, 0)
+  v1 = layout.layer(35, 0)
+  m2 = layout.layer(36, 0)
+  v2 = layout.layer(38, 0)
+  m3 = layout.layer(42, 0)
+  m4 = layout.layer(46, 0)
+  m5 = layout.layer(81, 0)
 
-sites.each do |cx, cy|
-  cell.shapes(m1).insert(RBA::Box.new((cx - 900) / 2, (cy - 780) / 2,
-                                      (cx + 900) / 2, (cy + 780) / 2))
-  cell.shapes(m2).insert(RBA::Box.new((cx - 3640) / 2, (cy - 840) / 2,
-                                      (cx + 3640) / 2, (cy + 840) / 2))
-  cell.shapes(m3).insert(RBA::Box.new((cx - 900) / 2, (cy - 800) / 2,
-                                      (cx + 900) / 2, (cy + 800) / 2))
+  sites.each_with_index do |(cx, cy), i|
+    ax = cx / 2
+    ay = cy / 2
+    cell.shapes(m1).insert(RBA::Box.new((cx - 900) / 2, (cy - 780) / 2,
+                                        (cx + 900) / 2, (cy + 780) / 2))
+    cell.shapes(m2).insert(RBA::Box.new((cx - 3640) / 2, (cy - 840) / 2,
+                                        (cx + 3640) / 2, (cy + 840) / 2))
+    cell.shapes(m3).insert(RBA::Box.new((cx - 900) / 2, (cy - 800) / 2,
+                                        (cx + 900) / 2, (cy + 800) / 2))
+    unless omit[i] == :via1
+      CUT_BOXES.each do |x0, y0, x1, y1|
+        cell.shapes(v1).insert(RBA::Box.new(ax + x0, ay + y0, ax + x1, ay + y1))
+      end
+    end
+    unless omit[i] == :via2
+      CUT_BOXES.each do |x0, y0, x1, y1|
+        cell.shapes(v2).insert(RBA::Box.new(ax + x0, ay + y0, ax + x1, ay + y1))
+      end
+    end
+  end
+  # One M4/M5 pair so those GDS layers are present for the XOR comparison.
+  cell.shapes(m4).insert(RBA::Box.new(1_500_000 - 500, 4_500_000 - 500,
+                                      1_500_000 + 500, 4_500_000 + 500))
+  cell.shapes(m5).insert(RBA::Box.new(1_500_000 - 600, 4_500_000 - 600,
+                                      1_500_000 + 600, 4_500_000 + 600))
+  layout.write(path)
+  path
 end
-# One M4/M5 pair so those GDS layers are present for the XOR comparison.
-cell.shapes(m4).insert(RBA::Box.new(1_500_000 - 500, 4_500_000 - 500,
-                                    1_500_000 + 500, 4_500_000 + 500))
-cell.shapes(m5).insert(RBA::Box.new(1_500_000 - 600, 4_500_000 - 600,
-                                    1_500_000 + 600, 4_500_000 + 600))
 
-layout.write(gds_file)
+write_gds(gds_file, sites)
+write_gds(mismatch_file, sites, 0 => :via1, 1 => :via2)
+
 puts "WROTE #{def_file} (#{File.size(def_file)} bytes)"
 puts "WROTE #{gds_file} (#{File.size(gds_file)} bytes)"
+puts "WROTE #{mismatch_file} (#{File.size(mismatch_file)} bytes)"
 puts "SITES=#{sites.length} VIA1=#{sites.length} VIA2=#{sites.length}"

@@ -33,6 +33,15 @@ WIDTHS = {
 
 VIA1 = "Via1_2X2_0_60_10_60_H_V"
 VIA2 = "Via2_2X2_0_60_10_60_V_H"
+# GDS cut layers for the approved 2x2 arrays (GF180MCU: Via1 35/0, Via2 38/0).
+VIA_CUT_LAYER = { VIA1 => [35, 0], VIA2 => [38, 0] }.freeze
+# 2x2 cut array: 0.26 um cuts on 0.52 um centers, in GDS dbu (0.001 um).
+CUT_BOXES = [
+  [-390, -390, -130, -130],
+  [130, -390, 390, -130],
+  [-390, 130, -130, 390],
+  [130, 130, 390, 390],
+].freeze
 ROW300_X0 = 3_088_430
 ROW300_Y0 = 2_794_510
 ROW300_X1 = 3_089_270
@@ -46,6 +55,8 @@ TOKEN_RE = /RECT\s*\(\s*-?\d+\s+-?\d+\s+-?\d+\s+-?\d+\s*\)|\(\s*(?:\*|-?\d+)\s+(
 boxes = Hash.new { |h, k| h[k] = [] }
 via1 = 0
 via2 = 0
+eco_via1 = []
+eco_via2 = []
 row300_via2 = 0
 section = nil
 layer = nil
@@ -144,10 +155,14 @@ File.foreach(def_file) do |line|
     end
 
     if tok == VIA1
+      raise "#{VIA1} has no anchor point" unless last
       via1 += 1
+      eco_via1 << last
     elsif tok == VIA2
+      raise "#{VIA2} has no anchor point" unless last
       via2 += 1
-      if last && last[0] >= ROW300_X0 && last[0] <= ROW300_X1 &&
+      eco_via2 << last
+      if last[0] >= ROW300_X0 && last[0] <= ROW300_X1 &&
          last[1] >= ROW300_Y0 && last[1] <= ROW300_Y1
         row300_via2 += 1
       end
@@ -165,6 +180,30 @@ raise "topcell #{topcell} not found in GDS" if gds_cell.nil?
 
 lines = []
 failures = []
+
+# Expected cut geometry, anchored at the DEF via points. Each 2x2 array is
+# compared only inside its own 0.78 um window so unrelated GDS vias are not
+# mistaken for ECO drops.
+cut_expected = {}
+[VIA1, VIA2].each do |name|
+  expected = RBA::Region.new
+  windows = RBA::Region.new
+  anchors = name == VIA1 ? eco_via1 : eco_via2
+  anchors.each do |x, y|
+    unless x.even? && y.even?
+      failures << "#{name}: anchor #{x},#{y} is off the GDS 0.001 um grid"
+      next
+    end
+    cx = x / 2
+    cy = y / 2
+    CUT_BOXES.each do |x0, y0, x1, y1|
+      expected.insert(RBA::Box.new(cx + x0, cy + y0, cx + x1, cy + y1))
+    end
+    windows.insert(RBA::Box.new(cx - 390, cy - 390, cx + 390, cy + 390))
+  end
+  cut_expected[name] = [expected, windows]
+end
+
 LAYERS.each do |name, (_dl, _dd, gl, gd)|
   def_region = RBA::Region.new
   boxes[name].each do |x0, y0, x1, y1|
@@ -182,6 +221,23 @@ LAYERS.each do |name, (_dl, _dd, gl, gd)|
   lines << "GDS_#{name}_SHAPES=#{gds_region.count}"
   lines << "XOR_#{name}_DBU2=#{xor_region.area}"
   failures << "#{name}: DEF/GDS top-level XOR is #{xor_region.area} dbu2" unless xor_region.area == 0
+end
+
+VIA_CUT_LAYER.each do |name, (gl, gd)|
+  gds_li = gds_layout.find_layer(RBA::LayerInfo.new(gl, gd))
+  if gds_li.nil?
+    failures << "#{name}: missing GDS cut layer #{gl}/#{gd}"
+    next
+  end
+  gds_cut = RBA::Region.new(gds_cell.shapes(gds_li))
+  expected, windows = cut_expected[name]
+  observed = gds_cut & windows
+  xor = observed ^ expected
+  lines << "GDS_#{name}_CUTS=#{observed.count}"
+  lines << "XOR_#{name}_CUT_DBU2=#{xor.area}"
+  unless xor.area == 0
+    failures << "#{name}: GDS cuts do not match the 2x2 array at every DEF anchor (XOR #{xor.area} dbu2)"
+  end
 end
 
 lines << "ECO_#{VIA1}=#{via1}"
