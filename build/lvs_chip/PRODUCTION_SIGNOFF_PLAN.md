@@ -80,10 +80,10 @@ sha256sum \
   > build/production/manifests/input_sha256.txt
 ```
 
-**Output**
+**Frozen input set**
 - `build/production/final/grx930_test_chip_final.gds`
-- `build/production/final/grx930_test_chip.cdl`
-- `build/production/final/grx930_test_chip.def`
+- `c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl` (in place; no copy)
+- `build/lvs_chip/rebased_grx930_test_chip.def` (in place; no copy; `DIEAREA` is the die authority)
 - `build/production/final/grx930_test_chip.spef`
 - `build/production/manifests/input_sha256.txt`
 
