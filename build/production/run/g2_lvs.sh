@@ -6,16 +6,32 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PROD="$PROJECT_ROOT/build/production"
 FINAL="$PROD/final"
 LVS="$PROD/lvs"
+MAN="$PROD/manifests"
 
 mkdir -p "$LVS" "$PROD/logs"
+
+block_g2() {
+  local note="$1"
+  shift
+  {
+    echo "gate=G2"
+    echo "status=BLOCKED"
+    echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "owner=Physical verification lead (unassigned)"
+    for line in "$@"; do echo "$line"; done
+    echo "note=$note"
+  } | tee "$LVS/G2_status.txt"
+  exit 2
+}
 
 GDS="$FINAL/grx930_test_chip_final.gds"
 SPEF="$FINAL/grx930_test_chip.spef"
 CDL="$PROJECT_ROOT/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl"
+DEF="$PROJECT_ROOT/build/lvs_chip/rebased_grx930_test_chip.def"
 DECK="$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs"
 IMAGE="${KLAYOUT_IMAGE:-grx930/klayout-lvs-pmap:local}"
 
-if [ ! -s "$GDS" ] || [ ! -s "$SPEF" ] || [ ! -s "$CDL" ] || [ ! -s "$DECK" ]; then
+if [ ! -s "$GDS" ] || [ ! -s "$SPEF" ] || [ ! -s "$CDL" ] || [ ! -s "$DEF" ] || [ ! -s "$DECK" ]; then
   {
     echo "gate=G2"
     echo "status=BLOCKED"
@@ -24,11 +40,45 @@ if [ ! -s "$GDS" ] || [ ! -s "$SPEF" ] || [ ! -s "$CDL" ] || [ ! -s "$DECK" ]; t
     [ -s "$GDS" ] || echo "missing=$GDS"
     [ -s "$SPEF" ] || echo "missing=$SPEF"
     [ -s "$CDL" ] || echo "missing=$CDL"
+    [ -s "$DEF" ] || echo "missing=$DEF"
     [ -s "$DECK" ] || echo "missing=$DECK"
     echo "note=Full-chip LVS not run; G0 frozen inputs are incomplete. SPEF is a G0 gate input, not an LVS deck input."
   } | tee "$LVS/G2_status.txt"
   exit 2
 fi
+
+G0_STATUS="$MAN/G0_status.txt"
+G0_SIGNOFF="$MAN/G0_signoff.txt"
+G0_MANIFEST="$MAN/input_sha256.txt"
+
+[ -s "$G0_STATUS" ] || block_g2 "G0 status is missing; no LVS run was started." "missing=$G0_STATUS"
+[ -s "$G0_MANIFEST" ] || block_g2 "G0 manifest is missing; no LVS run was started." "missing=$G0_MANIFEST"
+
+g0_state=$(grep '^status=' "$G0_STATUS" | tail -1 | cut -d= -f2-)
+[ "$g0_state" = "READY_FOR_REVIEW" ] || block_g2 "G0 is not READY; no LVS run was started." "g0_status=$g0_state"
+grep -qx 'gds_checks=PASS' "$G0_STATUS" || block_g2 "G0 GDS identity/ECO checks did not pass; no LVS run was started." "gds_checks=not-pass"
+grep -qx 'no_void=PASS' "$G0_STATUS" || block_g2 "G0 no-VOID check did not pass; no LVS run was started." "no_void=not-pass"
+
+g0_hash=$(sha256sum "$G0_MANIFEST" | awk '{print $1}')
+status_hash=$(grep '^manifest_sha256=' "$G0_STATUS" | tail -1 | cut -d= -f2-)
+[ "$g0_hash" = "$status_hash" ] || block_g2 "G0 status does not match the current manifest; no LVS run was started." "manifest_sha256_mismatch=status"
+
+[ -s "$G0_SIGNOFF" ] || block_g2 "G0 is not signed; no LVS run was started." "missing=$G0_SIGNOFF"
+signed_status=$(grep '^status=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
+signed_by=$(grep '^signed_by=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
+signed_utc=$(grep '^signed_utc=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
+signed_hash=$(grep '^manifest_sha256=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
+[ "$signed_status" = "SIGNED" ] || block_g2 "G0 signoff is not SIGNED; no LVS run was started." "g0_signoff=$signed_status"
+[ -n "$signed_by" ] || block_g2 "G0 signoff has no signer; no LVS run was started." "signed_by=empty"
+[ -n "$signed_utc" ] || block_g2 "G0 signoff has no timestamp; no LVS run was started." "signed_utc=empty"
+[ "$g0_hash" = "$signed_hash" ] || block_g2 "G0 signoff does not match the current manifest; no LVS run was started." "manifest_sha256_mismatch=signoff"
+
+for f in "$GDS" "$SPEF" "$CDL" "$DEF"; do
+  actual=$(sha256sum "$f" | awk '{print $1}')
+  expected=$(awk -v target="$f" '$2 == target {print $1; exit}' "$G0_MANIFEST")
+  [ -n "$expected" ] || block_g2 "G0 manifest has no hash for a frozen input; no LVS run was started." "missing_manifest_hash=$f"
+  [ "$actual" = "$expected" ] || block_g2 "A frozen input changed after G0; no LVS run was started." "manifest_hash_mismatch=$f"
+done
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "gate=G2" > "$LVS/G2_status.txt"

@@ -92,6 +92,8 @@ sha256sum \
 **Exit criteria**
 - One and only one GDS/CDL/DEF/SPEF set is named.
 - All four hashes match the recorded manifest.
+- `G0_status.txt` has `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `no_void=PASS`, and a `manifest_sha256` matching `input_sha256.txt`.
+- `G0_signoff.txt` exists with `status=SIGNED`, a non-empty `signed_by`, `signed_utc`, and the same `manifest_sha256`. This is a textual owner attestation, not a cryptographic signature.
 - GDS top cell is `grx930_test_chip`; **die from DEF `DIEAREA` is 3932 × 5122 µm**. The GDS top-cell bbox must fit inside the die; it is the routed content extent, not the die boundary. The fix16 reference bbox is 3931.530 × 5121.790 µm. The 3930 × 5120 figure in the old submission README is stale and is not the die, core, or boundary-layer definition.
 - The GDS includes the 8,168-drop ECO and excludes row 300.
 - No VOID submission artifact is used.
@@ -190,6 +192,8 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 ```
 
 Only the unmodified deck’s documented switches are used: `input`, `schematic`, `topcell`, `report`, `target_netlist`, `combine`, `check_ports`, `top_lvl_pins`, `run_mode`, `metal_level`, and `verbose`. `max_branch_complexity`, `write_netlist`, and `threads` are pruned-deck additions and are deliberately absent.
+
+**G0 precondition:** G2 refuses to run unless G0 is `READY_FOR_REVIEW`, `gds_checks=PASS`, `no_void=PASS`, and `G0_signoff.txt` is `SIGNED` with a matching manifest hash. It also recomputes the GDS, SPEF, CDL, and DEF hashes against `input_sha256.txt`; placing or replacing a file without a matching signed G0 cannot start LVS.
 
 **Environment prerequisite:** the unmodified deck calls `pmap` for its memory log line. The stock OpenLane image lacks it. The local image `grx930/klayout-lvs-pmap:local` adds `/usr/local/bin/pmap`, a diagnostic shim that reads resident pages from `/proc/<pid>/statm`; it is intentionally limited to this logging dependency and is not a procps replacement. Do not substitute the pruned deck to work around this.
 

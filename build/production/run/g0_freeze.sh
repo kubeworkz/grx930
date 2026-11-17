@@ -130,6 +130,8 @@ fi
   fi
   echo "note=Hashes and GDS checks are evidence only. G0 is not PASS until the design lead and independent reviewer sign the identity and contents."
 } > "$MAN/G0_status.txt"
+manifest_hash=$(sha256sum "$MAN/input_sha256.txt" | awk '{print $1}')
+echo "manifest_sha256=$manifest_hash" >> "$MAN/G0_status.txt"
 
 cat "$MAN/G0_status.txt"
 
