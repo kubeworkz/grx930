@@ -1,0 +1,15 @@
+LAND sub_row_0 M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_50_resite M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_100 M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_150 M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_200 M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_250_resite M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_300_resite M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_350_resite M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_400_resite M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_450 M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_500 M1_overlap=81.3% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND sub_row_540 M1_overlap=76.9% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND rail_left M1_overlap=70.5% M3_overlap=100.0% M2_foreign_overlap_area=0
+LAND rail_right M1_overlap=31.4% M3_overlap=100.0% M2_foreign_overlap_area=0
+LANDING_CHECK PASS

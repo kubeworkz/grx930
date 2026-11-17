@@ -1,0 +1,790 @@
+<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <description/>
+ <original-file/>
+ <generator>drc: script='/work/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/gf180mcu.drc'</generator>
+ <top-cell>crop_drc</top-cell>
+ <tags>
+ </tags>
+ <categories>
+  <category>
+   <name>M1.1</name>
+   <description>M1.1 : min. metal1 width : 0.23µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M1.2a</name>
+   <description>M1.2a : min. metal1 spacing : 0.23µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M1.2b</name>
+   <description>M1.2b : Space to wide Metal1 (length &amp; width &gt; 10um) : 0.3µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M1.3</name>
+   <description>M1.3 : Minimum metal1 area : 0.1444µm²</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.1</name>
+   <description>M2.1 : min. metal2 width : 0.28µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.2a</name>
+   <description>M2.2a : min. metal2 spacing : 0.28µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.2b</name>
+   <description>M2.2b : Space to wide Metal2 (length &amp; width &gt; 10um) : 0.3µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M2.3</name>
+   <description>M2.3 : Minimum metal2 area : 0.1444µm²</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.1</name>
+   <description>M3.1 : min. metal3 width : 0.28µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.2a</name>
+   <description>M3.2a : min. metal3 spacing : 0.28µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.2b</name>
+   <description>M3.2b : Space to wide Metal3 (length &amp; width &gt; 10um) : 0.3µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>M3.3</name>
+   <description>M3.3 : Minimum metal3 area : 0.1444µm²</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.1</name>
+   <description>V1.1 : Min/max via1 size . : 0.26µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.2a</name>
+   <description>V1.2a : min. via1 spacing : 0.26µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.2b</name>
+   <description>V1.2b : Space in 4x4 or larger via1 array : 0.36µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.3a</name>
+   <description>V1.3a : metal1 overlap of via1 &gt;= 0</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.3c</name>
+   <description>V1.3c : metal1 (&lt; 0.34um) end-of-line overlap of via1: 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.3d</name>
+   <description>V1.3d : If metal1 overlap via1 by &lt; 0.04um on one side, adjacent metal1 edges overlap. : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.4a</name>
+   <description>V1.4a : metal2 overlap of via1 &gt;= 0.01 upper_metal</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.4b</name>
+   <description>V1.4b : metal2 (&lt; 0.34um) end-of-line overlap of via1 : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V1.4c</name>
+   <description>V1.4c : If metal2 overlap via1 by &lt; 0.04um on one side, adjacent metal2 edges overlap. : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.1</name>
+   <description>V2.1 : Min/max via2 size . : 0.26µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.2a</name>
+   <description>V2.2a : min. via2 spacing : 0.26µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.2b</name>
+   <description>V2.2b : Space in 4x4 or larger via2 array : 0.36µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.3b</name>
+   <description>V2.3b : metal2 overlap of via2 &gt;= 0.01</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.3c</name>
+   <description>V2.3c : metal2 (&lt; 0.34um) end-of-line overlap of via2: 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.3d</name>
+   <description>V2.3d : If metal2 overlap via2 by &lt; 0.04um on one side, adjacent metal2 edges overlap. : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.4a</name>
+   <description>V2.4a : metal3 overlap of via2 &gt;= 0.01 upper_metal</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.4b</name>
+   <description>V2.4b : metal3 (&lt; 0.34um) end-of-line overlap of via2 : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+  <category>
+   <name>V2.4c</name>
+   <description>V2.4c : If metal3 overlap via2 by &lt; 0.04um on one side, adjacent metal3 edges overlap. : 0.06µm</description>
+   <categories>
+   </categories>
+  </category>
+ </categories>
+ <cells>
+  <cell>
+   <name>crop_drc</name>
+   <variant/>
+   <layout-name/>
+   <references>
+   </references>
+  </cell>
+ </cells>
+ <items>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2732.63,451.1;2732.63,451.985)|(2732.65,451.985;2732.65,450.871)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2732.63,452.73;2732.63,454.42)|(2732.65,454.649;2732.65,452.73)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2732.63,458.94;2732.63,459.825)|(2732.65,459.825;2732.65,458.711)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2732.63,460.57;2732.63,462.26)|(2732.65,462.489;2732.65,460.57)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2715.61,1616.96;2715.27,1616.96)|(2715.27,1617.03;2715.61,1617.03)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2721.325,1616.96;2721.325,1617.97)|(2721.45,1617.97;2721.45,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (3085.77,2012.89;3085.43,2012.89)|(3085.43,2012.96;3085.77,2012.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (3088.01,2012.89;3087.67,2012.89)|(3087.67,2012.96;3088.01,2012.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1646.6,2973.273;1646.6,2974.75)|(1646.635,2974.75;1646.635,2973.5)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1492.81,2976.6;1492.81,2976.83)|(1493,2976.83;1493,2976.6)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1483,2979.74;1483,2980.59)|(1483.075,2980.59;1483.075,2979.74)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1968.57,4360.96;1968.23,4360.96)|(1968.23,4361.03;1968.57,4361.03)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1970.81,4360.96;1970.47,4360.96)|(1970.47,4361.03;1970.81,4361.03)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1971.05,4660.96;1961.05,4660.96)|(1961.05,4661.18;1971.05,4661.18)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2715.27,1616.96;2715.27,1617.03;2715.61,1617.03;2715.61,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2721.325,1616.96;2721.325,1617.97;2721.45,1617.97;2721.45,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (3091.03,2000.96;3091.03,2001.19;3091.37,2001.19;3091.37,2000.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (3085.43,2012.89;3085.43,2012.96;3085.77,2012.96;3085.77,2012.89)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (3087.67,2012.89;3087.67,2012.96;3088.01,2012.96;3088.01,2012.89)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1646.6,2971.89;1646.6,2972.12;1646.83,2972.12;1646.83,2971.89)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1483,2973.13;1483,2973.51;1483.35,2973.51;1483.35,2973.13)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1492.81,2976.6;1492.81,2976.83;1493,2976.83;1493,2976.6)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1483,2979.74;1483,2980.59;1483.075,2980.59;1483.075,2979.74)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1968.23,3960.96;1968.23,3961.19;1968.57,3961.19;1968.57,3960.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1970.47,3960.96;1970.47,3961.19;1970.81,3961.19;1970.81,3960.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1968.23,4360.96;1968.23,4361.03;1968.57,4361.03;1968.57,4360.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1970.47,4360.96;1970.47,4361.03;1970.81,4361.03;1970.81,4360.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2721.18,1616.96;2721.18,1621.11)|(2721.45,1621.11;2721.45,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1646.6,2970.96;1646.6,2975.5)|(1646.82,2975.5;1646.82,2970.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1488.34,2981.39;1488.06,2981.39)|(1488.06,2981.5;1488.34,2981.5)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M2.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2713.9,1624.65;2713.9,1624.96;2714.18,1624.96;2714.18,1624.65)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M2.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1488.06,2981.39;1488.06,2981.5;1488.34,2981.5;1488.34,2981.39)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M3.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2721.45,1624.7;2713.85,1624.7)|(2713.85,1624.96;2721.45,1624.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M3.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2721.13,1620.78;2721.13,1621.06;2721.45,1621.06;2721.45,1620.78)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (2717.27,1616.96;2717.27,1617.13)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (2717.53,1617.13;2717.53,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.4a'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2717.259,1616.959;2717.269,1616.961;2717.531,1616.961;2717.541,1616.959)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.4b'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (2717.53,1616.96;2717.27,1616.96)/(2717.53,1616.96;2717.27,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.4c'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2717.27,1616.96;2717.27,1617.13;2717.53,1617.13;2717.53,1616.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (2713.91,1624.71;2713.91,1624.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (2714.17,1624.96;2714.17,1624.71)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.3b'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.3b'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.3d'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2713.91,1624.71;2713.91,1624.96;2714.17,1624.96;2714.17,1624.71)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.4a'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.4a'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.4b'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1483.03,2976.55;1483.03,2976.81)/(1483,2976.55;1483,2976.81)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.4c'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2721.19,1620.79;2721.19,1621.05;2721.45,1621.05;2721.45,1620.79)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.4c'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (1483.03,2976.55;1483.03,2976.81;1483.29,2976.81;1483.29,2976.55)</value>
+   </values>
+  </item>
+ </items>
+</report-database>

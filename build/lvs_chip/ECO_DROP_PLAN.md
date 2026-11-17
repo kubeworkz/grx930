@@ -1,6 +1,6 @@
 # ECO plan — 2×2 VSS/VDD drop arrays
 
-**Status: PENDING DRC / signoff. This plan is not an approval.**
+**Status: PENDING full-row/fix70 DRC and signoff. The corrected 14-site cropped surrogate is clean (0 added findings), but this plan is not an approval.**
 
 ## Scope
 
@@ -33,7 +33,7 @@ The final ECO must use the **2×2 via arrays**, not the earlier single-via geome
 1. **Window gate:** 541/541 `sub` rows legal with the 2×2 arrays and 0.84 µm M2 strap.
 2. **Rail gate:** both `$45264` endpoints legal; current endpoints are `1487.97, 2979.20` and `1651.97, 2979.20` µm (164.0 µm apart).
 3. **Synthetic DRC gate:** 14 representative drop sites, PDK `metal1,metal2,metal3,via1,via2` decks, **0 violations**.
-4. **Cropped real-layout gate:** no **added** M1/M2/M3/via finding at the representative sites after the drops. The first pass found 22 added findings (16 M1.2a, 6 M2.2a); this gate is **not yet met**.
+4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **MET** on the fix16 surrogate: 49 baseline findings before and after, **0 added / 0 removed**. The five resited rows are surrogate clean-row targets; this does **not** replace DRC of all 541 original row sites or the selected fix70 file.
 5. **Full-chip DRC:** unchanged pre-existing baseline; this plan does not claim full-chip DRC clean.
 6. **LVS:** not rerun by this ECO validation; prior residual remains 772 (770 with two NWELL taps).
 
@@ -55,9 +55,39 @@ The final ECO must use the **2×2 via arrays**, not the earlier single-via geome
   - Result: 0 violations
 - Cropped real-layout evidence is under `build/lvs_chip/eco_drop_2x2/`.
 
+## Corrected cropped validation (2026-11-17)
+
+The synthetic M1/M3 pads from the first pass were replaced by 0.90 × 0.78 µm M1
+and 0.90 × 0.80 µm M3 landing rectangles placed inside existing M1/M3 net
+geometry. The M1 pad sits inside the real VSS row/rail shape (76.9–81.3% area
+overlap; rail_left 70.5%, rail_right 31.4%), and the M3 pad is 100% inside the
+target strip. The M2 strap has **zero** overlap with existing foreign M2 on all
+14 checked sites.
+
+Resites used in the representative crop (original site → clean surrogate):
+
+- `sub_row_250` (2716.45, 2402.96) → `sub_row_500` (1970.53, 4362.96), M3 y=4362.96; removes the M1.2a conflict.
+- `sub_row_350` (2724.29, 3186.961) → `sub_row_0` (2727.65, 442.985), M3 y=462.96; removes the M2.2a conflict.
+- `sub_row_400` (1970.53, 3578.96) → `sub_row_150` (2716.45, 1618.96), M3 y=1622.96; removes the M2.2a conflict.
+- `rail_right` (1651.97, 2979.20) → (1651.60, 2973.50), M3 y=2972.96; shifts along the real rail into a 1.40 µm M2-free corridor.
+- Extra safety resites: `sub_row_50` → `sub_row_100` (1970.53, 1226.96), `sub_row_300` → `sub_row_450` (1970.53, 3970.96).
+
+Corrected evidence:
+
+- `build/lvs_chip/eco_drop_2x2/corrected/corrected_before.gds` — `faef835195fff4d79eee773390c23a61738a83f3494164c8a515a81c8d0c7080`
+- `build/lvs_chip/eco_drop_2x2/corrected/corrected_after.gds` — `12054120d68827fb2d5992b02ad454242dbd438eabd1910c932b31f52bfa730d`
+- `corrected_before.lyrdb` — `c38271e4416e6cae72143cd7e5c8219ba2b4714e709e8f9305e3cadb2c8c631e`
+- `corrected_after.lyrdb` — `6af9e1cd7cf14aa1f041d3660216bacbd6e3525f99adaff07b57fd5b54347863`
+- `corrected_compare.json` — `7dadc72edb9c9fcb5b983b0f6ab3247f440f8bbff3b9c8011e819208b3606538`
+- `landing_check.log` — `2479500792c22bfd00f410675467e22241523adcc408f83a6ab5e5d0b9c2a508`
+
+The run still uses the available fix16 surrogate, not the absent selected fix70
+GDS. **Full 541-row/fix70 cropped DRC and LVS remain pending.**
+
 ## Signoff
 
 The Gridworkz signoff packet is
 `build/lvs_chip/eco_drop_2x2/GRIDWORKZ_SIGNOFF_PACKET.md`.
-It is **pending** because the current cropped run is not clean and no Gridworkz
-signoff connector is available in this session.
+It is **pending** because the selected fix70 GDS is absent, the five resited rows
+have not been checked as a full 541-row DRC, and no Gridworkz signoff connector is
+available in this session. The corrected surrogate crop itself has 0 added findings.
