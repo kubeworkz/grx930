@@ -287,7 +287,7 @@ than two terminals; the audit DEF had 1,022 and 2 of that class. It is a loop ov
 DEF may define its own vias in a `VIAS` section instead. The old DEF has two:
 `via3_4_3200_3200_3_3_1040_1040` and `via4_5_3200_6400_4_2_1240_1240`. Promote
 them into a supplemental LEF; do not relax `stream_out.py` and do not read the
-artifact. Build `promote_def_vias.py` (§4) and run it after route export:
+artifact. Run `promote_def_vias.py` (§4) after route export:
 
 ```bash
 runpy c930/asic_gf180mcu/tools/lvs_chip/promote_def_vias.py \
@@ -522,10 +522,10 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
    with a generalized VDD exclusion and no dependence on `$45264`.
 2. **ECO inserter** — one site list consumed by an OpenDB DEF/ODB writer and a
    KLayout GDS patcher.
-3. **DEF `VIAS` promoter** — parse only the DEF `VIAS` section, cross-check each
-   `+ VIARULE` against the LEF, and write `routed_vias.lef` from the DEF's
-   cut/enclosure/rowcol values. It is a pure DEF+LEF transform and never reads
-   the artifact.
+3. **DEF `VIAS` promoter** — implemented in `promote_def_vias.py`; it parses
+   only the DEF `VIAS` section, cross-checks each `+ VIARULE` against the LEF,
+   and writes `routed_vias.lef` from the DEF's cut/enclosure/rowcol values. It is
+   a pure DEF+LEF transform and never reads the artifact.
 4. **All-site DRC/landing harness** — extend the 13-site checks to every row and
    rail.
 5. **CDL top override** — a `--top` option for `mk_chip_cdl.py`, because the flow
