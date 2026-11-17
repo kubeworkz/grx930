@@ -55,7 +55,7 @@ DFT insertion changes the netlist. Any LVS, DRC, or STA run made before G1 is a 
 **Inputs**
 - Final ECO GDS after the selected route/fill merge.
 - `c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl`
-- `build/lvs_chip/rebased_grx930_test_chip.def`
+- `build/lvs_chip/rebased_grx930_test_chip.def` (its `DIEAREA` is the die-size authority)
 - Final SPEF extracted from the final routed DEF
 - PDK deck identities:
   - `c930/asic_gf180mcu/libs.tech/klayout/tech/drc/gf180mcu.drc`
@@ -92,7 +92,7 @@ sha256sum \
 **Exit criteria**
 - One and only one GDS/CDL/DEF/SPEF set is named.
 - All four hashes match the recorded manifest.
-- GDS top cell is `grx930_test_chip`; die is 3930 × 5120 µm.
+- GDS top cell is `grx930_test_chip`; **die from DEF `DIEAREA` is 3932 × 5122 µm**. The GDS top-cell bbox must fit inside the die; it is the routed content extent, not the die boundary. The fix16 reference bbox is 3931.530 × 5121.790 µm. The 3930 × 5120 figure in the old submission README is stale and is not the die, core, or boundary-layer definition.
 - The GDS includes the 8,168-drop ECO and excludes row 300.
 - No VOID submission artifact is used.
 - Final CDL is generated from the same netlist as the final DEF.

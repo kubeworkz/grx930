@@ -78,7 +78,10 @@ if [ -s "$GDS" ] && [ -s "$BASE" ] && [ -s "$CHECK" ]; then
       -r /work/build/production/run/gds_checks.rb \
       -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
       -rd base=/work/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds \
+      -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
       -rd topcell=grx930_test_chip \
+      -rd expected_die_w=3932 \
+      -rd expected_die_h=5122 \
       -rd expected_drops=8168 \
       -rd report=/work/build/production/manifests/gds_checks.txt \
       > "$MAN/gds_checks.log" 2>&1
@@ -108,6 +111,7 @@ fi
   echo "cdl=$CDL"
   echo "def=$DEF"
   echo "gds=$GDS"
+  echo "die_source=DEF DIEAREA; GDS content bbox must fit inside it"
   echo "spef=$SPEF"
   echo "base=$BASE"
   echo "no_void=$no_void"

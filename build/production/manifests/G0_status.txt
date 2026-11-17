@@ -1,11 +1,12 @@
 gate=G0
 status=BLOCKED
-generated_utc=2026-11-17T18:23:13Z
+generated_utc=2026-11-17T18:28:18Z
 owner=Design lead (unassigned)
 manifest=/c/Users/kubew/grx930/build/production/manifests/input_sha256.txt
 cdl=/c/Users/kubew/grx930/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl
 def=/c/Users/kubew/grx930/build/lvs_chip/rebased_grx930_test_chip.def
 gds=/c/Users/kubew/grx930/build/production/final/grx930_test_chip_final.gds
+die_source=DEF DIEAREA; GDS content bbox must fit inside it
 spef=/c/Users/kubew/grx930/build/production/final/grx930_test_chip.spef
 base=/c/Users/kubew/grx930/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds
 no_void=NOT_RUN
