@@ -1,3 +1,5 @@
+# LEGACY single-via probe.  Do not use for the final ECO; the final endpoints
+# are reported by validate_drop_windows_2x2.rb.
 $stdout.sync = true
 l2n = RBA::LayoutToNetlist.new
 l2n.read("/scripts/chip.l2n")
@@ -68,9 +70,9 @@ ints.each do |a, z|
 end
 legal.uniq!
 puts "LEGAL_ENDPOINT_X_COUNT=#{legal.size}"
-if true
-  x1 = 1_484_960
-  x2 = 1_656_900
+if legal.size >= 2
+  x1 = legal.first
+  x2 = legal.last
   puts "DROP1=#{(x1*0.001).round(3)},#{(y*0.001).round(3)}"
   puts "DROP2=#{(x2*0.001).round(3)},#{(y*0.001).round(3)}"
   puts "SEPARATION_UM=#{((x2 - x1)*0.001).round(3)}"

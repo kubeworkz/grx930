@@ -1,3 +1,5 @@
+# LEGACY single-via probe.  Do not use for the final ECO; the final geometry is
+# validated by validate_drop_windows_2x2.rb and build_crop_drc_real.rb.
 $stdout.sync = true
 gds_path = "/work/c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds"
 gl = RBA::Layout.new
@@ -73,7 +75,6 @@ end
 puts "M2_GRID_CELLS=#{m2grid.size}"
 
 def m2_free?(grid, x, y0, y1, half, cell)
-  (x - half) / cell
   x0 = (x - half) / cell
   x1 = (x + half) / cell
   cy0 = y0 / cell
