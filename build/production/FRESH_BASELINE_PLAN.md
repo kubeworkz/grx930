@@ -1,7 +1,7 @@
-# Fresh baseline plan — RTL to ODB to a new-count ECO to GDS/SPEF
+# Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
 **Status: PLANNING ONLY — NOT STARTED.** No synthesis, place-and-route, DRT,
-stream-out, or RCX command has been run for this plan.
+stream-out, ECO insertion, or RCX command has been run for this plan.
 
 This creates a **new identity**. It cannot claim `fix59`, `fix70`, the historical
 541-row source, or the current 8,168-drop provenance. The existing submission
@@ -31,7 +31,7 @@ a property of the old fix16/fix70 database:
 
 Only reusing the exact old routed database preserves 8,168, and that is not a
 fresh baseline (and the database is absent). Therefore this plan derives a new
-drop list with a new count `N = N_sub + N_rows + N_rail`. G0, `def_gds_checks.rb`,
+drop list with a new count `N = N_sub + N_rows + N_rail`. G0, the DEF/GDS check,
 and the fixtures must take `N` as a parameter; the 8,168 fixtures remain
 historical/synthetic controls only. If the project requires exactly 8,168, the
 path is to recover the old database, not to run this plan.
@@ -40,38 +40,48 @@ path is to recover the old database, not to run this plan.
 
 | Purpose | Path | Notes |
 |---|---|---|
-| Full-chip flow runner | `c930/asic_gf180mcu/ws/ws_exec.sh` | LibreLane Chip flow; `WS_TAG`, `WS_LIMIT`, `WS_FROM`, `WS_OVERRIDE`; `cd /work/ws/template` |
-| Template source | `c930/asic_gf180mcu/tools/gf180mcu-project-template/` | `librelane/` and `src/`; `ws/template` is absent locally |
-| Slot config | `.../librelane/slots/slot_1x1.yaml` | pad ring and DIE/CORE area |
+| Full-chip flow runner | `c930/asic_gf180mcu/ws/ws_exec.sh` | LibreLane Chip flow; `WS_TAG`, `WS_LIMIT`, `WS_FROM`, `WS_OVERRIDE`; `cd /work/ws/template`; runs land in `librelane/runs/<tag>/` |
+| Template source | `c930/asic_gf180mcu/tools/gf180mcu-project-template/` | `librelane/` and `src/`; `ws/template` is absent locally; contains its own `.git` |
+| Slot config | `.../librelane/slots/slot_1x1.yaml` | pad ring and DIE/CORE area; 3930 × 5120 µm |
 | Design overrides | `c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml` | SHA-256 `2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9`; GRT 0.1, DRT_OPT_ITERS 8, antenna 10/10 |
 | Core adapter | `.../wafer_space_integration/chip_core_grx930.sv` | SHA-256 `585661ccc48cf1852ac0d9829abced93bac1beb3f151dbe640ad0f55d8b91c0b`; replaces `src/chip_core.sv` |
 | PDN config | `.../wafer_space_integration/pdn_cfg_grx930.tcl` | SHA-256 `cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b`; destination is `librelane/pdn/` |
-| Macro list | `.../wafer_space_integration/macros_grx930.yaml` | destination is `librelane/macros/` |
-| RTL tree | `c930/asic_gf180mcu/openlane2_rtl/src/` | destination is `ws/template/asic_core/`; exclude `c930_bootrom.sv` and `bootrom_wrapper.sv` |
-| Synth netlist (older arm) | `c930/asic_gf180mcu/openlane2_design/src/grx930_test_chip_synth_final.v` | SHA-256 `af4e0ad79a3f48edeb31a472d0130e72e9b9da7b3dcc054adef8483059ea635e`; not the full die |
-| Pre-DRT resume | `c930/asic_gf180mcu/ws/die_predrt_exec.sh` | resumes a frozen state; a fresh run starts from RTL |
-| Fast DRT loop | `c930/asic_gf180mcu/drt_fast/{run_drt.sh,die_drt.tcl,drt_fast.tcl}` | `run_drt.sh` hardcodes `D=/work/drt_fast`; 8 threads, Metal1–Metal5 |
+| Macro list | `.../wafer_space_integration/macros_grx930.yaml` | destination is `librelane/macros/`; 5 declarations, 0 demo SRAM |
+| RTL tree | `c930/asic_gf180mcu/openlane2_rtl/src/` | destination is `ws/template/asic_core/`; 40 `.sv`; exclude `c930_bootrom.sv` and `bootrom_wrapper.sv` |
+| Pre-DRT resume | `c930/asic_gf180mcu/ws/die_predrt_exec.sh` | records the exact resume shape and state-file contract; a fresh run starts from RTL |
+| Fast DRT loop | `c930/asic_gf180mcu/drt_fast/{run_drt.sh,die_drt.tcl,drt_fast.tcl}` | `run_drt.sh` hardcodes `D=/work/drt_fast`; output is `$FAST_OUT/$FAST_TAG.odb` |
 | DRT chain + guard | `c930/asic_gf180mcu/build/{die_drt_chain.sh,drt_curve_guard.sh,drt_db_compare_chain.sh,gate.sh}` | budgets, divergence kill, disk/memory gate |
-| Fill / stream / stitch / CDL | `c930/asic_gf180mcu/tools/lvs_chip/{fill_def.py,stream_out.py,pdn_stitch.py,mk_chip_cdl.py}` | must run in the OpenLane image; `stream_out.py` imports `klayout.db` |
+| Fill / stream / stitch / CDL | `c930/asic_gf180mcu/tools/lvs_chip/{fill_def.py,stream_out.py,pdn_stitch.py,mk_chip_cdl.py}` | the actual GDS construction; must run in the OpenLane image |
 | Stream/route checks | `.../tools/lvs_chip/{stream_check.py,net_compare.py}` | layer/placement and DEF-vs-CDL checks |
-| G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die/count/path currently hardcoded |
-| ECO crop geometry | `build_row_crops.rb`, `build_corrected_crops.rb`, `build/lvs_chip/eco_drop_2x2/` | 13 representative sites, not the full list |
-| ECO window logic | `validate_drop_windows_2x2.rb` | needs `fill_regression_tie_final.gds` + `chip.l2n`, both absent |
+| Cell/tech LEF | `c930/asic_gf180mcu/build/cells.lef` | 5 routing layers; carries the LEF definitions of the two 2×2 ECO vias |
+| PDK cell GDS | `c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds` | `stream_out.py` and `pdn_stitch.py` read cell layouts from it |
+| Artifact via geometry | `c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds` | VOID routing, but `stream_out.py` copies its seven `VIA_*` cells; pin it, never ship it |
+| G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die, count, paths, and the row-300 box are hardcoded |
 
 **Toolchain gap:** `ghcr.io/wafer-space/gf180mcu-precheck` is **not present in the
 local Docker image list**. It must be pulled and pinned by digest before Stage 2.
 The local images include `openlane2-gf180mcu:latest` and
 `ghcr.io/efabless/openlane2:2.3.10`, which are not the full-chip flow image.
 
+**Why the GDS pipeline matters.** The production GDS is not a single stream-out.
+`fill_def.py` adds fillers and well taps, `stream_out.py` renders the filled DEF,
+and `pdn_stitch.py` adds the M2 straps that join the M1 rails to the M3 grid. The
+fix16 base is exactly that chain (`..._stream_out_filled_stitched_fix16.gds`), and
+the `sub` islands this plan must find exist only after the fill and stitch passes.
+
 ## 3. Stages
 
 ### Stage 0 — Freeze the identity and choose the floorplan
 
-Inputs: RTL tree, overrides, slot config, PDK version.
+Inputs: RTL tree, overrides, slot config, PDK version, `cells.lef`, PDK cell GDS,
+and the artifact used for via geometry.
 
 Record before any compute:
-- Netlist entry: full-chip `openlane2_rtl` RTL through `ws_exec.sh`, **not** the
-  10 MB `openlane2_design` synth netlist. The two are different cell counts.
+- Netlist entry: full-chip `openlane2_rtl` RTL through `ws_exec.sh`. The flow's
+  `DESIGN_NAME` is `chip_top`, so the routed ODB and netlist top is `chip_top`;
+  `stream_out.py` names the GDS top `grx930_test_chip`. The CDL must be written
+  with `grx930_test_chip` as its top, or G2's `topcell` will name a netlist the
+  deck does not have (Stage 4).
 - Die/core: the ws `slot_1x1` template uses **3930 × 5120 µm**; the audit DEF and
   G0 currently use **3932 × 5122 µm**. A fresh floorplan uses the template die;
   the old G0 die constant must be parameterized.
@@ -79,8 +89,8 @@ Record before any compute:
 - Corner/RCX set: `nom`, `min`, `max` from the PDK RCX rules.
 
 Output: `build/production/baseline/baseline_manifest.sha256` with the RTL tree,
-overrides, PDN, macros, PDK version, flow image digest, die/core, and `N` marked
-`TO_BE_DERIVED`.
+overrides, PDN, macros, PDK version, flow image digest, die/core, LEF, cell GDS,
+via-geometry artifact, and `N` marked `TO_BE_DERIVED`.
 
 Gate: every input has a hash and there is exactly one netlist/floorplan pair.
 
@@ -93,7 +103,7 @@ Gate: every input has a hash and there is exactly one netlist/floorplan pair.
   OpenRCX rules exist:
   `rules.openrcx.gf180mcuD.{nom,min,max}`. If the image's PDK lacks them, stop;
   Stage 8 cannot run.
-- Pin the signoff images: `ghcr.io/efabless/openlane2:2.3.10` (stream/RCX) and
+- Pin `ghcr.io/efabless/openlane2:2.3.10` (fill/stream/stitch/CDL) and
   `grx930/klayout-lvs-pmap:local` (G2 deck).
 - Apply `c930/asic_gf180mcu/build/gate.sh`: at least 12 GB free RAM for pre-DRT,
   8 GB for a DRT arm, and ~150 GB of volume.
@@ -123,6 +133,7 @@ STAGE="$FLOW/ws/.template.stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -a "$FLOW/tools/gf180mcu-project-template/." "$STAGE/"
+rm -rf "$STAGE/.git"
 cp "$FLOW/wafer_space_integration/grx930_overrides.yaml" "$STAGE/librelane/"
 cp "$FLOW/wafer_space_integration/macros_grx930.yaml" "$STAGE/librelane/macros/"
 cp "$FLOW/wafer_space_integration/pdn_cfg_grx930.tcl" "$STAGE/librelane/pdn/"
@@ -138,6 +149,7 @@ rm -f "$STAGE/asic_core/c930_bootrom.sv" "$STAGE/asic_core/bootrom_wrapper.sv"
 # Fail before replacing a good tree if the staged tree is incomplete.
 test -f "$STAGE/src/chip_top.sv"
 test -f "$STAGE/src/chip_core.sv"
+test -f "$STAGE/src/slot_defines.svh"
 test -f "$STAGE/asic_core/grx930_test_chip.sv"
 test ! -e "$STAGE/asic_core/c930_bootrom.sv"
 test ! -e "$STAGE/asic_core/bootrom_wrapper.sv"
@@ -146,6 +158,7 @@ test -f "$STAGE/librelane/config.yaml"
 test -f "$STAGE/librelane/grx930_overrides.yaml"
 test -f "$STAGE/librelane/macros/macros_grx930.yaml"
 test -f "$STAGE/librelane/pdn/pdn_cfg_grx930.tcl"
+[ "$(ls "$STAGE/asic_core"/*.sv | wc -l)" -eq 38 ]
 [ "$(grep -c '^  gf180mcu' "$STAGE/librelane/macros/macros_grx930.yaml")" -eq 5 ]
 
 rm -rf "$FLOW/ws/template"
@@ -168,16 +181,21 @@ MSYS_NO_PATHCONV=1 docker run --rm --user 0:0 \
 ```
 
 `WS_TAG` must be fresh; resuming an old tag reuses its netlist. `STAMidPNR-3` is
-the last pre-DRT state: the STA steps pass the antenna-repaired ODB through, and
-the DRT step reads the ODB named by the last `state_out.json`.
+the last pre-DRT state: the STA steps pass the ODB through, and the DRT step reads
+the ODB named by the last `state_out.json`. At 0.1 the antenna step can abort with
+`GRT-0183`; `ws_exec.sh` installs `lln_antenna_catch.sh`, which keeps the inserted
+diodes and lets the step write its database. Treat that as a recorded condition,
+not a silent pass, and archive the antenna log.
 
-Output: `runs/prod01/.../*.odb` (copy to `build/production/baseline/pre_drt.odb`),
-`resolved.json`, GRT log.
+Output: the ODB named by the newest
+`ws/template/librelane/runs/prod01/*/state_out.json`; copy it to
+`build/production/baseline/pre_drt.odb` and keep the state file.
 
 Gate:
 - `resolved.json` shows `GRT_ADJUSTMENT: 0.1` and `DRT_OPT_ITERS: 8`; the GRT log
   contains `Global adjustment: 10%`.
-- No `GRT-0183` abort; PDN inserted once; macro-instance check passes.
+- PDN inserted once; macro-instance check passes; the antenna step either
+  completed cleanly or its GRT-0183 was caught and the ODB was written.
 - Cell count and die match the frozen manifest.
 
 ### Stage 3 — Complete detailed routing
@@ -204,35 +222,103 @@ exist here. Run `MSYS_NO_PATHCONV=1 docker run --rm \
 ghcr.io/wafer-space/gf180mcu-precheck sh -lc 'command -v openroad'` first if
 the name is not found.
 
-Run the same with `FAST_END_ITER=8` only after the probe shows a decreasing
-violation curve. Keep `drt_curve_guard.sh` attached to kill a divergent pass and
-to bound per-iteration and per-pass wall time. Do not use the last ODB if the
-curve diverged; the guard exists because the router writes the last database, not
-the best one.
+Run the same with `FAST_END_ITER=8` and a **new tag** (`prod01_drt8`) only after
+the probe shows a decreasing violation curve; `die_drt.tcl` writes
+`$FAST_OUT/$FAST_TAG.odb`, so reusing the probe tag would overwrite the probe.
+Keep `drt_curve_guard.sh` attached to kill a divergent pass and to bound
+per-iteration and per-pass wall time. Do not use the last ODB if the curve
+diverged; the guard exists because the router writes the last database, not the
+best one.
 
-Output: `build/production/baseline/routed.odb`, DRT log, violation curve.
+Output: `/work/drt_fast/out/prod01_drt/prod01_drt.odb` for the probe and
+`/work/drt_fast/out/prod01_drt8/prod01_drt8.odb` for the full pass; copy the
+latter to `build/production/baseline/routed.odb` and keep the DRT log and curve.
 
 Gate: **0 DRT violations**, or a numbered, owner-signed waiver. A nonzero count is
-not a routed production baseline and must not be streamed as one.
+not a routed production baseline.
 
-### Stage 4 — Route QA before the ECO
+### Stage 4 — Route QA, then build the pre-ECO GDS
 
-- Export DEF from the routed ODB to
-  `build/production/baseline/routed.def`; Stage 7 streams its pre-ECO GDS.
-- Run `net_compare.py --def <def> --cdl <cdl>` and `stream_check.py`.
-- Build a route-completeness checker (see §4): zero unrouted nets, zero zero-pin
-  dangling signal nets, zero unconnected special nets. The audited DEF had 1,022
-  dangling signal nets and 2 unconnected special nets; that class must fail here.
+Export the routed DEF and the post-route Verilog from the ODB in the flow image:
 
-Output: `route_qa.json` plus the DEF/CDL comparison.
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm \
+  -v "$(cygpath -m .):/work" -w /work \
+  ghcr.io/wafer-space/gf180mcu-precheck openroad -no_init -exit <<'EOF'
+read_db /work/build/production/baseline/routed.odb
+write_def /work/build/production/baseline/routed.def
+write_verilog /work/build/production/baseline/grx930_test_chip_routed.v
+EOF
+```
 
-Gate: 0 dangling/unrouted nets; all pins resolved; antenna clean.
+Build the CDL from that netlist and check the routed DEF against it. This is also
+the CDL G0/G2 will freeze, so build it here rather than at the end:
+
+```bash
+runpy() {
+  MSYS_NO_PATHCONV=1 docker run --rm \
+    -v "$(cygpath -m .):/work" -w /work \
+    --entrypoint python3 ghcr.io/efabless/openlane2:2.3.10 "$@"
+}
+# The flow top is chip_top; the GDS top (and the deck's `topcell`) is
+# grx930_test_chip. Add `--top` to mk_chip_cdl.py so the CDL's .SUBCKT matches
+# the layout, instead of renaming the netlist or the deck.
+runpy c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py \
+  --routed /work/build/production/baseline/grx930_test_chip_routed.v \
+  --top grx930_test_chip \
+  --out /work/build/production/baseline/grx930_test_chip.cdl
+runpy c930/asic_gf180mcu/tools/lvs_chip/net_compare.py \
+  --def /work/build/production/baseline/routed.def \
+  --cdl /work/build/production/baseline/grx930_test_chip.cdl \
+  --json /work/build/production/baseline/net_compare.json
+```
+
+`net_compare` answers connectivity, not coverage: a net can have both pins and no
+wire and still match. Add one small OpenDB pass over the routed database that
+counts multi-terminal signal nets with no `Wire`/`SWire` and any net with fewer
+than two terminals; the audit DEF had 1,022 and 2 of that class. It is a loop over
+`ord::get_db_block`, not a new checker.
+
+Then build the pre-ECO GDS in the documented order:
+
+```bash
+runpy c930/asic_gf180mcu/tools/lvs_chip/fill_def.py \
+  --def /work/build/production/baseline/routed.def \
+  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --out /work/build/production/baseline/filled.def
+runpy c930/asic_gf180mcu/tools/lvs_chip/stream_out.py \
+  --def /work/build/production/baseline/filled.def \
+  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --routing def --out /work/build/production/baseline/pre_eco_stream.gds
+runpy c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py \
+  --def /work/build/production/baseline/filled.def \
+  --gds /work/build/production/baseline/pre_eco_stream.gds \
+  --out-gds /work/build/production/baseline/pre_eco.gds \
+  --report /work/build/production/baseline/strap_report.json
+runpy c930/asic_gf180mcu/tools/lvs_chip/stream_check.py \
+  --gds /work/build/production/baseline/pre_eco.gds \
+  --def /work/build/production/baseline/filled.def \
+  --lib /work/c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
+```
+
+`stream_out.py` reads two fixed inputs through `/work`: the artifact GDS for its
+seven `VIA_*` cells and the PDK cell GDS for cell layouts. Both are pinned in the
+Stage 0 manifest. It also refuses a DEF whose via name has no `VIA_<name>` cell,
+which is why the ECO is patched into the GDS rather than re-streamed (Stage 6).
+
+Output: `routed.def`, `grx930_test_chip_routed.v`, `grx930_test_chip.cdl`,
+`filled.def`, `pre_eco.gds`, `strap_report.json`, `net_compare.json`.
+
+Gate: `net_compare` MATCH; 0 unrouted signal nets and 0 zero/one-terminal nets
+from the OpenDB pass; the CDL top is `grx930_test_chip`, the same name the GDS top
+and the G2 deck use; fill and stitch exit 0 with no refused island; stream check
+passes.
 
 ### Stage 5 — Derive the new ECO site list
 
-Build `find_eco_sites.py` on OpenDB, using the legality rules in
-`validate_drop_windows_2x2.rb` but taking `sub`, VSS, VDD, and rail shapes from
-the routed ODB instead of the missing `chip.l2n`:
+Build `find_eco_sites.py` on `pre_eco.gds` plus `filled.def`, using the legality
+rules in `validate_drop_windows_2x2.rb`. The `sub` islands and the rail ends exist
+only after the fill/stitch passes, so the routed ODB is the wrong source.
 
 - Substrate tap islands from connected M1 components on the `sub` net.
 - Legal VSS rows from the new VSS labels/strips; exclude any row whose only clean
@@ -240,155 +326,147 @@ the routed ODB instead of the missing `chip.l2n`:
 - Rail-end drops from the new power-rail geometry; do **not** look for the old
   `$45264` name.
 - 0.84 µm M2 strap, 1.40 µm M2 keepout, 0.90 × 0.78 µm M1 landing,
-  0.90 × 0.80 µm M3 landing, no row-300 cut overlap.
+  0.90 × 0.80 µm M3 landing, no VDD overlap.
 
 Output: `eco_sites.csv` (name, x, y, ty, kind) and a report with
 `N_sub + N_rows + N_rail = N`.
 
+The CSV carries **GDS database units** (1 nm), the frame the stitched GDS and
+`build_row_crops.rb` use. The DEF writer doubles them (2000 dbu/µm) and the
+checker converts back with the same round-half-to-even rule as `stream_out.py`;
+keep that conversion in one helper so a site cannot shift by half a DEF unit.
+
 Gate: `N` is frozen from the report, every site legal, no duplicate rows, and the
-generalized exclusion holds. **Do not gate on 8,168.**
+generalized VDD exclusion holds. **Do not gate on 8,168.**
 
-### Stage 6 — Insert the new ECO into the ODB and DEF
+### Stage 6 — Insert the ECO into the DEF/ODB and the base GDS
 
-Build `insert_eco_2x2.py` (OpenDB) from the geometry already used by
-`build_row_crops.rb`:
+One site list, two writers, so the DEF and GDS cannot drift:
 
-- M1 landing, M2 strap with 0.45 µm extension past each via centre, M3 landing.
-- Via1 `Via1_2X2_0_60_10_60_H_V` and Via2 `Via2_2X2_0_60_10_60_V_H`, 0.26 µm
-  cuts on 0.52 µm centres.
-- Insert the vias and wire segments into the routed ODB, then write the ECO DEF.
+1. **DEF/ODB** — `insert_eco_2x2.py` reads `filled.def` and `cells.lef` into
+   OpenDB (run under `openroad -python`; preflight `import odb`), inserts the M1
+   landing, the M2 strap, the M3 landing, and the Via1
+   `Via1_2X2_0_60_10_60_H_V` / Via2 `Via2_2X2_0_60_10_60_V_H` arrays, then writes
+   `eco_routed.def` and `eco_routed.odb`. Starting from `filled.def`, not the
+   routed ODB, keeps the fillers and well taps. The filled DEF has no `sub` net
+   (its `SPECIALNETS` are the supply nets), so create one with no terminals and
+   attach the substrate drops to it; the DEF net name is not what G0 checks, and
+   LVS reads the CDL, not this DEF. If the precheck image's OpenROAD has no
+   `odb` Python module, write the ECO DEF statements directly instead; the GDS
+   writer and the site list are unchanged.
+2. **GDS** — `patch_eco_gds.rb` inserts the same geometry from the same
+   `eco_sites.csv` into `pre_eco.gds` and writes
+   `build/production/final/grx930_test_chip_final.gds`. This is the 13-site
+   `build_row_crops.rb` method extended to the full list: M1 landing, M2 strap
+   with 0.45 µm extension past each via centre, M3 landing, 0.26 µm cuts on
+   0.52 µm centres.
 
-Run the DRC/landing checks on **all** rows and rails, not the 13-site crop. Extend
-the `eco_drop_2x2` methodology to the full list and compare before/after reports.
+Do **not** re-stream the ECO DEF. The artifact has only seven `VIA_*` cells
+(`Via1_HV`, `Via1_VV`, `Via2_VH`, `Via3_HV`, `Via4_VH`, and two stacked vias) and
+none of the 2×2 names, so `stream_out.py` refuses the ECO DEF. A re-stream would
+also drop the GDS-only stitch straps.
 
-Output: `eco_routed.odb`, `eco_routed.def`, `eco_drc.rlyrdb`, `eco_landing.log`.
+Run the DRC/landing checks on **all** sites, not the 13-site crop, and compare
+before/after reports.
 
-Gate: 0 added M1/M2/M3/V1/V2 findings; `N` of each 2×2 via; row-300 area count 0;
-M1/M3 landing coverage met; M2 keepout respected.
+Output: `eco_routed.odb`, `eco_routed.def`, `final/grx930_test_chip_final.gds`,
+`eco_drc.rlyrdb`, `eco_landing.log`.
 
-### Stage 7 — Stream the final GDS and run the G0 geometry checks
+Gate: 0 added M1/M2/M3/V1/V2 findings; `N` of each 2×2 via; no VDD overlap; M1/M3
+landing coverage met; M2 keepout respected.
 
-Stream the **pre-ECO** GDS first; `gds_checks.rb` needs it as `base` for the
-XOR, and without it the check has nothing to compare against. Then stream the
-final ECO GDS. Run both inside the OpenLane image (`stream_out.py` imports
-`klayout.db`; host Python is not enough):
+### Stage 7 — G0 geometry checks
 
-```bash
-stream() {
-  MSYS_NO_PATHCONV=1 docker run --rm \
-    -v "$(cygpath -m .):/work" -w /work \
-    --entrypoint python3 ghcr.io/efabless/openlane2:2.3.10 \
-    c930/asic_gf180mcu/tools/lvs_chip/stream_out.py "$@"
-}
+The checks are window-based, not full-chip: the pre-ECO GDS carries the
+`pdn_stitch` M2 straps that the DEF does not, so a whole-die Metal XOR can never
+be zero. Compare only the ECO windows, where base and final differ by exactly the
+inserted geometry.
 
-stream --def /work/build/production/baseline/routed.def \
-  --lef /work/c930/asic_gf180mcu/build/cells.lef --routing def \
-  --out /work/build/production/baseline/pre_eco.gds
+- `gds_checks.rb -rd gds=final.gds -rd base=pre_eco.gds -rd def=eco_routed.def
+  -rd topcell=grx930_test_chip -rd expected_die_w=<DEF die>
+  -rd expected_die_h=<DEF die> -rd expected_drops=<N> -rd report=...` — counts new
+  260 × 260 Via2 cuts, requires `4N`, and checks the die.
+- Change `def_gds_checks.rb` to take `-rd base=pre_eco.gds` and
+  `-rd sites=eco_sites.csv`, and compare, inside each site window,
+  `(final.gds − base.gds)` against `(eco_routed.def − filled.def)`. Count the 2×2
+  Via1/Via2 drops from the DEF anchors and require `N`, and assert that the GDS
+  delta is contained in the site windows. Drop the hardcoded `ROW300_*` box: the
+  generalized VDD exclusion is enforced when the site list is frozen (Stage 5),
+  and the old box names coordinates this baseline will not have.
+- Remove the old row-300 box from `gds_checks.rb` as well. It is a gate
+  (`row300_new == 0`), so on a new floorplan it can only fail spuriously; the
+  exclusion belongs in the site list, not in a fixed rectangle.
 
-stream --def /work/build/production/baseline/eco_routed.def \
-  --lef /work/c930/asic_gf180mcu/build/cells.lef --routing def \
-  --out /work/build/production/final/grx930_test_chip_final.gds
-```
+Run both checkers once, through the parameterized G0 in Stage 9; do not duplicate
+the invocations here.
 
-Run both KLayout checks with the exact `-rd` names the scripts require; both
-default to 3932 × 5122 and 8,168, so passing the new values is mandatory:
-
-```bash
-MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "$(cygpath -m .):/work" -w /work \
-  --entrypoint klayout grx930/klayout-lvs-pmap:local -b \
-  -r /work/build/production/run/gds_checks.rb \
-  -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
-  -rd base=/work/build/production/baseline/pre_eco.gds \
-  -rd def=/work/build/production/baseline/eco_routed.def \
-  -rd topcell=grx930_test_chip \
-  -rd expected_die_w=<DEF die width> -rd expected_die_h=<DEF die height> \
-  -rd expected_drops=<N> \
-  -rd report=/work/build/production/manifests/gds_checks.txt
-
-MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "$(cygpath -m .):/work" -w /work \
-  --entrypoint klayout grx930/klayout-lvs-pmap:local -b \
-  -r /work/build/production/run/def_gds_checks.rb \
-  -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
-  -rd def=/work/build/production/baseline/eco_routed.def \
-  -rd topcell=grx930_test_chip \
-  -rd expected_drops=<N> \
-  -rd report=/work/build/production/manifests/def_gds_checks.txt
-```
-
-`g0_freeze.sh` currently names
-`build/lvs_chip/rebased_grx930_test_chip.def` and hardcodes die 3932 × 5122 and
-8,168 drops; parameterize those before running it.
-
-Gate: both checkers exit 0; zero Metal1–Metal5 XOR; exact Via1/Via2 cut counts for
-`N`; row-300 area count 0; G0's no-VOID check rejects any hash matching a VOID
-artifact or the fix16 base.
+Gate: both checkers exit 0; zero XOR inside every site window; `N` Via1 and Via2
+drops; no new geometry outside the windows.
 
 ### Stage 8 — Extract SPEF with OpenRCX
 
 Verified in the pinned OpenROAD build
 (`edf00dff99f6c40d67a30c0e22a8191c5d2ed9d6`): `define_process_corner`,
 `extract_parasitics`, and `write_spef` exist. `report_parasitics` does **not**
-exist; use `report_parasitic_annotation` and `read_spef`/`diff_spef` instead.
+exist; use `report_parasitic_annotation` and `read_spef`/`diff_spef`.
 
-Build `extract_spef.tcl` and run it against the **same** `eco_routed.odb`:
+Run one corner per process against `eco_routed.odb`, so each rules file defines
+its own corner at index 0. Do not pass `-ext_model_file` again after
+`define_process_corner`; it redefines the corner set the first call just made.
 
 ```tcl
 read_db /work/build/production/baseline/eco_routed.odb
 define_process_corner -ext_model_index 0 \
   <PDK>/gf180mcuD/libs.tech/openlane/rules.openrcx.gf180mcuD.nom
-extract_parasitics -ext_model_file \
-  <PDK>/gf180mcuD/libs.tech/openlane/rules.openrcx.gf180mcuD.nom
+extract_parasitics
 write_spef /work/build/production/final/grx930_test_chip.spef
 ```
 
-This build's `define_process_corner` takes **one filename** plus the optional
-`-ext_model_index`; it does **not** take `(index, "corner name")`. Name the
-corner in the SPEF metadata or a sidecar, not in that call.
-
-`extract_parasitics` supports `-ext_model_file`, `-corner_cnt`, `-max_res`,
-`-coupling_threshold`, `-lef_res`, `-cc_model`, and `-no_merge_via_res`.
-`write_spef` takes an optional `-net_id`/`-nets` filter and a filename. Repeat for
-`min` and `max` if the signoff corners require them.
+`define_process_corner` takes **one filename** plus the optional
+`-ext_model_index`; it does **not** take `(index, "corner name")`. Name the corner
+in the SPEF metadata or a sidecar. Repeat with a separate process for `min` and
+`max` if the signoff corners require them.
 
 Validation: use `report_parasitic_annotation` and a net-coverage count against the
 DEF netlist; write a second SPEF with `-nets` for a subset and compare with
-`diff_spef` if needed. Do not rely on `report_parasitics`; it does not exist.
+`diff_spef` if needed.
 
-Gate: SPEF net count equals the DEF net count; no unannotated clock/power nets;
-corner files exist; `read_spef`/`diff_spef` succeeds.
+Gate: SPEF net count equals the DEF net count; no unannotated clock nets; corner
+files exist; `read_spef`/`diff_spef` succeeds.
 
 ### Stage 9 — Freeze, G0, and G2
 
-- Parameterize `build/production/run/g0_freeze.sh` for the new identity paths,
-  die (`-rd expected_die_w`, `-rd expected_die_h`), and `N`
-  (`-rd expected_drops`), add the pre-ECO `-rd base`, then regenerate
-  `input_sha256.txt`.
-- Run `g0_freeze.sh`; require `status=READY_FOR_REVIEW`, `gds_checks=PASS`,
-  `def_gds_checks=PASS`, `no_void=PASS`, and a manifest hash.
+- Add environment overrides to `g0_freeze.sh` and `g2_lvs.sh` rather than editing
+  constants per run: `G0_GDS`, `G0_CDL`, `G0_DEF`, `G0_SPEF`, `G0_BASE`,
+  `G0_DIE_W`, `G0_DIE_H`, `G0_DROPS`, `G0_SITES`, and the matching `G2_*`. Keep
+  the current paths as defaults, so the VOID package's state is unchanged. The
+  old row-300 rectangles in both checkers are removed rather than parameterized;
+  the site list is the only place that rule can be stated correctly.
+- Run `g0_freeze.sh` with `G0_BASE=pre_eco.gds`, `G0_DROPS=<N>`,
+  `G0_SITES=eco_sites.csv`, and the new GDS/CDL/DEF/SPEF. Require
+  `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `def_gds_checks=PASS`,
+  `no_void=PASS`, and a manifest hash.
 - Fill `G0_signoff.txt` with a **Gridworkz-authorized** signer. Do not fabricate it.
-- Run `g2_lvs.sh`; full-chip LVS uses the frozen GDS/SPEF/CDL/DEF and the
-  pmap-capable image. Historical full-chip LVS cost is ~5,983 s.
+- Run `g2_lvs.sh` with the new GDS/CDL/DEF/SPEF; full-chip LVS uses the frozen
+  GDS and CDL and the pmap-capable image. The DEF and SPEF are hash-gated inputs,
+  not deck inputs. Historical full-chip LVS cost is ~5,983 s.
 
 Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 
 ## 4. Pieces that must be built
 
-1. **Template staging script** — copies the template, overlays the four grx930
-   files at the exact `librelane/` and `src/` paths, and builds `asic_core/` from
-   the RTL tree. `ws/template` is absent locally.
-2. **Route QA checker** — dangling/unrouted/zero-pin net counts from the ODB or
-   DEF; the current G0 does not check this class.
-3. **ECO site finder** — OpenDB replacement for the missing `chip.l2n` logic in
-   `validate_drop_windows_2x2.rb`, with a generalized row-300 exclusion and no
-   dependence on `$45264`.
-4. **Full ECO inserter** — ODB/DEF insertion of the 2×2 arrays for `N` drops;
-   only the 13-site GDS crop exists today.
-5. **Full-row DRC/landing harness** — extend the 13-site checks to every row and
+1. **ECO site finder** — GDS/DEF replacement for the missing `chip.l2n` logic,
+   with a generalized VDD exclusion and no dependence on `$45264`.
+2. **ECO inserter** — one site list consumed by an OpenDB DEF/ODB writer and a
+   KLayout GDS patcher.
+3. **All-site DRC/landing harness** — extend the 13-site checks to every row and
    rail.
-6. **SPEF extraction Tcl** — OpenRCX corner runs using the verified commands.
-7. **G0 parameterization** — die, drop count, DEF path, and no-VOID identity.
+4. **CDL top override** — a `--top` option for `mk_chip_cdl.py`, because the flow
+   top (`chip_top`) is not the GDS/deck top (`grx930_test_chip`).
+5. **Window-based `def_gds_checks.rb`** — `base` + `sites` instead of a
+   whole-die XOR and a fixed row-300 box.
+6. **SPEF extraction Tcl** — one corner per process, verified commands only.
+7. **G0/G2 parameterization** — die, count, paths, and site list via environment.
 8. **Baseline manifest and signoff form** — one pinned set of hashes from RTL to
    SPEF.
 
@@ -400,9 +478,13 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | DRT memory | measured peaks 6.4–7.0 GB; Docker died under a 5.8 GiB container; pre-DRT gate wants 12 GB | `gate.sh`, 16 GB host, one arm at a time |
 | Disk exhaustion | a GRT overflow arm filled a 150 GB volume; flat stream GDS 509 MB, merged 392 MB, plus ODBs | 150 GB free; `disk_guard.sh`; delete intermediate ODBs |
 | GRT 0.2 abort | assembled die aborts with `GRT-0183` at 0.2; 0.1 is the landed value | keep 0.1; verify `Global adjustment: 10%` before DRT |
+| Antenna repair abort | at 0.1 the die's `repair_antennas` can abort with `GRT-0183`; the landed arm relies on the catch | keep `lln_antenna_catch.sh`; archive the antenna log; do not read a caught abort as an antenna pass |
 | ECO count is not 8,168 | the old list depends on fix16 `sub` islands, old VSS rows, and the old `$45264` net (§1.1) | derive `N`; parameterize G0/checkers; retire 8,168 with the old identity |
-| ECO legality | 4,318 pre-existing full-chip DRC findings; 0-added requirement over all rows; 1.40 µm M2 keepout | all-site DRC, resites, generalized row-300 exclusion |
-| Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
+| CDL/GDS top mismatch | flow `DESIGN_NAME: chip_top`; `stream_out.py` writes the GDS top as `grx930_test_chip`; the deck takes `topcell=grx930_test_chip` | write the CDL with `--top grx930_test_chip` and gate on it before G0 |
+| ECO via names are not streamable | artifact has only seven `VIA_*` cells; none of the two 2×2 names | patch `pre_eco.gds`; never re-stream the ECO DEF |
+| DEF/GDS mismatch outside the ECO | `pdn_stitch` writes M2 straps to the GDS only | window-based check; do not gate on a whole-die Metal XOR |
+| ECO legality | 4,318 pre-existing full-chip DRC findings; 0-added requirement over all sites; 1.40 µm M2 keepout | all-site DRC, resites, generalized VDD exclusion |
+| Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; fill/stream/stitch hours; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
 | Identity drift | three netlists/databases (53k synth, 209k audit, 332k die); 3930×5120 vs 3932×5122 die; unsupported keys `FP_DIE_AREA`/`DRT_ALLOW_CONGESTION` in the 2.3.10 log | Stage 0 freeze; pin one netlist/die; use supported keys |
 | RCX rules absent locally | local PDK `RCX_RULES` is empty; rules are referenced from the Volare PDK on the build machine; image PDK not yet inspected | verify `rules.openrcx.*` in the precheck image at Stage 1; stop if absent |
 | Precheck image absent | not in the local `docker images` list | pull and pin the digest before Stage 2 |
@@ -416,10 +498,10 @@ available, and DRT converging in the historical 0.1 regime:
 - Stage 0–1: 1–2 days.
 - Stage 2 (RTL to pre-DRT): 1–3 days.
 - Stage 3 (DRT): 1–10+ days; the largest variance.
-- Stage 4 (route QA): 1–2 days.
+- Stage 4 (QA + fill/stream/stitch/CDL): 1–2 days.
 - Stage 5 (ECO list): 3–5 days.
 - Stage 6 (ECO insert + all-site DRC): 1–2 weeks; the largest engineering risk.
-- Stage 7 (stream + G0 geometry): 1–2 days.
+- Stage 7 (geometry checks): 1 day.
 - Stage 8 (RCX/SPEF): 1–3 days.
 - Stage 9 (freeze/LVS): 1–2 days, plus Gridworkz signoff latency.
 
@@ -429,7 +511,8 @@ are outside this plan.
 
 ## 7. Explicitly not done
 
-No `docker pull`, `volare fetch`, `ws_exec.sh`, DRT, stream-out, or OpenRCX command
-has been run for this plan. Only read-only inspection and a no-design OpenROAD
-command-existence probe were run. No existing file was replaced. G0 remains
-`BLOCKED`, G2 exits 2, and the package remains **VOID — DO NOT SUBMIT**.
+No `docker pull`, `volare fetch`, `ws_exec.sh`, DRT, stream-out, ECO insertion, or
+OpenRCX command has been run for this plan. Only read-only inspection and a
+KLayout listing of the artifact's via cells were run. No existing file was
+replaced. G0 remains `BLOCKED`, G2 exits 2, and the package remains
+**VOID — DO NOT SUBMIT**.
