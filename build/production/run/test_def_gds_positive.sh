@@ -2,10 +2,11 @@
 # Positive control for def_gds_checks.rb: a synthetic DEF/GDS pair with matching
 # Metal1-Metal5 geometry, all 8,168 approved 2x2 ECO vias, and the matching
 # Via1/Via2 cut arrays on GDS 35/0 and 38/0 must return zero XOR and the exact
-# via counts. Two negative pairs must fail:
+# via counts. Three negative pairs must fail:
 # - positive_missing_cuts.gds omits two cut arrays.
-# - row300_via2.{def,gds} moves one Via2 drop into the row-300 exclusion box
-#   while keeping both counts at 8,168.
+# - row300_via2.{def,gds} moves one Via2 drop into the row-300 exclusion box.
+# - row300_edge_via2.{def,gds} keeps the anchor outside the box but lets its
+#   Via2 cuts intrude, so only an area rule can catch it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +72,7 @@ for via in "$V1" "$V2"; do
 done
 grep -qx 'EXPECTED_DROPS=8168' "$POS_REPORT" || { echo "FAIL: expected drop count is not 8168"; fail=1; }
 grep -qx "ROW300_${V2}=0" "$POS_REPORT" || { echo "FAIL: row-300 Via2 count is not zero"; fail=1; }
+grep -qx "ROW300_${V2}_ANCHORS_INSIDE=0" "$POS_REPORT" || { echo "FAIL: positive pair has a row-300 anchor"; fail=1; }
 grep -qx 'FAILURES=' "$POS_REPORT" || { echo "FAIL: report lists failures"; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
 
@@ -94,6 +96,7 @@ echo "--- row-300 control ---"
 cat "$ROW_REPORT"
 [ "$row_rc" -ne 0 ] || { echo "FAIL: checker accepted a Via2 array in row 300"; exit 1; }
 grep -qx "ROW300_${V2}=1" "$ROW_REPORT" || { echo "FAIL: row-300 Via2 count is not 1"; exit 1; }
+grep -qx "ROW300_${V2}_ANCHORS_INSIDE=1" "$ROW_REPORT" || { echo "FAIL: row-300 anchor was not reported inside the box"; exit 1; }
 grep -qx "ECO_${V1}=8168" "$ROW_REPORT" || { echo "FAIL: row-300 pair disturbed the Via1 count"; exit 1; }
 grep -qx "ECO_${V2}=8168" "$ROW_REPORT" || { echo "FAIL: row-300 pair disturbed the Via2 count"; exit 1; }
 for metal in Metal1 Metal2 Metal3 Metal4 Metal5; do
@@ -102,7 +105,27 @@ done
 for via in "$V1" "$V2"; do
   grep -qx "XOR_${via}_CUT_DBU2=0" "$ROW_REPORT" || { echo "FAIL: row-300 pair has a ${via} cut XOR"; exit 1; }
 done
-grep -qx 'FAILURES=row300 has 1 Via2_2X2 drops' "$ROW_REPORT" || {
+grep -qx 'FAILURES=row300 has 1 Via2_2X2 drops with cuts overlapping the exclusion box' "$ROW_REPORT" || {
   echo "FAIL: row-300 run failed for a reason other than the row-300 rule"; exit 1; }
 
-echo "PASS: matching pair is clean, and both the missing-cut and row-300 negative pairs fail"
+EDGE_REPORT="$FIX/def_gds_checks.row300_edge.txt"
+edge_rc=$(run_checker "$FIXW/row300_edge_via2.gds" "$FIXW/row300_edge_via2.def" \
+  "$FIXW/def_gds_checks.row300_edge.txt" "$FIX/def_gds_checks.row300_edge.log")
+[ -s "$EDGE_REPORT" ] || { echo "FAIL: row-300 edge run wrote no report (exit $edge_rc)"; exit 1; }
+echo "--- row-300 edge control ---"
+cat "$EDGE_REPORT"
+[ "$edge_rc" -ne 0 ] || { echo "FAIL: checker accepted Via2 cuts intruding into row 300"; exit 1; }
+grep -qx "ROW300_${V2}=1" "$EDGE_REPORT" || { echo "FAIL: intruding cuts were not counted"; exit 1; }
+grep -qx "ROW300_${V2}_ANCHORS_INSIDE=0" "$EDGE_REPORT" || { echo "FAIL: edge anchor was not reported outside the box"; exit 1; }
+grep -qx "ECO_${V1}=8168" "$EDGE_REPORT" || { echo "FAIL: edge pair disturbed the Via1 count"; exit 1; }
+grep -qx "ECO_${V2}=8168" "$EDGE_REPORT" || { echo "FAIL: edge pair disturbed the Via2 count"; exit 1; }
+for metal in Metal1 Metal2 Metal3 Metal4 Metal5; do
+  grep -qx "XOR_${metal}_DBU2=0" "$EDGE_REPORT" || { echo "FAIL: edge pair has a ${metal} XOR"; exit 1; }
+done
+for via in "$V1" "$V2"; do
+  grep -qx "XOR_${via}_CUT_DBU2=0" "$EDGE_REPORT" || { echo "FAIL: edge pair has a ${via} cut XOR"; exit 1; }
+done
+grep -qx 'FAILURES=row300 has 1 Via2_2X2 drops with cuts overlapping the exclusion box' "$EDGE_REPORT" || {
+  echo "FAIL: edge run failed for a reason other than the row-300 cut overlap"; exit 1; }
+
+echo "PASS: matching pair is clean; missing-cut, row-300 anchor, and row-300 cut-intrusion pairs all fail"

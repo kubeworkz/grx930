@@ -2,7 +2,8 @@
 # Required -rd values: gds, def, topcell, expected_drops, report.
 # The DEF's own NETS/SPECIALNETS routing is rebuilt as top-level metal and
 # XORed against the frozen GDS. The 8,168 ECO drops must be present as the
-# approved 2x2 Via1/Via2 names, and none may fall in the row-300 exclusion box.
+# approved 2x2 Via1/Via2 names, and no Via2 cut may overlap the row-300
+# exclusion box; an anchor outside the box is not enough if its cuts intrude.
 $stdout.sync = true
 
 gds = $gds
@@ -42,6 +43,8 @@ CUT_BOXES = [
   [-390, 130, -130, 390],
   [130, 130, 390, 390],
 ].freeze
+# The same array in DEF units (2000 dbu/um), for the row-300 area rule.
+CUT_BOXES_DEF = CUT_BOXES.map { |box| box.map { |v| v * 2 } }.freeze
 ROW300_X0 = 3_088_430
 ROW300_Y0 = 2_794_510
 ROW300_X1 = 3_089_270
@@ -58,6 +61,7 @@ via2 = 0
 eco_via1 = []
 eco_via2 = []
 row300_via2 = 0
+row300_anchor_via2 = 0
 section = nil
 layer = nil
 width = nil
@@ -73,6 +77,20 @@ def add_segment(boxes, layer, x0, y0, x1, y1, w)
   add_box(boxes, layer,
           [x0, x1].min - h, [y0, y1].min - h,
           [x0, x1].max + h, [y0, y1].max + h)
+end
+
+# True when any of the four Via2 cuts of the array overlaps the row-300 box
+# with positive area. Touching an edge is not an overlap.
+def row300_cut_overlap?(x, y)
+  CUT_BOXES_DEF.each do |x0, y0, x1, y1|
+    bx0 = x + x0
+    bx1 = x + x1
+    by0 = y + y0
+    by1 = y + y1
+    return true if bx0 < ROW300_X1 && ROW300_X0 < bx1 &&
+                   by0 < ROW300_Y1 && ROW300_Y0 < by1
+  end
+  false
 end
 
 File.foreach(def_file) do |line|
@@ -164,8 +182,9 @@ File.foreach(def_file) do |line|
       eco_via2 << last
       if last[0] >= ROW300_X0 && last[0] <= ROW300_X1 &&
          last[1] >= ROW300_Y0 && last[1] <= ROW300_Y1
-        row300_via2 += 1
+        row300_anchor_via2 += 1
       end
+      row300_via2 += 1 if row300_cut_overlap?(last[0], last[1])
     end
     pts = []
     last = nil
@@ -244,9 +263,10 @@ lines << "ECO_#{VIA1}=#{via1}"
 lines << "ECO_#{VIA2}=#{via2}"
 lines << "EXPECTED_DROPS=#{expected_drops}"
 lines << "ROW300_#{VIA2}=#{row300_via2}"
+lines << "ROW300_#{VIA2}_ANCHORS_INSIDE=#{row300_anchor_via2}"
 failures << "Via1_2X2 drops #{via1} != #{expected_drops}" unless via1 == expected_drops
 failures << "Via2_2X2 drops #{via2} != #{expected_drops}" unless via2 == expected_drops
-failures << "row300 has #{row300_via2} Via2_2X2 drops" unless row300_via2 == 0
+failures << "row300 has #{row300_via2} Via2_2X2 drops with cuts overlapping the exclusion box" unless row300_via2 == 0
 
 lines << "FAILURES=#{failures.join('; ')}"
 text = lines.join("\n") + "\n"

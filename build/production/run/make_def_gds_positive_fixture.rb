@@ -11,6 +11,8 @@
 #   at site 1, proving the cut check is not vacuous.
 # - row300_via2.{def,gds} moves one drop into the row-300 exclusion box,
 #   keeping both via counts at 8,168, so the row-300 rule is the only failure.
+# - row300_edge_via2.{def,gds} puts one anchor just outside the box so only its
+#   Via2 cuts intrude, proving the rule is an area check, not an anchor check.
 #
 # Run inside the KLayout container:
 #   klayout -b -r make_def_gds_positive_fixture.rb \
@@ -50,6 +52,8 @@ gds_file = File.join(out_dir, "positive.gds")
 mismatch_file = File.join(out_dir, "positive_missing_cuts.gds")
 row300_def = File.join(out_dir, "row300_via2.def")
 row300_gds = File.join(out_dir, "row300_via2.gds")
+row300_edge_def = File.join(out_dir, "row300_edge_via2.def")
+row300_edge_gds = File.join(out_dir, "row300_edge_via2.gds")
 
 def write_def(path, sites)
   File.open(path, "w") do |f|
@@ -132,8 +136,18 @@ row300_sites[0] = ROW300_VIA2
 write_def(row300_def, row300_sites)
 write_gds(row300_gds, row300_sites)
 
-[def_file, gds_file, mismatch_file, row300_def, row300_gds].each do |path|
+# Row-300 edge pair: the anchor is 700 dbu outside the box's left edge, but
+# the right Via2 cuts reach 80 dbu into it. The old anchor rule would pass.
+ROW300_EDGE_VIA2 = [3_087_730, 2_798_960]
+edge_sites = sites.dup
+edge_sites[0] = ROW300_EDGE_VIA2
+write_def(row300_edge_def, edge_sites)
+write_gds(row300_edge_gds, edge_sites)
+
+[def_file, gds_file, mismatch_file, row300_def, row300_gds,
+ row300_edge_def, row300_edge_gds].each do |path|
   puts "WROTE #{path} (#{File.size(path)} bytes)"
 end
 puts "SITES=#{sites.length} VIA1=#{sites.length} VIA2=#{sites.length}"
 puts "ROW300_ANCHOR=#{ROW300_VIA2.join(',')}"
+puts "ROW300_EDGE_ANCHOR=#{ROW300_EDGE_VIA2.join(',')}"
