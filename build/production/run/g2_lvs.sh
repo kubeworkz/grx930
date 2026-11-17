@@ -64,6 +64,7 @@ status_hash=$(grep '^manifest_sha256=' "$G0_STATUS" | tail -1 | cut -d= -f2-)
 [ "$g0_hash" = "$status_hash" ] || block_g2 "G0 status does not match the current manifest; no LVS run was started." "manifest_sha256_mismatch=status"
 
 [ -s "$G0_SIGNOFF" ] || block_g2 "G0 is not signed; no LVS run was started." "missing=$G0_SIGNOFF"
+grep -qx 'gate=G0' "$G0_SIGNOFF" || block_g2 "G0 signoff has no exact gate=G0 line; no LVS run was started." "gate=not-G0"
 signed_status=$(grep '^status=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
 signed_by=$(grep '^signed_by=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
 signed_utc=$(grep '^signed_utc=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
