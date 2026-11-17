@@ -1,6 +1,6 @@
 # Gridworkz signoff packet — 2×2 VSS/VDD drops
 
-- **Packet status: PENDING. NOT SIGNED. Candidate is 8,168 drops (540 row drops + 2 rail drops); row 300 is excluded. The 13-site cropped DRC is 226/226 with 0 added findings.**
+- **Packet status: PENDING. NOT SIGNED. Candidate is 8,168 drops (540 row drops + 2 rail drops); row 300 is excluded. The 13-site cropped DRC is 226/226 with 0 added findings. Production signoff is not established; see Production readiness below.**
 - **Submission status: NOT SUBMITTED — no Gridworkz connector/API is available in this session.**
 - **Prepared:** 2026-11-17
 - **Scope:** 8,168-drop candidate: 7,626 connected `sub` islands + 540 `sub` row drops + 2 `$45264` rail-end drops. `sub_row_300` is excluded.
@@ -9,6 +9,20 @@
 ## Decision requested
 
 Approve only after the selected fix70 cropped real-layout DRC has **zero added findings** for the 540-row candidate and the ECO plan’s 0.84 µm M2 / 2×2 array geometry is used. The current 13-site candidate crop has zero added findings, but row 300 is excluded and the historical 541-row source is absent. This packet does not grant a waiver.
+
+## Production readiness — NOT ESTABLISHED
+
+This packet is an ECO geometry/signoff artifact, not a production release. The following production items have no verdict and must not be inferred from the focused crop:
+
+| # | Required production evidence | Current state | Status |
+|---|---|---|---|
+| 1 | Full-chip LVS verdict | Full run stopped after more than 100 minutes; no full-chip verdict. A reduced crop cannot substitute. | **NOT DONE** |
+| 2 | Full-chip DRC across all layers and rules | Only focused M1/M2/M3/V1/V2 checks were run. Antenna, density, ERC, well/isolation, latch-up, ESD, sealring, padring, and DFM are not covered. | **NOT DONE** |
+| 3 | Full-chip timing and power signoff | No multi-corner STA, clock/reset integrity, IR drop, electromigration, crosstalk, or thermal signoff. | **NOT DONE** |
+| 4 | Production test evidence | No DFT/ATPG coverage, scan, boundary scan, memory BIST, fault simulation, or bring-up plan evidence. | **NOT DONE** |
+| 5 | Foundry tape-out review | No final GDS/CDL approval, approved PDK/rule-deck versions, waiver disposition, mask preparation, package/pinout review, or silicon qualification. | **NOT DONE** |
+
+**Overall production release: NOT APPROVED.** The 13-site crop has 0 added findings only for the focused decks listed below.
 
 ## Results
 
@@ -104,6 +118,7 @@ The first cropped pass added synthetic M1 landing pads that produced M1.2a edges
 - **Gridworkz signatory:** ____________________  Date: __________
 - **Decision:** APPROVED / REJECTED / PENDING
 - **Waiver granted:** NO
+- **Production release:** NOT APPROVED — full-chip LVS, full DRC, timing/power, test, and foundry review are outstanding
 - **Gridworkz submission:** NOT SUBMITTED — connector unavailable
 
 Row 300 is removed from the candidate and packet; the packet remains pending because only 540 of 541 row drops are represented and the selected fix70/full-541-row cropped run cannot be run. The 13-site crop has 0 added findings; the earlier surrogate is not valid 541-row evidence.

@@ -1,6 +1,6 @@
 # ECO plan — 2×2 VSS/VDD drop arrays
 
-**Status: PENDING. Row 300 is excluded from the candidate because its only DRC-clean M2 route overlapped VDD. The candidate is 8,168 drops (540 row drops + 2 rail drops); the 13-site crop is 226/226 with 0 added findings. The historical 541 evidence source is absent; this plan is not an approval.**
+**Status: PENDING. Row 300 is excluded from the candidate because its only DRC-clean M2 route overlapped VDD. The candidate is 8,168 drops (540 row drops + 2 rail drops); the 13-site crop is 226/226 with 0 added findings. The historical 541 evidence source is absent. Production release is not established: full-chip LVS, full DRC, timing/power, test, and foundry tape-out review are outstanding. This plan is not an approval.**
 
 ## Scope
 
@@ -36,7 +36,8 @@ The final ECO must use the **2×2 via arrays**, not the earlier single-via geome
 3. **Synthetic DRC gate:** 14 representative drop sites, PDK `metal1,metal2,metal3,via1,via2` decks, **0 violations**.
 4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **MET on the 13-site candidate**: **226 before / 226 after, 0 added / 0 removed**. Row 300 is **not in the crop**; its 0-added dogleg was removed because the overlap was VDD, so no shorting row remains in the candidate.
 5. **Full-chip DRC:** unchanged pre-existing baseline; this plan does not claim full-chip DRC clean.
-6. **LVS:** not rerun by this ECO validation; prior residual remains 772 (770 with two NWELL taps).
+6. **LVS:** not rerun by this ECO validation; prior residual remains 772 (770 with two NWELL taps). Full-chip LVS has no verdict: the full run was stopped after more than 100 minutes, and a reduced crop cannot substitute.
+7. **Production release gate:** **NOT MET**. Full-chip DRC across all layers/rules, multi-corner STA and power/IR/EM/crosstalk/thermal signoff, DFT/ATPG and bring-up evidence, and foundry final-GDS/CDL/PDK/waiver/mask/package/silicon review are all outstanding. The focused 13-site crop establishes none of them.
 
 ## Evidence and provenance
 
@@ -108,4 +109,4 @@ The candidate contains **540 of 541** row drops. The historical `541/541` valida
 
 The Gridworkz signoff packet is
 `build/lvs_chip/eco_drop_2x2/GRIDWORKZ_SIGNOFF_PACKET.md`.
-It is **pending** because row 300 is excluded (no clear 0.84 µm M2 route and the prior route shorted VDD), the selected fix70 and historical 541 source GDS are absent, and no Gridworkz signoff connector is available. The 13-site candidate crop has **0 added findings** and no row-300 short; the earlier duplicate-row surrogate is not valid 541-row evidence.
+It is **pending** because row 300 is excluded (no clear 0.84 µm M2 route and the prior route shorted VDD), the selected fix70 and historical 541 source GDS are absent, and no Gridworkz signoff connector is available. The 13-site candidate crop has **0 added findings** and no row-300 short; the earlier duplicate-row surrogate is not valid 541-row evidence. Production release remains **NOT APPROVED** pending full-chip LVS, full DRC, timing/power, test, and foundry review.
