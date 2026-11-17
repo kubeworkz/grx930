@@ -26,7 +26,7 @@ This plan is a sequence and evidence contract, not a result. A gate is complete 
 | Physical verification lead | ____________________ | Full LVS and full DRC runs, reports, waiver register |
 | STA/power lead | ____________________ | Multi-corner STA, power, IR, EM, crosstalk, thermal |
 | Tape-out manager | ____________________ | Foundry package, mask review, package/pinout, silicon qualification |
-| Independent reviewer | ____________________ | Recomputes input hashes and checks reports before release |
+| Gridworkz signatory | Gridworkz | Recomputes input hashes and signs the G0 attestation; no Gridworkz connector is available in this session |
 
 An owner name is required before the gate starts. An unsigned gate stays **NOT RUN**, even if a report exists.
 
@@ -93,7 +93,7 @@ sha256sum \
 - One and only one GDS/CDL/DEF/SPEF set is named.
 - All four hashes match the recorded manifest.
 - `G0_status.txt` has `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `no_void=PASS`, and a `manifest_sha256` matching `input_sha256.txt`.
-- `G0_signoff.txt` exists with an exact `gate=G0` line, `status=SIGNED`, a non-empty `signed_by`, `signed_utc`, and the same `manifest_sha256`. The canonical fields and empty-value form are in `build/production/manifests/G0_signoff.template.txt`; copy it to `G0_signoff.txt` and fill every field. This is a textual owner attestation, not a cryptographic signature.
+- `G0_signoff.txt` exists with an exact `gate=G0` line, `status=SIGNED`, a non-empty `signed_by`, `signed_utc`, and the same `manifest_sha256`. The canonical fields and empty-value form are in `build/production/manifests/G0_signoff.template.txt`; copy it to `G0_signoff.txt` and fill every field with a **Gridworkz-authorized signatory**. This is a textual owner attestation, not a cryptographic signature, and the agent must not fill it on Gridworkz's behalf.
 - GDS top cell is `grx930_test_chip`; **die from DEF `DIEAREA` is 3932 × 5122 µm**. The GDS top-cell bbox must fit inside the die; it is the routed content extent, not the die boundary. The fix16 reference bbox is 3931.530 × 5121.790 µm. The 3930 × 5120 figure in the old submission README is stale and is not the die, core, or boundary-layer definition.
 - The GDS includes the 8,168-drop ECO and excludes row 300.
 - No VOID submission artifact is used.

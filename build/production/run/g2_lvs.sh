@@ -71,6 +71,10 @@ signed_utc=$(grep '^signed_utc=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
 signed_hash=$(grep '^manifest_sha256=' "$G0_SIGNOFF" | tail -1 | cut -d= -f2-)
 [ "$signed_status" = "SIGNED" ] || block_g2 "G0 signoff is not SIGNED; no LVS run was started." "g0_signoff=$signed_status"
 [ -n "$signed_by" ] || block_g2 "G0 signoff has no signer; no LVS run was started." "signed_by=empty"
+case "$signed_by" in
+  *Gridworkz*) ;;
+  *) block_g2 "G0 signoff is not from a Gridworkz signatory; no LVS run was started." "signed_by=not-Gridworkz" ;;
+esac
 [ -n "$signed_utc" ] || block_g2 "G0 signoff has no timestamp; no LVS run was started." "signed_utc=empty"
 [ "$g0_hash" = "$signed_hash" ] || block_g2 "G0 signoff does not match the current manifest; no LVS run was started." "manifest_sha256_mismatch=signoff"
 
