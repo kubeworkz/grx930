@@ -245,7 +245,9 @@ def parse_lef_vias(path):
     vias = {}
     name = None
     layer = None
-    for lineno, line in enumerate(open(path, errors="replace"), 1):
+    with open(path, errors="replace") as fh:
+        lines = fh.read().splitlines()
+    for lineno, line in enumerate(lines, 1):
         s = line.strip()
         m = LEF_VIA_RE.match(s)
         if m:
@@ -273,8 +275,19 @@ def parse_lef_vias(path):
     return vias
 
 
+def require_lef_via(lef_vias, name, lef_paths):
+    """The LEF definition for a DEF via name, or a REFUSED exit."""
+    definition = lef_vias.get(name)
+    if definition is None:
+        raise SystemExit(f"REFUSED  the DEF uses via {name}, but no LEF in "
+                         f"{', '.join(lef_paths)} defines it as a VIA")
+    return definition
+
+
 def build_lef_via(out_layout, db, name, definition):
     """A `VIA_<name>` cell from one LEF VIA definition, on PDK GDS layer numbers."""
+    if not definition:
+        raise SystemExit(f"REFUSED  via {name}: empty LEF VIA definition")
     cell = out_layout.create_cell(f"VIA_{name}")
     for lef_layer, (x0, y0, x1, y1) in definition:
         level = DEF_LAYER.get(lef_layer)
@@ -524,12 +537,8 @@ def main():
         # the LEF's own layers and RECTs, never from the artifact.
         via_cells = {}
         for name in sorted({v[0] for v in vias}):
-            definition = lef_vias.get(name)
-            if definition is None:
-                print(f"REFUSED  the DEF uses via {name}, but no LEF in "
-                      f"{', '.join(lef_paths)} defines it as a VIA")
-                return 2
-            via_cells[name] = build_lef_via(out, db, name, definition)
+            via_cells[name] = build_lef_via(
+                out, db, name, require_lef_via(lef_vias, name, lef_paths))
         n_via_types = len(via_cells)
 
         layer_index = {}
