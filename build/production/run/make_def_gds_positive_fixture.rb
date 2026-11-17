@@ -6,9 +6,11 @@
 # micrometres, independently of the DEF's 2000 dbu/um text, so the checker
 # must parse, convert, and XOR two encodings.
 #
-# It also writes positive_missing_cuts.gds, which omits the Via1 cuts at site 0
-# and the Via2 cuts at site 1. The checker must fail on that file, proving the
-# cut check is not vacuous.
+# Two negative pairs are written beside it:
+# - positive_missing_cuts.gds omits the Via1 cuts at site 0 and the Via2 cuts
+#   at site 1, proving the cut check is not vacuous.
+# - row300_via2.{def,gds} moves one drop into the row-300 exclusion box,
+#   keeping both via counts at 8,168, so the row-300 rule is the only failure.
 #
 # Run inside the KLayout container:
 #   klayout -b -r make_def_gds_positive_fixture.rb \
@@ -46,30 +48,35 @@ raise "site count #{sites.length} != #{EXPECTED}" unless sites.length == EXPECTE
 def_file = File.join(out_dir, "positive.def")
 gds_file = File.join(out_dir, "positive.gds")
 mismatch_file = File.join(out_dir, "positive_missing_cuts.gds")
+row300_def = File.join(out_dir, "row300_via2.def")
+row300_gds = File.join(out_dir, "row300_via2.gds")
 
-File.open(def_file, "w") do |f|
-  f.puts "VERSION 5.8 ;"
-  f.puts "DIVIDERCHAR \"/\" ;"
-  f.puts "BUSBITCHARS \"[]\" ;"
-  f.puts "DESIGN grx930_test_chip ;"
-  f.puts "UNITS DISTANCE MICRONS 2000 ;"
-  f.puts "DIEAREA ( 0 0 ) ( #{DIE_W} #{DIE_H} ) ;"
-  f.puts "SPECIALNETS #{sites.length + 1} ;"
-  f.puts "- VDD ( * VDD ) + USE POWER"
-  f.puts "  + ROUTED Metal4 ( 3000000 9000000 ) RECT ( -1000 -1000 1000 1000 )"
-  f.puts "    NEW Metal5 ( 3000000 9000000 ) RECT ( -1200 -1200 1200 1200 )"
-  f.puts "  ;"
-  sites.each_with_index do |(cx, cy), i|
-    f.puts "- VSS_#{i} ( * VSS ) + USE GROUND"
-    f.puts "  + ROUTED Metal1 ( #{cx} #{cy} ) RECT ( -900 -780 900 780 )"
-    f.puts "    NEW Metal2 1680 ( #{cx - 2800} #{cy} ) ( #{cx + 2800} #{cy} )"
-    f.puts "    NEW Metal3 ( #{cx} #{cy} ) RECT ( -900 -800 900 800 )"
-    f.puts "  + ROUTED Metal2 ( #{cx} #{cy} ) #{VIA1}"
-    f.puts "    NEW Metal3 ( #{cx} #{cy} ) #{VIA2}"
+def write_def(path, sites)
+  File.open(path, "w") do |f|
+    f.puts "VERSION 5.8 ;"
+    f.puts "DIVIDERCHAR \"/\" ;"
+    f.puts "BUSBITCHARS \"[]\" ;"
+    f.puts "DESIGN grx930_test_chip ;"
+    f.puts "UNITS DISTANCE MICRONS 2000 ;"
+    f.puts "DIEAREA ( 0 0 ) ( #{DIE_W} #{DIE_H} ) ;"
+    f.puts "SPECIALNETS #{sites.length + 1} ;"
+    f.puts "- VDD ( * VDD ) + USE POWER"
+    f.puts "  + ROUTED Metal4 ( 3000000 9000000 ) RECT ( -1000 -1000 1000 1000 )"
+    f.puts "    NEW Metal5 ( 3000000 9000000 ) RECT ( -1200 -1200 1200 1200 )"
     f.puts "  ;"
+    sites.each_with_index do |(cx, cy), i|
+      f.puts "- VSS_#{i} ( * VSS ) + USE GROUND"
+      f.puts "  + ROUTED Metal1 ( #{cx} #{cy} ) RECT ( -900 -780 900 780 )"
+      f.puts "    NEW Metal2 1680 ( #{cx - 2800} #{cy} ) ( #{cx + 2800} #{cy} )"
+      f.puts "    NEW Metal3 ( #{cx} #{cy} ) RECT ( -900 -800 900 800 )"
+      f.puts "  + ROUTED Metal2 ( #{cx} #{cy} ) #{VIA1}"
+      f.puts "    NEW Metal3 ( #{cx} #{cy} ) #{VIA2}"
+      f.puts "  ;"
+    end
+    f.puts "END SPECIALNETS"
+    f.puts "END DESIGN"
   end
-  f.puts "END SPECIALNETS"
-  f.puts "END DESIGN"
+  path
 end
 
 def write_gds(path, sites, omit = {})
@@ -113,10 +120,20 @@ def write_gds(path, sites, omit = {})
   path
 end
 
+write_def(def_file, sites)
 write_gds(gds_file, sites)
 write_gds(mismatch_file, sites, 0 => :via1, 1 => :via2)
 
-puts "WROTE #{def_file} (#{File.size(def_file)} bytes)"
-puts "WROTE #{gds_file} (#{File.size(gds_file)} bytes)"
-puts "WROTE #{mismatch_file} (#{File.size(mismatch_file)} bytes)"
+# Row-300 negative pair: one drop moves to the center of the exclusion box.
+# Both via counts stay at 8,168, so only the row-300 rule may fail.
+ROW300_VIA2 = [3_088_850, 2_798_960]
+row300_sites = sites.dup
+row300_sites[0] = ROW300_VIA2
+write_def(row300_def, row300_sites)
+write_gds(row300_gds, row300_sites)
+
+[def_file, gds_file, mismatch_file, row300_def, row300_gds].each do |path|
+  puts "WROTE #{path} (#{File.size(path)} bytes)"
+end
 puts "SITES=#{sites.length} VIA1=#{sites.length} VIA2=#{sites.length}"
+puts "ROW300_ANCHOR=#{ROW300_VIA2.join(',')}"
