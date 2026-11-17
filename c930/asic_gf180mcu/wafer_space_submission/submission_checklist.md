@@ -42,12 +42,19 @@
 - [ ] Proper spacing from core logic
 - [ ] Connected to VDD/VSS
 
-## Submission Package Contents
+## Submission Package Contents — VOID Historical Inventory
 
-- [ ] `grx930_test_chip_final.gds` - Final layout
-- [ ] `README.md` - Design documentation
-- [ ] `verify_layers.py` - Layer verification script
-- [ ] `submission_checklist.md` - This file
+These are the only files present. This package contains no `.def`, routed
+Verilog, or `cells.lef`.
+
+- [ ] `grx930_test_chip_final.gds` — VOID layout; 77,083,214 bytes
+- [ ] `grx930_test_chip_with_seal.gds` — VOID layout with seal ring; 77,083,634 bytes
+- [ ] `README.md` — design documentation
+- [ ] `SUPERSEDED.md` — why the package is VOID
+- [ ] `submission_checklist.md` — this file
+- [ ] `verify_layers.py` — layer/die diagnostic
+- [ ] `list_layers.py` — layer listing helper
+- [ ] `generate_seal_ring.py` — historical seal-ring helper
 
 ## wafer.space Specific Requirements
 

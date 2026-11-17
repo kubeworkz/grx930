@@ -24,9 +24,9 @@ The table describes the void September artifact, not the current part. The curre
 | **Core Area** | 3048 × 4238 µm = 12.93 mm² (current one-pager; core is not defined by DEF `DIEAREA`) |
 | **Standard Cell Library** | gf180mcu_fd_sc_mcu7t5v0 |
 | **Metal Stack** | 5LM_1TM_11K |
-| **Cell Count** | 4,088 (after synthesis — the SRAM array was dead logic; see [SUPERSEDED.md](SUPERSEDED.md)) |
-| **Routing Violations** | 0 |
-| **Total Vias** | 409,399 |
+| **Cell Count** | **VOID artifact:** 4,088 synthesized cells (the SRAM array was dead logic; see [SUPERSEDED.md](SUPERSEDED.md)). Current design reference: **53,745 placed instances** (one-pager), not this GDS |
+| **Routing Violations** | **VOID artifact:** 0 reported; not a current signoff |
+| **Total Vias** | **VOID artifact:** 409,399; not a current count |
 
 ## Design Description
 
@@ -39,8 +39,7 @@ The GRX930 is a 64-bit RISC-V processor (RV64IMAC) with:
 ## Clock Configuration
 
 - **Clock Port**: `i_clk`
-- **Target Frequency**: 50 MHz (20 ns period) — as built for this void GDS;
-  the current part targets 25 MHz (40 ns)
+- **Target Frequency (VOID artifact)**: 50 MHz (20 ns period), as built for this GDS; **the current part targets 25 MHz (40 ns)**
 - **CTS Status**: Skipped (flat clock routing) to avoid DRT-0073 pin access limitation
 - **Clock Skew**: Not balanced (acceptable for test chip)
 
