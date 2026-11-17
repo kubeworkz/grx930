@@ -8,6 +8,7 @@ Verifies GDS layers match foundry requirements
 
 import sys
 import os
+import re
 
 try:
     import klayout.db as db
@@ -16,8 +17,25 @@ except ImportError:
     sys.exit(1)
 
 
-def verify_gds(gds_path):
-    """Verify GDS file for wafer.space submission"""
+def read_def_die(def_path):
+    """Return (width, height) in microns from a DEF DIEAREA."""
+    with open(def_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    units = re.search(r"^UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", text, re.MULTILINE)
+    die = re.search(
+        r"^DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)",
+        text,
+        re.MULTILINE,
+    )
+    if units is None or die is None:
+        raise ValueError(f"DEF UNITS/DIEAREA missing in {def_path}")
+    scale = float(units.group(1))
+    x1, y1, x2, y2 = (float(v) for v in die.groups())
+    return (x2 - x1) / scale, (y2 - y1) / scale, (x1 / scale, y1 / scale, x2 / scale, y2 / scale)
+
+
+def verify_gds(gds_path, def_path):
+    """Verify GDS layers and die containment for the VOID package."""
     print(f"Verifying GDS: {gds_path}")
     print("=" * 60)
     
@@ -46,12 +64,24 @@ def verify_gds(gds_path):
     
     print(f"Die size: {die_width:.1f} × {die_height:.1f} µm")
     
-    # Check die size (wafer.space 1×1 slot: 3930 × 5120 µm)
-    if abs(die_width - 3930) > 10 or abs(die_height - 5120) > 10:
-        print(f"WARNING: Die size mismatch (expected 3930 × 5120 µm)")
+    # The DEF DIEAREA is the die authority; the GDS top-cell bbox is only the
+    # routed content extent and must fit inside that die.
+    if not os.path.exists(def_path):
+        print(f"ERROR: DEF not found: {def_path}")
         return False
-    
-    print("✓ Die size matches wafer.space 1×1 slot")
+    try:
+        def_width, def_height, (dx1, dy1, dx2, dy2) = read_def_die(def_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        return False
+    print(f"DEF die: {def_width:.3f} × {def_height:.3f} µm (DIEAREA authority)")
+    print(f"GDS content bbox: {die_width:.3f} × {die_height:.3f} µm")
+    eps = 1e-6
+    if (bbox.left * dbu < dx1 - eps or bbox.bottom * dbu < dy1 - eps or
+            bbox.right * dbu > dx2 + eps or bbox.top * dbu > dy2 + eps):
+        print("ERROR: GDS content extends outside the DEF die")
+        return False
+    print(f"✓ GDS content fits inside the DEF die ({def_width:.3f} × {def_height:.3f} µm)")
     
     # Count layers
     layer_set = set()
@@ -98,8 +128,8 @@ def verify_gds(gds_path):
     # Summary
     print("\n" + "=" * 60)
     if all_layers_ok:
-        print("✓ GDS verification PASSED")
-        print("✓ Ready for wafer.space submission")
+        print("✓ Layer/die checks passed (diagnostic only)")
+        print("✗ Package is VOID — DO NOT SUBMIT")
         return True
     else:
         print("✗ GDS verification FAILED")
@@ -108,10 +138,15 @@ def verify_gds(gds_path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <gds_file>")
+    if len(sys.argv) not in (2, 3):
+        print(f"Usage: {sys.argv[0]} <gds_file> [def_file]")
         sys.exit(1)
-    
+
     gds_path = sys.argv[1]
-    success = verify_gds(gds_path)
+    if len(sys.argv) == 3:
+        def_path = sys.argv[2]
+    else:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+        def_path = os.path.join(repo_root, "build/lvs_chip/rebased_grx930_test_chip.def")
+    success = verify_gds(gds_path, def_path)
     sys.exit(0 if success else 1)

@@ -1,9 +1,14 @@
 # wafer.space Submission Checklist for GRX930
 
+> **VOID — DO NOT SUBMIT.** This checklist belongs to the superseded
+> September package. It is retained only as a historical record. The current
+> die-size authority is the DEF `DIEAREA` in
+> `build/lvs_chip/rebased_grx930_test_chip.def`: **3932 × 5122 µm**.
+
 ## Pre-Submission Verification
 
 ### Design Specifications
-- [ ] Die size: 3930 × 5120 µm (wafer.space 1×1 slot)
+- [ ] Die size: **3932 × 5122 µm** from DEF `DIEAREA` (not the VOID GDS bbox; old 3930 × 5120 retired)
 - [ ] Process: GF180MCU 180nm
 - [ ] Metal stack: 5LM_1TM_11K
 - [ ] Standard cell library: gf180mcu_fd_sc_mcu7t5v0

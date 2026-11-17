@@ -21,7 +21,7 @@ The table describes the void September artifact, not the current part. The curre
 | **Design Name** | grx930_test_chip |
 | **Process** | GlobalFoundries GF180MCU (180nm) |
 | **Die Size (current design authority)** | **3932 × 5122 µm** — from `build/lvs_chip/rebased_grx930_test_chip.def` `DIEAREA`; not a measurement of this VOID GDS |
-| **Core Area** | 3920 × 5100 µm (void-artifact figure; not current) |
+| **Core Area** | 3048 × 4238 µm = 12.93 mm² (current one-pager; core is not defined by DEF `DIEAREA`) |
 | **Standard Cell Library** | gf180mcu_fd_sc_mcu7t5v0 |
 | **Metal Stack** | 5LM_1TM_11K |
 | **Cell Count** | 4,088 (after synthesis — the SRAM array was dead logic; see [SUPERSEDED.md](SUPERSEDED.md)) |

@@ -29,5 +29,10 @@ replace these files once validated.
 
 The corrected design did complete the flow, but with a smaller memory than the
 8 KB named above: **2 KB SRAM and 512 B I/D caches**, which is what leaves
-routing margin in the 12.92 mm² core, and a **25 MHz (40 ns)** target. Current
-status and figures: [the one-pager](../wafer_space_status_onepager.md).
+routing margin in the **12.93 mm² core (3048 × 4238 µm, current one-pager;
+core is not defined by DEF `DIEAREA`)**, and a **25 MHz (40 ns)** target.
+
+**Current die-size authority:** DEF `DIEAREA` in
+`build/lvs_chip/rebased_grx930_test_chip.def` = **3932 × 5122 µm**. The old
+3930 × 5120 figure is retired. This package remains **VOID**. Current status:
+[the one-pager](../wafer_space_status_onepager.md).
