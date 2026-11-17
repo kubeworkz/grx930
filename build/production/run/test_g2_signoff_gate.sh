@@ -39,6 +39,7 @@ cat > "$G0_STATUS" <<EOF
 gate=G0
 status=READY_FOR_REVIEW
 gds_checks=PASS
+def_gds_checks=PASS
 no_void=PASS
 manifest_sha256=$g0_hash
 EOF

@@ -57,6 +57,7 @@ G0_MANIFEST="$MAN/input_sha256.txt"
 g0_state=$(grep '^status=' "$G0_STATUS" | tail -1 | cut -d= -f2-)
 [ "$g0_state" = "READY_FOR_REVIEW" ] || block_g2 "G0 is not READY; no LVS run was started." "g0_status=$g0_state"
 grep -qx 'gds_checks=PASS' "$G0_STATUS" || block_g2 "G0 GDS identity/ECO checks did not pass; no LVS run was started." "gds_checks=not-pass"
+grep -qx 'def_gds_checks=PASS' "$G0_STATUS" || block_g2 "G0 DEF/GDS routed-geometry or ECO check did not pass; no LVS run was started." "def_gds_checks=not-pass"
 grep -qx 'no_void=PASS' "$G0_STATUS" || block_g2 "G0 no-VOID check did not pass; no LVS run was started." "no_void=not-pass"
 
 g0_hash=$(sha256sum "$G0_MANIFEST" | awk '{print $1}')

@@ -18,8 +18,9 @@ DEF="$PROJECT_ROOT/build/lvs_chip/rebased_grx930_test_chip.def"
 SPEF="$FINAL/grx930_test_chip.spef"
 BASE="$PROJECT_ROOT/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds"
 CHECK="$PROJECT_ROOT/build/production/run/gds_checks.rb"
+DEF_CHECK="$PROJECT_ROOT/build/production/run/def_gds_checks.rb"
 
-required=("$GDS" "$CDL" "$DEF" "$SPEF" "$BASE" "$CHECK")
+required=("$GDS" "$CDL" "$DEF" "$SPEF" "$BASE" "$CHECK" "$DEF_CHECK")
 
 deck_files=(
   "$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/gf180mcu.drc"
@@ -42,6 +43,7 @@ done
 failures=()
 no_void="NOT_RUN"
 gds_checks="NOT_RUN"
+def_gds_checks="NOT_RUN"
 
 if [ -s "$GDS" ]; then
   final_hash="$(sha256sum "$GDS" | awk '{print $1}')"
@@ -96,6 +98,37 @@ if [ -s "$GDS" ] && [ -s "$BASE" ] && [ -s "$CHECK" ]; then
   fi
 fi
 
+if [ -s "$GDS" ] && [ -s "$DEF" ] && [ -s "$DEF_CHECK" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    def_gds_checks="BLOCKED_NO_DOCKER"
+    failures+=("docker unavailable for DEF/GDS consistency checks")
+  else
+    HOST_ROOT="$PROJECT_ROOT"
+    if command -v cygpath >/dev/null 2>&1; then
+      HOST_ROOT="$(cygpath -m "$PROJECT_ROOT")"
+    fi
+    set +e
+    MSYS_NO_PATHCONV=1 docker run --rm \
+      -v "$HOST_ROOT:/work" -w /work \
+      --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
+      -r /work/build/production/run/def_gds_checks.rb \
+      -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
+      -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
+      -rd topcell=grx930_test_chip \
+      -rd expected_drops=8168 \
+      -rd report=/work/build/production/manifests/def_gds_checks.txt \
+      > "$MAN/def_gds_checks.log" 2>&1
+    def_rc=$?
+    set -e
+    if [ "$def_rc" -eq 0 ]; then
+      def_gds_checks="PASS"
+    else
+      def_gds_checks="FAIL"
+      failures+=("DEF/GDS routed-geometry or ECO check exited $def_rc")
+    fi
+  fi
+fi
+
 if [ "${#missing[@]}" -eq 0 ] && [ "${#failures[@]}" -eq 0 ]; then
   status="READY_FOR_REVIEW"
 else
@@ -116,6 +149,7 @@ fi
   echo "base=$BASE"
   echo "no_void=$no_void"
   echo "gds_checks=$gds_checks"
+  echo "def_gds_checks=$def_gds_checks"
   if [ "${#missing[@]}" -eq 0 ]; then
     echo "missing=none"
   else
