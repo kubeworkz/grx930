@@ -22,7 +22,7 @@
 ### GDS File Requirements
 - [ ] Single top cell
 - [ ] Correct layer mapping (see verify_layers.py)
-- [ ] File size reasonable (77 MB expected)
+- [ ] GDS sizes (VOID artifacts): `grx930_test_chip_final.gds` **77,083,214 bytes**; `grx930_test_chip_with_seal.gds` **77,083,634 bytes**
 - [ ] No proprietary or restricted layers
 
 ### Pin/PAD Requirements
