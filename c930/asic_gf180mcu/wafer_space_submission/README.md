@@ -54,25 +54,38 @@ The GRX930 is a 64-bit RISC-V processor (RV64IMAC) with:
 | `o_uart_tx` | Output | UART transmit |
 | `io_gpio[31:0]` | Bidirectional | General purpose I/O |
 
-## Files in This Package
+## Files in This Package — VOID
 
-- `grx930_test_chip_final.gds` - Final GDS-II layout (77 MB)
-- `grx930_test_chip.def` - Design Exchange Format with routing
-- `grx930_test_chip_routed.v` - Gate-level netlist with routing
-- `cells.lef` - Standard cell library LEF
-- `verify_layers.py` - Layer verification script
-- `README.md` - This file
+These are the only files in this directory. The package does **not** contain a
+`.def`, a routed Verilog netlist, or a `cells.lef`; do not expect them here.
+
+- `grx930_test_chip_final.gds` — **VOID** GDS-II layout; **77,083,214 bytes (73.51 MiB)**
+- `grx930_test_chip_with_seal.gds` — **VOID** GDS-II layout with seal ring; **77,083,634 bytes (73.51 MiB)**
+- `README.md` — this file
+- `SUPERSEDED.md` — why the package is VOID
+- `submission_checklist.md` — historical checklist, marked VOID
+- `verify_layers.py` — layer/die diagnostic; it reads the current DEF `DIEAREA`
+- `list_layers.py` — layer listing helper
+- `generate_seal_ring.py` — historical seal-ring helper
+
+**Expected GDS sizes:** approximately **77.08 MB decimal / 73.51 MiB** each.
+There is no separate 77 MB “final DEF” artifact in this package.
 
 ## Verification Steps
 
-1. Run layer verification:
+1. Run the VOID diagnostic:
    ```bash
    python3 verify_layers.py grx930_test_chip_final.gds
    ```
 
-2. Check DRC violations in DEF:
+   The checker reads the current DEF `DIEAREA` from
+   `build/lvs_chip/rebased_grx930_test_chip.def`. This VOID GDS is expected to
+   fail die containment because its content origin is negative; that failure is
+   diagnostic, not an approval.
+
+2. List the GDS layers:
    ```bash
-   grep -c "DRC" grx930_test_chip.def
+   python3 list_layers.py grx930_test_chip_final.gds
    ```
 
 ## Notes
