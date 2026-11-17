@@ -1,0 +1,6 @@
+gate=G3
+status=BLOCKED
+generated_utc=2026-11-17T18:15:45Z
+owner=Physical verification lead (unassigned)
+missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip_final.gds
+note=Full-deck DRC not run.

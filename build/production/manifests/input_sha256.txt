@@ -1,0 +1,8 @@
+MISSING /c/Users/kubew/grx930/build/production/final/grx930_test_chip_final.gds
+MISSING /c/Users/kubew/grx930/build/production/final/grx930_test_chip.cdl
+MISSING /c/Users/kubew/grx930/build/production/final/grx930_test_chip.def
+MISSING /c/Users/kubew/grx930/build/production/final/grx930_test_chip.spef
+e7c7d2597890cfcb4cf0e5312f5652051a119fb3e1cc1772a6e5c04594bc65d8 */c/Users/kubew/grx930/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/gf180mcu.drc
+00019ed0a7f434fc9ead466be75c07cbaed4bf5de698446d6e3fafd43ac7cc59 */c/Users/kubew/grx930/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs
+d8ba81b38adc8258c867c87a11a653640ad62b78ea61e7de3729b57bea2aee1e */c/Users/kubew/grx930/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/rule_decks/metal.rb
+d48ead7abee03dec2bf9eb0abbf343c407dc4f1fc2e71b30878d38639ecaf5bf */c/Users/kubew/grx930/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/rule_decks/via.rb

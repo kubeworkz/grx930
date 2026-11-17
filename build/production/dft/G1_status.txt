@@ -1,0 +1,9 @@
+gate=G1
+status=BLOCKED
+generated_utc=2026-11-17T18:15:45Z
+owner=DFT lead (unassigned)
+missing=dftc
+missing=tetramax
+missing=/c/Users/kubew/grx930/build/production/dft/dft_insert.tcl
+missing=/c/Users/kubew/grx930/build/production/dft/atpg.tcl
+note=No DFT insertion or ATPG result is claimed.
