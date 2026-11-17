@@ -53,9 +53,8 @@ path is to recover the old database, not to run this plan.
 | DRT chain + guard | `c930/asic_gf180mcu/build/{die_drt_chain.sh,drt_curve_guard.sh,drt_db_compare_chain.sh,gate.sh}` | budgets, divergence kill, disk/memory gate |
 | Fill / stream / stitch / CDL | `c930/asic_gf180mcu/tools/lvs_chip/{fill_def.py,stream_out.py,pdn_stitch.py,mk_chip_cdl.py}` | the actual GDS construction; must run in the OpenLane image |
 | Stream/route checks | `.../tools/lvs_chip/{stream_check.py,net_compare.py}` | layer/placement and DEF-vs-CDL checks |
-| Cell/tech LEF | `c930/asic_gf180mcu/build/cells.lef` | 5 routing layers; carries the LEF definitions of the two 2×2 ECO vias |
+| Cell/tech LEF | `c930/asic_gf180mcu/build/cells.lef` | 5 routing layers and 56 `VIA` definitions; the only via-geometry source for `stream_out.py` |
 | PDK cell GDS | `c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds` | `stream_out.py` and `pdn_stitch.py` read cell layouts from it |
-| Artifact via geometry | `c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds` | VOID routing, but `stream_out.py` copies its seven `VIA_*` cells; pin it, never ship it |
 | G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die, count, paths, and the row-300 box are hardcoded |
 
 **Toolchain gap:** `ghcr.io/wafer-space/gf180mcu-precheck` is **not present in the
@@ -68,13 +67,16 @@ The local images include `openlane2-gf180mcu:latest` and
 and `pdn_stitch.py` adds the M2 straps that join the M1 rails to the M3 grid. The
 fix16 base is exactly that chain (`..._stream_out_filled_stitched_fix16.gds`), and
 the `sub` islands this plan must find exist only after the fill and stitch passes.
+`stream_out.py` now builds its `VIA_<name>` cells from the LEF `VIA` definitions
+the DEF names and refuses a via with no definition, so the VOID artifact is no
+longer in the fresh-baseline GDS path.
 
 ## 3. Stages
 
 ### Stage 0 — Freeze the identity and choose the floorplan
 
-Inputs: RTL tree, overrides, slot config, PDK version, `cells.lef`, PDK cell GDS,
-and the artifact used for via geometry.
+Inputs: RTL tree, overrides, slot config, PDK version, `cells.lef` (including its
+56 `VIA` definitions), and the PDK cell GDS.
 
 Record before any compute:
 - Netlist entry: full-chip `openlane2_rtl` RTL through `ws_exec.sh`. The flow's
@@ -89,8 +91,10 @@ Record before any compute:
 - Corner/RCX set: `nom`, `min`, `max` from the PDK RCX rules.
 
 Output: `build/production/baseline/baseline_manifest.sha256` with the RTL tree,
-overrides, PDN, macros, PDK version, flow image digest, die/core, LEF, cell GDS,
-via-geometry artifact, and `N` marked `TO_BE_DERIVED`.
+overrides, PDN, macros, PDK version, flow image digest, die/core, LEF (and its
+via table), cell GDS, and `N` marked `TO_BE_DERIVED`. A planning copy already
+lists the local inputs with `eco_count=TO_BE_DERIVED` and `artifact=NOT_USED`;
+Stage 0 replaces its `TO_BE_PINNED` flow image and PDK version.
 
 Gate: every input has a hash and there is exactly one netlist/floorplan pair.
 
@@ -301,18 +305,22 @@ runpy c930/asic_gf180mcu/tools/lvs_chip/stream_check.py \
   --lib /work/c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
 ```
 
-`stream_out.py` reads two fixed inputs through `/work`: the artifact GDS for its
-seven `VIA_*` cells and the PDK cell GDS for cell layouts. Both are pinned in the
-Stage 0 manifest. It also refuses a DEF whose via name has no `VIA_<name>` cell,
-which is why the ECO is patched into the GDS rather than re-streamed (Stage 6).
+`stream_out.py` reads the PDK cell GDS for cell layouts and the LEF's `VIA`
+definitions for via cells; `--lef` is repeatable, and every via token the DEF
+names must be defined in one of them. The routed DEF must therefore use LEF vias
+only: a DEF `VIAS` section (a generated via with no LEF definition) is refused,
+not approximated from the old layout. Both inputs are pinned in Stage 0, and the
+artifact is not read in `--routing def` mode. If the router emits a `VIAS`
+section, stop at this gate and promote those vias to the project LEF (or route
+with LEF vias) before fill; do not fall back to the artifact.
 
 Output: `routed.def`, `grx930_test_chip_routed.v`, `grx930_test_chip.cdl`,
 `filled.def`, `pre_eco.gds`, `strap_report.json`, `net_compare.json`.
 
 Gate: `net_compare` MATCH; 0 unrouted signal nets and 0 zero/one-terminal nets
 from the OpenDB pass; the CDL top is `grx930_test_chip`, the same name the GDS top
-and the G2 deck use; fill and stitch exit 0 with no refused island; stream check
-passes.
+and the G2 deck use; `stream_out.py` built every via from a LEF definition and
+refused none; fill and stitch exit 0 with no refused island; stream check passes.
 
 ### Stage 5 — Derive the new ECO site list
 
@@ -357,14 +365,14 @@ One site list, two writers, so the DEF and GDS cannot drift:
 2. **GDS** — `patch_eco_gds.rb` inserts the same geometry from the same
    `eco_sites.csv` into `pre_eco.gds` and writes
    `build/production/final/grx930_test_chip_final.gds`. This is the 13-site
-   `build_row_crops.rb` method extended to the full list: M1 landing, M2 strap
-   with 0.45 µm extension past each via centre, M3 landing, 0.26 µm cuts on
-   0.52 µm centres.
+   `build_row_crops.rb` method extended to the full list, using the 2×2 `VIA`
+   definitions from `cells.lef`: M1 landing, M2 strap with 0.45 µm extension past
+   each via centre, M3 landing, 0.26 µm cuts on 0.52 µm centres.
 
-Do **not** re-stream the ECO DEF. The artifact has only seven `VIA_*` cells
-(`Via1_HV`, `Via1_VV`, `Via2_VH`, `Via3_HV`, `Via4_VH`, and two stacked vias) and
-none of the 2×2 names, so `stream_out.py` refuses the ECO DEF. A re-stream would
-also drop the GDS-only stitch straps.
+Do **not** re-stream the ECO DEF. The 2×2 vias are now buildable from the LEF, but
+a re-stream would produce a new `pre_eco` frame and lose the GDS-only stitch
+straps; patching the existing `pre_eco.gds` keeps the base/final delta exactly the
+inserted geometry.
 
 Run the DRC/landing checks on **all** sites, not the 13-site crop, and compare
 before/after reports.
@@ -481,7 +489,8 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | Antenna repair abort | at 0.1 the die's `repair_antennas` can abort with `GRT-0183`; the landed arm relies on the catch | keep `lln_antenna_catch.sh`; archive the antenna log; do not read a caught abort as an antenna pass |
 | ECO count is not 8,168 | the old list depends on fix16 `sub` islands, old VSS rows, and the old `$45264` net (§1.1) | derive `N`; parameterize G0/checkers; retire 8,168 with the old identity |
 | CDL/GDS top mismatch | flow `DESIGN_NAME: chip_top`; `stream_out.py` writes the GDS top as `grx930_test_chip`; the deck takes `topcell=grx930_test_chip` | write the CDL with `--top grx930_test_chip` and gate on it before G0 |
-| ECO via names are not streamable | artifact has only seven `VIA_*` cells; none of the two 2×2 names | patch `pre_eco.gds`; never re-stream the ECO DEF |
+| Stream-out via coverage | `stream_out.py` builds via cells only from LEF `VIA` definitions; a DEF `VIAS`/generated via has none | run the stream-out on the routed DEF before fill; add a missing via to the project LEF; never fall back to the artifact |
+| VOID artifact in the GDS path | `--routing def` no longer reads the artifact; only `--routing artifact` does, for re-checking the September die | keep `--routing artifact` out of the fresh-baseline stages |
 | DEF/GDS mismatch outside the ECO | `pdn_stitch` writes M2 straps to the GDS only | window-based check; do not gate on a whole-die Metal XOR |
 | ECO legality | 4,318 pre-existing full-chip DRC findings; 0-added requirement over all sites; 1.40 µm M2 keepout | all-site DRC, resites, generalized VDD exclusion |
 | Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; fill/stream/stitch hours; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
@@ -512,7 +521,7 @@ are outside this plan.
 ## 7. Explicitly not done
 
 No `docker pull`, `volare fetch`, `ws_exec.sh`, DRT, stream-out, ECO insertion, or
-OpenRCX command has been run for this plan. Only read-only inspection and a
-KLayout listing of the artifact's via cells were run. No existing file was
-replaced. G0 remains `BLOCKED`, G2 exits 2, and the package remains
-**VOID — DO NOT SUBMIT**.
+OpenRCX command has been run for this plan. Read-only inspection, a parser test
+of the new LEF via reader, and a KLayout check of the 2×2 cell it builds were
+run; no DEF was streamed. No existing file was replaced. G0 remains `BLOCKED`,
+G2 exits 2, and the package remains **VOID — DO NOT SUBMIT**.

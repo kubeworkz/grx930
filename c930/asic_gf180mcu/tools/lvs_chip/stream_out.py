@@ -34,12 +34,13 @@ OpenROAD's own rectangle for a wire -- so collinear runs join and a 90-degree co
 half a width. A width the statement does not state comes from the LEF. Anything unreadable is
 refused, never guessed at.
 
-Via *geometry* still comes from the artifact: its seven `VIA_*` children are the writer's
-rendering of the same LEF via definitions this DEF names, so they keep geometry that September's
-691,010-device extraction already exercised. Their placements are the DEF's, not the artifact's.
-`--routing artifact` reproduces the old behaviour, for re-checking the September die only.
+Via *geometry* comes from the LEF `VIA` definitions the DEF names: each via token is looked up
+in the LEF, and its layers and RECTs are written into a `VIA_<name>` cell on the PDK's GDS
+numbers. A via token with no LEF definition is refused; `--routing def` no longer reads the
+artifact at all. `--routing artifact` still reproduces the old behaviour, for re-checking the
+September die only.
 
-    python3 tools/lvs_chip/stream_out.py [--routing def|artifact] [--lef FILE] [--out FILE]
+    python3 tools/lvs_chip/stream_out.py [--routing def|artifact] [--lef FILE]... [--out FILE]
 
 Exit status: 0 written, 2 refused (an input missing, or a placement mismatch).
 """
@@ -228,6 +229,64 @@ def lef_layer_widths(path, units):
     return widths
 
 
+LEF_VIA_RE = re.compile(r"^\s*VIA\s+(\S+)")
+LEF_LAYER_RE = re.compile(r"^\s*LAYER\s+(\S+)\s*;")
+LEF_RECT_RE = re.compile(r"^\s*RECT\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*;")
+LEF_VIA_UNSUPPORTED = re.compile(r"^\s*(POLYGON|MASK|OFFSET)\b")
+
+
+def parse_lef_vias(path):
+    """{name: [(LEF layer, (x0, y0, x1, y1))]} from the LEF's `VIA` blocks.
+
+    LEF RECT coordinates are microns relative to the via origin. `RESISTANCE` is ignored;
+    geometry this reader cannot reproduce is refused instead of silently dropped. `VIARULE
+    ... GENERATE` blocks are not fixed vias and are not entered here.
+    """
+    vias = {}
+    name = None
+    layer = None
+    for lineno, line in enumerate(open(path, errors="replace"), 1):
+        s = line.strip()
+        m = LEF_VIA_RE.match(s)
+        if m:
+            name = m.group(1)
+            vias[name] = []
+            layer = None
+            continue
+        if name is None:
+            continue
+        if s.startswith("END "):
+            if not vias[name]:
+                raise SystemExit(f"REFUSED  {path}:{lineno}: VIA {name} has no geometry")
+            name = None
+            layer = None
+            continue
+        if LEF_VIA_UNSUPPORTED.match(s):
+            raise SystemExit(f"REFUSED  {path}:{lineno}: VIA {name}: unsupported {s}")
+        m = LEF_LAYER_RE.match(s)
+        if m:
+            layer = m.group(1)
+            continue
+        m = LEF_RECT_RE.match(s)
+        if m and layer:
+            vias[name].append((layer, tuple(float(v) for v in m.groups())))
+    return vias
+
+
+def build_lef_via(out_layout, db, name, definition):
+    """A `VIA_<name>` cell from one LEF VIA definition, on PDK GDS layer numbers."""
+    cell = out_layout.create_cell(f"VIA_{name}")
+    for lef_layer, (x0, y0, x1, y1) in definition:
+        level = DEF_LAYER.get(lef_layer)
+        target = REMAP.get((level, 0)) if level is not None else None
+        if target is None:
+            raise SystemExit(f"REFUSED  via {name}: LEF layer {lef_layer} has no PDK GDS number")
+        cell.shapes(out_layout.layer(*target)).insert(
+            db.Box(int(round(x0 / out_layout.dbu)), int(round(y0 / out_layout.dbu)),
+                   int(round(x1 / out_layout.dbu)), int(round(y1 / out_layout.dbu))))
+    return cell
+
+
 def parse_def_routing(path, widths):
     """({layer: [(x0, y0, x1, y1)] boxes}, [(via, x, y)], Counter of what was read).
 
@@ -379,10 +438,13 @@ def main():
     ap.add_argument("--def", dest="def_file", default=DEF,
                     help="DEF to stream (default: the routed die)")
     ap.add_argument("--out", default=DEFAULT_OUT)
-    ap.add_argument("--lef", default=LEF, help="LEF the DEF's layer widths and cell sizes come from")
+    ap.add_argument("--lef", action="append",
+                    help="LEF with the DEF's layer widths and VIA definitions (repeatable; "
+                         "defaults to the repo LEF)")
     ap.add_argument("--routing", choices=("def", "artifact"), default="def",
                     help="stream the DEF's own NETS/SPECIALNETS (default) or the artifact's routing")
     args = ap.parse_args()
+    lef_paths = args.lef or [LEF]
     def_path = args.def_file
 
     try:
@@ -392,16 +454,15 @@ def main():
         return 2
 
     def_units = parse_def_units(def_path)
-    art = db.Layout()
-    art.read(ART)
-    art_top = art.cell("grx930_test_chip")
-    # DEF coordinates are in distance units; the layout's are in dbu. Both are integers, so this
-    # is an exact rescale -- and the placement match below only succeeds if it is the right one.
+    # The output frame is the PDK cell GDS the cells come from. No artifact is read here.
+    out = db.Layout()
+    out.read(LIB)
+    lib_cells = {c.name: c for c in out.each_cell()}
     if not def_units:
         print("REFUSED  no `UNITS DISTANCE MICRONS` in the DEF header")
         return 2
-    scale = art.dbu * def_units
-    print(f"units: DEF {def_units}/um, layout dbu {art.dbu} um, scale {scale:g}")
+    scale = out.dbu * def_units
+    print(f"units: DEF {def_units}/um, layout dbu {out.dbu} um, scale {scale:g}")
 
     comps = [(inst, cell, int(round(x / scale)), int(round(y / scale)), orient)
              for inst, cell, x, y, orient in parse_def_components(def_path)]
@@ -436,58 +497,39 @@ def main():
     print(f"placements: {len(comps)} components, all on one of the {len(row_grid)} DEF rows "
           f"and inside the die {box} ({box.width() / 1000:g} x {box.height() / 1000:g} um)")
 
-    # What the artifact did instead, orientation by orientation -- reported, never copied.
-    artifact_pts = {}
-    for inst in art_top.each_inst():
-        if inst.cell.name.startswith("gf180mcu_fd_sc"):
-            t = inst.trans
-            artifact_pts.setdefault(inst.cell.name, set()).add((t.disp.x, t.disp.y))
-    delta = {}
-    for _inst, cell, x, y, orient in comps:
-        best = min(artifact_pts.get(cell, {(x, y)}), key=lambda p: (abs(p[0] - x) + abs(p[1] - y), p))
-        delta.setdefault(orient, Counter())[(best[0] - x, best[1] - y)] += 1
-    for orient in sorted(delta):
-        seen = delta[orient]
-        total = sum(seen.values())
-        exact = seen.get((0, 0), 0)
-        print(f"  artifact {orient:2s}: {total:5d} components, {exact:5d} at the DEF position, "
-              f"most common offset {seen.most_common(1)[0][0]} ({seen.most_common(1)[0][1]}x)")
-
-    out = db.Layout()
-    out.read(LIB)
-    lib_cells = {c.name: c for c in out.each_cell()}
-
     top = out.create_cell("grx930_test_chip")
     via_count = 0
     via_xs, via_ys = [], []
     n_via_types = 0
     if args.routing == "def":
-        widths = lef_layer_widths(args.lef, def_units)
+        widths = {}
+        for lef in lef_paths:
+            for name, width in lef_layer_widths(lef, def_units).items():
+                widths.setdefault(name, width)
         missing = [n for n in WIRE_LAYERS if n not in widths]
         if missing:
-            print(f"REFUSED  {args.lef} states no WIDTH for {missing}")
+            print(f"REFUSED  {', '.join(lef_paths)} states no WIDTH for {missing}")
             return 2
+        lef_vias = {}
+        for lef in lef_paths:
+            for name, definition in parse_lef_vias(lef).items():
+                lef_vias.setdefault(name, definition)
         print("layer widths: " + ", ".join(f"{n} {widths[n]}" for n in WIRE_LAYERS) + " DEF units")
         wires, vias, rstats = parse_def_routing(def_path, widths)
         print(f"routing: {sum(len(v) for v in wires.values())} wire boxes from "
               f"{rstats['segment']} segments and {rstats['rect']} RECTs, {len(vias)} vias "
               f"({rstats['point_ext']} points carried an extension)")
 
-        # Via cells: the artifact names the writer's rendering of each LEF via `VIA_<name>`, and
-        # this DEF uses exactly the seven names it has. Reuse that geometry; place it ourselves.
-        art_vias = {i.cell.name: i.cell for i in art_top.each_inst()
-                    if i.cell.name.startswith("VIA")}
+        # Via cells: every DEF via token must be a LEF `VIA`; the geometry is written from
+        # the LEF's own layers and RECTs, never from the artifact.
         via_cells = {}
         for name in sorted({v[0] for v in vias}):
-            source = art_vias.get(f"VIA_{name}")
-            if source is None:
-                print(f"REFUSED  the DEF uses via {name}, but the artifact has no VIA_{name}")
+            definition = lef_vias.get(name)
+            if definition is None:
+                print(f"REFUSED  the DEF uses via {name}, but no LEF in "
+                      f"{', '.join(lef_paths)} defines it as a VIA")
                 return 2
-            target = out.create_cell(f"VIA_{name}")
-            if not copy_shapes(art, source, out, target, keep_only_routing=False):
-                print(f"REFUSED  VIA_{name} copied no geometry")
-                return 2
-            via_cells[name] = target
+            via_cells[name] = build_lef_via(out, db, name, definition)
         n_via_types = len(via_cells)
 
         layer_index = {}
@@ -509,6 +551,9 @@ def main():
             via_xs.append(trans.disp.x)
             via_ys.append(trans.disp.y)
     else:
+        art = db.Layout()
+        art.read(ART)
+        art_top = art.cell("grx930_test_chip")
         moved = copy_shapes(art, art_top, out, top, keep_only_routing=True)
         print(f"top cell: {moved} routed shapes and labels moved to PDK numbers")
 
@@ -599,9 +644,7 @@ def main():
         boxes.append((abs_box.bottom, abs_box.top, abs_box.left, abs_box.right, cell))
         top.insert(db.CellInstArray(target.cell_index(), trans))
         used[cell] += 1
-    print(f"cells: {sum(used.values())} placed over {len(used)} types "
-          f"(was {sum(1 for i in art_top.each_inst() if i.cell.name.startswith('gf180mcu_fd_sc'))}"
-          f" in the artifact)")
+    print(f"cells: {sum(used.values())} placed over {len(used)} types")
     print(f"anchors: {sum(shifted.values())} of {len(comps)} copies moved off the raw DEF point"
           + "".join(f", {o} {n}" for o, n in sorted(shifted.items())))
 
