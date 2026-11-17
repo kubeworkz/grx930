@@ -79,3 +79,6 @@ __pycache__/
 # the design config (it has to live in that directory for `dir::` to resolve).
 c930/asic/librelane/runs/
 c930/asic/librelane/boot_hex.yaml
+
+# Generated DEF/GDS positive-control fixture and checker output
+build/production/fixtures/
