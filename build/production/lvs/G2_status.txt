@@ -1,7 +1,7 @@
 gate=G2
 status=BLOCKED
-generated_utc=2026-11-17T18:15:45Z
+generated_utc=2026-11-17T19:01:34Z
 owner=Physical verification lead (unassigned)
 missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip_final.gds
-missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip.cdl
-note=Full-chip LVS not run.
+missing=/c/Users/kubew/grx930/build/production/final/grx930_test_chip.spef
+note=Full-chip LVS not run; G0 frozen inputs are incomplete. SPEF is a G0 gate input, not an LVS deck input.

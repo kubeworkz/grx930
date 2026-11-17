@@ -10,20 +10,22 @@ LVS="$PROD/lvs"
 mkdir -p "$LVS" "$PROD/logs"
 
 GDS="$FINAL/grx930_test_chip_final.gds"
+SPEF="$FINAL/grx930_test_chip.spef"
 CDL="$PROJECT_ROOT/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl"
 DECK="$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs"
 IMAGE="${KLAYOUT_IMAGE:-grx930/klayout-lvs-pmap:local}"
 
-if [ ! -s "$GDS" ] || [ ! -s "$CDL" ] || [ ! -s "$DECK" ]; then
+if [ ! -s "$GDS" ] || [ ! -s "$SPEF" ] || [ ! -s "$CDL" ] || [ ! -s "$DECK" ]; then
   {
     echo "gate=G2"
     echo "status=BLOCKED"
     echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "owner=Physical verification lead (unassigned)"
     [ -s "$GDS" ] || echo "missing=$GDS"
+    [ -s "$SPEF" ] || echo "missing=$SPEF"
     [ -s "$CDL" ] || echo "missing=$CDL"
     [ -s "$DECK" ] || echo "missing=$DECK"
-    echo "note=Full-chip LVS not run."
+    echo "note=Full-chip LVS not run; G0 frozen inputs are incomplete. SPEF is a G0 gate input, not an LVS deck input."
   } | tee "$LVS/G2_status.txt"
   exit 2
 fi
