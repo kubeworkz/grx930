@@ -1,6 +1,6 @@
 # ECO plan — 2×2 VSS/VDD drop arrays
 
-**Status: PENDING full-row/fix70 DRC and signoff. The corrected 14-site cropped surrogate is clean (0 added findings), but this plan is not an approval.**
+**Status: BLOCKED on the original-row retry and missing 541 evidence source. The corrected 14-site surrogate was clean, but the no-duplicate original-row crop has 3 added findings at `sub_row_300`; this plan is not an approval.**
 
 ## Scope
 
@@ -33,7 +33,7 @@ The final ECO must use the **2×2 via arrays**, not the earlier single-via geome
 1. **Window gate:** 541/541 `sub` rows legal with the 2×2 arrays and 0.84 µm M2 strap.
 2. **Rail gate:** both `$45264` endpoints legal; current endpoints are `1487.97, 2979.20` and `1651.97, 2979.20` µm (164.0 µm apart).
 3. **Synthetic DRC gate:** 14 representative drop sites, PDK `metal1,metal2,metal3,via1,via2` decks, **0 violations**.
-4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **MET** on the fix16 surrogate: 49 baseline findings before and after, **0 added / 0 removed**. The five resited rows are surrogate clean-row targets; this does **not** replace DRC of all 541 original row sites or the selected fix70 file.
+4. **Cropped real-layout gate (representative):** no **added** M1/M2/M3/via finding at the corrected representative sites after the drops. **PARTIAL**: the first surrogate crop was clean (49/49, 0 added), but it cloned rows. The no-duplicate retry keeps all 14 sites on original rows and results in **276 before / 279 after, 3 added** (1× M1.2a, 2× M2.2a) at `sub_row_300`. The gate is **not met** until row 300 is resolved or waived.
 5. **Full-chip DRC:** unchanged pre-existing baseline; this plan does not claim full-chip DRC clean.
 6. **LVS:** not rerun by this ECO validation; prior residual remains 772 (770 with two NWELL taps).
 
@@ -84,10 +84,29 @@ Corrected evidence:
 The run still uses the available fix16 surrogate, not the absent selected fix70
 GDS. **Full 541-row/fix70 cropped DRC and LVS remain pending.**
 
+## Original-row retry (no duplicate rows)
+
+The duplicate-row surrogate was rejected. `build_row_crops.rb` now places one drop on each of the original rows and uses explicit M1/M3 landing extensions plus clean-x positions. All 14 sites are original rows/rail points; no row is cloned.
+
+Result on the available fix16 file:
+
+- `row_before.gds` — `57b7eb9d5585a8d4944cdb66981dd6315d9cd0b8fa62be8c3d9c5b9eb0bd8786`
+- `row_after.gds` — `f1378f60db36432b288c3f5198073360e441f723dc2458d93f4ce3be36b056a3`
+- `row_before.lyrdb` — `1728c42bfd0aa4897bce8cbb6889f4aa9bc853e7b8c7acda251a31599c67366e`
+- `row_after.lyrdb` — `09de4857991fe1d2c5faf7808c2d5a6e8fe1e9ee413185f6373c9daa0633fd1a`
+- `row_compare.json` — `83c5eaaa43b6b5b5d5e005ec70cb2a56c580aaa1c7e86e0504fd1f6a65966926`
+- **276 before, 279 after, 3 added / 0 removed**: 1× M1.2a, 2× M2.2a at `sub_row_300`.
+- The other original rows and both rail points pass the added-finding comparison.
+
+## 541/541 evidence status
+
+The historical `541/541` validator (`validate_drop_windows_2x2.rb`) reads `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds` and `/scripts/chip.l2n`. **That GDS is absent from this checkout**, and the selected `fix70` GDS is also absent. The prior 541/541 result therefore cannot be regenerated or honestly updated here. The current no-duplicate crop is a 14-site representative check, not a replacement for 541/541 signoff.
+
 ## Signoff
 
 The Gridworkz signoff packet is
 `build/lvs_chip/eco_drop_2x2/GRIDWORKZ_SIGNOFF_PACKET.md`.
-It is **pending** because the selected fix70 GDS is absent, the five resited rows
-have not been checked as a full 541-row DRC, and no Gridworkz signoff connector is
-available in this session. The corrected surrogate crop itself has 0 added findings.
+It is **pending** because `sub_row_300` still adds 3 findings, the selected fix70
+and the historical 541 source GDS are absent, and no Gridworkz signoff connector is
+available in this session. The earlier duplicate-row surrogate crop had 0 added findings,
+but it is not valid 541-row evidence.

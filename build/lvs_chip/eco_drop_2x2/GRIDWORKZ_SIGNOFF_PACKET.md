@@ -1,6 +1,6 @@
 # Gridworkz signoff packet — 2×2 VSS/VDD drops
 
-- **Packet status: PENDING. NOT SIGNED. Corrected cropped surrogate has 0 added findings; full-row/fix70 DRC remains open.**
+- **Packet status: PENDING. NOT SIGNED. The no-duplicate original-row retry has 3 added findings at `sub_row_300`; the historical 541/541 source GDS is absent.**
 - **Submission status: NOT SUBMITTED — no Gridworkz connector/API is available in this session.**
 - **Prepared:** 2026-11-17
 - **Scope:** 8,169-drop candidate: 7,626 connected `sub` islands + 541 `sub` row drops + 2 `$45264` rail-end drops.
@@ -21,11 +21,12 @@ Approve only after the selected fix70/full-541-row cropped real-layout DRC has *
 | Endpoint separation | **164.0 µm** |
 | Drop count | **8,169** (7,626 + 541 + 2) |
 | Synthetic 14-site PDK DRC | **0 violations** |
-| Cropped real-layout DRC — corrected 14-site surrogate | **0 added / 0 removed**; 49 baseline before and after. M1.2a/M2.2a additions are gone. |
-| M1/M3 landing connectivity | M1 pad 76.9–81.3% inside real M1 (rail_left 70.5%, rail_right 31.4%); M3 pad 100%; M2 foreign overlap **0** on all 14 sites |
+| Row-original retry — 14 sites, no cloned rows | **3 added / 0 removed**; 276 before / 279 after. Residual: 1× M1.2a, 2× M2.2a at `sub_row_300`. **Not clean.** |
+| Cropped real-layout DRC — earlier duplicate-row surrogate | 0 added / 0 removed; 49 baseline. **Superseded because it cloned rows.** |
+| M1/M3 landing connectivity — row-original retry | M1/M3 pads are tied to the original rows through explicit landing extensions; DRC still reports 1× M1.2a at `sub_row_300` |
 | Original first pass (superseded) | 22 added findings: M1.2a ×16, M2.2a ×6 |
 
-The first cropped pass added synthetic M1 landing pads that produced M1.2a edges, and found six M2 spacing conflicts at three actual sites. The corrected candidate places the M1/M3 landing rectangles inside the real net and moves the conflicted sites into clean-row/corridor surrogates. The corrected 14-site crop now has **0 added findings** and all M1/M3 landing pads overlap real net geometry. This is not yet a fix70/full-541-row signoff: five rows were exercised as surrogate clean-row targets on fix16, and the selected fix70 GDS is still absent. Do not treat the result as a full-layout signoff.
+The first cropped pass added synthetic M1 landing pads that produced M1.2a edges and six M2 spacing conflicts. The earlier surrogate then reached 0 added findings by cloning clean rows, which is not legal 541-row evidence. The replacement no-duplicate crop keeps one drop on each original row and adds explicit M1/M3 landing extensions. It is **not clean**: `sub_row_300` still adds 1× M1.2a and 2× M2.2a. The selected fix70 GDS is absent, and the historical 541 validator cannot run because `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds` is absent. Do not treat any current result as a full-layout signoff.
 
 ## Geometry
 
@@ -75,9 +76,20 @@ The first cropped pass added synthetic M1 landing pads that produced M1.2a edges
 - After report: `corrected_after.lyrdb` — `6af9e1cd7cf14aa1f041d3660216bacbd6e3525f99adaff07b57fd5b54347863`
 - Comparison: `corrected_compare.json` — `7dadc72edb9c9fcb5b983b0f6ab3247f440f8bbff3b9c8011e819208b3606538`
 - Landing check: `corrected/landing_check.log` — `2479500792c22bfd00f410675467e22241523adcc408f83a6ab5e5d0b9c2a508`
-- Result: **49 before, 49 after, 0 added, 0 removed**; `LANDING_CHECK PASS`.
-- Resites: `sub_row_250`→row500; `sub_row_350`→row0; `sub_row_400`→row150; `rail_right`→(1651.60, 2973.50); `sub_row_50`→row100 and `sub_row_300`→row450 for extra M2 safety.
-- Scope limit: the corrected crop uses the fix16 surrogate, not the absent fix70. Five rows are surrogate clean-row targets, not full-row instances. Full 541-row/fix70 DRC and LVS are still open.
+- Earlier duplicate-row surrogate: **49 before, 49 after, 0 added, 0 removed**; `LANDING_CHECK PASS`. **Superseded by the no-duplicate retry.**
+
+### No-duplicate original-row retry
+
+- `row_before.gds` — `57b7eb9d5585a8d4944cdb66981dd6315d9cd0b8fa62be8c3d9c5b9eb0bd8786`
+- `row_after.gds` — `f1378f60db36432b288c3f5198073360e441f723dc2458d93f4ce3be36b056a3`
+- `row_before.lyrdb` — `1728c42bfd0aa4897bce8cbb6889f4aa9bc853e7b8c7acda251a31599c67366e`
+- `row_after.lyrdb` — `09de4857991fe1d2c5faf7808c2d5a6e8fe1e9ee413185f6373c9daa0633fd1a`
+- `row_compare.json` — `83c5eaaa43b6b5b5d5e005ec70cb2a56c580aaa1c7e86e0504fd1f6a65966926`
+- Result: **276 before, 279 after, 3 added / 0 removed**; residual at `sub_row_300` (1× M1.2a, 2× M2.2a).
+
+### 541/541 evidence
+
+- `validate_drop_windows_2x2.rb` requires `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds`; that file is absent (and the selected fix70 file is absent). The historical 541/541 result cannot be regenerated or updated in this checkout. The current no-duplicate crop is representative only.
 
 ## Signoff block
 
@@ -88,4 +100,4 @@ The first cropped pass added synthetic M1 landing pads that produced M1.2a edges
 - **Waiver granted:** NO
 - **Gridworkz submission:** NOT SUBMITTED — connector unavailable
 
-Until this block is completed and the selected fix70/full-541-row cropped run is clean, the packet remains pending.
+Until `sub_row_300` is clean and the selected fix70/full-541-row cropped run can be run, the packet remains pending. The earlier 0-added surrogate result is not valid 541-row evidence.
