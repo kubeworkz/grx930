@@ -11,7 +11,6 @@ SITES = [
   ["sub_row_150", 2_716_450, 1_618_960, 1_622_960, nil],
   ["sub_row_200", 3_088_850, 2_010_960, 2_002_960, nil],
   ["sub_row_250", 2_717_000, 2_402_800, 2_402_960, nil],
-  ["sub_row_300", 3_076_080, 2_794_960, 2_802_960, nil, nil, 195, true],
   ["sub_row_350", 2_728_330, 3_186_800, 3_182_960, 2_722_500],
   ["sub_row_400", 1_975_690, 3_578_800, 3_582_960, 1_971_300],
   ["sub_row_450", 1_970_530, 3_970_960, 3_962_960, nil],
@@ -46,7 +45,7 @@ source_regions = {}
 [[34, 0], [36, 0], [42, 0], [35, 0], [38, 0]].each do |ln, dt|
   source_regions[[ln, dt]] = RBA::Region.new(stop.begin_shapes_rec(layer_index(src, ln, dt)))
 end
-SITES.each do |name, x, y, ty, bridge_x0, right_ext, m1_left, m2_dogleg|
+SITES.each do |name, x, y, ty, bridge_x0, right_ext|
   win = RBA::Box.new([x, bridge_x0 || x].min - 5_000, [y, ty].min - 2_000,
                      x + 5_000, [y, ty].max + 2_000)
   [[34, 0], [36, 0], [42, 0], [35, 0], [38, 0]].each do |ln, dt|
@@ -56,9 +55,6 @@ SITES.each do |name, x, y, ty, bridge_x0, right_ext, m1_left, m2_dogleg|
   # Landing pad plus explicit M1/M3 extension to the original-net edge.
   acell.shapes(al[[34, 0]]).insert(RBA::Box.new(x - 450, y - 390, x + 450, y + 390))
   acell.shapes(al[[42, 0]]).insert(RBA::Box.new(x - 450, ty - 400, x + 450, ty + 400))
-  if m1_left
-    acell.shapes(al[[34, 0]]).insert(RBA::Box.new(x - 450 - m1_left, y - 390, x - 450, y + 390))
-  end
   if bridge_x0
     acell.shapes(al[[34, 0]]).insert(RBA::Box.new(bridge_x0, y - 390, x - 450, y + 390))
     acell.shapes(al[[42, 0]]).insert(RBA::Box.new(bridge_x0, ty - 400, x - 450, ty + 400))
@@ -69,18 +65,7 @@ SITES.each do |name, x, y, ty, bridge_x0, right_ext, m1_left, m2_dogleg|
   end
   m2b = [y, ty].min - 450
   m2t = [y, ty].max + 450
-  if m2_dogleg
-    xr = x + 1_120
-    h1 = y + 1_340
-    h2 = ty - 3_160
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, m2b, x + 420, h1 + 420))
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, h1 - 420, xr + 420, h1 + 420))
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(xr - 420, h1, xr + 420, h2))
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, h2 - 420, xr + 420, h2 + 420))
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, h2, x + 420, m2t))
-  else
-    acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, m2b, x + 420, m2t))
-  end
+  acell.shapes(al[[36, 0]]).insert(RBA::Box.new(x - 420, m2b, x + 420, m2t))
   [-260, 260].each do |dx|
     [-260, 260].each do |dy|
       acell.shapes(al[[35, 0]]).insert(RBA::Box.new(x + dx - 130, y + dy - 130, x + dx + 130, y + dy + 130))

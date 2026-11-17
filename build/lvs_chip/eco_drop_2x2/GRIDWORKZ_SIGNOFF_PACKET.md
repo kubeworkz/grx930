@@ -1,35 +1,33 @@
 # Gridworkz signoff packet — 2×2 VSS/VDD drops
 
-- **Packet status: BLOCKED. NOT SIGNED. The row-300 M2 dogleg has 0 added DRC findings but overlaps VDD M2; the contact is not VSS. No clear 0.84 µm M2 corridor exists in fix16.**
+- **Packet status: PENDING. NOT SIGNED. Candidate is 8,168 drops (540 row drops + 2 rail drops); row 300 is excluded. The 13-site cropped DRC is 226/226 with 0 added findings.**
 - **Submission status: NOT SUBMITTED — no Gridworkz connector/API is available in this session.**
 - **Prepared:** 2026-11-17
-- **Scope:** 8,169-drop candidate: 7,626 connected `sub` islands + 541 `sub` row drops + 2 `$45264` rail-end drops.
+- **Scope:** 8,168-drop candidate: 7,626 connected `sub` islands + 540 `sub` row drops + 2 `$45264` rail-end drops. `sub_row_300` is excluded.
 - **ECO plan:** `build/lvs_chip/ECO_DROP_PLAN.md`
 
 ## Decision requested
 
-Approve only after the selected fix70/full-541-row cropped real-layout DRC has **zero added findings** and the ECO plan’s 0.84 µm M2 / 2×2 array geometry is used. The current corrected 14-site surrogate has zero added findings but is not sufficient for approval. This packet does not grant a waiver.
+Approve only after the selected fix70 cropped real-layout DRC has **zero added findings** for the 540-row candidate and the ECO plan’s 0.84 µm M2 / 2×2 array geometry is used. The current 13-site candidate crop has zero added findings, but row 300 is excluded and the historical 541-row source is absent. This packet does not grant a waiver.
 
 ## Results
 
 | Gate | Result |
 |---|---|
-| `sub` rows legal | **541 / 541** |
-| `sub` missing rows | **0** |
+| `sub` rows legal | **540 / 541 candidate** |
+| `sub` missing rows | **1 — `sub_row_300` excluded** |
 | `$45264` endpoints | **2 / 2** legal |
 | Endpoint coordinates | `1487.97, 2979.20` and `1651.97, 2979.20` µm |
 | Endpoint separation | **164.0 µm** |
-| Drop count | **8,169** (7,626 + 541 + 2) |
+| Drop count | **8,168** (7,626 + 540 + 2) |
 | Synthetic 14-site PDK DRC | **0 violations** |
-| Row-original retry — 14 sites, no cloned rows | **0 added / 0 removed**; 253 before / 253 after. **DRC-only result; not electrically clean.** |
-| Row-300 M2 route | 0.84 µm dogleg x3076.08 → x3077.20 → x3076.08; DRC 0 added, but overlaps **0.146 µm² VDD M2**. **VDD short.** |
-| Row-300 net labels | VSS on the drop row at **(3077.2, 2794.96)**; VDD on the overlapped M1 row at **(3077.2, 2798.885)**. V1 at (3076.23, 2797.35) joins the overlapped M2 to that VDD row. |
-| Clear-lane search | **0** full-height clear 0.84 µm M2 corridors in the 3070–3100 window. |
+| Row-original candidate — 13 sites, no cloned rows | **0 added / 0 removed**; **226 before / 226 after**. Row 300 absent. |
+| Row-300 candidate geometry | **Excluded — no M2 dogleg in candidate or packet.** |
 | Cropped real-layout DRC — earlier duplicate-row surrogate | 0 added / 0 removed; 49 baseline. **Superseded because it cloned rows.** |
 | M1/M3 landing connectivity — row-original retry | M1 pad 79.9% over actual M1; M1 extension 76.9% over actual M1; M3 pad 100% over actual M3. |
 | Original first pass (superseded) | 22 added findings: M1.2a ×16, M2.2a ×6 |
 
-The first cropped pass added synthetic M1 landing pads that produced M1.2a edges and six M2 spacing conflicts. The earlier surrogate then reached 0 added findings by cloning clean rows, which is not legal 541-row evidence. The replacement no-duplicate crop keeps one drop on each original row. `sub_row_300` is routed with an explicit M2 dogleg: x=3076.08 to y=2796.30, right jog to x=3077.20, return at y=2799.80, then x=3076.08. The metal/via DRC is **253 before / 253 after, 0 added**, but the dogleg overlaps **0.146 µm² of VDD M2**. The M2 contains V1 at (3076.23, 2797.35) and the connected M1 row is labeled VDD at (3077.2, 2798.885); the drop row is labeled VSS at (3077.2, 2794.96). The overlap is therefore a VDD short, not a same-net VSS contact. A clear-lane scan found no full-height 0.84 µm corridor. The selected fix70 GDS is absent, and the historical 541 validator cannot run because its source GDS is absent. Do not treat any current result as a full-layout signoff.
+The first cropped pass added synthetic M1 landing pads that produced M1.2a edges and six M2 spacing conflicts. The earlier surrogate then reached 0 added findings by cloning clean rows, which is not legal 541-row evidence. The replacement candidate keeps one drop on each included original row and excludes `sub_row_300`. The 13-site crop is **226 before / 226 after, 0 added / 0 removed**. Row 300's prior DRC-clean route was removed because its overlap was VDD, not VSS; the rejected geometry and its label/clear-lane evidence are retained under `rejected_row300/` and are not part of this candidate. The selected fix70 GDS is absent, and the historical 541 validator cannot run because its source GDS is absent. Do not treat any current result as a full-layout signoff.
 
 ## Geometry
 
@@ -83,20 +81,21 @@ The first cropped pass added synthetic M1 landing pads that produced M1.2a edges
 
 ### No-duplicate original-row retry
 
-- `row_before.gds` — `3cbeb5fd04f940abe9d323b2d7ba3e385e1b095a1d1349ea76d9f966ef860222`
-- `row_after.gds` — `1bf77c7f537803f38c0cdd9736ed1f04e28c19d5d605c5f736e77ec8834e08bc`
-- `row_before.lyrdb` — `6893215faa8ca44d6463c33877906cd33d654372cf61fa90af7f61e3aed5df4d`
-- `row_after.lyrdb` — `afdbc4686049d81efd3ce9aba8d47950a02877597d8e7254a15451f89b58ee1b`
-- `row_compare.json` — `19a07a227119d3ee03461ad6a9675d6f4b83b81bb1cb159236671aa893dfaa59`
-- `row300_route_check.log` — `9b82303a3dc4861becd740fb9bfc03170149cfa384a73490bd7fe0c2f4e3e4ec`
-- `vdd_label_check.log` — nearest VDD at (3077.2, 2798.885)
-- `vss_label_check.log` — nearest VSS at (3077.2, 2794.96)
-- `m2_lanes.log` — `CLEAR_LANES=0`
-- Result: **253 before, 253 after, 0 added / 0 removed**, but the row-300 M2 overlap is VDD. **Not clean.**
+- `row_before.gds` — `59d04611d6479c409d33576d8dd8a0a9135d0c203307738e5988ba80a91cd7f1`
+- `row_after.gds` — `df39f58dde496116527f5f5a15e59b04ede1e3be15b1dd79bb0b0abb27d7f890`
+- `row_before.lyrdb` — `e7ec14ead0b40395f4a4d6a3017fa86d2bfd60bd8b01c6353dfcf3b99c8f9696`
+- `row_after.lyrdb` — `6022060b581463ed4d48739e204f5dd2a087fcd03c2d382461b0a9bf54906061`
+- `row_compare.json` — `76c2636c7e14a99c28dbefc927b6bdc91c2f3fe3559bd927de53f1f2a7c13c04`
+- Result: **226 before, 226 after, 0 added / 0 removed**; **13 sites**, no `sub_row_300`.
 
-### 541/541 evidence
+### Rejected row-300 evidence
 
-- `validate_drop_windows_2x2.rb` requires `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds`; that file is absent (and the selected fix70 file is absent). The historical 541/541 result cannot be regenerated or updated in this checkout. The current no-duplicate crop is representative only.
+- The prior dogleg and its VSS/VDD/clear-lane qualification are retained under `build/lvs_chip/eco_drop_2x2/rejected_row300/`.
+- **Not part of the candidate or packet geometry.** No row-300 drop is claimed.
+
+### 540/541 evidence
+
+- `validate_drop_windows_2x2.rb` requires `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds`; that file is absent (and the selected fix70 file is absent). The historical 541/541 result cannot be regenerated or updated in this checkout. The current crop is a 13-site representative check of the 540-row candidate.
 
 ## Signoff block
 
@@ -107,4 +106,4 @@ The first cropped pass added synthetic M1 landing pads that produced M1.2a edges
 - **Waiver granted:** NO
 - **Gridworkz submission:** NOT SUBMITTED — connector unavailable
 
-Until row 300 is rerouted without VDD M2 overlap and the selected fix70/full-541-row cropped run can be run, the packet remains blocked. The 14-site crop has 0 added DRC findings but a VDD short; the earlier surrogate is not valid 541-row evidence.
+Row 300 is removed from the candidate and packet; the packet remains pending because only 540 of 541 row drops are represented and the selected fix70/full-541-row cropped run cannot be run. The 13-site crop has 0 added findings; the earlier surrogate is not valid 541-row evidence.

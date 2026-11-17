@@ -207,78 +207,6 @@
    <comment/>
    <image/>
    <values>
-    <value>edge-pair: (3080.875,2800.1;3080.875,2800.205)|(3081.08,2800.309;3081.08,2800.1)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3081,2803.1;3081,2803.49)|(3081.08,2803.49;3081.08,2802.884)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3071.08,2803.645;3071.08,2804.96)|(3071.29,2804.96;3071.29,2803.645)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3075.04,2804.85;3073.095,2804.85)|(3073.095,2804.96;3075.242,2804.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3079.63,2804.905;3079.29,2804.905)|(3079.29,2804.96;3079.63,2804.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3081.08,2804.915;3080.385,2804.915)|(3080.385,2804.96;3081.08,2804.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>edge-pair: (2726.317,3180.96;2725.665,3180.96)|(2725.665,3181.02;2726.095,3181.02)</value>
    </values>
   </item>
@@ -435,18 +363,6 @@
    <comment/>
    <image/>
    <values>
-    <value>edge-pair: (2715.61,1616.96;2715.27,1616.96)|(2715.27,1617.03;2715.61,1617.03)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>edge-pair: (2721.325,1616.96;2721.325,1617.97)|(2721.45,1617.97;2721.45,1616.96)</value>
    </values>
   </item>
@@ -560,26 +476,14 @@
   </item>
   <item>
    <tags/>
-   <category>'M1.3'</category>
+   <category>'M1.1'</category>
    <cell>crop_drc</cell>
    <visited>false</visited>
    <multiplicity>1</multiplicity>
    <comment/>
    <image/>
    <values>
-    <value>polygon: (3079.29,2804.905;3079.29,2804.96;3079.63,2804.96;3079.63,2804.905)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.3'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (3080.385,2804.915;3080.385,2804.96;3081.08,2804.96;3081.08,2804.915)</value>
+    <value>edge-pair: (2715.61,1616.96;2715.27,1616.96)|(2715.27,1617.03;2715.61,1617.03)</value>
    </values>
   </item>
   <item>
@@ -783,18 +687,6 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2715.27,1616.96;2715.27,1617.03;2715.61,1617.03;2715.61,1616.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M1.3'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>polygon: (2721.325,1616.96;2721.325,1617.97;2721.45,1617.97;2721.45,1616.96)</value>
    </values>
   </item>
@@ -868,6 +760,18 @@
    <image/>
    <values>
     <value>polygon: (2712.59,2404.87;2712.59,2404.96;2712.82,2404.96;2712.82,2404.87)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'M1.3'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2715.27,1616.96;2715.27,1617.03;2715.61,1617.03;2715.61,1616.96)</value>
    </values>
   </item>
   <item>
@@ -952,30 +856,6 @@
    <image/>
    <values>
     <value>edge-pair: (2720.9,2404.73;2720.62,2404.73)|(2720.62,2404.96;2720.9,2404.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M2.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3073.7,2792.96;3073.42,2792.96)|(3073.42,2793.19;3073.7,2793.19)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M2.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3075.94,2792.96;3075.66,2792.96)|(3075.66,2793.19;3075.94,2793.19)</value>
    </values>
   </item>
   <item>
@@ -1120,30 +1000,6 @@
    <image/>
    <values>
     <value>polygon: (2720.62,2404.73;2720.62,2404.96;2720.9,2404.96;2720.9,2404.73)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M2.3'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (3073.42,2792.96;3073.42,2793.19;3073.7,2793.19;3073.7,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'M2.3'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (3075.66,2792.96;3075.66,2793.19;3075.94,2793.19;3075.94,2792.96)</value>
    </values>
   </item>
   <item>
@@ -1599,67 +1455,7 @@
    <comment/>
    <image/>
    <values>
-    <value>edge: (3075.93,2793.13;3075.93,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (3075.67,2792.96;3075.67,2793.13)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (3073.69,2793.13;3073.69,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (3073.43,2792.96;3073.43,2793.13)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (2719.51,2404.79;2719.51,2404.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (2719.77,2404.96;2719.77,2404.79)</value>
+    <value>edge: (2720.89,2404.96;2720.89,2404.79)</value>
    </values>
   </item>
   <item>
@@ -1683,7 +1479,19 @@
    <comment/>
    <image/>
    <values>
-    <value>edge: (2720.89,2404.96;2720.89,2404.79)</value>
+    <value>edge: (2719.77,2404.96;2719.77,2404.79)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (2719.51,2404.79;2719.51,2404.96)</value>
    </values>
   </item>
   <item>
@@ -1708,18 +1516,6 @@
    <image/>
    <values>
     <value>edge: (2717.53,1617.13;2717.53,1616.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.3c'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3073.69,2792.96;3073.43,2792.96)/(3073.69,2792.96;3073.43,2792.96)</value>
    </values>
   </item>
   <item>
@@ -1779,18 +1575,6 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (3073.43,2792.96;3073.43,2793.13;3073.69,2793.13;3073.69,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.3d'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>polygon: (2727.91,3180.96;2727.91,3181.21;2728.17,3181.21;2728.17,3180.96)</value>
    </values>
   </item>
@@ -1827,18 +1611,6 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (3075.67,2792.96;3075.67,2793.13;3075.93,2793.13;3075.93,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.3d'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>polygon: (2726.23,3188.79;2726.23,3188.8;2726.49,3188.8;2726.49,3188.79)</value>
    </values>
   </item>
@@ -1863,31 +1635,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2717.499,3183.739;2717.499,3184.021;2717.501,3184.011;2717.501,3183.749)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4a'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>polygon: (2727.899,3180.959;2727.909,3180.961;2728.171,3180.961;2728.181,3180.959)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4a'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (2719.509,2404.959;2719.499,2404.961;2719.781,2404.961;2719.771,2404.959)</value>
    </values>
   </item>
   <item>
@@ -1911,7 +1659,19 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (3073.419,2792.959;3073.429,2792.961;3073.691,2792.961;3073.701,2792.959)</value>
+    <value>polygon: (2719.509,2404.959;2719.499,2404.961;2719.781,2404.961;2719.771,2404.959)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V1.4a'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>polygon: (2717.499,3183.739;2717.499,3184.021;2717.501,3184.011;2717.501,3183.749)</value>
    </values>
   </item>
   <item>
@@ -1936,18 +1696,6 @@
    <image/>
    <values>
     <value>polygon: (2717.259,1616.959;2717.269,1616.961;2717.531,1616.961;2717.541,1616.959)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4a'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (3075.659,2792.959;3075.669,2792.961;3075.931,2792.961;3075.941,2792.959)</value>
    </values>
   </item>
   <item>
@@ -2055,54 +1803,6 @@
    <comment/>
    <image/>
    <values>
-    <value>edge-pair: (3073.43,2792.96;3073.43,2793.13)/(3073.42,2792.96;3073.42,2793.13)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4b'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3073.69,2793.13;3073.69,2792.96)/(3073.7,2793.13;3073.7,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4b'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3075.67,2792.96;3075.67,2793.13)/(3075.66,2792.96;3075.66,2793.13)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4b'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge-pair: (3075.93,2793.13;3075.93,2792.96)/(3075.94,2793.13;3075.94,2792.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4b'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>edge-pair: (2728.17,3180.96;2727.91,3180.96)/(2728.17,3180.96;2727.91,3180.96)</value>
    </values>
   </item>
@@ -2199,31 +1899,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2717.5,3188.79;2717.5,3188.8;2717.53,3188.8;2717.53,3188.79)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4c'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
     <value>polygon: (2719.51,2404.79;2719.51,2404.96;2719.77,2404.96;2719.77,2404.79)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V1.4c'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>polygon: (3073.43,2792.96;3073.43,2793.13;3073.69,2793.13;3073.69,2792.96)</value>
    </values>
   </item>
   <item>
@@ -2247,7 +1923,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2720.63,2404.79;2720.63,2404.96;2720.89,2404.96;2720.89,2404.79)</value>
+    <value>polygon: (2717.5,3188.79;2717.5,3188.8;2717.53,3188.8;2717.53,3188.79)</value>
    </values>
   </item>
   <item>
@@ -2259,7 +1935,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (3075.67,2792.96;3075.67,2793.13;3075.93,2793.13;3075.93,2792.96)</value>
+    <value>polygon: (2720.63,2404.79;2720.63,2404.96;2720.89,2404.96;2720.89,2404.79)</value>
    </values>
   </item>
   <item>
@@ -2307,7 +1983,7 @@
    <comment/>
    <image/>
    <values>
-    <value>edge: (2717.5,3180.96;2717.5,3181.21)</value>
+    <value>edge: (2717.53,3180.96;2717.5,3180.96)</value>
    </values>
   </item>
   <item>
@@ -2319,7 +1995,7 @@
    <comment/>
    <image/>
    <values>
-    <value>edge: (2717.53,3180.96;2717.5,3180.96)</value>
+    <value>edge: (2717.5,3180.96;2717.5,3181.21)</value>
    </values>
   </item>
   <item>
@@ -2475,6 +2151,30 @@
    <comment/>
    <image/>
    <values>
+    <value>edge: (1969.95,832.96;1969.95,833.09)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge: (1970.21,833.09;1970.21,832.96)</value>
+   </values>
+  </item>
+  <item>
+   <tags/>
+   <category>'V2.1'</category>
+   <cell>crop_drc</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
     <value>edge: (1970.51,832.96;1970.51,833.09)</value>
    </values>
   </item>
@@ -2512,30 +2212,6 @@
    <image/>
    <values>
     <value>edge: (1971.33,833.09;1971.33,832.96)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V2.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (1969.95,832.96;1969.95,833.09)</value>
-   </values>
-  </item>
-  <item>
-   <tags/>
-   <category>'V2.1'</category>
-   <cell>crop_drc</cell>
-   <visited>false</visited>
-   <multiplicity>1</multiplicity>
-   <comment/>
-   <image/>
-   <values>
-    <value>edge: (1970.21,833.09;1970.21,832.96)</value>
    </values>
   </item>
   <item>
@@ -2595,7 +2271,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
+    <value>polygon: (2719.499,3180.959;2719.509,3180.961;2719.771,3180.961;2719.781,3180.959)</value>
    </values>
   </item>
   <item>
@@ -2619,7 +2295,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2719.499,3180.959;2719.509,3180.961;2719.771,3180.961;2719.781,3180.959)</value>
+    <value>polygon: (2725.659,3180.959;2725.669,3180.961;2725.931,3180.961;2725.941,3180.959)</value>
    </values>
   </item>
   <item>
@@ -2643,7 +2319,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2725.659,3180.959;2725.669,3180.961;2725.931,3180.961;2725.941,3180.959)</value>
+    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
    </values>
   </item>
   <item>
@@ -2703,7 +2379,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
+    <value>polygon: (2717.499,3180.959;2717.499,3180.961;2717.531,3180.961;2717.541,3180.959)</value>
    </values>
   </item>
   <item>
@@ -2715,7 +2391,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2717.499,3180.959;2717.499,3180.961;2717.531,3180.961;2717.541,3180.959)</value>
+    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
    </values>
   </item>
   <item>
@@ -3003,7 +2679,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
+    <value>polygon: (2719.499,3180.959;2719.509,3180.961;2719.771,3180.961;2719.781,3180.959)</value>
    </values>
   </item>
   <item>
@@ -3027,7 +2703,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2719.499,3180.959;2719.509,3180.961;2719.771,3180.961;2719.781,3180.959)</value>
+    <value>polygon: (2725.659,3180.959;2725.669,3180.961;2725.931,3180.961;2725.941,3180.959)</value>
    </values>
   </item>
   <item>
@@ -3051,7 +2727,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2725.659,3180.959;2725.669,3180.961;2725.931,3180.961;2725.941,3180.959)</value>
+    <value>polygon: (2721.451,1620.779;2721.449,1620.789;2721.449,1621.051;2721.451,1621.061)</value>
    </values>
   </item>
   <item>
@@ -3111,7 +2787,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
+    <value>polygon: (2717.499,3180.959;2717.499,3180.961;2717.531,3180.961;2717.541,3180.959)</value>
    </values>
   </item>
   <item>
@@ -3123,7 +2799,7 @@
    <comment/>
    <image/>
    <values>
-    <value>polygon: (2717.499,3180.959;2717.499,3180.961;2717.531,3180.961;2717.541,3180.959)</value>
+    <value>polygon: (2713.909,1624.959;2713.899,1624.961;2714.181,1624.961;2714.171,1624.959)</value>
    </values>
   </item>
   <item>

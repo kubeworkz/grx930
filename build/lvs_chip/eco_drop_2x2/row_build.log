@@ -4,7 +4,6 @@ SITE sub_row_100 1970530 1226960 1222960 bridge=- right_ext=-
 SITE sub_row_150 2716450 1618960 1622960 bridge=- right_ext=-
 SITE sub_row_200 3088850 2010960 2002960 bridge=- right_ext=-
 SITE sub_row_250 2717000 2402800 2402960 bridge=- right_ext=-
-SITE sub_row_300 3076080 2794960 2802960 bridge=- right_ext=-
 SITE sub_row_350 2728330 3186800 3182960 bridge=2722500 right_ext=-
 SITE sub_row_400 1975690 3578800 3582960 bridge=1971300 right_ext=-
 SITE sub_row_450 1970530 3970960 3962960 bridge=- right_ext=-
