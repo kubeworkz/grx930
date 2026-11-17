@@ -5,6 +5,7 @@
 - **Prepared:** 2026-11-17
 - **Scope:** 8,168-drop candidate: 7,626 connected `sub` islands + 540 `sub` row drops + 2 `$45264` rail-end drops. `sub_row_300` is excluded.
 - **ECO plan:** `build/lvs_chip/ECO_DROP_PLAN.md`
+- **Production signoff plan:** `build/lvs_chip/PRODUCTION_SIGNOFF_PLAN.md` — all gates NOT RUN/BLOCKED
 
 ## Decision requested
 
