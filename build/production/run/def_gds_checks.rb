@@ -72,6 +72,15 @@ def add_box(boxes, layer, x0, y0, x1, y1)
   boxes[layer] << [x0, y0, x1, y1]
 end
 
+# DEF is 2000 dbu/um and the GDS is 1000 dbu/um. The stream-out converts
+# each coordinate with Python's round-half-to-even, so match that instead of
+# flooring: a 1-dbu edge error becomes millions of dbu2 on a long stripe.
+def gds_dbu(v)
+  q, r = v.divmod(2)
+  return q if r.zero?
+  q.even? ? q : q + 1
+end
+
 def add_segment(boxes, layer, x0, y0, x1, y1, w)
   h = w / 2
   add_box(boxes, layer,
@@ -209,12 +218,8 @@ cut_expected = {}
   windows = RBA::Region.new
   anchors = name == VIA1 ? eco_via1 : eco_via2
   anchors.each do |x, y|
-    unless x.even? && y.even?
-      failures << "#{name}: anchor #{x},#{y} is off the GDS 0.001 um grid"
-      next
-    end
-    cx = x / 2
-    cy = y / 2
+    cx = gds_dbu(x)
+    cy = gds_dbu(y)
     CUT_BOXES.each do |x0, y0, x1, y1|
       expected.insert(RBA::Box.new(cx + x0, cy + y0, cx + x1, cy + y1))
     end
@@ -226,8 +231,9 @@ end
 LAYERS.each do |name, (_dl, _dd, gl, gd)|
   def_region = RBA::Region.new
   boxes[name].each do |x0, y0, x1, y1|
-    # DEF units -> GDS dbu, exact because both are integer grids.
-    def_region.insert(RBA::Box.new(x0 / 2, y0 / 2, x1 / 2, y1 / 2))
+    # DEF units -> GDS dbu using the stream-out's rounding.
+    def_region.insert(RBA::Box.new(gds_dbu(x0), gds_dbu(y0),
+                                  gds_dbu(x1), gds_dbu(y1)))
   end
   gds_li = gds_layout.find_layer(RBA::LayerInfo.new(gl, gd))
   if gds_li.nil?

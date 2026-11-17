@@ -421,3 +421,18 @@ build/production/<gate>/
 `verdict.txt` starts as `NOT RUN`. It may be changed to `PASS` only by the named owner after the exit criteria are checked. A report without a signoff is evidence, not a gate pass.
 
 **Release status: NOT APPROVED.** G0 through G5 are **NOT RUN** or **BLOCKED** as stated above. The focused 13-site crop at `build/lvs_chip/eco_drop_2x2/row_corrected/` is **not** an input to any production gate except as ECO-geometry evidence.
+
+## 6. Limit closure register
+
+A full-depth workspace search, `git rev-list --all --objects`, and `git lfs ls-files` found none of the inputs below; the local OpenLane run trees contain only lint stages. These limits cannot be closed by changing the checker.
+
+| Limit | Current evidence | Closure input |
+|---|---|---|
+| Real 8,168-drop coordinate list | `validate_drop_windows_2x2.rb` needs `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds` and `/scripts/chip.l2n`; both absent. Selected `fix70` GDS (`c5fa46ed3d17e36b75026964655e6376d15a00ca03f57f67277290fc98c20738`) and accepted `fix59` base (`3f82dff9090c2c5d7a3fe7c921db3dd3dbc4ecda37b21f5d28c754abcff2bdae`) absent. | Supply those sources, or authorize a new 541-row extraction from a named baseline. |
+| Final GDS | `build/production/final/grx930_test_chip_final.gds` absent. | Supply it, or a completed routed ODB that can be streamed out. |
+| Final SPEF | `build/production/final/grx930_test_chip.spef` absent; no ODB and no RCX rules. | Supply the extracted SPEF, or the ODB and RCX rules. |
+| Gridworkz G0 signoff | No `G0_signoff.txt`; no Gridworkz connector/API. | Gridworkz-authorized signature over the frozen manifest. |
+
+Real-pair probes are not substitutes. `stream_out_filled.gds` against `filled/grx930_test_chip_filled.def` gives Metal1 XOR 0 but Metal2–Metal5 XOR 117,600 / 1,303,157,600 / 665,639,200 / 13,321,905,600 dbu²; `stream_out.gds` against the September `grx930_test_chip.def` gives the same numbers. Shape counts match per layer, but the local DEFs and streamed GDS files are not from the same stream-out revision, so neither pair is a zero-XOR real control. The synthetic fixtures remain the only passing controls.
+
+Until the inputs above arrive, G0 stays `BLOCKED`, G2 exits 2, and the package stays **VOID — DO NOT SUBMIT**.
