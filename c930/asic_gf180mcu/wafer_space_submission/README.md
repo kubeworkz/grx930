@@ -68,7 +68,7 @@ These are the only files in this directory. The package does **not** contain a
 - `generate_seal_ring.py` — historical seal-ring helper
 
 **Expected GDS sizes:** approximately **77.08 MB decimal / 73.51 MiB** each.
-There is no separate 77 MB “final DEF” artifact in this package.
+There is no separate final DEF artifact in this package.
 
 ## Verification Steps
 
