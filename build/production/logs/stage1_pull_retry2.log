@@ -1,0 +1,8 @@
+ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f: Pulling from wafer-space/gf180mcu-precheck
+dd06cdd913ff: Pulling fs layer
+9cae479a9928: Pulling fs layer
+50b1153e1854: Pulling fs layer
+c11ac226881d: Pulling fs layer
+Digest: sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
+Status: Downloaded newer image for ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
+ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
