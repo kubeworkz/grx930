@@ -1,7 +1,8 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
 **Status: STAGE 1 PASS — PDK/RCX/IMAGE CHECKS PASS; PRODUCTION HOST
-READINESS PASSES (197 GiB FREE); NO FLOW STARTED.** The Stage 0 pin is
+READINESS PASSES (197 GiB FREE); STAGE 2 STAGING REHEARSED LOCALLY; NO FLOW
+STARTED.** The Stage 0 pin is
 `build/production/baseline/stage0/IDENTITY.md`.
 No synthesis, place-and-route, DRT, stream-out, ECO insertion, or RCX command has
 been run for this plan. The submission package remains **VOID — DO NOT SUBMIT**.
@@ -46,7 +47,8 @@ The production target verified on 2026-11-18 is:
 - **Host:** `ubuntu@2.31.100.64` (`ubuntu-32gb-fsn1-1`, aarch64; 31,260 MiB
   total memory).
 - **Source checkout:** `/home/ubuntu/grx930` (git branch
-  `npu/shim-tile-model`; synchronize the intended source before staging).
+  `npu/shim-tile-model`; it has a local LVS commit, so Stage 2 uses a clean
+  `/home/ubuntu/grx930_stage2` worktree at `6278466` rather than resetting it).
 - **Flow root:** `/mnt/HC_Volume_107515356/grx930_ol2`; this is the deployed
   tree mounted at `/work`, not a git checkout. It contains `ws/`, `build/`, and
   `openlane2_rtl/`.
@@ -60,14 +62,14 @@ and its root filesystem has 36 GiB free (its auxiliary volume has 4.3 GiB).
 No host may start Stage 2 until the readiness gate in the Stage 2 section writes
 `status=PASS` for `/mnt/HC_Volume_107515356/grx930_ol2` with
 `disk.available_gb >= 150`. That gate now records **197 GiB free and
-`status=PASS`**. Stage 2 has not been started.
+`status=PASS`**. Stage 2 was launched on 2026-11-18.
 
 ## 2. Existing assets to reuse
 
 | Purpose | Path | Notes |
 |---|---|---|
 | Full-chip flow runner | `c930/asic_gf180mcu/ws/ws_exec.sh` | LibreLane Chip flow; `WS_TAG`, `WS_LIMIT`, `WS_FROM`, `WS_OVERRIDE`; `cd /work/ws/template`; runs land in `librelane/runs/<tag>/` |
-| Template source | `c930/asic_gf180mcu/tools/gf180mcu-project-template/` | `librelane/` and `src/`; `ws/template` is absent locally; contains its own `.git` |
+| Template source | `c930/asic_gf180mcu/tools/gf180mcu-project-template/` | `librelane/` and `src/`; untracked local checkout, not in target `6278466`; transfer it to the clean worktree before staging; contains its own `.git` |
 | Slot config | `.../librelane/slots/slot_1x1.yaml` | pad ring and DIE/CORE area; **3932 × 5122 µm**, core `[442, 442, 3490, 4680]` |
 | Design overrides | `c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml` | SHA-256 `2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9`; GRT 0.1, DRT_OPT_ITERS 8, antenna 10/10 |
 | Core adapter | `.../wafer_space_integration/chip_core_grx930.sv` | SHA-256 `585661ccc48cf1852ac0d9829abced93bac1beb3f151dbe640ad0f55d8b91c0b`; replaces `src/chip_core.sv` |
@@ -179,42 +181,245 @@ RCX hashes, host readiness, pad-ring/mask comparison, and the pass verdict).
 Gate: the exact RCX rule files and OpenROAD build are readable **and match the
 frozen pin**, and `STAGE1_READINESS.txt` has `status=PASS`. A version bump or a
 resource-gate failure restarts the Stage 1 check. The current production record
-is **PASS** (197 GiB free volume), so this gate is **MET**. Stage 2 has not been
-started.
+is **PASS** (197 GiB free volume), so this gate is **MET**. Stage 2 was launched
+on 2026-11-18.
 
 ### Stage 2 — RTL through global route to a pre-DRT ODB
 
 **Prerequisite — passing production readiness gate.** Do not run any command in
 this section until the gate above writes a record ending `status=PASS` and
 `disk.available_gb >= 150` for `/mnt/HC_Volume_107515356/grx930_ol2`. The
-production volume now records 197 GiB free and `status=PASS`; this section
-remains unlaunched until the owner explicitly starts Stage 2.
+production volume now records 197 GiB free and `status=PASS`. The owner
+authorized Stage 2 on 2026-11-18; it was launched after the checks below, and its
+acceptance gate remains pending.
 
 The container mount root is the deployed flow root
 `/mnt/HC_Volume_107515356/grx930_ol2`, **not the source checkout and not the
 repository root**: `ws_exec.sh` does `cd /work/ws/template`, and the RTL tree is
 at `/work/openlane2_rtl`.
 
-Stage the template exactly:
+**Production source preflight — use a clean target worktree.** The existing
+source checkout is at `f1ae96f`, one local LVS commit on top of `82dea44`.
+The pushed target `6278466` also descends from `82dea44` but does not contain
+`f1ae96f`, so a `git pull --ff-only` cannot work. Do not reset the existing
+checkout or discard its local commit. Preserve it on a branch and check out the
+exact flown commit in a separate worktree.
+
+On the production host the checkout's `origin` is
+`git@github.com:kubeworkz/grx930.git`, but the host has no GitHub SSH key, so
+`git fetch origin` fails with `Permission denied (publickey)`. Do not rewrite
+`origin`; fetch the same published ref over HTTPS into the remote-tracking ref:
 
 ```bash
 set -e
-SRC=${SRC:-/home/ubuntu/grx930}
-ROOT=${ROOT:-/mnt/HC_Volume_107515356/grx930_ol2}
-FLOW="$SRC/c930/asic_gf180mcu"
-STAGE="$ROOT/ws/.template.stage"
+OLD_SRC=/home/ubuntu/grx930
+SRC=/home/ubuntu/grx930_stage2
+ROOT=/mnt/HC_Volume_107515356/grx930_ol2
+TARGET=62784668c1e95f74933aa73dcd5935f0ce67e136
 
-# ws/template is generated by this block; do not keep local edits there. Build
-# the new tree beside the live one, validate it, then swap it in. Re-running the
-# block cannot nest the template inside itself or retain stale overlays.
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
+test -z "$(git -C "$OLD_SRC" status --porcelain --untracked-files=no)"
+# SSH origin has no key on this host; fetch HTTPS without changing the remote.
+GIT_TERMINAL_PROMPT=0 git -C "$OLD_SRC" fetch https://github.com/kubeworkz/grx930.git \
+  +npu/shim-tile-model:refs/remotes/origin/npu/shim-tile-model
+test "$(git -C "$OLD_SRC" rev-parse origin/npu/shim-tile-model)" = "$TARGET"
+test "$(git -C "$OLD_SRC" rev-parse FETCH_HEAD)" = "$TARGET"
+git -C "$OLD_SRC" branch -f prod/pre-sync-f1ae96f f1ae96f9e152d91263bb34693be0b6f60b50ab1a
+test ! -e "$SRC"
+git -C "$OLD_SRC" worktree add --detach "$SRC" "$TARGET"
+test "$(git -C "$SRC" rev-parse HEAD)" = "$TARGET"
+test -x "$SRC/c930/asic_gf180mcu/build/stage1_readiness.sh"
+```
+
+Rerun the readiness gate from that exact worktree before staging. The record is
+written to the flow volume, and every floor must be `PASS`:
+
+```bash
+bash "$SRC/c930/asic_gf180mcu/build/stage1_readiness.sh" \
+  --volume "$ROOT" \
+  --record "$ROOT/build/production/baseline/stage1/STAGE1_READINESS.txt"
+grep -qx 'mem.pre_drt=PASS' "$ROOT/build/production/baseline/stage1/STAGE1_READINESS.txt"
+grep -qx 'mem.drt_arm=PASS' "$ROOT/build/production/baseline/stage1/STAGE1_READINESS.txt"
+grep -qx 'disk=PASS' "$ROOT/build/production/baseline/stage1/STAGE1_READINESS.txt"
+grep -qx 'status=PASS' "$ROOT/build/production/baseline/stage1/STAGE1_READINESS.txt"
+```
+
+**The clean target worktree does not contain the template source.** Commit
+`6278466` does not track
+`c930/asic_gf180mcu/tools/gf180mcu-project-template` (`git ls-tree HEAD` is
+empty and there is no submodule entry). The local repository has the pristine
+template as an untracked checkout at the same path, at commit
+`6876569f06bd66bec83e9a3856d9524d1bb33eac`. The first production staging attempt
+on 2026-11-18 stopped at the missing `librelane/config.yaml` precondition, before
+any backup or swap; the live tree and its 13 runs were untouched.
+
+Transfer that checkout into the worktree without its `.git`, then verify the
+files the flow depends on:
+
+```bash
+TPL=c930/asic_gf180mcu/tools/gf180mcu-project-template
+TAR=/tmp/gf180mcu-template.tgz
+tar --exclude=.git -czf "$TAR" -C "$(dirname "$TPL")" "$(basename "$TPL")"
+scp "$TAR" ubuntu@2.31.100.64:/home/ubuntu/gf180mcu-template.tgz
+ssh ubuntu@2.31.100.64 '
+  SRC=/home/ubuntu/grx930_stage2
+  DEST="$SRC/c930/asic_gf180mcu/tools/gf180mcu-project-template"
+  test ! -e "$DEST"
+  tar -xzf /home/ubuntu/gf180mcu-template.tgz \
+    -C "$SRC/c930/asic_gf180mcu/tools"
+  test -f "$DEST/librelane/config.yaml"
+  sha256sum "$DEST/librelane/config.yaml" \
+            "$DEST/librelane/slots/slot_1x1.yaml" \
+            "$DEST/src/chip_top.sv"
+'
+```
+
+The 2026-11-18 transfer was 97 KiB / 52 files and produced these hashes:
+
+```
+53873a3e040dc30e939a4be9e8b6d06abbcedafa82cd5fcdcbcebbe5ddfc85ba  librelane/config.yaml
+cb47d6bb0e23d802c7b1fd54307880be466a3e6a09622222d47d73601a26b5a9  librelane/slots/slot_1x1.yaml
+fe6019f5e105d83fbe2979796fa55e2620c11ef159c12982f5fdb01a863f43e5  src/chip_top.sv
+```
+
+The transferred directory is intentionally untracked; the source worktree's
+`HEAD` remains `6278466`. If the worktree is recreated, repeat this transfer
+before running the staging block.
+
+Stage the template transactionally. The existing tree has old run trees under
+`ws/template/librelane/runs` (13 at the time of this plan). The block below
+inventories every run by name and content, moves the **entire** existing
+`ws/template` to `ws/.template.backup.<UTC>.<pid>/template` before the swap
+(nothing is deleted), stages and validates the replacement beside it, moves the
+run trees into the new template, and re-inventories every one. A name, file-hash,
+directory, or symlink difference restores the old template and exits non-zero.
+
+```bash
+# stage2-staging-block-begin
+set -euo pipefail
+
+SRC=${SRC:-/home/ubuntu/grx930_stage2}
+ROOT=${ROOT:-/mnt/HC_Volume_107515356/grx930_ol2}
+EXPECT_RUNS=${EXPECT_RUNS:-13}
+RECORD=${RECORD:-$ROOT/build/production/baseline/stage2/STAGING_RECORD.txt}
+FLOW="$SRC/c930/asic_gf180mcu"
+WS="$ROOT/ws"
+LIVE="$WS/template"
+RUNS="$LIVE/librelane/runs"
+
+# Preconditions. Nothing below this point may run against a different tree.
+for f in \
+    "$FLOW/tools/gf180mcu-project-template/librelane/config.yaml" \
+    "$FLOW/wafer_space_integration/grx930_overrides.yaml" \
+    "$FLOW/wafer_space_integration/macros_grx930.yaml" \
+    "$FLOW/wafer_space_integration/pdn_cfg_grx930.tcl" \
+    "$FLOW/wafer_space_integration/chip_core_grx930.sv" \
+    "$FLOW/wafer_space_integration/fill/fill_active.rb" \
+    "$FLOW/openlane2_rtl/src/grx930_test_chip.sv"
+do
+    test -f "$f"
+done
+test -d "$LIVE"
+test -d "$RUNS"
+test ! -L "$RUNS"
+test -f "$LIVE/librelane/config.yaml"
+# Bind staging to the flown tree, not the old checkout with its local LVS commit.
+TARGET=62784668c1e95f74933aa73dcd5935f0ce67e136
+test "$(git -C "$SRC" rev-parse HEAD)" = "$TARGET"
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+BACKUP="$WS/.template.backup.$STAMP.$$"
+test ! -e "$BACKUP"
+mkdir "$BACKUP"
+
+# One inventory line per run: sha256 of its sorted file-hash manifest, its name,
+# file count and byte count. The per-run manifests also record every directory
+# and every symlink target, so the after-comparison checks layout as well as
+# bytes. Hashing reads run data; it writes only the manifests in the backup.
+snapshot_runs() {  # snapshot_runs RUNS_DIR OUT_DIR
+    local runs=$1 out=$2 name dir digest files bytes
+    mkdir -p "$out"
+    find "$runs" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort > "$out/names.txt"
+    : > "$out/digests.txt"
+    while IFS= read -r name; do
+        dir="$runs/$name"
+        ( cd "$dir" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum ) \
+            > "$out/$name.files.sha256"
+        ( cd "$dir" && find . -type d -printf '%P\n' | LC_ALL=C sort ) \
+            > "$out/$name.dirs.txt"
+        ( cd "$dir" && find . -type l -printf '%P -> %l\n' | LC_ALL=C sort ) \
+            > "$out/$name.links.txt"
+        digest=$(sha256sum "$out/$name.files.sha256" | cut -d' ' -f1)
+        files=$(awk 'END { print NR }' "$out/$name.files.sha256")
+        bytes=$( cd "$dir" && find . -type f -printf '%s\n' | awk '{ s += $1 } END { printf "%d", s + 0 }' )
+        printf '%s  %s  files=%s bytes=%s\n' "$digest" "$name" "$files" "$bytes" \
+            >> "$out/digests.txt"
+    done < "$out/names.txt"
+    [ "$(awk 'END { print NR }' "$out/names.txt")" -eq "$EXPECT_RUNS" ]
+}
+
+compare_runs() {  # compare_runs BEFORE AFTER
+    local before=$1 after=$2 name kind
+    cmp -s "$before/names.txt" "$after/names.txt" || {
+        echo "stage2: run names differ" >&2
+        diff -u "$before/names.txt" "$after/names.txt" | head -40 >&2 || true
+        return 1
+    }
+    cmp -s "$before/digests.txt" "$after/digests.txt" || {
+        echo "stage2: run content digests differ" >&2
+        diff -u "$before/digests.txt" "$after/digests.txt" | head -40 >&2 || true
+        return 1
+    }
+    while IFS= read -r name; do
+        for kind in files.sha256 dirs.txt links.txt; do
+            if ! cmp -s "$before/$name.$kind" "$after/$name.$kind"; then
+                echo "stage2: run $name $kind differs" >&2
+                return 1
+            fi
+        done
+    done < "$before/names.txt"
+}
+
+MOVED_OLD=0
+SWAPPED=0
+STAGE=
+rollback() {
+    local rc=$?
+    trap - EXIT
+    if [ "$rc" -eq 0 ]; then exit 0; fi
+    echo "stage2: staging failed (rc=$rc); restoring the old template" >&2
+    if [ "$SWAPPED" -eq 1 ]; then
+        if [ -d "$LIVE/librelane/runs" ] && [ ! -e "$BACKUP/template/librelane/runs" ]; then
+            mv "$LIVE/librelane/runs" "$BACKUP/template/librelane/runs" \
+                || echo "stage2: could not return runs to the backup" >&2
+        fi
+        if [ -d "$BACKUP/template" ]; then
+            # SWAPPED=1 means $LIVE is the new tree; the old one is in the backup.
+            rm -rf "$LIVE"
+            mv "$BACKUP/template" "$LIVE" || echo "stage2: ROLLBACK MOVE FAILED" >&2
+        fi
+    elif [ "$MOVED_OLD" -eq 1 ] && [ ! -e "$LIVE" ] && [ -d "$BACKUP/template" ]; then
+        mv "$BACKUP/template" "$LIVE" || echo "stage2: ROLLBACK MOVE FAILED" >&2
+    fi
+    if [ -n "$STAGE" ] && [ -d "$STAGE" ]; then rm -rf "$STAGE"; fi
+    exit "$rc"
+}
+trap rollback EXIT
+
+snapshot_runs "$RUNS" "$BACKUP/runs-before"
+
+# Build the replacement beside the live tree; nothing has been touched yet.
+STAGE=$(mktemp -d "$WS/.template.stage.XXXXXX")
 cp -a "$FLOW/tools/gf180mcu-project-template/." "$STAGE/"
 rm -rf "$STAGE/.git"
 cp "$FLOW/wafer_space_integration/grx930_overrides.yaml" "$STAGE/librelane/"
 cp "$FLOW/wafer_space_integration/macros_grx930.yaml" "$STAGE/librelane/macros/"
 cp "$FLOW/wafer_space_integration/pdn_cfg_grx930.tcl" "$STAGE/librelane/pdn/"
 cp "$FLOW/wafer_space_integration/chip_core_grx930.sv" "$STAGE/src/chip_core.sv"
+
+# KLAYOUT_FILLER_SCRIPT points at ../fill/fill_active.rb; the template does not
+# contain that deck, so stage the wafer-space fill files explicitly.
+mkdir -p "$STAGE/fill"
+cp -a "$FLOW/wafer_space_integration/fill/." "$STAGE/fill/"
 
 # Copy the whole RTL tree, not just *.sv: any .svh, relative include, or
 # subdirectory the core needs must survive. Exclude only the two unused ROM
@@ -235,19 +440,106 @@ test -f "$STAGE/librelane/config.yaml"
 test -f "$STAGE/librelane/grx930_overrides.yaml"
 test -f "$STAGE/librelane/macros/macros_grx930.yaml"
 test -f "$STAGE/librelane/pdn/pdn_cfg_grx930.tcl"
-[ "$(ls "$STAGE/asic_core"/*.sv | wc -l)" -eq 38 ]
+test -f "$STAGE/fill/fill_active.rb"
+test ! -e "$STAGE/librelane/runs"
+[ "$(find "$STAGE/asic_core" -maxdepth 1 -type f -name '*.sv' | awk 'END { print NR }')" -eq 38 ]
 [ "$(grep -c '^  gf180mcu' "$STAGE/librelane/macros/macros_grx930.yaml")" -eq 5 ]
 
-rm -rf "$ROOT/ws/template"
-mv "$STAGE" "$ROOT/ws/template"
+# The swap: the entire old template is renamed into the backup, never deleted.
+mv "$LIVE" "$BACKUP/template"
+MOVED_OLD=1
+mv "$STAGE" "$LIVE"
+SWAPPED=1
+STAGE=
+
+# The run trees are moved (not copied) so the volume does not need a second
+# copy of days of run data. Their before manifests stay in the backup.
+mv "$BACKUP/template/librelane/runs" "$LIVE/librelane/runs"
+
+snapshot_runs "$LIVE/librelane/runs" "$BACKUP/runs-after"
+compare_runs "$BACKUP/runs-before" "$BACKUP/runs-after"
+
+mkdir -p "$(dirname "$RECORD")"
+{
+    echo "stage2_template_staging=PASS"
+    echo "when_utc=$STAMP"
+    echo "source_worktree=$SRC"
+    echo "source_commit=$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "flow_root=$ROOT"
+    echo "backup=$BACKUP"
+    echo "runs=$EXPECT_RUNS"
+    echo "runs_verified=name+content"
+    echo "backup_runs_relocated_to=$LIVE/librelane/runs"
+    echo "status=PASS"
+    echo "# per-run content digest, name, files, bytes"
+    cat "$BACKUP/runs-before/digests.txt"
+} > "$BACKUP/STAGING_RECORD.txt"
+cp "$BACKUP/STAGING_RECORD.txt" "$RECORD"
+
+trap - EXIT
+echo "stage2: staged $LIVE"
+echo "stage2: backup $BACKUP"
+echo "stage2: $EXPECT_RUNS run trees verified by name and content"
+echo "stage2: record $RECORD"
+# stage2-staging-block-end
 ```
+
+The before inventory is `$BACKUP/runs-before/`: `names.txt`, `digests.txt`, and
+per run `<run>.files.sha256`, `<run>.dirs.txt`, `<run>.links.txt`; `runs-after/`
+is the same inventory taken from the new location. A `digests.txt` line carries
+the SHA-256 of the run's sorted file-hash manifest, the run name, file count and
+byte count, so `compare_runs` proves each old tree survived under the same name
+with the same bytes, directories and symlink targets. A missing, renamed,
+truncated or changed run fails the compare and triggers the rollback above; a
+count alone is never accepted.
+
+The backup holds the entire old template at the instant of the swap. The run
+trees are then moved into the verified new tree rather than copied, because a
+second copy of days of run data could drop the volume below the 150 GiB floor;
+their before manifests stay in the backup. Keep the backup and its
+`STAGING_RECORD.txt` until the Stage 2 gate is accepted. Both inventories read
+every run file, so budget one full read of the run tree before the swap and one
+after, plus the manifest space in the backup.
+
+The block was rehearsed locally on 2026-11-18 with
+`bash build/production/stage2_staging_simulation.sh`: 49/49 checks, 13 synthetic
+run trees preserved and byte-compared, the backup held the old template, and a
+missing-source failure left the live tree and its runs untouched. `EXPECT_RUNS=13`
+is only a guard against a changed set; the per-run name+content comparison is the
+verification. The production run on 2026-11-18 then performed the fetch, target worktree, gate
+rerun, staging swap and flow launch; its staging record is
+`build/production/baseline/stage2/STAGING_RECORD.txt`. This simulation remains
+the disposable rehearsal.
 
 `grx930_overrides.yaml` declares `VERILOG_FILES` as `../src/chip_top.sv`,
 `../src/chip_core.sv`, and `../asic_core/*.sv`; `PDN_CFG` is
 `dir::pdn/pdn_cfg_grx930.tcl`, which is why the PDN file goes under
 `librelane/pdn/`. `ws_exec.sh` writes `src/generated_defines.svh` itself.
 
-Run on the production host with a fresh tag:
+The tag must not exist yet. Check both the run directory and container namespace
+before launching (both are expected to be empty):
+
+```bash
+test ! -e "$ROOT/ws/template/librelane/runs/prod_stage2_01"
+test -z "$(docker ps -a --filter name=prod_stage2_01 --format '{{.Names}}')"
+docker image inspect gf180mcu-precheck:arm64 \
+  --format '{{.Architecture}} {{.Id}}' | grep '^arm64 '
+
+ROOT_NEED_GIB=${ROOT_NEED_GIB:-10}
+ROOT_FREE_GIB=$(df -BG / | awk 'NR==2 {sub(/G$/,"",$4); printf "%d\n", $4}')
+test "${ROOT_FREE_GIB:-0}" -ge "$ROOT_NEED_GIB"
+echo "root_free_gib=$ROOT_FREE_GIB (need >= $ROOT_NEED_GIB)"
+```
+
+`/` also holds `/var/lib/docker` and the git worktree metadata; the flow-volume
+gate does not cover it. The 2026-11-18 launch was made with only 1.6 GiB free
+and later required reclaiming 17.4 GiB while the run was live. A launch must
+stop at this check and reclaim space if it fails. If
+`docker info --format '{{.DockerRootDir}}'` is outside `/`, apply the same check
+to that filesystem.
+
+Run on the production host with a fresh tag. This is the launch command; do not
+run it until the owner says go and the root check passes:
 
 ```bash
 docker run --rm --user 0:0 \
@@ -264,19 +556,69 @@ the ODB named by the last `state_out.json`. At 0.1 the antenna step can abort wi
 diodes and lets the step write its database. Treat that as a recorded condition,
 not a silent pass, and archive the antenna log.
 
-Output: the ODB named by the newest
-`ws/template/librelane/runs/prod_stage2_01/*/state_out.json`; copy it to
+Output: the staged template, its `ws/.template.backup.*` and
+`build/production/baseline/stage2/STAGING_RECORD.txt`; then the ODB named by the
+newest `ws/template/librelane/runs/prod_stage2_01/*/state_out.json`; copy it to
 `build/production/baseline/pre_drt.odb` and keep the state file.
 
-Gate:
-- `resolved.json` shows `GRT_ADJUSTMENT: 0.1` and `DRT_OPT_ITERS: 8`; the GRT log
-  contains `Global adjustment: 10%`.
-- No `GRT-0183` appears in any step log. A caught occurrence is a failure under
-  this gate; archive the log and stop rather than accepting the ODB.
-- PDN inserted exactly once; macro-instance check passes.
-- Cell count and die match the frozen manifest.
+Gate (run these before accepting the ODB):
+
+```bash
+RUN="$ROOT/ws/template/librelane/runs/prod_stage2_01"
+test -f "$RUN/resolved.json"
+grep -Fq '"GRT_ADJUSTMENT": 0.1' "$RUN/resolved.json"
+grep -Fq '"DRT_OPT_ITERS": 8' "$RUN/resolved.json"
+test "$(grep -ahoE 'Global adjustment: [0-9]+%' "$RUN"/*openroad-globalrouting/*.log | tail -1)" = 'Global adjustment: 10%'
+! grep -Rqa 'GRT-0183' "$RUN"
+
+PDN=$(find "$RUN" -maxdepth 1 -type d -name '*-openroad-generatepdn')
+test "$(printf '%s\n' "$PDN" | sed '/^$/d' | wc -l)" -eq 1
+test "$(grep -c 'PDN-0001.*Inserting grid' "$PDN"/*.log)" -eq 1
+
+MC=$(find "$RUN" -maxdepth 1 -type d -name '*-openroad-checkmacroinstances' | head -1)
+test -n "$MC"
+test -f "$MC/state_out.json"
+! grep -Rqa 'No macro instance' "$MC"
+
+LAST=$(find "$RUN" -maxdepth 2 -name state_out.json -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+ODB=$(sed -n 's/.*"odb": "\([^"]*\)".*/\1/p' "$LAST" | head -1)
+ODB_HOST="$ROOT/${ODB#/work/}"
+test -f "$ODB_HOST"
+mkdir -p "$ROOT/build/production/baseline"
+cp -f "$ODB_HOST" "$ROOT/build/production/baseline/pre_drt.odb"
+```
+
+`resolved.json` shows `GRT_ADJUSTMENT: 0.1` and `DRT_OPT_ITERS: 8`; the GRT log
+contains `Global adjustment: 10%`. No `GRT-0183` may appear in any step log — a
+caught occurrence is a failure under this gate; archive the log and stop rather
+than accepting the ODB. PDN must be inserted exactly once and the macro-instance
+check must pass. Cell count and die must match the frozen manifest.
+
+**Timing provenance — ss/ff are `STA_PREPNR`, not pre-DRT signoff.**
+`final/metrics.json` carries one key per corner, but only the default
+`nom_tt_025C_5v00` corner is re-measured after `STA pre-PnR`: every mid-PnR STA
+step (`30`, `34`, `36`, `41`) runs that corner alone. The
+`nom_ss_125C_4v50` and `nom_ff_n40C_5v50` entries are inherited unchanged from
+step 12 (`12-openroad-staprepnr`), measured on the synthesized netlist with an
+ideal clock before placement, CTS, resizing and global routing. They are **not**
+measurements of the pre-DRT ODB and must not be read as a Stage 2 gate result.
+In the 2026-11-18 run the inherited ss entry was `wns -139.20 ns`,
+`tns -786532.5`, `setup_vio 30348` and ff was `wns -30.69 ns`, `tns -32747.4`,
+`setup_vio 3383`, while the only corner measured on the pre-DRT database was
+`nom_tt_025C_5v00` at `wns 0`, `ws +1.56 ns`. The ss value came from unbuffered
+high-fanout nets in the synthesized netlist (`_349120_/Q` →
+`u_rom.line_p1[2]` at fanout 2142 and a 270 ns slew, `_380465_/Q` →
+`o_pipe_out[0]`, `_380850_/Q` → `o_pipe_out[15]` at 1316, `rst_n_PAD` →
+`i_chip_core.rst_n` at 4266), which the resizer later rewrote; the pre-DRT
+netlist buffers `line_p1[2]` to roughly 30 loads. Re-measure ss and ff on the ODB
+named by `41-openroad-stamidpnr-3/state_out.json` before accepting Stage 3.
 
 ### Stage 3 — Complete detailed routing
+
+Precondition: the Stage 2 record's ss and ff timing is `STA_PREPNR` (step 12, on
+the synthesized netlist). Run fresh `nom_ss_125C_4v50` and `nom_ff_n40C_5v50` STA
+on the pre-DRT ODB first; Stage 3 must not start while ss is known only from the
+synthesized netlist and only tt has been measured on the ODB.
 
 Stage `c930/asic_gf180mcu/drt_fast` at `/work/drt_fast` in the image; the runner
 hardcodes `D=/work/drt_fast` and its default `FAST_OPENROAD` is a build-machine
@@ -657,8 +999,13 @@ are outside this plan.
 ## 7. Explicitly not done
 
 Stage 1 pulled the pinned image and ran only read-only version, path, and hash
-probes plus an OpenROAD command-help check; no `ws_exec.sh`, DRT, stream-out, ECO
-insertion, or OpenRCX command has been run. The Stage 0 PDK/GDS/LEF pins were
+probes plus an OpenROAD command-help check; Stage 1 did not run `ws_exec.sh`, DRT,
+stream-out, ECO insertion, or OpenRCX. Stage 2 was started on 2026-11-18:
+the source fetch, target worktree, gate rerun, template staging and `ws_exec.sh`
+launch were performed. Its GRT/PDN acceptance gate has not yet been evaluated;
+no DRT, stream-out, ECO insertion, or OpenRCX command has been run. The staging
+block was rehearsed first in a disposable local root
+(`build/production/stage2_staging_simulation.sh`, 49/49 checks). The Stage 0 PDK/GDS/LEF pins were
 updated to the image's 792 identity (see `baseline/stage0/IDENTITY.md`), and the
 pad-ring/mask comparison is recorded in
 `baseline/stage1/PAD_RING_MASK_COMPARISON.md`. Read-only inspection, a parser test
