@@ -615,10 +615,25 @@ named by `41-openroad-stamidpnr-3/state_out.json` before accepting Stage 3.
 
 ### Stage 3 — Complete detailed routing
 
-Precondition: the Stage 2 record's ss and ff timing is `STA_PREPNR` (step 12, on
-the synthesized netlist). Run fresh `nom_ss_125C_4v50` and `nom_ff_n40C_5v50` STA
-on the pre-DRT ODB first; Stage 3 must not start while ss is known only from the
-synthesized netlist and only tt has been measured on the ODB.
+Precondition — measured, and **not met at ss**. The re-measure required above was
+run on 2026-11-18 against `build/production/baseline/pre_drt.odb`
+(sha256 `c76785bf…54dc`) with the flow's own `sta/corner.tcl`, the same
+`chip_top.sdc` (sha256 `0885ff0e…d2e6`), a propagated clock and global-route
+parasitics. Results: `nom_ss_125C_4v50` **fails setup** at `WNS -5.845 ns`,
+`TNS -2380.47 ns`, 1,915 violating endpoints (1,475 reg-to-reg) and
+`period_min 42.73 ns` (23.40 MHz); `nom_ff_n40C_5v50` **passes** at `WS +6.871 ns`
+with 0 setup endpoints. Hold remains at 2 input endpoints on `bidir_PAD[0]` and
+`bidir_PAD[6]` at both corners. The reports are archived in
+`build/production/baseline/stage2/sta_odb/` and the result is recorded in
+`build/production/baseline/stage2/EXIT_REPORT.txt`.
+
+So the `STA_PREPNR` re-measure step is **satisfied** and Stage 3 is blocked on
+**ss setup closure**, not on missing data. Closing it needs a resizer/slew pass
+targeted at `nom_ss_125C_4v50` (the buffers in this ODB were sized against tt
+alone; worst residual path is `_379778_/Q → u_riscv_core_csr_unit.mstatus[8]`,
+fanout 35, with 5.87 ns of clock insertion, and 3,076 max-fanout violations
+remain), then a repeat of the same two-corner STA. Do not launch Stage 3 on the
+current ODB.
 
 Stage `c930/asic_gf180mcu/drt_fast` at `/work/drt_fast` in the image; the runner
 hardcodes `D=/work/drt_fast` and its default `FAST_OPENROAD` is a build-machine
