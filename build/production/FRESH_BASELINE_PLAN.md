@@ -1,7 +1,8 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
-**Status: PLANNING ONLY — NOT STARTED.** No synthesis, place-and-route, DRT,
-stream-out, ECO insertion, or RCX command has been run for this plan.
+**Status: STAGE 0 IDENTITY FROZEN — NO FLOW STARTED.** The Stage 0 pin is
+`build/production/baseline/stage0/IDENTITY.md`. No synthesis, place-and-route,
+DRT, stream-out, ECO insertion, or RCX command has been run for this plan.
 
 This creates a **new identity**. It cannot claim `fix59`, `fix70`, the historical
 541-row source, or the current 8,168-drop provenance. The existing submission
@@ -42,7 +43,7 @@ path is to recover the old database, not to run this plan.
 |---|---|---|
 | Full-chip flow runner | `c930/asic_gf180mcu/ws/ws_exec.sh` | LibreLane Chip flow; `WS_TAG`, `WS_LIMIT`, `WS_FROM`, `WS_OVERRIDE`; `cd /work/ws/template`; runs land in `librelane/runs/<tag>/` |
 | Template source | `c930/asic_gf180mcu/tools/gf180mcu-project-template/` | `librelane/` and `src/`; `ws/template` is absent locally; contains its own `.git` |
-| Slot config | `.../librelane/slots/slot_1x1.yaml` | pad ring and DIE/CORE area; 3930 × 5120 µm |
+| Slot config | `.../librelane/slots/slot_1x1.yaml` | pad ring and DIE/CORE area; **3932 × 5122 µm**, core `[442, 442, 3490, 4680]` |
 | Design overrides | `c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml` | SHA-256 `2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9`; GRT 0.1, DRT_OPT_ITERS 8, antenna 10/10 |
 | Core adapter | `.../wafer_space_integration/chip_core_grx930.sv` | SHA-256 `585661ccc48cf1852ac0d9829abced93bac1beb3f151dbe640ad0f55d8b91c0b`; replaces `src/chip_core.sv` |
 | PDN config | `.../wafer_space_integration/pdn_cfg_grx930.tcl` | SHA-256 `cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b`; destination is `librelane/pdn/` |
@@ -58,8 +59,8 @@ path is to recover the old database, not to run this plan.
 | G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die, count, paths, and the row-300 box are hardcoded |
 
 **Toolchain gap:** `ghcr.io/wafer-space/gf180mcu-precheck` is **not present in the
-local Docker image list**. It must be pulled and pinned by digest before Stage 2.
-The local images include `openlane2-gf180mcu:latest` and
+local Docker image list**. Stage 0 pinned its OCI index digest; Stage 1 must pull
+and verify it. The local images include `openlane2-gf180mcu:latest` and
 `ghcr.io/efabless/openlane2:2.3.10`, which are not the full-chip flow image.
 
 **Why the GDS pipeline matters.** The production GDS is not a single stream-out.
@@ -75,28 +76,34 @@ longer in the fresh-baseline GDS path.
 
 ### Stage 0 — Freeze the identity and choose the floorplan
 
-Inputs: RTL tree, overrides, slot config, PDK version, `cells.lef` (including its
-56 `VIA` definitions), and the PDK cell GDS.
+Inputs: RTL tree, overrides, slot config, PDK version, flow image, `cells.lef`
+(including its 56 `VIA` definitions), and the PDK cell GDS.
 
 Record before any compute:
-- Netlist entry: full-chip `openlane2_rtl` RTL through `ws_exec.sh`. The flow's
-  `DESIGN_NAME` is `chip_top`, so the routed ODB and netlist top is `chip_top`;
-  `stream_out.py` names the GDS top `grx930_test_chip`. The CDL must be written
-  with `grx930_test_chip` as its top, or G2's `topcell` will name a netlist the
-  deck does not have (Stage 4).
-- Die/core: the ws `slot_1x1` template uses **3930 × 5120 µm**; the audit DEF and
-  G0 currently use **3932 × 5122 µm**. A fresh floorplan uses the template die;
-  the old G0 die constant must be parameterized.
+- Netlist entry: full-chip `openlane2_rtl` RTL through `ws_exec.sh`, 40 files,
+  tree SHA-256 `7c4d919b1950033089a2a43b8be729defb9ff50e2a50873865552b76f85049b9`.
+  The old Yosys netlist and audit DEF are **not** inputs. The flow's `DESIGN_NAME`
+  is `chip_top`, so the routed ODB and netlist top is `chip_top`; `stream_out.py`
+  names the GDS top `grx930_test_chip`. The CDL must be written with
+  `grx930_test_chip` as its top, or G2's `topcell` will name a netlist the deck
+  does not have (Stage 4).
+- Die/core: the ws `slot_1x1` template, the audit DEF, and G0 all use
+  **3932 × 5122 µm** (core `[442, 442, 3490, 4680]`). The old 3930 × 5120 figure
+  is retired and must not be used. A fresh floorplan uses the template die; G0
+  already defaults to 3932 × 5122.
 - **ECO count:** new count `N`; do not plan for 8,168 (see §1.1).
 - Corner/RCX set: `nom`, `min`, `max` from the PDK RCX rules.
 
-Output: `build/production/baseline/baseline_manifest.sha256` with the RTL tree,
-overrides, PDN, macros, PDK version, flow image digest, die/core, LEF (and its
-via table), cell GDS, and `N` marked `TO_BE_DERIVED`. A planning copy already
-lists the local inputs with `eco_count=TO_BE_DERIVED` and `artifact=NOT_USED`;
-Stage 0 replaces its `TO_BE_PINNED` flow image and PDK version.
+Output: `build/production/baseline/baseline_manifest.sha256`,
+`stage0/IDENTITY.md`, and `stage0/netlist_sha256.txt`. The manifest pins the RTL
+tree, overrides, PDN, macros, PDK version, flow image index digest, die/core,
+LEF, cell GDS, and `N=TO_BE_DERIVED`; the netlist manifest pins the 40 RTL files
+plus `chip_top.sv`, `chip_core_grx930.sv`, and `slot_defines.svh`. Stage 0 has
+replaced the `TO_BE_PINNED` placeholders.
 
-Gate: every input has a hash and there is exactly one netlist/floorplan pair.
+Gate met: every input has a hash and there is exactly one netlist/floorplan pair
+(`identity=READY_FOR_STAGE1`). The image pull and RCX-rule verification remain
+Stage 1 work.
 
 ### Stage 1 — Toolchain and PDK readiness
 
@@ -554,7 +561,7 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | DEF/GDS mismatch outside the ECO | `pdn_stitch` writes M2 straps to the GDS only | window-based check; do not gate on a whole-die Metal XOR |
 | ECO legality | 4,318 pre-existing full-chip DRC findings; 0-added requirement over all sites; 1.40 µm M2 keepout | all-site DRC, resites, generalized VDD exclusion |
 | Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; fill/stream/stitch hours; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
-| Identity drift | three netlists/databases (53k synth, 209k audit, 332k die); 3930×5120 vs 3932×5122 die; unsupported keys `FP_DIE_AREA`/`DRT_ALLOW_CONGESTION` in the 2.3.10 log | Stage 0 freeze; pin one netlist/die; use supported keys |
+| Identity drift | legacy synth netlist, audit DEF, and die database; stale 3930×5120 references vs the 3932×5122 authority; unsupported keys `FP_DIE_AREA`/`DRT_ALLOW_CONGESTION` in the 2.3.10 log | Stage 0 freezes one RTL entry and 3932×5122; old synthesized netlists are excluded; use supported keys |
 | RCX rules absent locally | local PDK `RCX_RULES` is empty; rules are referenced from the Volare PDK on the build machine; image PDK not yet inspected | verify `rules.openrcx.*` in the precheck image at Stage 1; stop if absent |
 | Precheck image absent | not in the local `docker images` list | pull and pin the digest before Stage 2 |
 | Signoff | no Gridworkz connector; G1 DFT/ATPG absent; G3 waiver and G4 STA/power open | external signoff; do not claim a pass without receipts |
@@ -581,7 +588,8 @@ are outside this plan.
 ## 7. Explicitly not done
 
 No `docker pull`, `volare fetch`, `ws_exec.sh`, DRT, stream-out, ECO insertion, or
-OpenRCX command has been run for this plan. Read-only inspection, a parser test
+OpenRCX command has been run for this plan; only a registry manifest inspect was
+used to pin the image. Read-only inspection, a parser test
 of the new LEF via reader, and a KLayout check of the 2×2 cell it builds were
 run; no DEF was streamed. No existing file was replaced. G0 remains `BLOCKED`,
 G2 exits 2, and the package remains **VOID — DO NOT SUBMIT**.

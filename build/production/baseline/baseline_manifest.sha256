@@ -1,12 +1,23 @@
-# Fresh-baseline input manifest — PLANNING ONLY. Stage 0 has not run.
-# status=PLANNING
-# flow_image=TO_BE_PINNED
-# pdk_version=TO_BE_PINNED
-# die_um=3930x5120
+# Fresh-baseline input manifest — Stage 0 identity frozen 2026-11-18.
+# status=STAGE0_FROZEN
+# stage0_identity=build/production/baseline/stage0/IDENTITY.md
+# flow_image=ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
+# flow_image_amd64=sha256:f4a9fe760e6dc43ade6245f801b9f6b5807161ea2e12590b241fba55d2d087b0
+# pdk=gf180mcuD
+# pdk_version=0fe599b2afb6708d281543108caf8310912f54af
+# die_um=3932x5122
+# core_um=3048x4238
+# die_authority=slot_1x1.yaml cb47d6bb0e23d802c7b1fd54307880be466a3e6a09622222d47d73601a26b5a9; audit_def a2511927e233b9b2ac87e7e0285d5f33499516c0594a4e48d40640cbbeb40b8f
+# netlist_entry=c930/asic_gf180mcu/openlane2_rtl/src
+# netlist_top=chip_top
+# netlist_manifest=build/production/baseline/stage0/netlist_sha256.txt
 # eco_count=TO_BE_DERIVED
+# legacy_eco_count=8168; fix16/fix70; NOT_A_TARGET
 # via_source=cells.lef (56 VIA definitions); artifact=NOT_USED
 # rtl_tree_sha256=7c4d919b1950033089a2a43b8be729defb9ff50e2a50873865552b76f85049b9
 # rtl_files=40
+1412e195c6bd218fd0ddb7c5e4e8629ea361fda50f06c71ea4a0f58ce16baefd *build/production/baseline/stage0/IDENTITY.md
+ce8d3d81b7442104afefc44f31b4c94f9e904099b76ab22a09b0a91af4bc9781 *build/production/baseline/stage0/netlist_sha256.txt
 2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9 *c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml
 cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b *c930/asic_gf180mcu/wafer_space_integration/pdn_cfg_grx930.tcl
 8b3fa88edb6a5bd75d3962dda9580acbe745edbca76718f84e59d4cd62ebd83e *c930/asic_gf180mcu/wafer_space_integration/macros_grx930.yaml
