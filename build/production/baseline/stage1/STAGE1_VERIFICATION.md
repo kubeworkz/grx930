@@ -97,9 +97,15 @@ Full record:
 | 0fe vs 792 GDS layer 37/0 | **XOR empty** for every IO cell; both 60 × 60 µm at the same center |
 | Pad cell footprints | 75 × 350 µm in both; fill and 355 × 355 µm corner unchanged |
 | LEF `PAD` pin | 0fe 25 × 25 µm → 792 60 × 60 µm; LEF-only change |
+| 792 `cor` LEF pin/OBS waiver | **`COR-LEF-PIN-OBS-001`** — interior via taps only; edge-rail pins exposed; no edits |
 | Pad-ring edit required | **NO** |
 | Floorplan edit required | **NO** |
 | `mask_1x1.gds` edit required | **NO** |
+
+The 792 `cor` LEF also contains 13 pin/OBS overlaps documented as
+`COR-LEF-PIN-OBS-001` in the pad-ring record. That is a LEF-only waiver: the
+overlap is confined to interior via taps, all edge-rail pins remain exposed, and
+no GDS or floorplan edit is required.
 
 The precheck pad check is `input(37,0).and(mask).xor(mask)`; it reads GDS layer
 37/0, not the LEF `PAD` pin. Both PDK versions supply the 60 × 60 µm GDS openings
