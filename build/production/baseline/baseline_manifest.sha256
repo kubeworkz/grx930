@@ -1,4 +1,4 @@
-# Fresh-baseline input manifest — Stage 0 re-pinned; Stage 1 pass and cor pin-access evidence 2026-11-18.
+# Fresh-baseline input manifest — Stage 0 re-pinned; Stage 1 pass, cor pin-access evidence, and M5 MT.1 resolution 2026-11-18.
 # status=STAGE1_PASS_REPINNED_CIEL792_OPENROAD_DCF
 # stage0_status=STAGE0_FROZEN_REPINNED
 # stage0_identity=build/production/baseline/stage0/IDENTITY.md
@@ -24,8 +24,10 @@
 # stage1_openroad_verified=YES
 # stage1_pad_ring_mask=PASS_NO_EDITS
 # stage1_cor_pin_access=PASS_WITH_DIRECT_VIA_CONSTRAINT
-# stage1_cor_pin_access_escape=153_OF_153_0_METAL_DRC
-# stage1_cor_pin_access_external_pad_via=24_OF_24_0_METAL_VIA_DRC
+# stage1_cor_pin_access_m5_width_rule=MT1_0.44_GOVERNS_5LM_1TM_11K
+# stage1_cor_pin_access_narrow_pin=0.38_LEF_ABSTRACTION_ONLY
+# stage1_cor_pin_access_escape=153_OF_153_M5_0.44_METALTOP_0_DRC
+# stage1_cor_pin_access_external_pad_via=24_OF_24_METALTOP_0_DRC
 # stage1_cor_pin_access_direct_via=NOT_AVAILABLE_USE_LANDING_PAD
 # stage1_rcx_path=gf180mcuD/libs.tech/librelane
 # stage1_rcx_nom_sha256=d83a04ea28af9b74a097fb479bbab9ed52859a1e3428b33d3151cb5afae62ddf
@@ -64,7 +66,7 @@ fa1ac7cdd9501dd441d3ddd05dab95dd591026384feb5ebec9361f7db26d1be0 *c930/asic_gf18
 23224df78126c662d8370e0c73990ff0f1c63decc6b21351f0afbfc764b30bbe *c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py
 685ab89d0dbf9442bc6eee3986ab8b999d7fbc0ef58dafe3cb5d81747ea3c806 *c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py
 5bdf411939e719e3b3f905cc1ddceb8e52a92bbd267c84f4baa930e5a18b2017 *c930/asic_gf180mcu/tools/lvs_chip/net_compare.py
-0dbdeaf9bb073d652e0af7849859872d0645fea32e222489a73a5c69e0b40aeb *build/production/baseline/stage1/STAGE1_VERIFICATION.md
+9aa5500e4751fa18f92504a6f04fa679505fb68eb93b465a17a3af83734b3568 *build/production/baseline/stage1/STAGE1_VERIFICATION.md
 b4ee38883ad764cf1669b9ca6dc9c04f5473e690823051f6728c32b962650772 *build/production/baseline/stage1/toolchain_versions.txt
-4f0b73f7dc82b2c1bbc950440a4a81580162802be9a51303da13d4668f21861a *build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
+6699dcdd770b572415f6477f77a11c25557f581d25acc84dcbb7d093fd6fe9c2 *build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
 c41b99cd71421244f331d5d623bc97ff1bb116051c18cbe4cbdd12d97927f514 *build/production/logs/stage1_pull_retry2.log

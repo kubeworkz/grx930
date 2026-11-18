@@ -1,7 +1,7 @@
 # Stage 1 — Toolchain and PDK verification
 
 **Status: PASS — RE-PINNED TO CIEL/Open_PDKs `792ef670…` AND OPENROAD
-`dcf36133…`; `cor` PIN-ACCESS EVIDENCE RECORDED.** The Stage 0 identity was
+`dcf36133…`; `cor` PIN-ACCESS EVIDENCE AND M5 WIDTH RULE RESOLVED.** The Stage 0 identity was
 updated to the versions already present
 in the pinned flow image. No synthesis, P&R, DRT, stream-out, ECO insertion, or
 RCX has run. The submission package remains **VOID — DO NOT SUBMIT**; G0 and G2
@@ -99,8 +99,9 @@ Full record:
 | Pad cell footprints | 75 × 350 µm in both; fill and 355 × 355 µm corner unchanged |
 | LEF `PAD` pin | 0fe 25 × 25 µm → 792 60 × 60 µm; LEF-only change |
 | 792 `cor` LEF pin/OBS waiver | **`COR-LEF-PIN-OBS-001`** — interior via taps only; edge-rail pins exposed; no edits |
-| `cor` edge-rail outward escape | **PASS** — 153/153 exposed shapes, 0 metal DRC |
-| `cor` external pad/via landings | **PASS** — 24/24 representatives, 0 metal/via DRC |
+| `cor` edge-rail outward escape | **PASS** — 153/153 at 0.44 µm M5, 0 metal/metaltop DRC |
+| `cor` external pad/via landings | **PASS** — 24/24, 0 metal/metaltop/via DRC |
+| Metal5 minimum-width rule | **RESOLVED** — `MT.1` 0.44 µm governs 5LM; 0.38 µm LEF pin is an abstraction |
 | Direct via on exposed edge rail | **CONSTRAINT** — no clear direct site; escape to landing pad |
 | Pad-ring edit required | **NO** |
 | Floorplan edit required | **NO** |
@@ -111,15 +112,17 @@ The 792 `cor` LEF also contains 13 pin/OBS overlaps documented as
 overlap is confined to interior via taps, all edge-rail pins remain exposed, and
 no GDS or floorplan edit is required.
 
-The focused pin-access evidence is in the same pad-ring record: all 153 exposed
-edge shapes escaped with 0 metal DRC violations. The narrow
-**DVDD Metal5 north** shape is 0.38 µm wide and passed at that width; the 792
-metal deck's M5.1 minimum is 0.28 µm. If the 0.44 µm tech-LEF M5 width is a hard
-signoff constraint, confirm this single pin separately. A 24-point external
-pad/Via3/Via4 test passed with 0 metal/via DRC violations. A direct via landing
-on the exposed edge metal is not available at the tested locations (dense
-existing via arrays; no 0.40 µm-keepout clear site), so fan out to a landing pad
-before via placement. This is DRC evidence only, not router signoff.
+The focused pin-access evidence is in the same pad-ring record. The Metal5
+minimum-width discrepancy is resolved: **`MT.1` (0.44 µm) governs Metal5 for
+gf180mcuD `5LM_1TM_11K`**, matching the tech LEF; the generic `metal5` M5.1
+0.28 µm check is not sufficient alone. The 0.38 µm value is a LEF pin
+abstraction inside wider GDS metal, not a drawn M5 wire. A synthetic 0.38 µm
+stub fails `MT.1`, while the 0.44 µm stub passes; all 153/153 edge shapes pass at
+0.44 µm, and the 24-point external pad/Via3/Via4 test passes with `metaltop`
+included. A direct via landing on the exposed edge metal is not available at the
+tested locations (dense existing via arrays; no 0.40 µm-keepout clear site), so
+fan out to a landing pad before via placement. This is DRC evidence only, not
+router signoff.
 
 The precheck pad check is `input(37,0).and(mask).xor(mask)`; it reads GDS layer
 37/0, not the LEF `PAD` pin. Both PDK versions supply the 60 × 60 µm GDS openings
@@ -147,7 +150,7 @@ definitions, 229 macros, and one `END LIBRARY`.
 | `rules.openrcx.gf180mcuD.{nom,min,max}` present/readable | `PASS` (at `libs.tech/librelane/`) |
 | OpenROAD build equals Stage 0 `dcf3613…` | `PASS` |
 | Pad-ring/mask comparison; no edits required | `PASS` |
-| `cor` pin-access escape/external-via evidence | `PASS` (direct via constrained) |
+| `cor` pin-access escape/external-via evidence | `PASS` (`MT.1` 0.44 µm; direct via constrained) |
 | Stage 1 gate | **MET** |
 | Synthesis / P&R / DRT / stream-out / RCX | `NOT_RUN` |
 | Stage 2 | `NOT_STARTED` |

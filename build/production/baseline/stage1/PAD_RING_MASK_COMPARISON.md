@@ -1,7 +1,7 @@
 # Pad-ring and precheck-mask comparison — 0fe vs CIEL 792
 
 **Status: PASS — NO PAD-RING OR FLOORPLAN EDIT REQUIRED; `cor` LEF PIN/OBS
-WAIVER AND FOCUSED PIN-ACCESS CHECK RECORDED.**
+WAIVER, FOCUSED PIN-ACCESS CHECK, AND M5 WIDTH-RULE RESOLUTION RECORDED.**
 **Date: 2026-11-18.** This is a geometry comparison and LEF pin/OBS waiver
 record, not a flow run. No synthesis,
 P&R, DRT, stream-out, ECO insertion, or RCX was started. The submission package
@@ -21,10 +21,13 @@ corner cell, and introduces 13 `gf180mcu_fd_io__cor` pin/OBS overlaps. Those
 overlaps are recorded below as a LEF-only waiver; they do not change the GDS or
 pad-ring geometry and do not block the corner rail pins.
 
-A focused read-only KLayout check now confirms that all **153** exposed corner
-edge shapes can escape outward at pin-appropriate width. Direct via landing on the edge
-metal is not available at the tested locations; fan out to a landing pad before
-placing the via. This is DRC-only evidence, not a router pin-access signoff.
+A focused read-only KLayout check confirms that all **153** exposed corner edge
+shapes can escape outward at the governing **0.44 µm Metal5** width. The 0.38 µm
+value is a LEF pin abstraction inside wider GDS metal, not a drawn Metal5 wire;
+**MT.1 (0.44 µm)** governs this `5LM_1TM_11K` stack. Direct via landing on the
+edge metal is not available at the tested locations; fan out to a landing pad
+before placing the via. This is DRC-only evidence, not a router pin-access
+signoff.
 
 ## Sources
 
@@ -166,23 +169,48 @@ DRC evidence for the exposed corner rails, not a router run.
 
 | Check | Result |
 |---|---|
-| Unmodified `cor` baseline, `metal3,metal4,metal5,via3,via4` | **PASS** — 0 violations, 43.5 s |
-| All 153 exposed edge shapes, outward escape stubs, `metal3,metal4,metal5` | **PASS** — 153/153, 0 violations, 5.46 s |
-| DVDD Metal5 north 0.38 × 37.84 µm edge shape | **PASS** — tested at its 0.38 µm width; 0 violations |
-| 24 external pad/via landings covering DVDD/DVSS/VDD/VSS, M3/M4/M5, N/E, `metal3,metal4,metal5,via3,via4` | **PASS** — 24/24, 0 violations, 46.05 s |
+| Unmodified `cor` baseline, `metal5,metaltop` | **PASS** — 0 violations, 3.23 s |
+| DVDD Metal5 north stub at 0.38 µm, `metal5,metaltop` | **FAIL (negative control)** — 1 `MT.1` violation |
+| Same DVDD Metal5 north stub at 0.44 µm, `metal5,metaltop` | **PASS** — 0 violations, 2.14 s |
+| All 153 exposed edge shapes, 0.44 µm M5 / 0.28 µm M3/M4 stubs, `metal3,metal4,metal5,metaltop` | **PASS** — 153/153, 0 violations, 5.43 s |
+| 24 external pad/via landings covering DVDD/DVSS/VDD/VSS, M3/M4/M5, N/E, `metal3,metal4,metal5,metaltop,via3,via4` | **PASS** — 24/24, 0 violations, 37.02 s |
 | Direct via landing on exposed edge metal | **CONSTRAINT** — no clear site at 0.40 µm keepout; route outward to a pad |
 
-The 153-shape pass covers every exposed edge RECT on the north/east boundary,
-including the narrow **DVDD / Metal5 / north** shape at
-`(281.31, 317.16)–(281.69, 355.00)` (`x` width **0.38 µm**). The 792 metal deck’s
-M5.1 minimum width is **0.28 µm**, so the 0.38 µm escape stub is DRC-clean. The
-earlier tech-LEF M5 width was **0.44 µm**; if that value is a hard signoff
-constraint, treat this single pin as a narrow-pin exception and confirm with the
-PDK owner.
+### M5 width-rule resolution
+
+**Governing rule: `MT.1` = 0.44 µm for gf180mcuD `5LM_1TM_11K`.** The 0.28 µm
+and 0.44 µm values are different checks, not two competing definitions of one
+rule:
+
+- `metal.rb:76` maps metal level 5 to the **generic** `M5.1` minimum width of
+  **0.28 µm**.
+- `generic_layers.rb:241` maps the level-5 `top_metal` and `top_metal_drawn`
+  names to **Metal5**.
+- `metaltop.rb:61-65` applies **`MT.1` = 0.44 µm** for 9K/11K top metal.
+- `c930/asic_gf180mcu/build/tech.lef:296-300` gives Metal5
+  `MINWIDTH 0.440` / `WIDTH 0.440` with the `MT.1` comment, matching the
+  top-metal rule.
+
+Thus 0.28 µm is the generic Metal5 deck check (`M5.1`), not the top-metal
+constraint. **`MT.1` at 0.44 µm is the governing minimum for Metal5 in this
+variant**, and the tech LEF agrees.
+
+The 0.38 µm value exists in the `cor` LEF pin RECT at
+`(281.31, 317.16)–(281.69, 355.00)`, but a KLayout read of the `cor` GDS layer 81
+at that location found no 0.38 µm drawn shape: the nearest local M5 crop is
+6.38 µm wide, with enclosing M5 planes. The pin is therefore a LEF abstraction
+inside wider physical metal, not a 0.38 µm Metal5 wire.
+
+A synthetic 0.38 µm escape stub **fails `MT.1`** with 1 violation; the same stub
+at 0.44 µm passes. The earlier 0.38 µm “0 violations” result used only the
+generic `metal5` deck and is superseded. All **153/153** edge escapes pass at
+0.44 µm with `metaltop` included, and all **24/24** external pad/Via3/Via4
+landings pass with `metaltop` included.
 
 The external-via pass used 1 × 1 µm landing pads outside the cell boundary with
 Via3/Via4 cuts; it proves that the exposed rails can be fanned out and via-landed
-under this DRC subset. It does not prove a direct via drop on the edge metal.
+under the `metaltop`-inclusive DRC subset. It does not prove a direct via drop on
+the edge metal.
 
 The direct-via attempt at representative edge locations produced **60 via-rule
 violations** because it collided with existing via arrays. A clear-site search
@@ -191,9 +219,9 @@ the long rails have only roughly **0.08 µm** free gaps at the tested location.
 Do not place a via directly on the exposed edge rail; escape outward first, then
 place the via on a clear landing pad.
 
-**Limits:** DRC subset only (`metal3,metal4,metal5,via3,via4`); no full DRC, LVS,
-router, RCX, EM/IR, or full-chip signoff. Synthetic layouts were written only to
-container `/tmp`; the project GDS was not modified.
+**Limits:** DRC subset only (`metal3,metal4,metal5,metaltop,via3,via4`); no full
+DRC, LVS, router, RCX, EM/IR, or full-chip signoff. Synthetic layouts were written
+only to container `/tmp`; the project GDS was not modified.
 
 ### Re-open conditions
 
@@ -225,8 +253,9 @@ untouched. A read-only simulation of that deletion gave **0 pin/OBS overlaps and
 | Need to edit pad-ring positions or die/core floorplan | **NO** |
 | Need to edit `mask_1x1.gds` | **NO** |
 | `cor` LEF pin/OBS overlap | **WAIVED** — `COR-LEF-PIN-OBS-001`; 13 taps, 1.0192 µm² |
-| `cor` edge-rail outward escape (153 shapes) | **PASS** — 153/153 stubs, 0 metal DRC |
-| `cor` external pad/via landings (24 reps) | **PASS** — 24/24, 0 metal/via DRC |
+| `cor` edge-rail outward escape (153 shapes) | **PASS** — 153/153 at 0.44 µm M5, 0 metal/metaltop DRC |
+| `cor` external pad/via landings (24 reps) | **PASS** — 24/24, 0 metal/metaltop/via DRC |
+| Metal5 minimum-width rule | **RESOLVED** — `MT.1` 0.44 µm governs 5LM; 0.38 µm LEF pin is an abstraction |
 | Direct via landing on exposed edge rail | **CONSTRAINT** — no clear direct site; escape, then via |
 | Need GDS or LEF geometry edit | **NO** — waiver accepted; no edge-rail pin is blocked |
 | Remaining work | Router pin-access/DRC revalidation during routing (direct via constrained; use landing pad); full precheck after a real assembled GDS |
@@ -240,10 +269,10 @@ pad-ring or floorplan edit.
 
 The `cor` waiver is based on direct LEF/GDS geometry, not a router pin-access
 run. The focused check in this record adds a DRC-only escape/external-via
-result; it is not router signoff and does not cover full-chip DRC, LVS, RCX, or
-EM/IR. It covers only the LEF pin/OBS abstraction and the tested synthetic
-metal/via geometries. The full assembled-ring DRC/LVS/precheck remains to be
-run.
+result; it resolves the M5 top-metal width rule as `MT.1` 0.44 µm, but it is not
+router signoff and does not cover full-chip DRC, LVS, RCX, or EM/IR. It covers
+only the LEF pin/OBS abstraction and the tested synthetic metal/via geometries.
+The full assembled-ring DRC/LVS/precheck remains to be run.
 
 The temporary 0fe PDK volume used for this comparison was removed after the
 comparison. No project file other than the recorded baseline artifacts and
