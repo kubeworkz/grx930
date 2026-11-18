@@ -1,9 +1,15 @@
 # Stage 0 — production identity freeze
 
-**Status: FROZEN 2026-11-18. No synthesis, P&R, DRT, stream-out, ECO insertion, or
-RCX has run.** This is the identity input to the fresh baseline, not a production
-signoff. The existing submission package remains **VOID — DO NOT SUBMIT**, and G0
-remains `BLOCKED`.
+**Status: FROZEN 2026-11-18; re-pinned 2026-11-18. No synthesis, P&R, DRT,
+stream-out, ECO insertion, or RCX has run.** This is the identity input to the
+fresh baseline, not a production signoff. The existing submission package remains
+**VOID — DO NOT SUBMIT**, and G0 remains `BLOCKED`.
+
+**2026-11-18 re-pin:** the identity was moved from Volare PDK
+`0fe599b2…` / OpenROAD `edf00dff…` to the pulled flow image's CIEL/Open_PDKs
+`792ef670…` / OpenROAD `dcf3613…`. The pad-ring/mask comparison found no
+pad-ring or floorplan edit; see
+`build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md`.
 
 The gate is: every Stage 0 input has a hash, and there is exactly one
 netlist/floorplan pair. That gate is met below. The fresh baseline's synthesized
@@ -37,21 +43,24 @@ it, and that new file is not pinned until it exists.
 | Item | Pinned value |
 |---|---|
 | PDK | `gf180mcuD` |
-| PDK commit | `0fe599b2afb6708d281543108caf8310912f54af` |
-| PDK source | `volare fetch --pdk gf180mcu 0fe599b2afb6708d281543108caf8310912f54af` |
+| PDK commit | `792ef67037d74c8c51811eab3ce23cf793491296` |
+| PDK source | CIEL/Open_PDKs `792ef670…` already in the pinned flow image; `volare` is not installed |
+| Open_PDKs version | `1.0.616` |
+| `gf180mcu_pdk` reference | `a897aa30369d3bcec87d9d50ce9b01f320f854ef` |
 | PDK root | `/workspace/gf180mcu` (image default) |
 | Standard-cell library | `gf180mcu_fd_sc_mcu7t5v0` |
 | Pad library | `gf180mcu_fd_io` |
-| RCX corners | `nom`, `min`, `max` (`rules.openrcx.gf180mcuD.*`; verify in Stage 1) |
+| RCX corners | `nom`, `min`, `max` (`rules.openrcx.gf180mcuD.*`; verified in Stage 1) |
 | Flow image | `ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f` |
 | Flow image, linux/amd64 | `sha256:f4a9fe760e6dc43ade6245f801b9f6b5807161ea2e12590b241fba55d2d087b0` |
 | Stream/fill image | `ghcr.io/efabless/openlane2:2.3.10@sha256:37c3bd4ea0534a276cb2deb88d601044857bad2807b9bc5b36efe9d02c62624e` |
 | KLayout G2 image | `grx930/klayout-lvs-pmap:local@sha256:520139faa49df8d2a39a9a88345f7b3544db0bf8698258a4a006b2d2d5c05ae3` |
 
 The flow image is pinned by its OCI index digest, not the mutable `latest` tag.
-`docker manifest inspect`/`buildx imagetools inspect` resolved the digest; the
-image is **not present locally**, so Stage 1 must pull the pinned digest and
-verify the PDK/RCX files inside it. This Stage 0 did not pull it.
+`docker manifest inspect`/`buildx imagetools inspect` resolved the digest. Stage 1
+pulled the pinned digest and verified the in-image CIEL/Open_PDKs `792ef…` PDK,
+OpenROAD `dcf3613…`, and the three RCX rule files; the image is now present
+locally. Stage 0 itself did not pull it.
 
 ## Overrides and PDN
 
@@ -60,8 +69,9 @@ verify the PDK/RCX files inside it. This Stage 0 did not pull it.
 | `grx930_overrides.yaml` | `2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9` |
 | `pdn_cfg_grx930.tcl` | `cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b` |
 | `macros_grx930.yaml` | `8b3fa88edb6a5bd75d3962dda9580acbe745edbca76718f84e59d4cd62ebd83e` |
-| `cells.lef` | `8251799d31ff62347a27db44e3ec9eed4a3c1ee50c05a54eb06d46bd735ee58b` |
-| PDK cell GDS | `6c8be6496c53aa03cb8f35e6b75bef60a05b10cc00b191048cb86e38d3874049` |
+| `tech.lef` | `842b186318d53844561af4ec530b4e30d8ba519bcc58d512a363ef255acc7abd` (792 `nom` tech LEF) |
+| `cells.lef` | `3a60c20f788fb14c6034c39490b4169418a7db3b5dfcbb791b1e137a115a5248` (792 tech LEF + 792 cell LEF) |
+| PDK cell GDS | `918955160002012d54d307273545bd72fe7e3ec4009efce02b7c2235a2fbaf67` (792) |
 
 The complete checksum list is `baseline_manifest.sha256`; the hashes above are
 the design-specific files that must not change without a new Stage 0.
@@ -105,17 +115,22 @@ must be parameterized with `G0_DROPS=<N>` before it is used on this baseline;
 
 ## Stage 0 result
 
-- `identity=READY_FOR_STAGE1`
+- `identity=FROZEN_REPINNED`
 - `netlist=ONE` (RTL entry; old synthesized netlists excluded)
 - `floorplan=ONE` (`slot_1x1`; 3932 × 5122)
-- `pdk=PINNED` (`0fe599b2…`)
-- `flow_image=PINNED_BY_DIGEST`, locally absent
+- `pdk=PINNED` (`792ef670…`; re-pinned 2026-11-18)
+- `flow_image=PINNED_BY_DIGEST`, present locally
+- `stage1=PASS` (`dcf3613…`; RCX and pad/mask checks pass)
+- `stage2=NOT_STARTED` (no synthesis or P&R run)
 - `eco_count=TO_BE_DERIVED`
 - `G0=BLOCKED`, `G2=BLOCKED`, package=`VOID — DO NOT SUBMIT`
 
-Stage 1 must pull the pinned flow image and verify the in-image PDK commit and
-`rules.openrcx.gf180mcuD.{nom,min,max}`. Until then this is an identity freeze,
-not a toolchain qualification.
+Stage 1 pulled the pinned flow image and verified the in-image CIEL/Open_PDKs
+`792ef…` PDK, OpenROAD `dcf3613…`, and `rules.openrcx.gf180mcuD.{nom,min,max}`.
+The pad-ring/mask comparison is in
+`build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md`; it requires no
+pad-ring or floorplan edit. This is a qualified identity freeze, but not a
+production signoff.
 
 ## Verification
 

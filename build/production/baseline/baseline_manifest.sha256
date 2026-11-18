@@ -1,22 +1,28 @@
-# Fresh-baseline input manifest — Stage 0 frozen; Stage 1 blocked 2026-11-18.
-# status=STAGE1_BLOCKED_PDK_OPENROAD_MISMATCH
-# stage0_status=STAGE0_FROZEN
+# Fresh-baseline input manifest — Stage 0 re-pinned; Stage 1 pass 2026-11-18.
+# status=STAGE1_PASS_REPINNED_CIEL792_OPENROAD_DCF
+# stage0_status=STAGE0_FROZEN_REPINNED
 # stage0_identity=build/production/baseline/stage0/IDENTITY.md
 # flow_image=ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
 # flow_image_amd64=sha256:f4a9fe760e6dc43ade6245f801b9f6b5807161ea2e12590b241fba55d2d087b0
 # pdk=gf180mcuD
-# pdk_version=0fe599b2afb6708d281543108caf8310912f54af
+# pdk_version=792ef67037d74c8c51811eab3ce23cf793491296
+# pdk_open_pdks_version=1.0.616
+# pdk_gf180mcu_pdk_reference=a897aa30369d3bcec87d9d50ce9b01f320f854ef
+# tech_lef=c930/asic_gf180mcu/build/tech.lef
+# cells_lef=c930/asic_gf180mcu/build/cells.lef
 # stage1_record=build/production/baseline/stage1/STAGE1_VERIFICATION.md
+# stage1_pad_ring_mask_record=build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
 # stage1_toolchain=build/production/baseline/stage1/toolchain_versions.txt
-# stage1_gate=NOT_MET
-# stage1_pdk_expected=0fe599b2afb6708d281543108caf8310912f54af
+# stage1_gate=MET
+# stage1_pdk_expected=792ef67037d74c8c51811eab3ce23cf793491296
 # stage1_pdk_image_ciel=792ef67037d74c8c51811eab3ce23cf793491296
 # stage1_pdk_image_open_pdks=792ef67037d74c8c51811eab3ce23cf793491296
 # stage1_pdk_image_gf180mcu_pdk_reference=a897aa30369d3bcec87d9d50ce9b01f320f854ef
-# stage1_pdk_verified=NO
-# stage1_openroad_expected=edf00dff99f6c40d67a30c0e22a8191c5d2ed9d6
+# stage1_pdk_verified=YES
+# stage1_openroad_expected=dcf36133a369abc8f3c5e5738cd4d82e4903c0e0
 # stage1_openroad_image=dcf36133a369abc8f3c5e5738cd4d82e4903c0e0
-# stage1_openroad_verified=NO
+# stage1_openroad_verified=YES
+# stage1_pad_ring_mask=PASS_NO_EDITS
 # stage1_rcx_path=gf180mcuD/libs.tech/librelane
 # stage1_rcx_nom_sha256=d83a04ea28af9b74a097fb479bbab9ed52859a1e3428b33d3151cb5afae62ddf
 # stage1_rcx_min_sha256=5cf275c985ffd49096407d22891910fea34aff5a915db8a5b9a7c1e04b737e00
@@ -35,7 +41,7 @@
 # via_source=cells.lef (56 VIA definitions); artifact=NOT_USED
 # rtl_tree_sha256=7c4d919b1950033089a2a43b8be729defb9ff50e2a50873865552b76f85049b9
 # rtl_files=40
-1412e195c6bd218fd0ddb7c5e4e8629ea361fda50f06c71ea4a0f58ce16baefd *build/production/baseline/stage0/IDENTITY.md
+8d0b253473e4bf07b08515ae9ccdf66ab79d62115537c0aabe236715610f4e46 *build/production/baseline/stage0/IDENTITY.md
 ce8d3d81b7442104afefc44f31b4c94f9e904099b76ab22a09b0a91af4bc9781 *build/production/baseline/stage0/netlist_sha256.txt
 2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9 *c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml
 cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b *c930/asic_gf180mcu/wafer_space_integration/pdn_cfg_grx930.tcl
@@ -45,14 +51,16 @@ cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b *c930/asic_gf18
 cb47d6bb0e23d802c7b1fd54307880be466a3e6a09622222d47d73601a26b5a9 *c930/asic_gf180mcu/tools/gf180mcu-project-template/librelane/slots/slot_1x1.yaml
 fe6019f5e105d83fbe2979796fa55e2620c11ef159c12982f5fdb01a863f43e5 *c930/asic_gf180mcu/tools/gf180mcu-project-template/src/chip_top.sv
 ca0395c63097c57543942c01793ec423b73fe558745507677e2e65e6d83b79dc *c930/asic_gf180mcu/tools/gf180mcu-project-template/src/slot_defines.svh
-8251799d31ff62347a27db44e3ec9eed4a3c1ee50c05a54eb06d46bd735ee58b *c930/asic_gf180mcu/build/cells.lef
-6c8be6496c53aa03cb8f35e6b75bef60a05b10cc00b191048cb86e38d3874049 *c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
+842b186318d53844561af4ec530b4e30d8ba519bcc58d512a363ef255acc7abd *c930/asic_gf180mcu/build/tech.lef
+3a60c20f788fb14c6034c39490b4169418a7db3b5dfcbb791b1e137a115a5248 *c930/asic_gf180mcu/build/cells.lef
+918955160002012d54d307273545bd72fe7e3ec4009efce02b7c2235a2fbaf67 *c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
 c4221175934f7175d836c0673891e9b37267850617861bdf5fec67723d1e9397 *c930/asic_gf180mcu/tools/lvs_chip/stream_out.py
 fa1ac7cdd9501dd441d3ddd05dab95dd591026384feb5ebec9361f7db26d1be0 *c930/asic_gf180mcu/tools/lvs_chip/promote_def_vias.py
 022b2a3c14c823adc6dbd5121c2b00559e4c68ece9ae0e2f9e5538b09a79fe43 *c930/asic_gf180mcu/tools/lvs_chip/fill_def.py
 23224df78126c662d8370e0c73990ff0f1c63decc6b21351f0afbfc764b30bbe *c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py
 685ab89d0dbf9442bc6eee3986ab8b999d7fbc0ef58dafe3cb5d81747ea3c806 *c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py
 5bdf411939e719e3b3f905cc1ddceb8e52a92bbd267c84f4baa930e5a18b2017 *c930/asic_gf180mcu/tools/lvs_chip/net_compare.py
-eea417e0ffe31ac299368efa451eace67d6b81965218925f4170d388058d8a07 *build/production/baseline/stage1/STAGE1_VERIFICATION.md
-d39da042308a7e3a2ce421cb9e0834ed467884a8f7aa93c42642ca4b2d9e6c4f *build/production/baseline/stage1/toolchain_versions.txt
+6a2fc2a6d8a5a2a3d957ac756138485534ee60d86fa1036696be3247a795864e *build/production/baseline/stage1/STAGE1_VERIFICATION.md
+b4ee38883ad764cf1669b9ca6dc9c04f5473e690823051f6728c32b962650772 *build/production/baseline/stage1/toolchain_versions.txt
+22307d2d95abbcb27320b96777fcb7189030d71e765ac591ef61697885376969 *build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
 c41b99cd71421244f331d5d623bc97ff1bb116051c18cbe4cbdd12d97927f514 *build/production/logs/stage1_pull_retry2.log

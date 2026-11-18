@@ -1,8 +1,9 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
-**Status: STAGE 1 BLOCKED — PDK/OPENROAD MISMATCH; NO FLOW STARTED.** The Stage 0 pin is
-`build/production/baseline/stage0/IDENTITY.md`. No synthesis, place-and-route,
-DRT, stream-out, ECO insertion, or RCX command has been run for this plan.
+**Status: STAGE 1 PASS — RE-PINNED TO CIEL 792ef… / OpenROAD dcf3613…; NO FLOW
+STARTED.** The Stage 0 pin is `build/production/baseline/stage0/IDENTITY.md`.
+No synthesis, place-and-route, DRT, stream-out, ECO insertion, or RCX command has
+been run for this plan. The submission package remains **VOID — DO NOT SUBMIT**.
 
 This creates a **new identity**. It cannot claim `fix59`, `fix70`, the historical
 541-row source, or the current 8,168-drop provenance. The existing submission
@@ -58,10 +59,11 @@ path is to recover the old database, not to run this plan.
 | PDK cell GDS | `c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds` | `stream_out.py` and `pdn_stitch.py` read cell layouts from it |
 | G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die, count, paths, and the row-300 box are hardcoded |
 
-**Toolchain gap:** `ghcr.io/wafer-space/gf180mcu-precheck` is **not present in the
-local Docker image list**. Stage 0 pinned its OCI index digest; Stage 1 must pull
-and verify it. The local images include `openlane2-gf180mcu:latest` and
-`ghcr.io/efabless/openlane2:2.3.10`, which are not the full-chip flow image.
+**Toolchain status:** `ghcr.io/wafer-space/gf180mcu-precheck` is present locally at
+the pinned OCI index digest. Stage 1 pulled it and verified the in-image CIEL
+`792ef…` PDK, OpenROAD `dcf3613…`, and RCX rules. The local
+`openlane2-gf180mcu:latest` and `ghcr.io/efabless/openlane2:2.3.10` images are
+not the full-chip flow image.
 
 **Why the GDS pipeline matters.** The production GDS is not a single stream-out.
 `fill_def.py` adds fillers and well taps, `stream_out.py` renders the filled DEF,
@@ -102,17 +104,21 @@ plus `chip_top.sv`, `chip_core_grx930.sv`, and `slot_defines.svh`. Stage 0 has
 replaced the `TO_BE_PINNED` placeholders.
 
 Gate met: every input has a hash and there is exactly one netlist/floorplan pair
-(`identity=READY_FOR_STAGE1`). Stage 1 has since pulled the image and verified its
-RCX files, but found PDK and OpenROAD mismatches; see
-`baseline/stage1/STAGE1_VERIFICATION.md`. The flow has not started.
+(`identity=FROZEN_REPINNED`). Stage 1 has pulled the image, verified its PDK
+(`792ef…`), OpenROAD (`dcf3613…`), and RCX files, and recorded the pad-ring/mask
+comparison; see `baseline/stage1/STAGE1_VERIFICATION.md` and
+`baseline/stage1/PAD_RING_MASK_COMPARISON.md`. The 792 cell LEF/GDS and merged
+`cells.lef` have replaced the old 0fe pins. The flow has not started.
 
 ### Stage 1 — Toolchain and PDK readiness
 
-**Result 2026-11-18: BLOCKED.** The pinned image was pulled and inspected
-read-only. Its PDK is CIEL/Open_PDKs `792ef…`, not Stage 0's `0fe599b2…`; its
-OpenROAD is `dcf3613…`, not the expected `edf00dff…`. The RCX rules are present
-at `gf180mcuD/libs.tech/librelane/`, not `.../openlane/`. Full record:
-`baseline/stage1/STAGE1_VERIFICATION.md`.
+**Result 2026-11-18: PASS — re-pinned.** The pinned image was pulled and
+inspected read-only. Stage 0 was moved to its CIEL/Open_PDKs `792ef…` PDK and
+OpenROAD `dcf3613…`; the RCX rules are present at
+`gf180mcuD/libs.tech/librelane/`. The 0fe→792 pad-ring/mask comparison found the
+GDS pad-opening layer identical and requires no pad-ring or floorplan edit. Full
+records: `baseline/stage1/STAGE1_VERIFICATION.md` and
+`baseline/stage1/PAD_RING_MASK_COMPARISON.md`.
 
 - Pull and pin the full-chip image by index digest, not a tag:
   `docker pull --platform linux/amd64 ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d…`
@@ -128,10 +134,12 @@ at `gf180mcuD/libs.tech/librelane/`, not `.../openlane/`. Full record:
   8 GB for a DRT arm, and ~150 GB of volume.
 
 Output: `toolchain_versions.txt` and `STAGE1_VERIFICATION.md` (librelane,
-OpenROAD, KLayout, image digests, PDK path, RCX hashes, and the mismatch verdict).
+OpenROAD, KLayout, image digests, PDK path, RCX hashes, pad-ring/mask comparison,
+and the pass verdict).
 
 Gate: the exact RCX rule files and OpenROAD build are readable **and match the
-frozen pin**; a version bump restarts the baseline. This gate is **NOT MET**.
+frozen pin**; a version bump restarts the baseline. This gate is **MET**. Stage 2
+has not been started.
 
 ### Stage 2 — RTL through global route to a pre-DRT ODB
 
@@ -481,12 +489,11 @@ drops; no new geometry outside the windows.
 
 ### Stage 8 — Extract SPEF with OpenRCX
 
-Verified in the Stage 0 expected OpenROAD build
-(`edf00dff99f6c40d67a30c0e22a8191c5d2ed9d6`): `define_process_corner`,
-`extract_parasitics`, and `write_spef` exist. `report_parasitics` does **not**
-exist; use `report_parasitic_annotation` and `read_spef`/`diff_spef`. The pulled
-image reports `dcf36133…`; do not run Stage 8 until the Stage 1 pin mismatch is
-resolved and these commands are revalidated.
+Verified against the re-pinned Stage 0 OpenROAD build
+(`dcf36133a369abc8f3c5e5738cd4d82e4903c0e0`): `define_process_corner`,
+`extract_parasitics`, and `write_spef` are present. `report_parasitics` does
+**not** exist; use `report_parasitic_annotation` and `read_spef`/`diff_spef`.
+This is command-name verification only; RCX has not run.
 
 Run one corner per process against `eco_routed.odb`, so each rules file defines
 its own corner at index 0. Do not pass `-ext_model_file` again after
@@ -573,8 +580,8 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; fill/stream/stitch hours; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
 | Identity drift | legacy synth netlist, audit DEF, and die database; stale 3930×5120 references vs the 3932×5122 authority; unsupported keys `FP_DIE_AREA`/`DRT_ALLOW_CONGESTION` in the 2.3.10 log | Stage 0 freezes one RTL entry and 3932×5122; old synthesized netlists are excluded; use supported keys |
 | RCX rules absent locally | local PDK `RCX_RULES` is empty; Stage 1 found the image rules at `gf180mcuD/libs.tech/librelane/`, with hashes in `stage1/toolchain_versions.txt` | use the verified `librelane` path; do not use the stale `openlane` path |
-| Precheck image absent | Stage 1 pulled the pinned index digest; image ID and size are in `stage1/STAGE1_VERIFICATION.md` | image is present; its PDK/OpenROAD mismatch still blocks |
-| PDK/OpenROAD identity mismatch | image PDK is CIEL/Open_PDKs `792ef…` (not `0fe599b2…`); OpenROAD is `dcf3613…` (not `edf00dff…`); `volare` absent | Stage 1 gate failed; re-pin Stage 0 or obtain an image with the frozen pins; no Stage 2 |
+| Precheck image present | Stage 1 pulled the pinned index digest; image ID and size are in `stage1/STAGE1_VERIFICATION.md` | image is present and the 792/dcf Stage 1 gate is met; Stage 2 not started |
+| PDK/OpenROAD identity | Stage 0 re-pinned to image CIEL/Open_PDKs `792ef…` and OpenROAD `dcf3613…`; no `volare`; pad ring/mask comparison found no edits | Stage 1 gate MET; use only these pins; Stage 2 not started |
 | Signoff | no Gridworkz connector; G1 DFT/ATPG absent; G3 waiver and G4 STA/power open | external signoff; do not claim a pass without receipts |
 
 ## 6. Planning envelope
@@ -599,9 +606,11 @@ are outside this plan.
 ## 7. Explicitly not done
 
 Stage 1 pulled the pinned image and ran only read-only version, path, and hash
-probes; no `volare fetch`, `ws_exec.sh`, DRT, stream-out, ECO insertion, or
-OpenRCX command has been run. The image's PDK/OpenROAD mismatch blocks Stage 2
-(see `baseline/stage1/STAGE1_VERIFICATION.md`). Read-only inspection, a parser test
+probes plus an OpenROAD command-help check; no `ws_exec.sh`, DRT, stream-out, ECO
+insertion, or OpenRCX command has been run. The Stage 0 PDK/GDS/LEF pins were
+updated to the image's 792 identity (see `baseline/stage0/IDENTITY.md`), and the
+pad-ring/mask comparison is recorded in
+`baseline/stage1/PAD_RING_MASK_COMPARISON.md`. Read-only inspection, a parser test
 of the new LEF via reader, and a KLayout check of the 2×2 cell it builds were
-run; no DEF was streamed. No existing file was replaced. G0 remains `BLOCKED`,
-G2 exits 2, and the package remains **VOID — DO NOT SUBMIT**.
+run; no DEF was streamed. G0 remains `BLOCKED`, G2 exits 2, and the package
+remains **VOID — DO NOT SUBMIT**.

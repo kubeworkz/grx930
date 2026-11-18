@@ -1,14 +1,14 @@
 # Stage 1 — Toolchain and PDK verification
 
-**Status: BLOCKED — PDK COMMIT AND OPENROAD BUILD MISMATCH. No synthesis, P&R,
-DRT, stream-out, ECO insertion, or RCX has run.** The submission package remains
-**VOID — DO NOT SUBMIT**; G0 and G2 remain `BLOCKED`.
+**Status: PASS — RE-PINNED TO CIEL/Open_PDKs `792ef670…` AND OPENROAD
+`dcf36133…`.** The Stage 0 identity was updated to the versions already present
+in the pinned flow image. No synthesis, P&R, DRT, stream-out, ECO insertion, or
+RCX has run. The submission package remains **VOID — DO NOT SUBMIT**; G0 and G2
+remain `BLOCKED`.
 
-The pinned image was pulled by OCI index digest and inspected read-only. The
-image is usable, and the three RCX rule files are present and readable, but the
-image does **not** contain the Stage 0 PDK commit or the Stage 0 expected
-OpenROAD build. Stage 1's gate is therefore **not met**, and Stage 2 must not
-start under the frozen identity.
+The earlier mismatch was resolved by changing the Stage 0 identity, not by
+substituting a different image or by mixing the `0fe`/`edf` build with the
+`792`/`dcf` one. The old `0fe599b2…` / `edf00dff…` pins are no longer active.
 
 ## Pull result
 
@@ -24,49 +24,35 @@ start under the frozen identity.
 | Entrypoint / workdir | `dev-shell` / `/workspace` |
 | Built-in env | `PDK_ROOT=/workspace/gf180mcu`, `PDK=gf180mcuD` |
 
-The first pull failed with `unexpected EOF` after all layers reported complete.
-A retry stalled before registry progress and was cancelled. The final pull used
-an explicit `--platform linux/amd64` and succeeded:
-
-```text
-Digest: sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
-Status: Downloaded newer image for ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
-```
-
 Successful pull log:
 `build/production/logs/stage1_pull_retry2.log`.
-The failed first pull is retained at `build/production/logs/stage1_pull.log`.
 
-## PDK verification — FAIL (commit mismatch)
+## PDK verification — PASS (re-pinned)
 
 | Item | Stage 0 pin | Image observation |
 |---|---|---|
 | PDK | `gf180mcuD` | `gf180mcuD` |
 | Root | `/workspace/gf180mcu` | `/workspace/gf180mcu` |
-| PDK commit | `0fe599b2afb6708d281543108caf8310912f54af` | **not present** |
-| PDK manager/source | `volare fetch --pdk gf180mcu 0fe599b2…` | `ciel`; `SOURCES` says `open_pdks 792ef67037d74c8c51811eab3ce23cf793491296` |
+| PDK commit | `792ef67037d74c8c51811eab3ce23cf793491296` | `792ef67037d74c8c51811eab3ce23cf793491296` |
+| PDK manager/source | CIEL/Open_PDKs | `ciel`; `SOURCES` says `open_pdks 792ef670…` |
 | Resolved target | — | `/workspace/gf180mcu/ciel/gf180mcu/versions/792ef67037d74c8c51811eab3ce23cf793491296/gf180mcuD` |
-| Open_PDKs version/commit | — | `1.0.616` / `792ef67037d74c8c51811eab3ce23cf793491296` |
-| `gf180mcu_pdk` reference | — | `a897aa30369d3bcec87d9d50ce9b01f320f854ef` |
+| Open_PDKs version/commit | `1.0.616` / `792ef670…` | `1.0.616` / `792ef67037d74c8c51811eab3ce23cf793491296` |
+| `gf180mcu_pdk` reference | `a897aa30369d3bcec87d9d50ce9b01f320f854ef` | same |
 | Git metadata | — | no `.git` directory |
 
-The image's `gf180mcuD` is a symlink into CIEL's `792ef…` version directory.
-The `SOURCES` file and `nodeinfo.json` both identify Open_PDKs commit
+The image's `gf180mcuD` is a symlink into CIEL's `792ef…` version directory. The
+`SOURCES` file and `nodeinfo.json` both identify Open_PDKs commit
 `792ef67037d74c8c51811eab3ce23cf793491296`; the nodeinfo's underlying
-`gf180mcu_pdk` reference is `a897aa30369d3bcec87d9d50ce9b01f320f854ef`. A
-recursive search of the CIEL PDK tree found no reference to
-`0fe599b2afb6708d281543108caf8310912f54af`. `volare` is **not installed** in the
-image; `ciel` 3.1.0 is.
+`gf180mcu_pdk` reference is `a897aa30369d3bcec87d9d50ce9b01f320f854ef`.
+`volare` is not installed in the image; `ciel` 3.1.0 is.
 
-This is not a cosmetic version label: Stage 0 pins a Volare PDK commit, while the
-image carries a CIEL/Open_PDKs build. They are different identities and must not
-be mixed. **`pdk_commit_verified=NO`.**
+**`pdk_commit_verified=YES`.** The Stage 0 pin and the image now describe the
+same PDK identity.
 
-## RCX rules — PRESENT and readable
+## RCX rules — PASS
 
-The Stage 1 plan expected these under the PDK's OpenLane directory. In this image
-they are under `libs.tech/librelane/`, so the Stage 8 path in the plan was
-incorrect and has been corrected.
+The RCX rules are under `libs.tech/librelane/`, not `.../openlane/`. All three
+are present, non-empty, and declare `LayerCount 5`:
 
 | Corner | Path | Bytes | SHA-256 |
 |---|---|---:|---|
@@ -74,10 +60,10 @@ incorrect and has been corrected.
 | `min` | `.../libs.tech/librelane/rules.openrcx.gf180mcuD.min` | 31,290 | `5cf275c985ffd49096407d22891910fea34aff5a915db8a5b9a7c1e04b737e00` |
 | `max` | `.../libs.tech/librelane/rules.openrcx.gf180mcuD.max` | 31,286 | `0ee103cf2108f2fd945087551b6dd1eaf4ee55af60571de2983878c8a271515f` |
 
-All three begin with `Extraction Rules for OpenRCX`, declare `LayerCount 5`, and
-are non-empty. The `.nom.magic`, `.min.magic`, and `.max.magic` variants are also
-present. **RCX file presence/readability is PASS**, but extraction cannot be
-qualified against a PDK/OpenROAD identity that does not match Stage 0.
+The `.nom.magic`, `.min.magic`, and `.max.magic` variants are also present. These
+hashes are unchanged from the earlier image inspection; `0fe` and `792` RCX files
+were previously found byte-identical. **RCX presence/readability is PASS.**
+Extraction itself has not run.
 
 ## Toolchain pins
 
@@ -94,11 +80,42 @@ qualified against a PDK/OpenROAD identity that does not match Stage 0.
 | CIEL | `3.1.0` |
 | Volare | **MISSING** |
 
-Stage 0's Stage 8 notes were verified against OpenROAD
-`edf00dff99f6c40d67a30c0e22a8191c5d2ed9d6`. The pulled image reports
-`dcf36133a369abc8f3c5e5738cd4d82e4903c0e0` instead. **OpenROAD pin
-verified=NO.** The Stage 8 `define_process_corner`/`extract_parasitics`/
-`write_spef` command set has not been revalidated against the image's build.
+Stage 0 now pins OpenROAD `dcf36133a369abc8f3c5e5738cd4d82e4903c0e0`.
+**OpenROAD pin verified=YES.** A read-only OpenROAD help check on this build
+found `define_process_corner`, `extract_parasitics`, and `write_spef`; no RCX was
+run. `report_parasitics` remains absent and is not used.
+
+## Pad-ring and precheck-mask comparison — PASS, no edits
+
+Full record:
+`build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md`.
+
+| Check | Result |
+|---|---|
+| `slot_1x1` pad allocation | S17 / E20 / N17 / W20 = 74 pads |
+| Current `mask_1x1.gds` | 74 pad apertures, all 60 × 60 µm; same allocation |
+| 0fe vs 792 GDS layer 37/0 | **XOR empty** for every IO cell; both 60 × 60 µm at the same center |
+| Pad cell footprints | 75 × 350 µm in both; fill and 355 × 355 µm corner unchanged |
+| LEF `PAD` pin | 0fe 25 × 25 µm → 792 60 × 60 µm; LEF-only change |
+| Pad-ring edit required | **NO** |
+| Floorplan edit required | **NO** |
+| `mask_1x1.gds` edit required | **NO** |
+
+The precheck pad check is `input(37,0).and(mask).xor(mask)`; it reads GDS layer
+37/0, not the LEF `PAD` pin. Both PDK versions supply the 60 × 60 µm GDS openings
+the current mask expects.
+
+## Updated Stage 0 artifacts
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `c930/asic_gf180mcu/build/tech.lef` | 33,047 | `842b186318d53844561af4ec530b4e30d8ba519bcc58d512a363ef255acc7abd` |
+| `c930/asic_gf180mcu/build/cells.lef` | 704,024 | `3a60c20f788fb14c6034c39490b4169418a7db3b5dfcbb791b1e137a115a5248` |
+| `c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds` | 1,450,948 | `918955160002012d54d307273545bd72fe7e3ec4009efce02b7c2235a2fbaf67` |
+
+`tech.lef` is the 792 `nom` tech LEF. `cells.lef` is that tech LEF with its final
+`END LIBRARY` removed, followed by the 792 cell macros; it validates as 56 VIA
+definitions, 229 macros, and one `END LIBRARY`.
 
 ## Gate result
 
@@ -106,28 +123,19 @@ verified=NO.** The Stage 8 `define_process_corner`/`extract_parasitics`/
 |---|---|
 | Image pull by pinned index digest | `PASS` |
 | Image is linux/amd64 at the pinned digest | `PASS` |
-| In-image PDK commit equals Stage 0 `0fe599b2…` | `FAIL` — image has CIEL/Open_PDKs `792ef670…` |
+| In-image PDK commit equals Stage 0 `792ef…` | `PASS` |
 | `rules.openrcx.gf180mcuD.{nom,min,max}` present/readable | `PASS` (at `libs.tech/librelane/`) |
-| OpenROAD build equals Stage 0 expected `edf00dff…` | `FAIL` — image has `dcf36133…` |
-| Stage 1 gate | **NOT MET** |
-| Synthesis / P&R / RCX | `NOT_RUN` |
+| OpenROAD build equals Stage 0 `dcf3613…` | `PASS` |
+| Pad-ring/mask comparison; no edits required | `PASS` |
+| Stage 1 gate | **MET** |
+| Synthesis / P&R / DRT / stream-out / RCX | `NOT_RUN` |
+| Stage 2 | `NOT_STARTED` |
 | G0 / G2 | `BLOCKED` / `BLOCKED` |
 | Package | `VOID — DO NOT SUBMIT` |
 
-## Required resolution before Stage 2
-
-Do not silently substitute versions. Choose one identity and freeze it anew:
-
-1. **Re-pin to this image:** make a new Stage 0 identity using the image's
-   CIEL/Open_PDKs `792ef…` PDK and OpenROAD `dcf3613…`, then revalidate the flow
-   and the Stage 8 RCX commands against that build; or
-2. **Keep the existing Stage 0 identity:** obtain an image containing PDK
-   `0fe599b2…` and OpenROAD `edf00dff…` (or build/fetch them into a controlled
-   image), then repeat this Stage 1 verification.
-
-Until one is done, Stage 2 must not start. No flow command was run for this
-record; the only container commands were read-only version, path, and hash
-probes. The existing submission remains VOID and no signoff is claimed.
+Stage 2 may start under this re-pinned identity when authorized. It has not been
+started. Stage 8 RCX remains a later step and must run against this exact image,
+PDK, and OpenROAD build; no RCX result is claimed here.
 
 ## Evidence
 
@@ -142,3 +150,6 @@ docker run --rm "$REF" sh -lc 'librelane --version; openroad -version; klayout -
 docker run --rm --entrypoint /bin/sh "$REF" -lc 'cat "$V/SOURCES"; find ...'
 docker run --rm "$REF" sh -lc 'sha256sum "$PDK/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD."{nom,min,max}'
 ```
+
+The only flow-adjacent commands were read-only version/path/hash probes and the
+OpenROAD `help` check. No design database was read and no flow step was invoked.
