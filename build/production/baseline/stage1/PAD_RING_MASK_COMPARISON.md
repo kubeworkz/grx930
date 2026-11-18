@@ -1,7 +1,7 @@
 # Pad-ring and precheck-mask comparison — 0fe vs CIEL 792
 
 **Status: PASS — NO PAD-RING OR FLOORPLAN EDIT REQUIRED; `cor` LEF PIN/OBS
-WAIVER RECORDED.**
+WAIVER AND FOCUSED PIN-ACCESS CHECK RECORDED.**
 **Date: 2026-11-18.** This is a geometry comparison and LEF pin/OBS waiver
 record, not a flow run. No synthesis,
 P&R, DRT, stream-out, ECO insertion, or RCX was started. The submission package
@@ -20,6 +20,11 @@ precheck reads the GDS opening layer, not the LEF pin.
 corner cell, and introduces 13 `gf180mcu_fd_io__cor` pin/OBS overlaps. Those
 overlaps are recorded below as a LEF-only waiver; they do not change the GDS or
 pad-ring geometry and do not block the corner rail pins.
+
+A focused read-only KLayout check now confirms that all **153** exposed corner
+edge shapes can escape outward at pin-appropriate width. Direct via landing on the edge
+metal is not available at the tested locations; fan out to a landing pad before
+placing the via. This is DRC-only evidence, not a router pin-access signoff.
 
 ## Sources
 
@@ -150,12 +155,53 @@ connection. The named nets retain exposed edge/rail pins. The overlap is a LEF
 abstraction artifact, not a GDS geometry change. This review did not run LVS, so
 it does not establish physical net connectivity.
 
+### Focused pin-access check (2026-11-18)
+
+**Scope: read-only KLayout DRC on the 792 `cor` GDS/LEF. No GDS, LEF, or
+pad-ring edit was made, and no synthesis, P&R, DRT, stream-out, ECO, or RCX was
+started.**
+
+The check used the pinned 792 image and the 792 KLayout metal/via decks. It is
+DRC evidence for the exposed corner rails, not a router run.
+
+| Check | Result |
+|---|---|
+| Unmodified `cor` baseline, `metal3,metal4,metal5,via3,via4` | **PASS** — 0 violations, 43.5 s |
+| All 153 exposed edge shapes, outward escape stubs, `metal3,metal4,metal5` | **PASS** — 153/153, 0 violations, 5.46 s |
+| DVDD Metal5 north 0.38 × 37.84 µm edge shape | **PASS** — tested at its 0.38 µm width; 0 violations |
+| 24 external pad/via landings covering DVDD/DVSS/VDD/VSS, M3/M4/M5, N/E, `metal3,metal4,metal5,via3,via4` | **PASS** — 24/24, 0 violations, 46.05 s |
+| Direct via landing on exposed edge metal | **CONSTRAINT** — no clear site at 0.40 µm keepout; route outward to a pad |
+
+The 153-shape pass covers every exposed edge RECT on the north/east boundary,
+including the narrow **DVDD / Metal5 / north** shape at
+`(281.31, 317.16)–(281.69, 355.00)` (`x` width **0.38 µm**). The 792 metal deck’s
+M5.1 minimum width is **0.28 µm**, so the 0.38 µm escape stub is DRC-clean. The
+earlier tech-LEF M5 width was **0.44 µm**; if that value is a hard signoff
+constraint, treat this single pin as a narrow-pin exception and confirm with the
+PDK owner.
+
+The external-via pass used 1 × 1 µm landing pads outside the cell boundary with
+Via3/Via4 cuts; it proves that the exposed rails can be fanned out and via-landed
+under this DRC subset. It does not prove a direct via drop on the edge metal.
+
+The direct-via attempt at representative edge locations produced **60 via-rule
+violations** because it collided with existing via arrays. A clear-site search
+across all 153 edge shapes found **0 sites** with a conservative 0.40 µm keepout;
+the long rails have only roughly **0.08 µm** free gaps at the tested location.
+Do not place a via directly on the exposed edge rail; escape outward first, then
+place the via on a clear landing pad.
+
+**Limits:** DRC subset only (`metal3,metal4,metal5,via3,via4`); no full DRC, LVS,
+router, RCX, EM/IR, or full-chip signoff. Synthetic layouts were written only to
+container `/tmp`; the project GDS was not modified.
+
 ### Re-open conditions
 
 Re-open `COR-LEF-PIN-OBS-001` if any of the following occurs:
 
 - A router or pin-access check reports a blocked `cor` pin that cannot use an
-  exposed edge tap.
+  exposed edge tap, or requires a direct via landing on an exposed edge rail
+  rather than an outward landing pad.
 - `cor` is used in a non-abutted configuration, or signal routing is attempted
   to one of the interior via taps.
 - A LEF reader/lint or signoff gate requires zero pin/OBS overlap.
@@ -179,8 +225,11 @@ untouched. A read-only simulation of that deletion gave **0 pin/OBS overlaps and
 | Need to edit pad-ring positions or die/core floorplan | **NO** |
 | Need to edit `mask_1x1.gds` | **NO** |
 | `cor` LEF pin/OBS overlap | **WAIVED** — `COR-LEF-PIN-OBS-001`; 13 taps, 1.0192 µm² |
+| `cor` edge-rail outward escape (153 shapes) | **PASS** — 153/153 stubs, 0 metal DRC |
+| `cor` external pad/via landings (24 reps) | **PASS** — 24/24, 0 metal/via DRC |
+| Direct via landing on exposed edge rail | **CONSTRAINT** — no clear direct site; escape, then via |
 | Need GDS or LEF geometry edit | **NO** — waiver accepted; no edge-rail pin is blocked |
-| Remaining work | Router pin-access/DRC revalidation during routing; full precheck after a real assembled GDS |
+| Remaining work | Router pin-access/DRC revalidation during routing (direct via constrained; use landing pad); full precheck after a real assembled GDS |
 
 ## Limitations
 
@@ -190,8 +239,11 @@ full precheck still has to run on the eventual `chip_top.gds`; that is not a
 pad-ring or floorplan edit.
 
 The `cor` waiver is based on direct LEF/GDS geometry, not a router pin-access
-run. It covers only the LEF pin/OBS abstraction; it does not waive physical DRC
-or LVS. The full assembled-ring DRC/LVS/precheck remains to be run.
+run. The focused check in this record adds a DRC-only escape/external-via
+result; it is not router signoff and does not cover full-chip DRC, LVS, RCX, or
+EM/IR. It covers only the LEF pin/OBS abstraction and the tested synthetic
+metal/via geometries. The full assembled-ring DRC/LVS/precheck remains to be
+run.
 
 The temporary 0fe PDK volume used for this comparison was removed after the
 comparison. No project file other than the recorded baseline artifacts and

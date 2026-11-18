@@ -1,7 +1,8 @@
 # Stage 1 — Toolchain and PDK verification
 
 **Status: PASS — RE-PINNED TO CIEL/Open_PDKs `792ef670…` AND OPENROAD
-`dcf36133…`.** The Stage 0 identity was updated to the versions already present
+`dcf36133…`; `cor` PIN-ACCESS EVIDENCE RECORDED.** The Stage 0 identity was
+updated to the versions already present
 in the pinned flow image. No synthesis, P&R, DRT, stream-out, ECO insertion, or
 RCX has run. The submission package remains **VOID — DO NOT SUBMIT**; G0 and G2
 remain `BLOCKED`.
@@ -98,6 +99,9 @@ Full record:
 | Pad cell footprints | 75 × 350 µm in both; fill and 355 × 355 µm corner unchanged |
 | LEF `PAD` pin | 0fe 25 × 25 µm → 792 60 × 60 µm; LEF-only change |
 | 792 `cor` LEF pin/OBS waiver | **`COR-LEF-PIN-OBS-001`** — interior via taps only; edge-rail pins exposed; no edits |
+| `cor` edge-rail outward escape | **PASS** — 153/153 exposed shapes, 0 metal DRC |
+| `cor` external pad/via landings | **PASS** — 24/24 representatives, 0 metal/via DRC |
+| Direct via on exposed edge rail | **CONSTRAINT** — no clear direct site; escape to landing pad |
 | Pad-ring edit required | **NO** |
 | Floorplan edit required | **NO** |
 | `mask_1x1.gds` edit required | **NO** |
@@ -106,6 +110,16 @@ The 792 `cor` LEF also contains 13 pin/OBS overlaps documented as
 `COR-LEF-PIN-OBS-001` in the pad-ring record. That is a LEF-only waiver: the
 overlap is confined to interior via taps, all edge-rail pins remain exposed, and
 no GDS or floorplan edit is required.
+
+The focused pin-access evidence is in the same pad-ring record: all 153 exposed
+edge shapes escaped with 0 metal DRC violations. The narrow
+**DVDD Metal5 north** shape is 0.38 µm wide and passed at that width; the 792
+metal deck's M5.1 minimum is 0.28 µm. If the 0.44 µm tech-LEF M5 width is a hard
+signoff constraint, confirm this single pin separately. A 24-point external
+pad/Via3/Via4 test passed with 0 metal/via DRC violations. A direct via landing
+on the exposed edge metal is not available at the tested locations (dense
+existing via arrays; no 0.40 µm-keepout clear site), so fan out to a landing pad
+before via placement. This is DRC evidence only, not router signoff.
 
 The precheck pad check is `input(37,0).and(mask).xor(mask)`; it reads GDS layer
 37/0, not the LEF `PAD` pin. Both PDK versions supply the 60 × 60 µm GDS openings
@@ -133,6 +147,7 @@ definitions, 229 macros, and one `END LIBRARY`.
 | `rules.openrcx.gf180mcuD.{nom,min,max}` present/readable | `PASS` (at `libs.tech/librelane/`) |
 | OpenROAD build equals Stage 0 `dcf3613…` | `PASS` |
 | Pad-ring/mask comparison; no edits required | `PASS` |
+| `cor` pin-access escape/external-via evidence | `PASS` (direct via constrained) |
 | Stage 1 gate | **MET** |
 | Synthesis / P&R / DRT / stream-out / RCX | `NOT_RUN` |
 | Stage 2 | `NOT_STARTED` |
@@ -159,3 +174,5 @@ docker run --rm "$REF" sh -lc 'sha256sum "$PDK/gf180mcuD/libs.tech/librelane/rul
 
 The only flow-adjacent commands were read-only version/path/hash probes and the
 OpenROAD `help` check. No design database was read and no flow step was invoked.
+The focused `cor` pin-access check was also read-only; its synthetic layouts were
+written only to `/tmp`, and the project GDS was not modified.
