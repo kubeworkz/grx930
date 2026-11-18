@@ -120,7 +120,7 @@ must be parameterized with `G0_DROPS=<N>` before it is used on this baseline;
 - `floorplan=ONE` (`slot_1x1`; 3932 × 5122)
 - `pdk=PINNED` (`792ef670…`; re-pinned 2026-11-18)
 - `flow_image=PINNED_BY_DIGEST`, present locally
-- `stage1=PASS` (`dcf3613…`; RCX and pad/mask checks pass)
+- `stage1=PASS` (`dcf3613…`; RCX and pad/mask checks pass; host readiness PASS on the 197 GiB production volume)
 - `stage2=NOT_STARTED` (no synthesis or P&R run)
 - `eco_count=TO_BE_DERIVED`
 - `G0=BLOCKED`, `G2=BLOCKED`, package=`VOID — DO NOT SUBMIT`
@@ -129,8 +129,10 @@ Stage 1 pulled the pinned flow image and verified the in-image CIEL/Open_PDKs
 `792ef…` PDK, OpenROAD `dcf3613…`, and `rules.openrcx.gf180mcuD.{nom,min,max}`.
 The pad-ring/mask comparison is in
 `build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md`; it requires no
-pad-ring or floorplan edit. This is a qualified identity freeze, but not a
-production signoff.
+pad-ring or floorplan edit. The explicit host readiness gate is **PASS** on the
+production volume; see
+`build/production/baseline/stage1/STAGE1_READINESS.txt`. Stage 2 has not been
+started. This is a qualified identity freeze, but not a production signoff.
 
 ## Verification
 

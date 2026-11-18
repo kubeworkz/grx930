@@ -1,8 +1,8 @@
 # Stage 1 toolchain and PDK pins
 # date_utc=2026-11-18
-# status=PASS
-# reason=repinned_to_ciel_open_pdks_792_openroad_dcf
-# gate=MET
+# status=TOOLCHAIN_PASS_STAGE1_READY
+# reason=repinned_to_ciel_open_pdks_792_openroad_dcf; stage1_readiness_passed_on_prod_volume
+# gate=PASS
 # synthesis=NOT_RUN
 # place_and_route=NOT_RUN
 # rcx=NOT_RUN
@@ -74,6 +74,25 @@ rcx.min.sha256=5cf275c985ffd49096407d22891910fea34aff5a915db8a5b9a7c1e04b737e00
 rcx.max.path=/workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.max
 rcx.max.bytes=31286
 rcx.max.sha256=0ee103cf2108f2fd945087551b6dd1eaf4ee55af60571de2983878c8a271515f
+
+stage1.readiness=PASS
+stage1.readiness.record=/mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt
+stage1.readiness.repository_copy=build/production/baseline/stage1/STAGE1_READINESS.txt
+stage1.readiness.generated_utc=2026-11-18T04:12:16Z
+stage1.readiness.host=ubuntu-32gb-fsn1-1
+stage1.readiness.command=/home/ubuntu/grx930/c930/asic_gf180mcu/build/stage1_readiness.sh --volume /mnt/HC_Volume_107515356/grx930_ol2 --record /mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt
+stage1.memory.pre_drt_need_mb=12288
+stage1.memory.drt_arm_need_mb=8192
+stage1.memory.available_mb=29179
+stage1.memory.source=MemAvailable
+stage1.memory.pre_drt=PASS
+stage1.memory.drt_arm=PASS
+stage1.disk.volume=/mnt/HC_Volume_107515356/grx930_ol2
+stage1.disk.available_gb=197
+stage1.disk.need_gb=150
+stage1.disk=PASS
+stage1.resource_gate=PASS
+stage1.gate_rule=requires STAGE1_READINESS.txt status=PASS
 
 padring.slot=slot_1x1
 padring.slot_sha256=cb47d6bb0e23d802c7b1fd54307880be466a3e6a09622222d47d73601a26b5a9

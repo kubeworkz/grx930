@@ -1,5 +1,5 @@
-# Fresh-baseline input manifest — Stage 0 re-pinned; Stage 1 pass, cor pin-access evidence, and M5 MT.1 resolution 2026-11-18.
-# status=STAGE1_PASS_REPINNED_CIEL792_OPENROAD_DCF
+# Fresh-baseline input manifest — Stage 0 re-pinned; Stage 1 host readiness passed (197 GiB free) 2026-11-18.
+# status=STAGE1_READINESS_PASS
 # stage0_status=STAGE0_FROZEN_REPINNED
 # stage0_identity=build/production/baseline/stage0/IDENTITY.md
 # flow_image=ghcr.io/wafer-space/gf180mcu-precheck@sha256:104d9ccbc0d3e4bbffba6201b7f68cd8f64d064b5b9072b64a3a4c926d46339f
@@ -13,7 +13,13 @@
 # stage1_record=build/production/baseline/stage1/STAGE1_VERIFICATION.md
 # stage1_pad_ring_mask_record=build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
 # stage1_toolchain=build/production/baseline/stage1/toolchain_versions.txt
-# stage1_gate=MET
+# stage1_readiness_record=build/production/baseline/stage1/STAGE1_READINESS.txt
+# stage1_resource_gate=PASS
+# stage1_memory_pre_drt_need_mb=12288
+# stage1_memory_drt_arm_need_mb=8192
+# stage1_disk_need_gb=150
+# stage1_gate=PASS
+# stage1_gate_rule=REQUIRES_STAGE1_READINESS_STATUS_PASS
 # stage1_pdk_expected=792ef67037d74c8c51811eab3ce23cf793491296
 # stage1_pdk_image_ciel=792ef67037d74c8c51811eab3ce23cf793491296
 # stage1_pdk_image_open_pdks=792ef67037d74c8c51811eab3ce23cf793491296
@@ -47,7 +53,7 @@
 # via_source=cells.lef (56 VIA definitions); artifact=NOT_USED
 # rtl_tree_sha256=7c4d919b1950033089a2a43b8be729defb9ff50e2a50873865552b76f85049b9
 # rtl_files=40
-8d0b253473e4bf07b08515ae9ccdf66ab79d62115537c0aabe236715610f4e46 *build/production/baseline/stage0/IDENTITY.md
+41979b6a78c7588bdc1008f3729755811a456321a708a3471e0deb8151656db6 *build/production/baseline/stage0/IDENTITY.md
 ce8d3d81b7442104afefc44f31b4c94f9e904099b76ab22a09b0a91af4bc9781 *build/production/baseline/stage0/netlist_sha256.txt
 2e35833d4adc80560f81dce9a13f0f5b1f437e134e8a0c095b2f16c46a3910c9 *c930/asic_gf180mcu/wafer_space_integration/grx930_overrides.yaml
 cb9fd56896f184fd435f133b3bef370d8825f2ebf97a1ed880da5bbb1e29f00b *c930/asic_gf180mcu/wafer_space_integration/pdn_cfg_grx930.tcl
@@ -58,6 +64,7 @@ cb47d6bb0e23d802c7b1fd54307880be466a3e6a09622222d47d73601a26b5a9 *c930/asic_gf18
 fe6019f5e105d83fbe2979796fa55e2620c11ef159c12982f5fdb01a863f43e5 *c930/asic_gf180mcu/tools/gf180mcu-project-template/src/chip_top.sv
 ca0395c63097c57543942c01793ec423b73fe558745507677e2e65e6d83b79dc *c930/asic_gf180mcu/tools/gf180mcu-project-template/src/slot_defines.svh
 842b186318d53844561af4ec530b4e30d8ba519bcc58d512a363ef255acc7abd *c930/asic_gf180mcu/build/tech.lef
+881b565ca8735767519d8732a30a896fbc656fe1b1bbb526a82d45eea6e0bee4 *c930/asic_gf180mcu/build/stage1_readiness.sh
 3a60c20f788fb14c6034c39490b4169418a7db3b5dfcbb791b1e137a115a5248 *c930/asic_gf180mcu/build/cells.lef
 918955160002012d54d307273545bd72fe7e3ec4009efce02b7c2235a2fbaf67 *c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
 c4221175934f7175d836c0673891e9b37267850617861bdf5fec67723d1e9397 *c930/asic_gf180mcu/tools/lvs_chip/stream_out.py
@@ -66,7 +73,8 @@ fa1ac7cdd9501dd441d3ddd05dab95dd591026384feb5ebec9361f7db26d1be0 *c930/asic_gf18
 23224df78126c662d8370e0c73990ff0f1c63decc6b21351f0afbfc764b30bbe *c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py
 685ab89d0dbf9442bc6eee3986ab8b999d7fbc0ef58dafe3cb5d81747ea3c806 *c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py
 5bdf411939e719e3b3f905cc1ddceb8e52a92bbd267c84f4baa930e5a18b2017 *c930/asic_gf180mcu/tools/lvs_chip/net_compare.py
-9aa5500e4751fa18f92504a6f04fa679505fb68eb93b465a17a3af83734b3568 *build/production/baseline/stage1/STAGE1_VERIFICATION.md
-b4ee38883ad764cf1669b9ca6dc9c04f5473e690823051f6728c32b962650772 *build/production/baseline/stage1/toolchain_versions.txt
+319616db94804f8a2c9c0f12c44d53ecf00e5d2a7e56bc912f7520565751dbec *build/production/baseline/stage1/STAGE1_VERIFICATION.md
+ad1c62f618a17156bf5e1079ea7102760f6534f060b2c77a325a9cd2d29e9cf5 *build/production/baseline/stage1/toolchain_versions.txt
+74436adb24f8db9d37747920fbbbde30f82b2abd7029e62e8bc22a3a431ecfd7 *build/production/baseline/stage1/STAGE1_READINESS.txt
 6699dcdd770b572415f6477f77a11c25557f581d25acc84dcbb7d093fd6fe9c2 *build/production/baseline/stage1/PAD_RING_MASK_COMPARISON.md
 c41b99cd71421244f331d5d623bc97ff1bb116051c18cbe4cbdd12d97927f514 *build/production/logs/stage1_pull_retry2.log

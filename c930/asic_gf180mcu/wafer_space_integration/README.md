@@ -50,15 +50,20 @@ sh wafer_space_integration/run_adapter_lint.sh
 
 ## Assembling and running
 
-**Engine: use the pre-check image for both steps.** The flow box (`ubuntu@49.13.6.8`,
-`/home/ubuntu/grx930_ol2`) has no nix, and the OpenLane2 2.3.10 image the OL2 investigation
-uses cannot run this template at all: its flow list is `Optimizing / Classic / VHDLClassic /
-OpenIn* / SynthesisExploration` and the strings `PadRing` / `PAD_SOUTH` appear nowhere in
-the installed package — OpenLane2 2.3.x has no pad-ring step (it does support
-`substituting_steps`, and its meta versions stop at 2, so the template's `meta.version: 3`
-is also a mismatch).
+**Engine: use the pre-check image for both steps.** The production flow box is
+`ubuntu@2.31.100.64` (`ubuntu-32gb-fsn1-1`, aarch64): source checkout
+`/home/ubuntu/grx930`, deployed flow root `/mnt/HC_Volume_107515356/grx930_ol2`
+(mounted as `/work`), and local image `gf180mcu-precheck:arm64`. The old x86 path
+`ubuntu@49.13.6.8:/home/ubuntu/grx930_ol2` is retired: that host has no `_ol2`
+checkout. The flow box has no nix, and the OpenLane2 2.3.10 image the OL2
+investigation uses cannot run this template at all: its flow list is
+`Optimizing / Classic / VHDLClassic / OpenIn* / SynthesisExploration` and the
+strings `PadRing` / `PAD_SOUTH` appear nowhere in the installed package —
+OpenLane2 2.3.x has no pad-ring step (it does support `substituting_steps`, and
+its meta versions stop at 2, so the template's `meta.version: 3` is also a
+mismatch).
 
-`ghcr.io/wafer-space/gf180mcu-precheck` is the right environment: its `flake.nix` builds a
+`gf180mcu-precheck:arm64` is the right environment: its `flake.nix` builds a
 `librelane-shell` from `github:librelane/librelane/dev` (LibreLane + klayout + magic +
 openroad + yosys + `ciel`, plus `gnumake` and `procps`, which the open_pdks density deck
 shells out to), pins it in `flake.lock`, and clones the `gf180mcuD` PDK into the image
@@ -69,8 +74,23 @@ If the pinned `librelane/dev` ever disagrees with the template's config schema, 
 fallback is the LibreLane image (`ghcr.io/librelane/librelane`) with `ciel enable` for the
 PDK; what is *not* worth trying is bending the configs down to 2.3.10.
 
-Staging (paths as the flow expects; `asic_core/` is the tapeout RTL minus the two unused
-ROM modules):
+**Stage 2 production prerequisite.** Do not launch `ws_exec.sh` until the gate has
+been run on the production host and writes `status=PASS` with
+`disk.available_gb >= 150`:
+
+```
+bash /home/ubuntu/grx930/c930/asic_gf180mcu/build/stage1_readiness.sh \
+  --volume /mnt/HC_Volume_107515356/grx930_ol2 \
+  --record /mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt
+```
+
+The production flow root now records **197 GiB free and `status=PASS`**, so the
+readiness prerequisite is met. Stage 2 remains unlaunched until the owner starts
+it. The gate script is installed in the source checkout.
+
+Staging (paths as the flow expects; `_ol2` is the deployed flow root, while
+`/home/ubuntu/grx930` is the source checkout; `asic_core/` is the tapeout RTL
+minus the two unused ROM modules):
 
 ```
 ws/template/            <- gf180mcu-project-template checkout
@@ -81,14 +101,14 @@ ws/template/asic_core/*.sv      <- c930/asic_gf180mcu/openlane2_rtl/src minus c9
 ws/template/fill/*.rb   <- wafer_space_integration/fill/*.rb   (KLAYOUT_FILLER_SCRIPT points here)
 ```
 
-Run (container side), once the version question above is settled:
+Run on the production host with a fresh tag, after the readiness gate passes:
 
 ```
-openlane --run-tag ws_v1 --pdk gf180mcuD --manual-pdk \
-    librelane/slots/slot_1x1.yaml \
-    librelane/macros/macros_5v.yaml \
-    librelane/config.yaml \
-    librelane/grx930_overrides.yaml
+docker run --rm --user 0:0 \
+    -v /mnt/HC_Volume_107515356/grx930_ol2:/work \
+    -e WS_TAG=prod_stage2_01 \
+    -e WS_LIMIT=OpenROAD.STAMidPNR-3 \
+    gf180mcu-precheck:arm64 /work/ws/ws_exec.sh
 ```
 
 That staging list's last line is not optional: `grx930_overrides.yaml` sets `KLAYOUT_FILLER_SCRIPT` to
@@ -134,9 +154,9 @@ against the failed step's own `state_in.json` — the exact ODB GRT was handed �
 knob changed, and prints the outcome off the step's own log:
 
 ```
-docker run --rm --user 0:0 -v /home/ubuntu/grx930_ol2:/work \
+docker run --rm --user 0:0 -v /mnt/HC_Volume_107515356/grx930_ol2:/work \
     -e PROBE_TAG=grt_probe_it1 -e GRT_OVERFLOW_ITERS=1 \
-    ghcr.io/wafer-space/gf180mcu-precheck /work/ws/probe_grt.sh
+    gf180mcu-precheck:arm64 /work/ws/probe_grt.sh
 ```
 
 Measured that way on 2026-10-13 against `ws_v3`'s frozen step-37 state (each arm ~7 min,

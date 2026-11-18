@@ -1,7 +1,7 @@
-# Stage 1 — Toolchain and PDK verification
+# Stage 1 — Toolchain, PDK, and host readiness verification
 
-**Status: PASS — RE-PINNED TO CIEL/Open_PDKs `792ef670…` AND OPENROAD
-`dcf36133…`; `cor` PIN-ACCESS EVIDENCE AND M5 WIDTH RULE RESOLVED.** The Stage 0 identity was
+**Status: PASS — PDK/RCX/IMAGE AND PIN CHECKS PASS; STAGE 1 RESOURCE READINESS
+GATE PASSES ON THE PRODUCTION HOST (197 GiB FREE).** The Stage 0 identity was
 updated to the versions already present
 in the pinned flow image. No synthesis, P&R, DRT, stream-out, ECO insertion, or
 RCX has run. The submission package remains **VOID — DO NOT SUBMIT**; G0 and G2
@@ -65,6 +65,42 @@ The `.nom.magic`, `.min.magic`, and `.max.magic` variants are also present. Thes
 hashes are unchanged from the earlier image inspection; `0fe` and `792` RCX files
 were previously found byte-identical. **RCX presence/readability is PASS.**
 Extraction itself has not run.
+
+## Resource readiness — PASS
+
+`c930/asic_gf180mcu/build/stage1_readiness.sh` is the explicit host gate. It
+records the values and exits non-zero unless both memory floors and the volume
+floor pass. The production target is `ubuntu@2.31.100.64`
+(`ubuntu-32gb-fsn1-1`, aarch64), with source checkout
+`/home/ubuntu/grx930` and deployed flow root
+`/mnt/HC_Volume_107515356/grx930_ol2`.
+
+The gate was run there on 2026-11-18:
+
+| Check | Required | Recorded | Result |
+|---|---:|---:|---|
+| Pre-DRT available memory | 12 GiB (12,288 MiB) | 29,179 MiB (`MemAvailable`) | **PASS** |
+| DRT-arm available memory | 8 GiB (8,192 MiB) | 29,179 MiB (`MemAvailable`) | **PASS** |
+| Flow volume free | 150 GiB | 197 GiB | **PASS** |
+
+The production record is at
+`/mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt`
+and ends `status=PASS`. It is also copied to
+`build/production/baseline/stage1/STAGE1_READINESS.txt` as the repository-side
+production record; the earlier Windows/MSYS control is replaced.
+
+The source checkout contains `stage1_readiness.sh`. Run the gate from there on
+the target host:
+
+```bash
+ssh ubuntu@2.31.100.64
+bash /home/ubuntu/grx930/c930/asic_gf180mcu/build/stage1_readiness.sh \
+  --volume /mnt/HC_Volume_107515356/grx930_ol2 \
+  --record /mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt
+```
+
+Do not mark Stage 1 `MET` without a `STAGE1_READINESS.txt` record whose final
+`status` is `PASS`. The production record now satisfies that condition.
 
 ## Toolchain pins
 
@@ -151,20 +187,27 @@ definitions, 229 macros, and one `END LIBRARY`.
 | OpenROAD build equals Stage 0 `dcf3613…` | `PASS` |
 | Pad-ring/mask comparison; no edits required | `PASS` |
 | `cor` pin-access escape/external-via evidence | `PASS` (`MT.1` 0.44 µm; direct via constrained) |
-| Stage 1 gate | **MET** |
+| Pre-DRT memory ≥ 12 GiB | **PASS** — 29,179 MiB on production host |
+| DRT-arm memory ≥ 8 GiB | **PASS** — 29,179 MiB on production host |
+| Flow volume ≥ 150 GiB | **PASS** — 197 GiB recorded on production host |
+| Stage 1 gate | **MET — production readiness record `status=PASS`** |
 | Synthesis / P&R / DRT / stream-out / RCX | `NOT_RUN` |
 | Stage 2 | `NOT_STARTED` |
 | G0 / G2 | `BLOCKED` / `BLOCKED` |
 | Package | `VOID — DO NOT SUBMIT` |
 
-Stage 2 may start under this re-pinned identity when authorized. It has not been
-started. Stage 8 RCX remains a later step and must run against this exact image,
+The target production host has passed `stage1_readiness.sh`, and this record is
+`status=PASS`. Stage 2 has not been started. Stage 8 RCX remains a later step and must run against this exact image,
 PDK, and OpenROAD build; no RCX result is claimed here.
 
 ## Evidence
 
 Machine-readable pins and hashes:
 `build/production/baseline/stage1/toolchain_versions.txt`.
+Host readiness evidence: the production record at
+`/mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt`,
+with a repository-side copy at
+`build/production/baseline/stage1/STAGE1_READINESS.txt`.
 
 Key commands (run with `MSYS_NO_PATHCONV=1` on this Windows host):
 

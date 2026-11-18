@@ -1,0 +1,19 @@
+# Stage 1 readiness gate
+generated_utc=2026-11-18T04:12:16Z
+host=ubuntu-32gb-fsn1-1
+platform=Linux 7.0.0-43-generic aarch64
+memory_source=MemAvailable
+mem.total_mb=31260
+mem.available_mb=29179
+mem.free_mb=3894
+mem.swapfree_mb=0
+mem.pre_drt_need_mb=12288
+mem.pre_drt=PASS
+mem.drt_arm_need_mb=8192
+mem.drt_arm=PASS
+disk.volume=/mnt/HC_Volume_107515356/grx930_ol2
+disk.available_gb=197
+disk.need_gb=150
+disk=PASS
+status=PASS
+reason=none

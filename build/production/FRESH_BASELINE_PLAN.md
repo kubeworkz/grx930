@@ -1,7 +1,8 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
-**Status: STAGE 1 PASS — RE-PINNED TO CIEL 792ef… / OpenROAD dcf3613…; NO FLOW
-STARTED.** The Stage 0 pin is `build/production/baseline/stage0/IDENTITY.md`.
+**Status: STAGE 1 PASS — PDK/RCX/IMAGE CHECKS PASS; PRODUCTION HOST
+READINESS PASSES (197 GiB FREE); NO FLOW STARTED.** The Stage 0 pin is
+`build/production/baseline/stage0/IDENTITY.md`.
 No synthesis, place-and-route, DRT, stream-out, ECO insertion, or RCX command has
 been run for this plan. The submission package remains **VOID — DO NOT SUBMIT**.
 
@@ -38,6 +39,29 @@ and the fixtures must take `N` as a parameter; the 8,168 fixtures remain
 historical/synthetic controls only. If the project requires exactly 8,168, the
 path is to recover the old database, not to run this plan.
 
+## 1.2 Production host and checkout path
+
+The production target verified on 2026-11-18 is:
+
+- **Host:** `ubuntu@2.31.100.64` (`ubuntu-32gb-fsn1-1`, aarch64; 31,260 MiB
+  total memory).
+- **Source checkout:** `/home/ubuntu/grx930` (git branch
+  `npu/shim-tile-model`; synchronize the intended source before staging).
+- **Flow root:** `/mnt/HC_Volume_107515356/grx930_ol2`; this is the deployed
+  tree mounted at `/work`, not a git checkout. It contains `ws/`, `build/`, and
+  `openlane2_rtl/`.
+- **Flow image:** `gf180mcu-precheck:arm64`, the local aarch64 build of the
+  pinned pre-check image.
+
+The old assumption `ubuntu@49.13.6.8:/home/ubuntu/grx930_ol2` is retired. The x86
+host does not have that path; it has only an old `/home/ubuntu/grx930` checkout,
+and its root filesystem has 36 GiB free (its auxiliary volume has 4.3 GiB).
+
+No host may start Stage 2 until the readiness gate in the Stage 2 section writes
+`status=PASS` for `/mnt/HC_Volume_107515356/grx930_ol2` with
+`disk.available_gb >= 150`. That gate now records **197 GiB free and
+`status=PASS`**. Stage 2 has not been started.
+
 ## 2. Existing assets to reuse
 
 | Purpose | Path | Notes |
@@ -59,9 +83,10 @@ path is to recover the old database, not to run this plan.
 | PDK cell GDS | `c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds` | `stream_out.py` and `pdn_stitch.py` read cell layouts from it |
 | G0/G2 | `build/production/run/{g0_freeze.sh,g2_lvs.sh,gds_checks.rb,def_gds_checks.rb}` | die, count, paths, and the row-300 box are hardcoded |
 
-**Toolchain status:** `ghcr.io/wafer-space/gf180mcu-precheck` is present locally at
-the pinned OCI index digest. Stage 1 pulled it and verified the in-image CIEL
-`792ef…` PDK, OpenROAD `dcf3613…`, and RCX rules. The local
+**Toolchain status:** the production ARM flow box has
+`gf180mcu-precheck:arm64` at the pinned pre-check identity. Stage 1 pulled and
+verified the in-image CIEL `792ef…` PDK, OpenROAD `dcf3613…`, and RCX rules.
+The retired x86 image reference is not the production flow target. The local
 `openlane2-gf180mcu:latest` and `ghcr.io/efabless/openlane2:2.3.10` images are
 not the full-chip flow image.
 
@@ -112,12 +137,13 @@ comparison; see `baseline/stage1/STAGE1_VERIFICATION.md` and
 
 ### Stage 1 — Toolchain and PDK readiness
 
-**Result 2026-11-18: PASS — re-pinned.** The pinned image was pulled and
-inspected read-only. Stage 0 was moved to its CIEL/Open_PDKs `792ef…` PDK and
-OpenROAD `dcf3613…`; the RCX rules are present at
-`gf180mcuD/libs.tech/librelane/`. The 0fe→792 pad-ring/mask comparison found the
-GDS pad-opening layer identical and requires no pad-ring or floorplan edit. Full
-records: `baseline/stage1/STAGE1_VERIFICATION.md` and
+**Result 2026-11-18: PASS — PDK/RCX re-pin PASS; production host readiness
+passes on the volume-backed flow root.** The pinned image was pulled and inspected read-only. Stage 0 was
+moved to its CIEL/Open_PDKs `792ef…` PDK and OpenROAD `dcf3613…`; the RCX rules
+are present at `gf180mcuD/libs.tech/librelane/`. The 0fe→792 pad-ring/mask
+comparison found the GDS pad-opening layer identical and requires no pad-ring or
+floorplan edit. Full records: `baseline/stage1/STAGE1_VERIFICATION.md`,
+`baseline/stage1/STAGE1_READINESS.txt`, and
 `baseline/stage1/PAD_RING_MASK_COMPARISON.md`.
 
 - Pull and pin the full-chip image by index digest, not a tag:
@@ -130,29 +156,53 @@ records: `baseline/stage1/STAGE1_VERIFICATION.md` and
   run.
 - Pin `ghcr.io/efabless/openlane2:2.3.10` (fill/stream/stitch/CDL) and
   `grx930/klayout-lvs-pmap:local` (G2 deck).
-- Apply `c930/asic_gf180mcu/build/gate.sh`: at least 12 GB free RAM for pre-DRT,
-  8 GB for a DRT arm, and ~150 GB of volume.
+- Run the explicit host gate on the production host, against
+  `/mnt/HC_Volume_107515356/grx930_ol2`:
 
-Output: `toolchain_versions.txt` and `STAGE1_VERIFICATION.md` (librelane,
-OpenROAD, KLayout, image digests, PDK path, RCX hashes, pad-ring/mask comparison,
-and the pass verdict).
+  ```bash
+  /home/ubuntu/grx930/c930/asic_gf180mcu/build/stage1_readiness.sh \
+    --volume /mnt/HC_Volume_107515356/grx930_ol2 \
+    --record /mnt/HC_Volume_107515356/grx930_ol2/build/production/baseline/stage1/STAGE1_READINESS.txt
+  ```
+
+  The script is present in the source checkout. It requires at least 12 GiB
+  available memory for pre-DRT, 8 GiB for a DRT arm, and 150 GiB free on the
+  volume. The production run records 29,179 MiB available (both memory floors
+  PASS) and 197 GiB free (`disk=PASS`), with `status=PASS`. The flow-chain
+  `gate.sh` remains the per-arm launch guard, not a substitute for this Stage 1
+  record.
+
+Output: `toolchain_versions.txt`, `STAGE1_READINESS.txt`, and
+`STAGE1_VERIFICATION.md` (librelane, OpenROAD, KLayout, image digests, PDK path,
+RCX hashes, host readiness, pad-ring/mask comparison, and the pass verdict).
 
 Gate: the exact RCX rule files and OpenROAD build are readable **and match the
-frozen pin**; a version bump restarts the baseline. This gate is **MET**. Stage 2
-has not been started.
+frozen pin**, and `STAGE1_READINESS.txt` has `status=PASS`. A version bump or a
+resource-gate failure restarts the Stage 1 check. The current production record
+is **PASS** (197 GiB free volume), so this gate is **MET**. Stage 2 has not been
+started.
 
 ### Stage 2 — RTL through global route to a pre-DRT ODB
 
-The container mount root is `c930/asic_gf180mcu`, **not the repository root**:
-`ws_exec.sh` does `cd /work/ws/template`, and the RTL tree is at
-`/work/openlane2_rtl`.
+**Prerequisite — passing production readiness gate.** Do not run any command in
+this section until the gate above writes a record ending `status=PASS` and
+`disk.available_gb >= 150` for `/mnt/HC_Volume_107515356/grx930_ol2`. The
+production volume now records 197 GiB free and `status=PASS`; this section
+remains unlaunched until the owner explicitly starts Stage 2.
+
+The container mount root is the deployed flow root
+`/mnt/HC_Volume_107515356/grx930_ol2`, **not the source checkout and not the
+repository root**: `ws_exec.sh` does `cd /work/ws/template`, and the RTL tree is
+at `/work/openlane2_rtl`.
 
 Stage the template exactly:
 
 ```bash
 set -e
-FLOW=c930/asic_gf180mcu
-STAGE="$FLOW/ws/.template.stage"
+SRC=${SRC:-/home/ubuntu/grx930}
+ROOT=${ROOT:-/mnt/HC_Volume_107515356/grx930_ol2}
+FLOW="$SRC/c930/asic_gf180mcu"
+STAGE="$ROOT/ws/.template.stage"
 
 # ws/template is generated by this block; do not keep local edits there. Build
 # the new tree beside the live one, validate it, then swap it in. Re-running the
@@ -188,8 +238,8 @@ test -f "$STAGE/librelane/pdn/pdn_cfg_grx930.tcl"
 [ "$(ls "$STAGE/asic_core"/*.sv | wc -l)" -eq 38 ]
 [ "$(grep -c '^  gf180mcu' "$STAGE/librelane/macros/macros_grx930.yaml")" -eq 5 ]
 
-rm -rf "$FLOW/ws/template"
-mv "$STAGE" "$FLOW/ws/template"
+rm -rf "$ROOT/ws/template"
+mv "$STAGE" "$ROOT/ws/template"
 ```
 
 `grx930_overrides.yaml` declares `VERILOG_FILES` as `../src/chip_top.sv`,
@@ -197,14 +247,14 @@ mv "$STAGE" "$FLOW/ws/template"
 `dir::pdn/pdn_cfg_grx930.tcl`, which is why the PDN file goes under
 `librelane/pdn/`. `ws_exec.sh` writes `src/generated_defines.svh` itself.
 
-Run with a fresh tag:
+Run on the production host with a fresh tag:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm --user 0:0 \
-  -v "$(cygpath -m c930/asic_gf180mcu):/work" \
-  -e WS_TAG=prod01 \
+docker run --rm --user 0:0 \
+  -v /mnt/HC_Volume_107515356/grx930_ol2:/work \
+  -e WS_TAG=prod_stage2_01 \
   -e WS_LIMIT=OpenROAD.STAMidPNR-3 \
-  ghcr.io/wafer-space/gf180mcu-precheck /work/ws/ws_exec.sh
+  gf180mcu-precheck:arm64 /work/ws/ws_exec.sh
 ```
 
 `WS_TAG` must be fresh; resuming an old tag reuses its netlist. `STAMidPNR-3` is
@@ -215,14 +265,15 @@ diodes and lets the step write its database. Treat that as a recorded condition,
 not a silent pass, and archive the antenna log.
 
 Output: the ODB named by the newest
-`ws/template/librelane/runs/prod01/*/state_out.json`; copy it to
+`ws/template/librelane/runs/prod_stage2_01/*/state_out.json`; copy it to
 `build/production/baseline/pre_drt.odb` and keep the state file.
 
 Gate:
 - `resolved.json` shows `GRT_ADJUSTMENT: 0.1` and `DRT_OPT_ITERS: 8`; the GRT log
   contains `Global adjustment: 10%`.
-- PDN inserted once; macro-instance check passes; the antenna step either
-  completed cleanly or its GRT-0183 was caught and the ODB was written.
+- No `GRT-0183` appears in any step log. A caught occurrence is a failure under
+  this gate; archive the log and stop rather than accepting the ODB.
+- PDN inserted exactly once; macro-instance check passes.
 - Cell count and die match the frozen manifest.
 
 ### Stage 3 — Complete detailed routing
@@ -580,8 +631,8 @@ Gate: G0 signed; G2 completes with 0 mismatches; report and netlist archived.
 | Runtime | full flow to pre-DRT days; DRT 1.5–10+ days per pass; fill/stream/stitch hours; LVS ~100 min; DRC ~10 min; RCX hours/corner; STA corners hours | dedicated machine, one baseline tag, checkpoint every step |
 | Identity drift | legacy synth netlist, audit DEF, and die database; stale 3930×5120 references vs the 3932×5122 authority; unsupported keys `FP_DIE_AREA`/`DRT_ALLOW_CONGESTION` in the 2.3.10 log | Stage 0 freezes one RTL entry and 3932×5122; old synthesized netlists are excluded; use supported keys |
 | RCX rules absent locally | local PDK `RCX_RULES` is empty; Stage 1 found the image rules at `gf180mcuD/libs.tech/librelane/`, with hashes in `stage1/toolchain_versions.txt` | use the verified `librelane` path; do not use the stale `openlane` path |
-| Precheck image present | Stage 1 pulled the pinned index digest; image ID and size are in `stage1/STAGE1_VERIFICATION.md` | image is present and the 792/dcf Stage 1 gate is met; Stage 2 not started |
-| PDK/OpenROAD identity | Stage 0 re-pinned to image CIEL/Open_PDKs `792ef…` and OpenROAD `dcf3613…`; no `volare`; pad ring/mask comparison found no edits | Stage 1 gate MET; use only these pins; Stage 2 not started |
+| Precheck image present | Stage 1 pulled the pinned index digest; image ID and size are in `stage1/STAGE1_VERIFICATION.md` | image present; PDK/RCX checks pass; host readiness gate PASS; Stage 2 not started |
+| PDK/OpenROAD identity | Stage 0 re-pinned to image CIEL/Open_PDKs `792ef…` and OpenROAD `dcf3613…`; no `volare`; pad ring/mask comparison found no edits | use only these pins; the production readiness gate is PASS |
 | Signoff | no Gridworkz connector; G1 DFT/ATPG absent; G3 waiver and G4 STA/power open | external signoff; do not claim a pass without receipts |
 
 ## 6. Planning envelope
