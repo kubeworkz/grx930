@@ -683,7 +683,7 @@ docker run --rm --user 0:0 \
   -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 \
   -e FAST_TCL=/work/drt_fast/die_drt.tcl \
   -e FAST_OPENROAD=openroad \
-  gf180mcu-precheck:arm64 /work/drt_fast/run_drt.sh
+  gf180mcu-precheck:arm64 bash /work/drt_fast/run_drt.sh
 ```
 
 `FAST_OPENROAD=openroad` resolves through the image entrypoint's nix-shell
@@ -691,6 +691,27 @@ docker run --rm --user 0:0 \
 exist here. Run `docker run --rm \
 gf180mcu-precheck:arm64 sh -lc 'command -v openroad'` first if the name is not
 found.
+
+The container command must be `bash /work/drt_fast/run_drt.sh`, not the bare
+script path: `run_drt.sh` starts with `#!/bin/bash`, the image has no
+`/bin/bash`, and Docker then fails before the script runs with
+`.../run_drt.sh: bad interpreter: No such file or directory` (rc 126). `bash`
+resolves only through the entrypoint's nix-shell `PATH`. The first probe launch
+on 2026-11-19 failed exactly that way; prefixing `bash` fixed it.
+
+**Probe result — 2026-11-19, tag `prod01_drt`, `FAST_END_ITER=2`.** The probe ran
+with `drt_curve_guard.sh` attached and exited rc=0 on a decreasing curve:
+iteration 0 **398,816** violations, iteration 1 **255,218**, iteration 2
+**246,191**. It ran 04:52–05:48Z. Output
+`drt_fast/out/prod01_drt/prod01_drt.odb` (387,500,774 B, sha256
+`dbd06e3e595bc416c418eb43312384573254c12cf80ddbea5f9a352b124680be`); the router
+log and `.drc` sit beside it, the command is `stage3/PROBE_CMD.txt`, and the
+curve, ODB hash and input hash are in `stage3/probe/`. The guard recorded no
+stop. **Gate: FAIL** — 246,191 violations remain, so the probe is not a routed
+production baseline and Stage 3 cannot exit on it. The last iteration removed
+only 3.7%, so the 8-iteration pass is expected to lower the count without
+reaching 0; unless it does, Stage 3 requires a numbered, owner-signed waiver
+naming the residual count and categories.
 
 Run the same with `FAST_END_ITER=8` and a **new tag** (`prod01_drt8`) only after
 the probe shows a decreasing violation curve; `die_drt.tcl` writes
