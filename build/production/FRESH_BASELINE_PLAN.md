@@ -617,18 +617,21 @@ named by `41-openroad-stamidpnr-3/state_out.json` before accepting Stage 3.
 
 Precondition — measured and **met** on
 `build/production/baseline/stage2/ss_setup_fix/pass4/pre_drt_sssetup4.odb`
-(sha256 `dc2d325b…c0eb0`). Both corners were re-measured on 2026-11-19 with
-global-route parasitics asserted inside the STA process; ss setup now closes and
-both holds are clean.
+(sha256 `dc2d325b…c0eb0`), the ODB Stage 3 seeds from (`FAST_ODB` below points
+at it). Both corners were re-measured on 2026-11-19 with global-route parasitics
+asserted inside the STA process (guarded `corner.tcl`, `grt::have_routes`): ss
+setup **+0.050768 ns** with **0 endpoints**, ff setup **+7.775756 ns**, ff hold
+**+0.101570 ns**, both clean.
 
 **Database chain.** `build/production/baseline/pre_drt.odb`
 (sha256 `c76785bf…54dc`) → ss-targeted resize (`stage2/ss_closure/`, 12 buffers,
 220 resizes) → `pre_drt_ss.odb` (`1bcba3a9…e7d11`) → one ff hold buffer
-(`stage2/ff_hold_fix/`) → `pre_drt_ffhold.odb` (`c44b2ec6…047f5`). That database
-still failed ss setup — `WNS -1.763 ns` over 6 endpoints, archived in
-`stage2/sta_odb_ffhold/` — so it was not launchable. The unrepaired
-`pre_drt.odb` was worse still (`WNS -5.845 ns`, `TNS -2380.47 ns`, 1,915
-endpoints), archived in `stage2/sta_odb/`.
+(`stage2/ff_hold_fix/`) → `pre_drt_ffhold.odb` (`c44b2ec6…047f5`) → ss-targeted
+repair, pass 4 (`stage2/ss_setup_fix/pass4/`) → **`pre_drt_sssetup4.odb`**
+(`dc2d325b…c0eb0`), the launch database. The pre-repair corner measurements on
+`pre_drt_ffhold.odb` and on the unrepaired `pre_drt.odb` are retained in
+`stage2/sta_odb_ffhold/` and `stage2/sta_odb/`; the guarded pass-4 result below
+supersedes both.
 
 **ss setup repair.** `stage2/ss_setup_fix/` ran the flow's resizer sequence
 targeted at `nom_ss_125C_4v50`: refresh the global routes, `estimate_parasitics
