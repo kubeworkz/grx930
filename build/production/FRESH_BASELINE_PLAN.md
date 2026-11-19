@@ -615,25 +615,46 @@ named by `41-openroad-stamidpnr-3/state_out.json` before accepting Stage 3.
 
 ### Stage 3 — Complete detailed routing
 
-Precondition — measured, and **not met at ss**. The re-measure required above was
-run on 2026-11-18 against `build/production/baseline/pre_drt.odb`
-(sha256 `c76785bf…54dc`) with the flow's own `sta/corner.tcl`, the same
-`chip_top.sdc` (sha256 `0885ff0e…d2e6`), a propagated clock and global-route
-parasitics. Results: `nom_ss_125C_4v50` **fails setup** at `WNS -5.845 ns`,
-`TNS -2380.47 ns`, 1,915 violating endpoints (1,475 reg-to-reg) and
-`period_min 42.73 ns` (23.40 MHz); `nom_ff_n40C_5v50` **passes** at `WS +6.871 ns`
-with 0 setup endpoints. Hold remains at 2 input endpoints on `bidir_PAD[0]` and
-`bidir_PAD[6]` at both corners. The reports are archived in
-`build/production/baseline/stage2/sta_odb/` and the result is recorded in
+Precondition — measured. **ss setup now closes** on the ss-repaired database
+`build/production/baseline/stage2/ss_closure/pre_drt_ss.odb`
+(sha256 `1bcba3a9…e7d11`), produced from `build/production/baseline/pre_drt.odb`
+(sha256 `c76785bf…54dc`) by one resizer pass targeted at `nom_ss_125C_4v50`. That
+re-measure was run on 2026-11-18 against the unrepaired ODB with the flow's own
+`sta/corner.tcl`, the same `chip_top.sdc` (sha256 `0885ff0e…d2e6`), a propagated
+clock and global-route parasitics: `nom_ss_125C_4v50` failed setup at
+`WNS -5.845 ns`, `TNS -2380.47 ns`, 1,915 violating endpoints (1,475 reg-to-reg)
+and `period_min 42.73 ns` (23.40 MHz), while `nom_ff_n40C_5v50` passed at
+`WS +6.871 ns`. Those reports are archived in
+`build/production/baseline/stage2/sta_odb/`.
+
+The repair reused the flow's `rsz_timing_postcts.tcl` with only that corner, and
+with the pre-repair `estimate_parasitics` switched from `-placement` to
+`-global_routing` so it optimized the same model the verification STA measures.
+It ran setup and hold repair, then detailed placement, and inserted 12 setup
+buffers with 220 resizes (area +0.1%).
+
+The repeat two-corner STA was run on 2026-11-19 against `pre_drt_ss.odb` with the
+same SDC, propagated clock and global-route parasitics, one `sta/corner.tcl`
+process per corner. Results:
+
+- `nom_ss_125C_4v50`: setup **passes** — `WNS 0`, `TNS 0`, worst slack
+  `+0.012 ns`, **0 violating endpoints**; `period_min 38.83 ns` (25.75 MHz).
+  Hold passes at `+1.381 ns`.
+- `nom_ff_n40C_5v50`: setup **passes** at `WS +7.718 ns` with 0 setup endpoints;
+  hold has **one** input endpoint at `-0.023 ns` (`bidir_PAD[0]`), improved from
+  two at `-0.986 ns` but not clean.
+
+Reports are archived in `build/production/baseline/stage2/sta_odb_ssfix/` with a
+`SUMMARY.txt`, and the result is recorded in
 `build/production/baseline/stage2/EXIT_REPORT.txt`.
 
-So the `STA_PREPNR` re-measure step is **satisfied** and Stage 3 is blocked on
-**ss setup closure**, not on missing data. Closing it needs a resizer/slew pass
-targeted at `nom_ss_125C_4v50` (the buffers in this ODB were sized against tt
-alone; worst residual path is `_379778_/Q → u_riscv_core_csr_unit.mstatus[8]`,
-fanout 35, with 5.87 ns of clock insertion, and 3,076 max-fanout violations
-remain), then a repeat of the same two-corner STA. Do not launch Stage 3 on the
-current ODB.
+So the `STA_PREPNR` re-measure step is **satisfied** and the ss setup blocker on
+Stage 3 is **cleared** for `pre_drt_ss.odb`. Three caveats bound that close: the
+ss setup margin is 12 ps and has not been through RCX or crosstalk; the ff hold
+endpoint at -23 ps is still open; and the new buffers have no global-route
+guides, so re-run global routing before DRT. Slew, fanout and cap violations are
+untouched (85,955 / 3,083 / 3,953 at ss). Launch Stage 3 on `pre_drt_ss.odb`, not
+on the unrepaired `pre_drt.odb`, and only with explicit approval.
 
 Stage `c930/asic_gf180mcu/drt_fast` at `/work/drt_fast` in the image; the runner
 hardcodes `D=/work/drt_fast` and its default `FAST_OPENROAD` is a build-machine
@@ -643,7 +664,7 @@ Nix path. Set `FAST_OPENROAD` to the OpenROAD binary inside the precheck image.
 MSYS_NO_PATHCONV=1 docker run --rm --user 0:0 \
   -v "$(cygpath -m c930/asic_gf180mcu):/work" \
   -e FAST_TAG=prod01_drt \
-  -e FAST_ODB=/work/build/production/baseline/pre_drt.odb \
+  -e FAST_ODB=/work/build/production/baseline/stage2/ss_closure/pre_drt_ss.odb \
   -e FAST_END_ITER=2 -e FAST_THREADS=8 \
   -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 \
   -e FAST_TCL=/work/drt_fast/die_drt.tcl \
