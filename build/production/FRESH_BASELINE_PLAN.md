@@ -713,6 +713,20 @@ only 3.7%, so the 8-iteration pass is expected to lower the count without
 reaching 0; unless it does, Stage 3 requires a numbered, owner-signed waiver
 naming the residual count and categories.
 
+**Full-pass result — 2026-11-19, tag `prod01_drt8`, `FAST_END_ITER=8`.** Seeded
+from the same pre-DRT ODB and run under the same guard. It started 05:49:29Z and
+exited rc=0 at 08:36:56Z (2 h 47 m). Violations by iteration: 398,816 → 255,218 →
+246,191 → **67,819 → 31,754 → 16,800 → 8,826 → 5,416 → 3,805**. The guard
+recorded no stop and retired only when the container was gone. Output
+`drt_fast/out/prod01_drt8/prod01_drt8.odb` (393,195,240 B, sha256
+`1bd7e7e23991f6484f42300535323489187cb76a0148cc4d07294f15d593ff07`), with
+`prod01_drt8.drc` beside it (11,415 lines). Peak memory was 8.9 GB. **Gate:
+FAIL** — 3,805 violations remain and none were waived, so this is not a routed
+production baseline; nothing was copied to
+`build/production/baseline/routed.odb`. Stage 3 needs a numbered, owner-signed
+waiver naming the residual count and categories, or a further arm seeded from
+this ODB.
+
 Run the same with `FAST_END_ITER=8` and a **new tag** (`prod01_drt8`) only after
 the probe shows a decreasing violation curve; `die_drt.tcl` writes
 `$FAST_OUT/$FAST_TAG.odb`, so reusing the probe tag would overwrite the probe.
