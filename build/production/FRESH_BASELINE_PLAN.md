@@ -1,11 +1,11 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
-**Status: STAGE 1 PASS — PDK/RCX/IMAGE CHECKS PASS; PRODUCTION HOST
-READINESS PASSES (197 GiB FREE); STAGE 2 STAGING REHEARSED LOCALLY; NO FLOW
-STARTED.** The Stage 0 pin is
-`build/production/baseline/stage0/IDENTITY.md`.
-No synthesis, place-and-route, DRT, stream-out, ECO insertion, or RCX command has
-been run for this plan. The submission package remains **VOID — DO NOT SUBMIT**.
+**Status: STAGE 3 PASS — DETAILED ROUTING REACHED 0 VIOLATIONS (tag
+`prod01_drt16`, clean at iteration 11); Stage 0–2 records remain below.** The
+Stage 0 pin is `build/production/baseline/stage0/IDENTITY.md`.
+Stage 2 synthesis/place-and-route and Stage 3 DRT have run; no stream-out, ECO
+insertion, or RCX command has been run for this plan. The submission package
+remains **VOID — DO NOT SUBMIT**.
 
 This creates a **new identity**. It cannot claim `fix59`, `fix70`, the historical
 541-row source, or the current 8,168-drop provenance. The existing submission
@@ -720,12 +720,28 @@ exited rc=0 at 08:36:56Z (2 h 47 m). Violations by iteration: 398,816 → 255,21
 recorded no stop and retired only when the container was gone. Output
 `drt_fast/out/prod01_drt8/prod01_drt8.odb` (393,195,240 B, sha256
 `1bd7e7e23991f6484f42300535323489187cb76a0148cc4d07294f15d593ff07`), with
-`prod01_drt8.drc` beside it (11,415 lines). Peak memory was 8.9 GB. **Gate:
-FAIL** — 3,805 violations remain and none were waived, so this is not a routed
-production baseline; nothing was copied to
-`build/production/baseline/routed.odb`. Stage 3 needs a numbered, owner-signed
-waiver naming the residual count and categories, or a further arm seeded from
-this ODB.
+`prod01_drt8.drc` beside it (11,415 lines). Peak memory was 8.9 GB. **Gate at
+that point: FAIL** — 3,805 violations remained and none were waived; it was
+superseded by the continuation below.
+
+**Continuation result — 2026-11-19, tag `prod01_drt16`, `FAST_END_ITER=16`,
+seeded from `prod01_drt8.odb`.** The launcher
+`build/production/baseline/stage3/launch_pass.sh` was extended with an optional
+third argument so the arm reads the prior database instead of the Stage 2
+pre-DRT ODB; the exact invocation is `stage3/ARM16_CMD.txt`. The arm ran
+17:40:37Z–18:44:44Z (1 h 04 m) and exited rc=0. Violations by iteration:
+3,831 (0th) → 3,829 → 3,831 → 3,004 → 2,550 → 2,046 → 1,642 → 1,426 → 1,267 →
+786 → 109 → 23 → 10 → 9 → 9 → 9 → **0**; the router stopped at iteration 11
+because the route was clean, so the 16-iteration budget was not exhausted. The
+six counts from 23 onward are internal passes of iteration 11. The guard recorded
+`CURVE_CLEAN pass=1 iter=11 count=0` and no stop (`STALL_ITERS=0` was used so the
+plateau rule could not end the asymptote measurement; regression and wall-clock
+bounds stayed armed). Output `drt_fast/out/prod01_drt16/prod01_drt16.odb`
+(392,900,136 B, sha256
+`a433816bded175fec8a66090478399c447fcee2fc686ab79c0d89e3a9a40d07e`) with a
+**0-byte** `prod01_drt16.drc`; a read-back in the flow image reported 337,060
+instances and 244,238 nets. **Gate: MET — 0 DRT violations.** The database was
+copied byte-identically to `build/production/baseline/routed.odb` (same sha256).
 
 Run the same with `FAST_END_ITER=8` and a **new tag** (`prod01_drt8`) only after
 the probe shows a decreasing violation curve; `die_drt.tcl` writes
@@ -735,18 +751,22 @@ per-iteration and per-pass wall time. Do not use the last ODB if the curve
 diverged; the guard exists because the router writes the last database, not the
 best one.
 
-Output: `/work/drt_fast/out/prod01_drt/prod01_drt.odb` for the probe and
-`/work/drt_fast/out/prod01_drt8/prod01_drt8.odb` for the full pass; copy the
-latter to `build/production/baseline/routed.odb` and keep the DRT log and curve.
+Output: `/work/drt_fast/out/prod01_drt/prod01_drt.odb` for the probe,
+`/work/drt_fast/out/prod01_drt8/prod01_drt8.odb` for the 8-iteration pass, and
+`/work/drt_fast/out/prod01_drt16/prod01_drt16.odb` for the continuation. The
+continuation ODB is copied byte-identically to
+`build/production/baseline/routed.odb` (sha256
+`a433816b…a40d07e`); keep the DRT logs and curves.
 
-Gate: **0 DRT violations**, or a numbered, owner-signed waiver. A nonzero count is
-not a routed production baseline. `DRT-RESIDUE-001` below is the draft waiver for
-the 2026-11-19 residue; it is not in force until signed and dated.
+Gate: **MET** on `prod01_drt16.odb` — **0 DRT violations**, with a 0-byte
+`prod01_drt16.drc`. The earlier 3,805-violation result is superseded.
+`DRT-RESIDUE-001` below is **withdrawn** (never signed) and retained only as a
+record of the residue before the continuation.
 
-**Waiver `DRT-RESIDUE-001` — Stage 3 detailed-route residue (DRAFT, awaiting
-signature).** Recorded 2026-11-19 against the completed 8-iteration pass, not the
-probe. It covers only the database and count below and is a development-stage
-continuation waiver, **not** a manufacturing or tape-out waiver.
+**Waiver `DRT-RESIDUE-001` — WITHDRAWN, never signed (superseded by the
+zero-violation `prod01_drt16` pass).** Recorded 2026-11-19 against the completed
+8-iteration pass, not the probe. It is retained only as a record of the residue
+that the continuation removed; it is not in force and covers nothing.
 
 - Database: `drt_fast/out/prod01_drt8/prod01_drt8.odb`, sha256
   `1bd7e7e23991f6484f42300535323489187cb76a0148cc4d07294f15d593ff07`, routed from
