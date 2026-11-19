@@ -740,7 +740,54 @@ Output: `/work/drt_fast/out/prod01_drt/prod01_drt.odb` for the probe and
 latter to `build/production/baseline/routed.odb` and keep the DRT log and curve.
 
 Gate: **0 DRT violations**, or a numbered, owner-signed waiver. A nonzero count is
-not a routed production baseline.
+not a routed production baseline. `DRT-RESIDUE-001` below is the draft waiver for
+the 2026-11-19 residue; it is not in force until signed and dated.
+
+**Waiver `DRT-RESIDUE-001` — Stage 3 detailed-route residue (DRAFT, awaiting
+signature).** Recorded 2026-11-19 against the completed 8-iteration pass, not the
+probe. It covers only the database and count below and is a development-stage
+continuation waiver, **not** a manufacturing or tape-out waiver.
+
+- Database: `drt_fast/out/prod01_drt8/prod01_drt8.odb`, sha256
+  `1bd7e7e23991f6484f42300535323489187cb76a0148cc4d07294f15d593ff07`, routed from
+  `pre_drt_sssetup4.odb` (`dc2d325b…0eb0`) with OpenROAD `dcf36133…`, Metal1–Metal5,
+  8 threads, `or_seed 42`.
+- Residual: **3,805** detailed-route violations (DRT-0199 / `prod01_drt8.drc`),
+  **0.95%** of the first-iteration count, on a monotone decreasing curve with no
+  guard stop.
+- Categories and layers (router classes, not foundry deck rule IDs):
+
+| Router class | Count | Layers |
+|---|---:|---|
+| Short | 3,295 | Metal2 2,033; Metal3 844; Metal4 367; Metal5 36; Metal1 15 |
+| Metal Spacing | 503 | Metal2 281; Metal3 134; Metal5 51; Metal4 28; Metal1 9 |
+| NS Metal | 4 | Metal2 4 |
+| Cut Spacing | 2 | Via2 1; Via3 1 |
+| Cut Short | 1 | Via2 1 |
+| **Total** | **3,805** | Metal2 2,318; Metal3 978; Metal4 395; Metal5 87; Metal1 24; Via2 2; Via3 1 |
+
+- Composition: 1,976 distinct shorted net pairs (767 of them carry more than one
+  marker); 134 shorts
+  involve a `clknet_*` net and 126 involve VDD or VSS (VSS in 79, VDD in 47).
+  Shorts span x 578.9–2,008.6 µm, y 1,097.8–3,736.0 µm; the densest 500 µm cells
+  are x 500–1,000 / y 2,000–2,500 with 777, x 1,500–2,000 / y 1,000–1,500 with
+  571, and x 1,000–1,500 / y 2,000–2,500 with 434.
+- Basis for acceptance at Stage 3: the pass converged monotonically with the guard
+  attached, every marker is enumerated in the `.drc`, and the residue is confined
+  to detailed routing. This unblocks Stage 4 route QA and GDS assembly for
+  development.
+- What this waiver does **not** assert: that the database is DRC-clean,
+  electrically functional, manufacturable or tape-out ready. The 3,295 shorts are
+  electrical failures, and 134/126 of them touch clock/power nets. It does not
+  cover full-deck DRC (KLayout/GF deck), LVS, antenna, STA/power/IR/EM, or any
+  later database, and it is void if the ODB or count changes.
+- Conditions: (1) Stage 4 records this residue as known and does not present the
+  resulting GDS as DRC-clean; (2) any further DRT arm or ECO supersedes this
+  waiver and requires a new count; (3) foundry/tape-out acceptance needs its own
+  numbered waiver on the final GDS; (4) the waiver is re-validated if the router,
+  deck, seed, layer range or input ODB changes.
+- Owner signature: ______________________________  Date: ____________
+  Design lead: ______________________________  Date: ____________
 
 ### Stage 4 — Route QA, then build the pre-ECO GDS
 
