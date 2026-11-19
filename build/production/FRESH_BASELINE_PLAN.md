@@ -675,22 +675,22 @@ hardcodes `D=/work/drt_fast` and its default `FAST_OPENROAD` is a build-machine
 Nix path. Set `FAST_OPENROAD` to the OpenROAD binary inside the precheck image.
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm --user 0:0 \
-  -v "$(cygpath -m c930/asic_gf180mcu):/work" \
+docker run --rm --user 0:0 \
+  -v /mnt/HC_Volume_107515356/grx930_ol2:/work \
   -e FAST_TAG=prod01_drt \
   -e FAST_ODB=/work/build/production/baseline/stage2/ss_setup_fix/pass4/pre_drt_sssetup4.odb \
   -e FAST_END_ITER=2 -e FAST_THREADS=8 \
   -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 \
   -e FAST_TCL=/work/drt_fast/die_drt.tcl \
   -e FAST_OPENROAD=openroad \
-  ghcr.io/wafer-space/gf180mcu-precheck /work/drt_fast/run_drt.sh
+  gf180mcu-precheck:arm64 /work/drt_fast/run_drt.sh
 ```
 
 `FAST_OPENROAD=openroad` resolves through the image entrypoint's nix-shell
 `PATH`; the script's own default is a build-machine store path that does not
-exist here. Run `MSYS_NO_PATHCONV=1 docker run --rm \
-ghcr.io/wafer-space/gf180mcu-precheck sh -lc 'command -v openroad'` first if
-the name is not found.
+exist here. Run `docker run --rm \
+gf180mcu-precheck:arm64 sh -lc 'command -v openroad'` first if the name is not
+found.
 
 Run the same with `FAST_END_ITER=8` and a **new tag** (`prod01_drt8`) only after
 the probe shows a decreasing violation curve; `die_drt.tcl` writes
@@ -712,9 +712,9 @@ not a routed production baseline.
 Export the routed DEF and the post-route Verilog from the ODB in the flow image:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "$(cygpath -m .):/work" -w /work \
-  ghcr.io/wafer-space/gf180mcu-precheck openroad -no_init -exit <<'EOF'
+docker run --rm \
+  -v /mnt/HC_Volume_107515356/grx930_ol2:/work -w /work \
+  gf180mcu-precheck:arm64 openroad -no_init -exit <<'EOF'
 read_db /work/build/production/baseline/routed.odb
 write_def /work/build/production/baseline/routed.def
 write_verilog /work/build/production/baseline/grx930_test_chip_routed.v
@@ -725,19 +725,25 @@ Build the CDL from that netlist and check the routed DEF against it. This is als
 the CDL G0/G2 will freeze, so build it here rather than at the end:
 
 ```bash
+SRC=/home/ubuntu/grx930_stage2
+ROOT=/mnt/HC_Volume_107515356/grx930_ol2
 runpy() {
-  MSYS_NO_PATHCONV=1 docker run --rm \
-    -v "$(cygpath -m .):/work" -w /work \
+  docker run --rm \
+    -v "$ROOT:/work" -v "$SRC:/src" -w /work \
     --entrypoint python3 ghcr.io/efabless/openlane2:2.3.10 "$@"
 }
+# $SRC is the clean Stage 2 worktree; $ROOT is the flow volume. The Stage 0
+# inputs (c930/asic_gf180mcu/build/cells.lef and
+# build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds) must be staged under $SRC first: on
+# 2026-11-19 neither existed on the production host.
 # The flow top is chip_top; the GDS top (and the deck's `topcell`) is
 # grx930_test_chip. Add `--top` to mk_chip_cdl.py so the CDL's .SUBCKT matches
 # the layout, instead of renaming the netlist or the deck.
-runpy c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py \
   --routed /work/build/production/baseline/grx930_test_chip_routed.v \
   --top grx930_test_chip \
   --out /work/build/production/baseline/grx930_test_chip.cdl
-runpy c930/asic_gf180mcu/tools/lvs_chip/net_compare.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/net_compare.py \
   --def /work/build/production/baseline/routed.def \
   --cdl /work/build/production/baseline/grx930_test_chip.cdl \
   --json /work/build/production/baseline/net_compare.json
@@ -756,9 +762,9 @@ them into a supplemental LEF; do not relax `stream_out.py` and do not read the
 artifact. Run `promote_def_vias.py` (§4) after route export:
 
 ```bash
-runpy c930/asic_gf180mcu/tools/lvs_chip/promote_def_vias.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/promote_def_vias.py \
   --def /work/build/production/baseline/routed.def \
-  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --lef /src/c930/asic_gf180mcu/build/cells.lef \
   --out /work/build/production/baseline/routed_vias.lef
 ```
 
@@ -799,24 +805,24 @@ refusal; it reads no design or artifact.
 Then build the pre-ECO GDS in the documented order:
 
 ```bash
-runpy c930/asic_gf180mcu/tools/lvs_chip/fill_def.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/fill_def.py \
   --def /work/build/production/baseline/routed.def \
-  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --lef /src/c930/asic_gf180mcu/build/cells.lef \
   --out /work/build/production/baseline/filled.def
-runpy c930/asic_gf180mcu/tools/lvs_chip/stream_out.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/stream_out.py \
   --def /work/build/production/baseline/filled.def \
-  --lef /work/c930/asic_gf180mcu/build/cells.lef \
+  --lef /src/c930/asic_gf180mcu/build/cells.lef \
   --lef /work/build/production/baseline/routed_vias.lef \
   --routing def --out /work/build/production/baseline/pre_eco_stream.gds
-runpy c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py \
   --def /work/build/production/baseline/filled.def \
   --gds /work/build/production/baseline/pre_eco_stream.gds \
   --out-gds /work/build/production/baseline/pre_eco.gds \
   --report /work/build/production/baseline/strap_report.json
-runpy c930/asic_gf180mcu/tools/lvs_chip/stream_check.py \
+runpy /src/c930/asic_gf180mcu/tools/lvs_chip/stream_check.py \
   --gds /work/build/production/baseline/pre_eco.gds \
   --def /work/build/production/baseline/filled.def \
-  --lib /work/c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
+  --lib /src/c930/asic_gf180mcu/build/lvs_chip/pdk_fd_sc_mcu7t5v0.gds
 ```
 
 `stream_out.py` reads the PDK cell GDS for cell layouts and the LEF's `VIA`
