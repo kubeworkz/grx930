@@ -615,71 +615,60 @@ named by `41-openroad-stamidpnr-3/state_out.json` before accepting Stage 3.
 
 ### Stage 3 — Complete detailed routing
 
-Precondition — measured, **not met**. Both corners are now measured on the
-database Stage 3 would use, but ss setup does **not** close. That measurement
-supersedes an earlier "+0.012 ns" claim, which came from a silent parasitics
-fallback (below) and is withdrawn.
+Precondition — measured and **met** on
+`build/production/baseline/stage2/ss_setup_fix/pass4/pre_drt_sssetup4.odb`
+(sha256 `dc2d325b…c0eb0`). Both corners were re-measured on 2026-11-19 with
+global-route parasitics asserted inside the STA process; ss setup now closes and
+both holds are clean.
 
-**Database.** `build/production/baseline/stage2/ff_hold_fix/pre_drt_ffhold.odb`
-(sha256 `c44b2ec6…047f5`) descends from
-`build/production/baseline/stage2/ss_closure/pre_drt_ss.odb`
-(sha256 `1bcba3a9…e7d11`), which one resizer pass targeted at `nom_ss_125C_4v50`
-produced from `build/production/baseline/pre_drt.odb`
-(sha256 `c76785bf…54dc`). That pass reused the flow's `rsz_timing_postcts.tcl`
-with only that corner and with the pre-repair `estimate_parasitics` switched from
-`-placement` to `-global_routing`, then ran setup and hold repair, detailed
-placement, and inserted 12 setup buffers with 220 resizes (area +0.1%). A second
-targeted pass (`stage2/ff_hold_fix/`) then ran `repair_timing -hold` at margin
-0.05 ns for `nom_ff_n40C_5v50` only, inserted **one** hold buffer, performed
-detailed placement, and made no setup repair and no other netlist change. Global
-routing was restored before and after each placement, so the saved ODB carries
-complete guides.
+**Database chain.** `build/production/baseline/pre_drt.odb`
+(sha256 `c76785bf…54dc`) → ss-targeted resize (`stage2/ss_closure/`, 12 buffers,
+220 resizes) → `pre_drt_ss.odb` (`1bcba3a9…e7d11`) → one ff hold buffer
+(`stage2/ff_hold_fix/`) → `pre_drt_ffhold.odb` (`c44b2ec6…047f5`). That database
+still failed ss setup — `WNS -1.763 ns` over 6 endpoints, archived in
+`stage2/sta_odb_ffhold/` — so it was not launchable. The unrepaired
+`pre_drt.odb` was worse still (`WNS -5.845 ns`, `TNS -2380.47 ns`, 1,915
+endpoints), archived in `stage2/sta_odb/`.
 
-The earlier reference point, run on 2026-11-18 against the unrepaired
-`pre_drt.odb` with the flow's own `sta/corner.tcl`, the same `chip_top.sdc`
-(sha256 `0885ff0e…d2e6`), a propagated clock and global-route parasitics, was
-`nom_ss_125C_4v50` setup `WNS -5.845 ns`, `TNS -2380.47 ns`, 1,915 violating
-endpoints (1,475 reg-to-reg), `period_min 42.73 ns` (23.40 MHz) and
-`nom_ff_n40C_5v50` `WS +6.871 ns`; archived in
-`build/production/baseline/stage2/sta_odb/`.
+**ss setup repair.** `stage2/ss_setup_fix/` ran the flow's resizer sequence
+targeted at `nom_ss_125C_4v50`: refresh the global routes, `estimate_parasitics
+-global_routing`, one `repair_timing -setup`, detailed placement, then global
+route again. Each GRT run is followed by a hard `grt::have_routes` assertion, so
+no pass optimized on placement parasitics. The saved database is pass 4 (100
+resizes, no new buffers); passes 1–3 and one discarded run that repaired at the
+wrong corner are retained in the same directory and marked superseded, not used.
 
-**Model correction — the withdrawn +0.012 ns claim.** The 2026-11-19 00:14
-two-corner STA on `pre_drt_ss.odb` (archived in
-`build/production/baseline/stage2/sta_odb_ssfix/`) reported ss worst slack
-`+0.012 ns` with 0 endpoints, and an earlier revision of this section recorded
-that as closure. It is **not** a global-route result. The resizer's inserted
-buffers had invalidated the global routes in that ODB, so `sta/corner.tcl`'s
-`[grt::have_routes]` test was false and it silently substituted
-`estimate_parasitics -placement`, with no error or warning. The report is a
-placement-parasitics artifact, not signoff, and must not be cited as an ss pass.
-Any corner measured on a database that has been through placement must first
-assert `grt::have_routes` (or re-run `common/grt.tcl`) rather than trust that
-fallback.
+**Guarded two-corner STA — `pre_drt_sssetup4.odb`.** `stage2/sta_odb_sssetup/`
+runs `corner_guarded.tcl`, the flow `corner.tcl` plus one inserted block that
+aborts with an error when `[grt::have_routes]` is false; the exact delta is
+`corner_guarded.diff`, and both `sta.log`s print `global_routes_asserted=true`.
+One process per corner, the same `chip_top.sdc` (sha256 `0885ff0e…d2e6`),
+propagated clock, OpenROAD `dcf36133…`:
 
-**Authoritative two-corner STA — `pre_drt_ffhold.odb`, complete global routes.**
-Run 2026-11-19 with the flow's own `sta/corner.tcl`, one process per corner, the
-same SDC, a propagated clock and `estimate_parasitics -global_routing`; the saved
-ODB was confirmed to have complete global routes. Reports, `or_metrics_out.json`
-and `SUMMARY.txt` are archived in
-`build/production/baseline/stage2/sta_odb_ffhold/`:
+- `nom_ss_125C_4v50`: setup **passes** — `WNS 0`, `TNS 0`, worst slack
+  **`+0.050768 ns`**, **0 violating endpoints**; hold **passes** at
+  `+1.421780 ns` with 0 endpoints.
+- `nom_ff_n40C_5v50`: setup **passes** at **`+7.775756 ns`** with 0 endpoints;
+  hold **passes** at **`+0.101570 ns`** with 0 endpoints.
 
-- `nom_ss_125C_4v50`: setup **FAILS** — `WNS -1.763190 ns`, `TNS -1.907380 ns`,
-  **6 violating endpoints**, `period_min 41.76 ns` (23.94 MHz). The worst is
-  `_348729_/Q` → `_380495_/D` at `-1.763 ns`; the other five lie between
-  `-0.095` and `-0.007 ns`. Hold passes with 0 endpoints at `WS +1.422 ns`.
-- `nom_ff_n40C_5v50`: setup **passes** at `WS +7.661 ns` with 0 endpoints; hold
-  **passes** with 0 endpoints at `WS +0.149 ns`, clearing the previous
-  `bidir_PAD[0]` endpoint at `-0.023 ns`. `period_min 19.31 ns` (51.79 MHz).
+Reports, `or_metrics_out.json` and `SUMMARY.txt` are archived in
+`build/production/baseline/stage2/sta_odb_sssetup/`, and the result is recorded
+in `build/production/baseline/stage2/EXIT_REPORT.txt`.
 
-So the `STA_PREPNR` re-measure step is **done** — both corners are measured on
-the pre-DRT database under the verification model — but the Stage 3 precondition
-is **not satisfied**: ff is clean, ss setup is open at `-1.763 ns` over 6
-endpoints. An ss-targeted repair pass on `pre_drt_ffhold.odb` (run, then
-re-verified with global routes restored) is required before launch. Slew, fanout
-and cap violations (89,394 / 3,083 / 3,878 at ss) are untouched, and any ss margin
-has not been through RCX or crosstalk. Launch Stage 3 on `pre_drt_ffhold.odb`,
-never on `pre_drt.odb` or `pre_drt_ss.odb`, only after ss setup closes, and only
-with explicit approval.
+**Model caution — the withdrawn +0.012 ns claim.** The 2026-11-19 00:14 STA on
+`pre_drt_ss.odb` (archived in `stage2/sta_odb_ssfix/`) reported ss `+0.012 ns`
+only because the resizer had invalidated that ODB's global routes and
+`sta/corner.tcl` silently substituted `estimate_parasitics -placement`. That
+figure is a placement-parasitics artifact, never signoff. Any corner measured on
+a database that has been through placement must assert `grt::have_routes` (as
+`corner_guarded.tcl` now does) rather than trust that fallback.
+
+So the `STA_PREPNR` re-measure step is **satisfied** and the Stage 3 precondition
+is **met** on `pre_drt_sssetup4.odb`. Two margins are thin and must be watched:
+ss setup has 50.8 ps and ff hold 101.6 ps, neither through RCX or crosstalk yet.
+Slew, fanout and cap violations are untouched (89,292 / 3,085 / 3,898 at ss).
+Launch Stage 3 on `pre_drt_sssetup4.odb`, never on `pre_drt.odb`,
+`pre_drt_ss.odb` or `pre_drt_ffhold.odb`, and only with explicit approval.
 
 Stage `c930/asic_gf180mcu/drt_fast` at `/work/drt_fast` in the image; the runner
 hardcodes `D=/work/drt_fast` and its default `FAST_OPENROAD` is a build-machine
@@ -689,7 +678,7 @@ Nix path. Set `FAST_OPENROAD` to the OpenROAD binary inside the precheck image.
 MSYS_NO_PATHCONV=1 docker run --rm --user 0:0 \
   -v "$(cygpath -m c930/asic_gf180mcu):/work" \
   -e FAST_TAG=prod01_drt \
-  -e FAST_ODB=/work/build/production/baseline/stage2/ff_hold_fix/pre_drt_ffhold.odb \
+  -e FAST_ODB=/work/build/production/baseline/stage2/ss_setup_fix/pass4/pre_drt_sssetup4.odb \
   -e FAST_END_ITER=2 -e FAST_THREADS=8 \
   -e FAST_MIN_LAYER=Metal1 -e FAST_MAX_LAYER=Metal5 \
   -e FAST_TCL=/work/drt_fast/die_drt.tcl \
