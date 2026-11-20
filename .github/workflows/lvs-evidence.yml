@@ -197,7 +197,16 @@ jobs:
       # Cheap, and it proves the evidence still satisfies the gate that runs on every push.
       - name: The gate's own verdict on the committed report
         if: always()
-        run: bash c930/asic_gf180mcu/build/chip_gates.sh --only lvs-fixture
+        run: |
+          # The gate table declares `python` as lvs-fixture's prerequisite and this runner carries
+          # only python3. lvs_check.sh itself probes python3 first, so a job-local symlink satisfies
+          # the declaration without editing the table or the host.
+          if ! command -v python >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/bin"
+            ln -sf "$(command -v python3)" "$RUNNER_TEMP/bin/python"
+            export PATH="$RUNNER_TEMP/bin:$PATH"
+          fi
+          bash c930/asic_gf180mcu/build/chip_gates.sh --only lvs-fixture
 
       - name: Upload the refreshed report and the harness log
         if: always()
@@ -240,4 +249,4 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/work" --entrypoint sh \
             ghcr.io/efabless/openlane2:2.3.10 \
-            -c 'chown -R '"$(id -u)"':"$(id -g)"' /work'
+            -c "chown -R $(id -u):$(id -g) /work"
