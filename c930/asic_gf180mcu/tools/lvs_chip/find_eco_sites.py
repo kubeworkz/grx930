@@ -9,13 +9,13 @@ The 2x2 drop list used to come from a KLayout L2N database (`/scripts/chip.l2n`)
 extracted from the GDS and read back per net. That file is not in this tree and cannot be
 regenerated from the artifacts that are here, so the finder asks the two sources that do exist:
 
-  * `pre_eco.gds` -- the geometry the fill and stitch passes produced: the M1 islands, the M2
-    routing the strap must keep away from and the `VSS` labels that mark the rows;
+  * `pre_eco.gds` -- the geometry the fill and stitch passes produced: the M1 islands and the M2
+    routing the strap must keep away from;
   * `filled.def` -- the database's own account of the power grid: the VSS/VDD M3 stripes and the
     `filltie` placements that are the substrate taps.
 
 No `chip.l2n`, no L2N netlist, no per-net connectivity: an island is an M1 shape with a filltie
-on it, a row is a VSS label row, and a strip is a DEF special-net stripe.
+on it, a row is a VSS Metal3 stripe of the filled DEF, and a strip is a DEF special-net stripe.
 
 The DEF side is not text-parsed. `read_def_odb.py` runs under `openroad -python`, preflights
 `import odb`, loads the LEF and DEF into OpenDB and hands back the VSS/VDD Metal3 stripe boxes
@@ -29,10 +29,16 @@ The rules are the ones `validate_drop_windows_2x2.rb` applied, kept in micrometr
   * the M2 strap extends 0.45 um past each via centre;
   * no VDD geometry inside the landing or the keepout.
 
-Rows are the `VSS` label rows of the GDS; labels closer than 3 um are one row (the stitched GDS
-is 1 nm/dbu, the old validator's 300 counted its 10 nm dbu). A site is legal when the M2 keepout
-is empty over the whole strap, an M1 island is under the row point and a VSS M3 strip is under
-the strap's other end. Rail-end sites are the ends of the long M1 VSS rails.
+Rows are the VSS Metal3 stripes of the filled DEF: pdn draws one stripe per row band, so the
+stripe centre is the row. The GDS `VSS` texts are counted in the report but are not the row
+source -- in the stitched GDS they are cell-local pin labels (11 distinct y at the origin), not
+top-level net labels, and every one of them would have to be paired with a stripe 460 um away.
+The GDS is read through the cell hierarchy with each instance's transform applied; without it
+every box is in its standard cell's local frame and nothing can ever match the DEF.
+
+A site is legal when the M2 keepout is empty over the whole strap, an M1 island is under the row
+point and a VSS M3 strip is under the strap's other end. Rail-end sites are the ends of the long
+M1 VSS rails.
 
 Output: `eco_sites.csv` (name, x, y, ty, kind) in GDS database units (1 nm), and a report with
 `N_sub + N_rows + N_rail = N`. The DEF writer doubles these for its 2000 dbu/um frame; use
@@ -66,7 +72,6 @@ STRAP_HALF = 0.70           # 1.40 um keepout across the strap
 PAD_Y = 0.45                # M2 extends 0.45 um past each via centre
 M1_HALF, M1_V = 0.45, 0.39  # 0.90 x 0.78 landing
 M3_HALF, M3_V = 0.45, 0.40  # 0.90 x 0.80 landing
-ROW_GAP = 3.0               # labels closer than this are one row
 X_STEP = 5.0                # candidate pitch along a row
 STRIP_MIN_LEN = 100.0       # a stripe/rail must be at least this long
 STRIP_MIN_H, STRIP_MAX_H = 1.0, 2.0
@@ -108,9 +113,12 @@ class BoxIndex:
 def read_gds(path):
     layout = db.Layout()
     layout.read(path)
-    top = layout.top_cell()
-    if top is None:
+    tops = layout.top_cells()
+    if not tops:
         sys.exit(f"find_eco_sites: CANNOT-RUN {path} has no top cell")
+    # A stream-out can leave the via masters as extra top cells. The die is the one with the
+    # largest extent, and it is not always the first; sorting by area makes the pick deterministic.
+    top = max(tops, key=lambda c: (c.bbox().area(), c.name))
 
     shapes = {}
     for name, (ln, dt) in (("m1", M1), ("m2", M2), ("m3", M3)):
@@ -123,42 +131,28 @@ def read_gds(path):
         out = []
         it = top.begin_shapes_rec(li)
         while not it.at_end():
-            b = it.shape().bbox()
+            # The shapes live in the standard cells, the fill cells and the strap cells, not in the
+            # top cell: `begin_shapes_rec` yields them in the child cell's frame, so the instance
+            # transform has to be applied here or every box sits at the origin.
+            t = it.trans()
+            b = it.shape().bbox().transformed(t)
             out.append((b.left, b.bottom, b.right, b.top))
             it.next()
         shapes[name] = out
 
-    # Rows are the net labels drawn in the top cell, the same texts the old validator read; pin
-    # labels inside the standard cells sit on every row and would merge them into one. Fall back
-    # to recursive texts only when the top cell has none.
+    # The VSS texts are cell-local pin labels; they are counted for the report only (rows come from
+    # the DEF stripes). Same transform rule: an untransformed label lands wherever its cell is.
     labels = Counter()
     li = layout.find_layer(*M1_LABEL)
     if li is not None:
-        for recursive in (False, True):
-            if recursive:
-                it = top.begin_shapes_rec(li)
-                while not it.at_end():
-                    shape = it.shape()
-                    if shape.is_text() and shape.text.string.upper() == "VSS":
-                        labels[shape.text.y] += 1
-                    it.next()
-            else:
-                for shape in top.shapes(li):
-                    if shape.is_text() and shape.text.string.upper() == "VSS":
-                        labels[shape.text.y] += 1
-            if labels:
-                break
-    return layout, shapes, labels
-
-
-def vss_rows(label_ys):
-    ys = sorted(label_ys)
-    rows = []
-    for y in ys:
-        if not rows or y - rows[-1][-1] > nm(ROW_GAP):
-            rows.append([])
-        rows[-1].append(y)
-    return [int(round(sum(r) / float(len(r)))) for r in rows]
+        it = top.begin_shapes_rec(li)
+        while not it.at_end():
+            shape = it.shape()
+            if shape.is_text() and shape.text.string.upper() == "VSS":
+                p = it.trans() * db.DPoint(shape.text.x, shape.text.y)
+                labels[int(round(p.y))] += 1
+            it.next()
+    return layout, shapes, labels, top
 
 
 def load_def_facts(args):
@@ -208,12 +202,9 @@ def main():
     args = ap.parse_args()
 
     t0 = time.time()
-    layout, shapes, label_ys = read_gds(args.gds)
+    layout, shapes, label_ys, top = read_gds(args.gds)
     print(f"PHASE read_gds {time.time()-t0:.0f}s shapes=" + str({k: len(v) for k, v in shapes.items()}), flush=True)
     m1, m2, m3 = shapes["m1"], shapes["m2"], shapes["m3"]
-    rows = vss_rows(label_ys.keys())
-    if not rows:
-        sys.exit("find_eco_sites: CANNOT-RUN the GDS has no VSS labels to derive rows from")
 
     facts = load_def_facts(args)
     units = float(facts["def_units"])
@@ -260,6 +251,10 @@ def main():
         vdd_index.add(*box)
     vss_boxes = [(x0, y - nm(1.6) // 2, x1, y + nm(1.6) // 2) for x0, x1, y in vss]
 
+    # One row per VSS stripe, and the row point is the stripe centre itself: pdn puts the stripe
+    # under the row it feeds. (Rows are not the GDS labels; those are cell-local pin texts.)
+    rows = [(y, y) for y in sorted({y for _, _, y in vss})]
+
     def keepout_free(x, y, ty):
         x0, x1 = x - nm(STRAP_HALF), x + nm(STRAP_HALF)
         y0 = min(y, ty) - nm(PAD_Y) - nm(EPS)
@@ -286,21 +281,12 @@ def main():
 
     rails = [b for b in m1
              if b[2] - b[0] >= nm(STRIP_MIN_LEN) and nm(STRIP_MIN_H) <= b[3] - b[1] <= nm(STRIP_MAX_H)]
-    if len(rows) < 2 and rails:
-        # Pin labels sit on every row of every cell and can merge into one band; the rails are the
-        # row pitch then, one row per rail centre.
-        rows = vss_rows(list(label_ys.keys()) + [(b[1] + b[3]) // 2 for b in rails])
-        print(f"PHASE rows_with_rails={len(rows)}", flush=True)
 
     print(f"PHASE rows={len(rows)}", flush=True)
     t0 = time.time()
     sites = []
     row_fail = []
-    for idx, y in enumerate(rows):
-        ty = min(((b[1] + b[3]) // 2 for b in vss_boxes), key=lambda sy: abs(sy - y))
-        if abs(ty - y) > nm(4.0):
-            row_fail.append((y, idx, "no VSS strip within 4 um"))
-            continue
+    for idx, (y, ty) in enumerate(rows):
         found = None
         for bx0, by0, bx1, by1 in islands:
             if by0 > y or by1 < y or bx1 - bx0 < 2 * nm(M1_HALF):
@@ -356,8 +342,10 @@ def main():
         f"odb_module    {facts.get('odb_module', '?')}",
         f"def_units     {facts['def_units']} dbu/um",
         f"dbu_um        {layout.dbu}",
+        f"top_cell      {top.name}",
         f"vss_labels    {sum(label_ys.values())}",
         f"vss_rows      {len(rows)}",
+        f"row_source    DEF VSS Metal3 stripes",
         f"vss_strips    {len(vss)}",
         f"vdd_strips    {len(vdd)}",
         f"fillties      {len(fillties)}",
