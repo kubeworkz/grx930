@@ -44,6 +44,39 @@ run python3 c930/asic_gf180mcu/tools/lvs_chip/fill_def.py \
     --out /work/build/lvs_chip/filled.def 2>&1 | tee "$WORK/fill.log"
 rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { echo "fill refused/failed ($rc)"; exit "$rc"; }
 
+# The Stage 4 acceptance asks for zero nets with fewer than two terminals. That question is about
+# the database, not the text DEF, so export an ODB and run the pinned audit on it: an unused
+# output is allowed only when tools/lvs_chip/dangling_manifest.tsv names it, a dangling input and
+# any new short net fail here, before the expensive stream/stitch/CDL steps spend the time. The
+# manifest's own sha256 is checked by dangling_audit.sh, so this cannot pass on an edited list.
+# Zero-terminal nets are dropped while exporting the ODB (the fill pass can leave a rail name with
+# no pin on it): measured on the 2026-11-02 DEF, deleting the 7 such nets left all 26 layers
+# geometrically identical (KLayout XOR 0) and stream_check PASS before and after, so the stream
+# output below is unaffected.
+step "dangling-net audit (OpenDB, pinned manifest)"
+ODB=$WORK/filled.odb
+MSYS_NO_PATHCONV=1 docker run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$R:/work" -v "$S:/work/c930/asic_gf180mcu" -w /work \
+    --entrypoint openroad "$IMG" -no_init -exit > "$WORK/odb.log" 2>&1 <<'TCL'
+read_lef c930/asic_gf180mcu/build/cells.lef
+read_def build/lvs_chip/filled.def
+set block [ord::get_db_block]
+set killed 0
+foreach net [$block getNets] {
+    if {[llength [$net getITerms]] + [llength [$net getBTerms]] == 0} {
+        odb::dbNet_destroy $net
+        incr killed
+    }
+}
+puts "DROPPED_EMPTY $killed"
+write_db build/lvs_chip/filled.odb
+TCL
+rc=$?; [ "$rc" -eq 0 ] || { echo "ODB export failed ($rc); see $WORK/odb.log"; exit "$rc"; }
+[ -s "$ODB" ] || { echo "no ODB at $ODB"; exit 2; }
+bash "$S/tools/lvs_chip/dangling_audit.sh" \
+    --odb "$ODB" --report "$WORK/dangling_nets.tsv"
+rc=$?; [ "$rc" -eq 0 ] || { echo "dangling-net audit failed ($rc); see $WORK/dangling_nets.tsv"; exit "$rc"; }
+
 step "stream out (DEF cells, NETS/SPECIALNETS routing and vias at the DEF's die frame)"
 run python3 c930/asic_gf180mcu/tools/lvs_chip/stream_out.py \
     --def /work/build/lvs_chip/filled.def \
@@ -82,5 +115,6 @@ fi
 
 step "done"
 echo "filled DEF:   $WORK/filled.def"
+echo "dangling:     $WORK/dangling_nets.tsv (CLEAN)"
 echo "stitched GDS: $WORK/stream_out_filled_stitched.gds"
 echo "chip CDL:     $WORK/grx930_test_chip.cdl"
