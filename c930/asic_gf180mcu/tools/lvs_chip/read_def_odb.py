@@ -11,6 +11,8 @@ It returns, as JSON, everything the finder needs from the database:
 
   * the Metal3 special-net stripe boxes of VSS and VDD (dbSWire geometry, in DEF dbu);
   * the origin of every `*__filltie` instance, the substrate taps;
+  * the height of the site each placement row sits on, so the caller knows the row pitch from the
+    database instead of guessing it from the tap spacing;
   * the DEF database units, so the caller converts to GDS nanometres once.
 
     openroad -python tools/lvs_chip/read_def_odb.py --lef cells.lef --def filled.def --out def.json
@@ -61,6 +63,13 @@ def main():
                 boxes.append([w.xMin(), w.yMin(), w.xMax(), w.yMax()])
         return boxes
 
+    # ROWS are the placement rows themselves; their sites carry the standard-cell row height.
+    row_heights = set()
+    for row in block.getRows():
+        site = row.getSite()
+        if site is not None:
+            row_heights.add(site.getHeight())
+
     fillties = []
     for inst in block.getInsts():
         master = inst.getMaster()
@@ -78,11 +87,14 @@ def main():
         "vss_m3": m3_stripes("VSS"),
         "vdd_m3": m3_stripes("VDD"),
         "fillties": fillties,
+        "row_count": len(block.getRows()),
+        "row_heights": sorted(row_heights),
     }
     with open(args.out, "w") as fh:
         json.dump(data, fh)
     print(f"READ_DEF_ODB units={units} vss_m3={len(data['vss_m3'])} "
-          f"vdd_m3={len(data['vdd_m3'])} fillties={len(fillties)}", flush=True)
+          f"vdd_m3={len(data['vdd_m3'])} fillties={len(fillties)} "
+          f"rows={data['row_count']} row_heights={data['row_heights']}", flush=True)
     return 0
 
 

@@ -37,8 +37,13 @@ The GDS is read through the cell hierarchy with each instance's transform applie
 every box is in its standard cell's local frame and nothing can ever match the DEF.
 
 A site is legal when the M2 keepout is empty over the whole strap, an M1 island is under the row
-point and a VSS M3 strip is under the strap's other end. Rail-end sites are the ends of the long
-M1 VSS rails.
+point and a VSS M3 strip is under the strap's other end. The row point is the stripe centre when
+an island there can hold the 0.90 x 0.78 landing; otherwise it moves onto the nearest island that
+can, by at most half a standard-cell row -- the pitch is the site height of the DEF's own ROWS,
+cross-checked against the filltie rows, and never more than half a stripe band, so the bound
+follows the library instead of a number here. A stripe centre a few nanometres off a pad centre
+would otherwise fail a test the pad itself can pass. Islands are indexed by y, so a row only visits
+the islands that can reach it. Rail-end sites are the ends of the long M1 VSS rails.
 
 Output: `eco_sites.csv` (name, x, y, ty, kind) in GDS database units (1 nm), and a report with
 `N_sub + N_rows + N_rail = N`. The DEF writer doubles these for its 2000 dbu/um frame; use
@@ -77,10 +82,49 @@ STRIP_MIN_LEN = 100.0       # a stripe/rail must be at least this long
 STRIP_MIN_H, STRIP_MAX_H = 1.0, 2.0
 GRID_CELL = 10.0            # M2 / filltie bucket, as in the validator
 EPS = 0.02                  # keepout is strict: no touching geometry
+Y_BUCKET = 1.0              # island y-bucket: an M1 island is about a micrometre tall
 
 
 def nm(v):
     return int(round(v * 1000.0))
+
+
+def tap_gaps(ys):
+    """Smallest and most common gap between adjacent filltie rows, in the caller's units."""
+    rows = sorted(set(ys))
+    gaps = [b - a for a, b in zip(rows, rows[1:]) if b > a]
+    if not gaps:
+        return 0, 0
+    return min(gaps), Counter(gaps).most_common(1)[0][0]
+
+
+def row_pitch(facts, tap_ys, to_nm):
+    """One standard-cell row in nm, plus the line the report should show for where it came from.
+
+    The DEF's ROWS are the authority: a placement row sits on a site, so the site height is the
+    pitch. The taps are the cross-check, because the tap spacing alone cannot tell one row from
+    two -- a DEF that taps only every other row has gaps of 2 rows and no smaller gap to reveal
+    the one it skipped. Without ROWS the taps are all there is, and then an even spacing is
+    refused for that reason rather than used: the bound would silently be two rows again.
+    """
+    heights = sorted({to_nm(h) for h in facts.get("row_heights", []) if h and h > 0})
+    tap_min, tap_mode = tap_gaps(tap_ys)
+    if heights:
+        fits = [h for h in heights
+                if not tap_mode or abs(tap_mode - int(round(tap_mode / float(h))) * h) <= 1]
+        if len(fits) != 1:
+            sys.exit("find_eco_sites: CANNOT-RUN the DEF's ROWS do not agree with its filltie rows "
+                     f"(site heights {heights} nm, tap gaps min {tap_min} mode {tap_mode} nm)")
+        if not tap_mode:
+            return fits[0], "DEF ROWS site height (no filltie rows to check it)"
+        every = int(round(tap_mode / float(fits[0])))
+        return fits[0], f"DEF ROWS site height; fillties every {every} row(s)"
+    if not tap_mode:
+        sys.exit("find_eco_sites: CANNOT-RUN the DEF has no ROWS and no filltie rows")
+    if tap_min < tap_mode:
+        return tap_min, f"smallest filltie gap {tap_min} nm (DEF has no ROWS)"
+    sys.exit("find_eco_sites: CANNOT-RUN the DEF has no ROWS and its fillties are evenly spaced "
+             f"at {tap_mode} nm, which may be more than one row")
 
 
 class BoxIndex:
@@ -108,6 +152,29 @@ class BoxIndex:
                     if r[0] <= x1 and x0 <= r[2] and r[1] <= y1 and y0 <= r[3]:
                         return True
         return False
+
+
+class YIndex:
+    """Bucket boxes by their y extent so a row visits only the shapes that can reach it."""
+
+    def __init__(self, cell_um=Y_BUCKET):
+        self.cell = nm(cell_um)
+        self.grid = {}
+
+    def add(self, box):
+        c = self.cell
+        for ky in range(box[1] // c, box[3] // c + 1):
+            self.grid.setdefault(ky, []).append(box)
+
+    def span(self, y0, y1):
+        """Every box whose y extent touches [y0, y1], each once."""
+        c = self.cell
+        seen = set()
+        for ky in range(y0 // c, y1 // c + 1):
+            for box in self.grid.get(ky, ()):
+                if id(box) not in seen:
+                    seen.add(id(box))
+                    yield box
 
 
 def read_gds(path):
@@ -234,7 +301,9 @@ def main():
     # Islands: M1 shapes with a filltie point on them. No merge, no netlist: a tap is the anchor.
     t0 = time.time()
     islands = [b for b in m1 if fillties and ft_index.hits(b[0], b[1], b[2], b[3])]
-    island_boxes = islands
+    island_y = YIndex()
+    for b in islands:
+        island_y.add(b)
     print(f"PHASE islands {time.time()-t0:.0f}s n={len(islands)}", flush=True)
 
     m2_index = BoxIndex()
@@ -255,6 +324,16 @@ def main():
     # under the row it feeds. (Rows are not the GDS labels; those are cell-local pin texts.)
     rows = [(y, y) for y in sorted({y for _, _, y in vss})]
 
+    # How far a row point may move to sit on an island: half a row, so it reaches the row boundary
+    # but never the next row, and never more than half the band of the stripe it drops to.
+    pitch, pitch_src = row_pitch(facts, [y for _, y in fillties], def_nm)
+    stripe_pitch = min((b[0] - a[0] for a, b in zip(rows, rows[1:])), default=0)
+    snap = pitch // 2
+    if stripe_pitch:
+        snap = min(snap, stripe_pitch // 2)
+    if snap <= 0:
+        sys.exit("find_eco_sites: CANNOT-RUN the DEF's row pitch is not positive")
+
     def keepout_free(x, y, ty):
         x0, x1 = x - nm(STRAP_HALF), x + nm(STRAP_HALF)
         y0 = min(y, ty) - nm(PAD_Y) - nm(EPS)
@@ -265,14 +344,14 @@ def main():
         return any(b[0] <= x - nm(M3_HALF) and x + nm(M3_HALF) <= b[2]
                    and b[1] <= ty - nm(M3_V) and ty + nm(M3_V) <= b[3] for b in vss_boxes)
 
-    def landings_ok(x, y, ty, anchor=None):
-        """anchor=None means a tap island under the row; a rail box means the rail itself."""
+    def landings_ok(x, y, ty, anchor):
+        """The M1 landing has to sit inside `anchor`: the island the row was snapped to, or the
+        rail itself. Checking that one box is what the row loop used to ask of every island."""
         if not covered_by_vss(x, ty):
             return False
+        b = anchor
         m1_box = (x - nm(M1_HALF), y - nm(M1_V), x + nm(M1_HALF), y + nm(M1_V))
-        boxes = island_boxes if anchor is None else [anchor]
-        if not any(b[0] <= m1_box[0] and m1_box[2] <= b[2] and b[1] <= m1_box[1] and m1_box[3] <= b[3]
-                   for b in boxes):
+        if not (b[0] <= m1_box[0] and m1_box[2] <= b[2] and b[1] <= m1_box[1] and m1_box[3] <= b[3]):
             return False
         m3_box = (x - nm(M3_HALF), ty - nm(M3_V), x + nm(M3_HALF), ty + nm(M3_V))
         if vdd_index.hits(*m3_box):
@@ -282,27 +361,53 @@ def main():
     rails = [b for b in m1
              if b[2] - b[0] >= nm(STRIP_MIN_LEN) and nm(STRIP_MIN_H) <= b[3] - b[1] <= nm(STRIP_MAX_H)]
 
+    def row_islands(y):
+        """The islands a row may drop onto, nearest row point first.
+
+        An island is usable when its x extent holds a landing and its y extent holds one too; the
+        row point is the stripe centre clamped into that y extent, so a pad whose centre is a
+        nanometre off the stripe still matches. The clamp has to land inside the snap bound, not
+        merely the island's box: a tall island can reach the window with its edge while its
+        landing range sits past it. Sorting by the distance makes the site the closest legal one
+        rather than whichever island the GDS happened to iterate first.
+        """
+        out = []
+        for b in island_y.span(y - snap, y + snap):
+            if b[2] - b[0] < 2 * nm(M1_HALF) or b[3] - b[1] < 2 * nm(M1_V):
+                continue
+            lo, hi = b[1] + nm(M1_V), b[3] - nm(M1_V)
+            if lo > y + snap or hi < y - snap:
+                continue
+            ys = min(max(y, lo), hi)
+            out.append((abs(ys - y), ys, b))
+        out.sort(key=lambda t: (t[0], t[1], t[2][0], t[2][1]))
+        return out
+
     print(f"PHASE rows={len(rows)}", flush=True)
     t0 = time.time()
     sites = []
     row_fail = []
+    snapped = 0
+    snap_max = 0
     for idx, (y, ty) in enumerate(rows):
         found = None
-        for bx0, by0, bx1, by1 in islands:
-            if by0 > y or by1 < y or bx1 - bx0 < 2 * nm(M1_HALF):
-                continue
-            x = bx0 + nm(M1_HALF)
-            while x <= bx1 - nm(M1_HALF):
-                if keepout_free(x, y, ty) and landings_ok(x, y, ty):
-                    found = x
+        for _, ys, b in row_islands(y):
+            x = b[0] + nm(M1_HALF)
+            while x <= b[2] - nm(M1_HALF):
+                if keepout_free(x, ys, ty) and landings_ok(x, ys, ty, b):
+                    found = (x, ys)
                     break
                 x += nm(X_STEP)
             if found is not None:
                 break
         if found is None:
-            row_fail.append((y, idx, "no legal x in any sub island on the row"))
+            row_fail.append((y, idx, f"no usable island within {snap / 1000.0:.2f} um of the row"))
         else:
-            sites.append((f"row_{idx:04d}", found, y, ty, "row"))
+            x, ys = found
+            if ys != y:
+                snapped += 1
+                snap_max = max(snap_max, abs(ys - y))
+            sites.append((f"row_{idx:04d}", x, ys, ty, "row"))
         if args.progress and (idx + 1) % 50 == 0:
             print(f"ROW_PROGRESS={idx + 1}/{len(rows)}", flush=True)
 
@@ -317,7 +422,7 @@ def main():
             continue
         for end, sign in ((r0, 1), (r1, -1)):
             x = end + sign * nm(M1_HALF + EPS)
-            if keepout_free(x, ry, ty) and landings_ok(x, ry, ty, anchor=rail):
+            if keepout_free(x, ry, ty) and landings_ok(x, ry, ty, rail):
                 sites.append((f"rail_{len(sites):04d}", x, ry, ty, "rail"))
             else:
                 rail_fail += 1
@@ -346,6 +451,9 @@ def main():
         f"vss_labels    {sum(label_ys.values())}",
         f"vss_rows      {len(rows)}",
         f"row_source    DEF VSS Metal3 stripes",
+        f"row_pitch_um  {pitch / 1000.0:.3f} ({pitch_src})",
+        f"stripe_pitch_um {stripe_pitch / 1000.0:.3f}",
+        f"row_snap_um   {snap / 1000.0:.3f} (half a row, capped at half the stripe pitch)",
         f"vss_strips    {len(vss)}",
         f"vdd_strips    {len(vdd)}",
         f"fillties      {len(fillties)}",
@@ -356,6 +464,7 @@ def main():
         f"N_rail        {n_rail}",
         f"N             {n_sub + n_rows + n_rail}",
         f"row_fail      {len(row_fail)}",
+        f"rows_snapped  {snapped} (max {snap_max} nm)",
         f"rail_fail     {rail_fail}",
         "ECO_SITES: " + ("CLEAN" if sites else "EMPTY"),
     ]
