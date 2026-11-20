@@ -97,7 +97,11 @@ concurrency:
 jobs:
   pdn-negative:
     name: "pdn_stitch existing-stack refusal test (KLayout image)"
-    runs-on: ubuntu-24.04
+    # Self-hosted on the build machine: that host already carries the pinned flow image, so this
+    # job starts without the 1.5 GB pull a cold hosted runner pays, and it does not sit behind the
+    # hosted queue. Docker and python3 were verified there with these exact steps before the job
+    # was moved off ubuntu-24.04.
+    runs-on: [self-hosted, Linux, X64, grx930-gates]
     timeout-minutes: 10
     # This job only checks out and runs the test; it has no reason to hold the workflow's write
     # token. A job-level block replaces the workflow-level one wholesale, so this is the whole
