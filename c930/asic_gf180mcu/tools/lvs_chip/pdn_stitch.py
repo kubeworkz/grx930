@@ -52,8 +52,11 @@ Exit status: 0 written, 2 refused (a placement, stripe phase, clearance or cover
 """
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import shutil
 import sys
 from collections import Counter, defaultdict
 
@@ -146,6 +149,282 @@ def parse_def(path):
     return units, comps, stripes
 
 
+def parse_pdn_stack(path):
+    """Rail/M4/M5/via coordinates for VDD and VSS from the DEF's SPECIALNETS."""
+    rails = defaultdict(set)
+    m4 = defaultdict(set)
+    m5 = defaultdict(set)
+    via = defaultdict(lambda: defaultdict(set))
+    two = re.compile(r"^\s*(?:NEW |\+ ROUTED )?(Metal[1-5]) (\d+) \+ SHAPE "
+                     r"(STRIPE|FOLLOWPIN) \( (\d+) (\d+) \) \( (\d+) (\d+) \)")
+    one = re.compile(r"^\s*(?:NEW |\+ ROUTED )?(Metal[1-5]) (\d+) \+ SHAPE STRIPE "
+                     r"\( (\d+) (\d+) \) (\S+)")
+    net = None
+    inside = False
+    for line in open(path, errors="replace"):
+        s = line.strip()
+        if s.startswith("SPECIALNETS"):
+            inside = True
+            continue
+        if s.startswith("END SPECIALNETS"):
+            break
+        if not inside:
+            continue
+        if s.startswith("- "):
+            net = s.split()[1]
+            continue
+        if net not in ("VDD", "VSS"):
+            continue
+        m = two.match(s)
+        if m:
+            layer, width, shape, x1, y1, x2, y2 = m.groups()
+            x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+            if layer == "Metal1" and shape == "FOLLOWPIN":
+                rails[net].add(y1)
+            elif layer == "Metal4" and width == "10000" and x1 == x2:
+                m4[net].add(x1)
+            elif layer == "Metal5" and width == "10000" and y1 == y2:
+                m5[net].add(y1)
+            continue
+        m = one.match(s)
+        if m:
+            _layer, _width, x, y, cell = m.groups()
+            for level in (1, 2, 3, 4):
+                if cell.startswith(f"via{level}_{level + 1}"):
+                    via[net][level].add((int(x), int(y)))
+    return rails, m4, m5, via
+
+
+def verify_existing_stack(args):
+    """Prove the streamed PDN already joins every rail to the M5 grid; write a no-op stitched copy."""
+    if os.path.abspath(args.out_gds) == os.path.abspath(args.gds):
+        print("REFUSED  --out-gds must differ from --gds")
+        return 2
+    # A failed geometry check must not leave a stale "verified" copy or report behind.
+    for path in (args.out_gds, args.report):
+        if path and os.path.exists(path):
+            os.remove(path)
+
+    rails, m4, m5, via = parse_pdn_stack(args.def_file)
+    errors = []
+    summary = {}
+    core_v4 = {}
+    for net in ("VDD", "VSS"):
+        xs, ys, rs = m4[net], m5[net], rails[net]
+        v1, v2, v3, v4 = (via[net][i] for i in (1, 2, 3, 4))
+        v123 = v1 & v2 & v3
+        y1 = {y for _x, y in v1}
+        x1 = {x for x, _y in v1}
+        if not rs or not xs or not ys:
+            errors.append(f"{net}: missing rails/M4/M5 ({len(rs)}/{len(xs)}/{len(ys)})")
+            continue
+        if y1 != rs:
+            errors.append(f"{net}: via1 y does not cover the rails ({len(y1 - rs)} off, "
+                          f"{len(rs - y1)} uncovered)")
+        if x1 != xs:
+            errors.append(f"{net}: via1 x does not cover the M4 stripes ({len(x1 - xs)} off, "
+                          f"{len(xs - x1)} uncovered)")
+        if v123 != v1 or len(v1) != len(rs) * len(xs):
+            errors.append(f"{net}: via1/2/3 stack is incomplete ({len(v123)} common of "
+                          f"{len(rs) * len(xs)} rail/stripe crossings)")
+        # A via4 centre within half a 10 um stripe still lands on both stripes.
+        close = [(x, y) for x, y in v4
+                 if min(abs(x - a) for a in xs) <= 5000 and min(abs(y - a) for a in ys) <= 5000]
+        cov_x = {min(xs, key=lambda a: abs(a - x)) for x, _y in close}
+        cov_y = {min(ys, key=lambda a: abs(a - y)) for _x, y in close}
+        if cov_x != xs:
+            errors.append(f"{net}: via4 does not cover all M4 stripes ({len(cov_x)}/{len(xs)})")
+        if cov_y != ys:
+            errors.append(f"{net}: via4 does not cover all M5 stripes ({len(cov_y)}/{len(ys)})")
+        core_v4[net] = close
+        summary[net] = {"rails": len(rs), "m4_stripes": len(xs), "m5_stripes": len(ys),
+                        "via1": len(v1), "via123": len(v123), "via4": len(v4),
+                        "via4_on_core": len(close), "m4_covered": len(cov_x),
+                        "m5_covered": len(cov_y)}
+    if rails["VDD"] & rails["VSS"]:
+        errors.append("VDD and VSS share a rail y")
+    if via["VDD"][1] & via["VSS"][1]:
+        errors.append("VDD and VSS share a via1 coordinate")
+    if errors:
+        for e in errors:
+            print(f"REFUSED  {e}")
+        return 2
+
+    # The DEF proof above is only a promise; check that the streamed GDS actually implements it.
+    units = 0
+    for line in open(args.def_file, errors="replace"):
+        m = re.match(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", line.strip())
+        if m:
+            units = int(m.group(1))
+            break
+    try:
+        ly = db.Layout()
+        ly.read(args.gds)
+    except Exception as exc:
+        print(f"REFUSED  cannot read {args.gds}: {exc}")
+        return 2
+    tops = list(ly.top_cells())
+    if len(tops) != 1:
+        print(f"REFUSED  GDS has {len(tops)} top cells")
+        return 2
+    top = tops[0]
+    scale = ly.dbu * units if units else 0
+    if not scale:
+        print("REFUSED  no UNITS DISTANCE MICRONS in the DEF")
+        return 2
+    print(f"gds: {args.gds} top={top.name} dbu={ly.dbu} scale={scale:g}")
+    layer_keys = {"M1": (34, 0), "V1": (35, 0), "M2": (36, 0), "V2": (38, 0),
+                  "M3": (42, 0), "V3": (40, 0), "M4": (46, 0), "V4": (41, 0),
+                  "M5": (81, 0)}
+    layers = {}
+    for name, key in layer_keys.items():
+        idx = ly.find_layer(*key)
+        if idx is None:
+            errors.append(f"GDS has no {name} {key[0]}/{key[1]} layer")
+        layers[name] = idx
+    if errors:
+        for e in errors:
+            print(f"REFUSED  {e}")
+        return 2
+
+    def g(v):
+        return int(round(v / scale))
+
+    def top_boxes(name):
+        out = []
+        for sh in top.shapes(layers[name]).each():
+            b = sh.bbox()
+            out.append((b.left, b.bottom, b.right, b.top))
+        return out
+
+    # Only the PDN stripes have these widths; signal routing is far narrower.
+    m1_shapes = [b for b in top_boxes("M1") if b[3] - b[1] == 600 and b[2] - b[0] > 1000]
+    m4_shapes = [b for b in top_boxes("M4") if b[2] - b[0] == 5000 and b[3] - b[1] > 100000]
+    m5_shapes = [b for b in top_boxes("M5") if b[3] - b[1] == 5000 and b[2] - b[0] > 100000]
+    want_m1 = len(rails["VDD"]) + len(rails["VSS"])
+    want_m4 = len(m4["VDD"]) + len(m4["VSS"])
+    want_m5 = len(m5["VDD"]) + len(m5["VSS"])
+    if len(m1_shapes) != want_m1:
+        errors.append(f"GDS M1 rail count {len(m1_shapes)} != DEF {want_m1}")
+    if len(m4_shapes) != want_m4:
+        errors.append(f"GDS M4 stripe count {len(m4_shapes)} != DEF {want_m4}")
+    if len(m5_shapes) != want_m5:
+        errors.append(f"GDS M5 stripe count {len(m5_shapes)} != DEF {want_m5}")
+    m1_by_y = defaultdict(list)
+    for x0, y0, x1, y1 in m1_shapes:
+        m1_by_y[(y0 + y1) // 2].append((x0, x1))
+
+    def covered(boxes, x, y):
+        return any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in boxes)
+
+    via_prefix = re.compile(r"VIA_via([1-4])_[1-5]_")
+    via_at = {i: set() for i in (1, 2, 3, 4)}
+    via_name = {}
+    for inst in top.each_inst():
+        m = via_prefix.match(inst.cell.name)
+        if not m:
+            continue
+        level = int(m.group(1))
+        t = inst.trans
+        p = (t.disp.x, t.disp.y)
+        via_at[level].add(p)
+        via_name[(level, p)] = inst.cell.name
+
+    expected = {1: via["VDD"][1] | via["VSS"][1],
+                2: via["VDD"][2] | via["VSS"][2],
+                3: via["VDD"][3] | via["VSS"][3],
+                4: {(x, y) for net in ("VDD", "VSS") for x, y in core_v4[net]}}
+    used_names = defaultdict(set)
+    missing = defaultdict(int)
+    examples = []
+    for level in (1, 2, 3, 4):
+        for x, y in expected[level]:
+            p = (g(x), g(y))
+            name = via_name.get((level, p))
+            if name is None:
+                missing[level] += 1
+                if len(examples) < 5:
+                    examples.append(f"via{level}_{level + 1} at {p}")
+            else:
+                used_names[level].add(name)
+    for level in (1, 2, 3, 4):
+        if missing[level]:
+            errors.append(f"GDS missing {missing[level]} via{level}_{level + 1} instances")
+    if examples:
+        errors.append("first missing instances: " + ", ".join(examples))
+
+    pad_layers = {1: ("M1", "M2"), 2: ("M2", "M3"),
+                  3: ("M3", "M4"), 4: ("M4", "M5")}
+    for level, names in used_names.items():
+        for name in names:
+            cell = ly.cell(name)
+            if cell is None:
+                errors.append(f"GDS via cell {name} missing")
+                continue
+            for layer_name in pad_layers[level]:
+                if not any(sh.bbox().contains(db.Point(0, 0))
+                           for sh in cell.shapes(layers[layer_name]).each()):
+                    errors.append(f"{name}: no {layer_name} pad over its origin")
+
+    m1_fail = []
+    m4_fail = []
+    m5_fail = []
+    for net in ("VDD", "VSS"):
+        for x, y in via[net][1]:
+            gx, gy = g(x), g(y)
+            if not any(x0 <= gx <= x1 for x0, x1 in m1_by_y.get(gy, ())):
+                m1_fail.append((net, gx, gy))
+        for x, y in via[net][1] & via[net][3]:
+            if not covered(m4_shapes, g(x), g(y)):
+                m4_fail.append((net, g(x), g(y)))
+        for x, y in core_v4[net]:
+            if not covered(m4_shapes, g(x), g(y)):
+                m4_fail.append((net, g(x), g(y)))
+            if not covered(m5_shapes, g(x), g(y)):
+                m5_fail.append((net, g(x), g(y)))
+    for label, fail, shape in (("M1 rail", m1_fail, "via1"), ("M4 stripe", m4_fail, "via3/4"),
+                               ("M5 stripe", m5_fail, "via4")):
+        if fail:
+            errors.append(f"{len(fail)} {shape} points are not on an {label}; e.g. {fail[:3]}")
+    if errors:
+        for e in errors:
+            print(f"REFUSED  {e}")
+        return 2
+    gds_summary = {"top": top.name, "m1_rails": len(m1_shapes), "m4_stripes": len(m4_shapes),
+                   "m5_stripes": len(m5_shapes), "via_instances": {str(k): len(v) for k, v in via_at.items()},
+                   "expected_via": {str(k): len(v) for k, v in expected.items()},
+                   "m1_points": sum(len(via[n][1]) for n in ("VDD", "VSS")),
+                   "m4_points": sum(len(via[n][1] & via[n][3]) for n in ("VDD", "VSS"))
+                                 + sum(len(core_v4[n]) for n in ("VDD", "VSS")),
+                   "m5_points": sum(len(core_v4[n]) for n in ("VDD", "VSS"))}
+    print(f"gds geometry: {len(m1_shapes)} M1 rails, {len(m4_shapes)} M4 stripes, "
+          f"{len(m5_shapes)} M5 stripes; "
+          f"all expected via cells and stripe overlaps present")
+
+    if os.path.abspath(args.out_gds) == os.path.abspath(args.gds):
+        print("REFUSED  --out-gds must differ from --gds")
+        return 2
+    shutil.copyfile(args.gds, args.out_gds)
+    h = hashlib.sha256()
+    with open(args.out_gds, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    print(f"existing stack: VDD {summary['VDD']['rails']} rails, "
+          f"VSS {summary['VSS']['rails']} rails; all M4/M5 stripes covered")
+    print(f"no straps needed; wrote {args.out_gds} as a byte-identical copy")
+    report = {"mode": "existing-stack", "verdict": "NO-STRAPS-NEEDED",
+              "inputs": {"def": args.def_file, "gds": args.gds},
+              "stack": summary, "gds": gds_summary,
+              "output": {"gds": args.out_gds, "sha256": digest,
+                         "bytes": os.path.getsize(args.out_gds)}}
+    if args.report:
+        with open(args.report, "w") as f:
+            json.dump(report, f, indent=1)
+            f.write("\n")
+    return 0
+
+
 def lib_rails(lib, cells):
     """{cell: (width, height, {net: top_side})} from the VDD/VSS texts and the 0/0 box."""
     text_layer = lib.layer(34, 10)
@@ -195,9 +474,24 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="stitch at most N islands (smoke test)")
     ap.add_argument("--allow-unstitched", type=int, default=0,
                     help="permit N islands to be left without a strap (they are listed)")
+    ap.add_argument("--cell-prefix", default=None,
+                    help="stitch only placements whose cell name starts with this prefix")
+    ap.add_argument("--skip-non-core", action="store_true",
+                    help="drop pad-ring and wafer-space placements before building islands")
+    ap.add_argument("--existing-stack", action="store_true",
+                    help="verify the DEF's existing M1->M4->M5 via stack and copy the GDS "
+                         "unchanged when no straps are needed")
     args = ap.parse_args()
 
+    if args.existing_stack:
+        return verify_existing_stack(args)
+
     units, comps, def_stripes = parse_def(args.def_file)
+    if args.skip_non_core:
+        comps = [c for c in comps if c[1].startswith("gf180mcu_fd_sc_mcu7t5v0__")]
+    if args.cell_prefix:
+        comps = [c for c in comps if c[1].startswith(args.cell_prefix)]
+    print(f"DEF: {len(comps)} stitched placements")
     lib = db.Layout()
     lib.read(args.lib)
     ly = db.Layout()

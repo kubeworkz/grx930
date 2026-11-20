@@ -41,6 +41,10 @@
 #   the default and not on a schedule: a bot commit that silently rewrites the evidence under a
 #   green gate is the failure mode the gate exists to prevent.
 #
+#   Only the `evidence` job can use that write token: `pdn-negative` overrides it with
+#   `permissions: contents: read`, so the one job that runs on every push to the test and the
+#   stitcher holds nothing it could commit with.
+#
 # A NOTE ON THIS FILE'S OWN VALIDITY
 #
 #   An unquoted `: ` in a plain scalar makes GitHub answer only "Invalid workflow file". Every
@@ -58,6 +62,8 @@ on:
       - 'c930/asic_gf180mcu/tools/klayout_lvs.*'
       - 'c930/asic_gf180mcu/tools/lvs_verdict.py'
       - 'c930/asic_gf180mcu/tools/lvs_family.py'
+      - 'c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py'
+      - 'c930/asic_gf180mcu/tools/lvs_chip/test_pdn_existing_stack.py'
       - 'c930/doc/lvs_plan.md'
       - '.github/workflows/lvs-evidence.yml'
   pull_request:
@@ -66,6 +72,8 @@ on:
       - 'c930/asic_gf180mcu/tools/klayout_lvs.*'
       - 'c930/asic_gf180mcu/tools/lvs_verdict.py'
       - 'c930/asic_gf180mcu/tools/lvs_family.py'
+      - 'c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py'
+      - 'c930/asic_gf180mcu/tools/lvs_chip/test_pdn_existing_stack.py'
       - 'c930/doc/lvs_plan.md'
       - '.github/workflows/lvs-evidence.yml'
   schedule:
@@ -87,6 +95,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pdn-negative:
+    name: "pdn_stitch existing-stack refusal test (KLayout image)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # This job only checks out and runs the test; it has no reason to hold the workflow's write
+    # token. A job-level block replaces the workflow-level one wholesale, so this is the whole
+    # token: read-only contents, nothing else.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The test builds its own tiny DEF/GDS fixtures; it needs KLayout and
+      # python3 from the flow image, not the PDK or any campaign database.
+      - name: Docker
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Run pdn_stitch --existing-stack positive/negative test
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            --entrypoint python3 \
+            ghcr.io/efabless/openlane2:2.3.10 \
+            /work/c930/asic_gf180mcu/tools/lvs_chip/test_pdn_existing_stack.py \
+              --pdn /work/c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py
+
   evidence:
     name: "LVS evidence refresh (docker + pinned PDK subset)"
     runs-on: ubuntu-24.04
