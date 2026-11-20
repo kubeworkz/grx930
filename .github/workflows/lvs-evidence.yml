@@ -24,10 +24,8 @@
 #   queue is unreliable right now -- on 2026-11-20 ubuntu-24.04 jobs here waited 2, 12 and 79
 #   minutes, and two runs never got a runner at all (one was cancelled, one was still queued after
 #   30 minutes). Move both back to `runs-on: ubuntu-24.04` once a few consecutive hosted runs
-#   start within a few minutes, and drop the two steps that exist only for this shared workspace:
-#   the `python` -> python3 shim in the gate step, and "Return the workspace to the runner user"
-#   (a hosted runner discards its tree, so the harness's root-owned bin/pmap never survives to
-#   break the next checkout).
+#   start within a few minutes, and drop the step that exists only for this shared workspace: the
+#   `python` -> python3 shim in the gate step.
 #
 # WHEN IT RUNS
 #
@@ -247,15 +245,3 @@ jobs:
             Pin:    c930/asic_gf180mcu/build/.lvs_pin/PIN.txt (fetched in this run)"
             git push origin "HEAD:${{ github.ref_name }}"
           fi
-
-      # The harness runs docker as the image's own root when it writes the pmap stub, so each
-      # fixture leaves a root-owned bin/pmap under build/lvs_run. A hosted runner throws its
-      # workspace away; this one does not, and the next actions/checkout's `git clean -ffdx` exits
-      # 1 on it (measured on this host). Give the tree back to the runner user, always -- a run
-      # that died half way leaves the same debris.
-      - name: Return the workspace to the runner user
-        if: always()
-        run: |
-          docker run --rm -v "$PWD:/work" --entrypoint sh \
-            ghcr.io/efabless/openlane2:2.3.10 \
-            -c "chown -R $(id -u):$(id -g) /work"

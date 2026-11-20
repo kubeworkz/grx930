@@ -138,4 +138,11 @@ ARGS+=("${PORT_ARGS[@]+"${PORT_ARGS[@]}"}")
 ARGS+=("${RUNNER_ARGS[@]+"${RUNNER_ARGS[@]}"}")
 
 mkdir -p "$OUT"
-MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w /work "$IMAGE" python3 "${ARGS[@]}"
+# Run as the calling user, not as the image's own root. The runner writes the `pmap` stub into
+# --out, and on a bind mount a root-written file stays root-owned on the host: a persistent
+# workspace then cannot `git clean` it away, and every later checkout trips over it. HOME moves
+# with the uid because the image's /root is not writable by anyone else and KLayout wants a
+# config directory under it.
+RUN_AS=(--user "$(id -u):$(id -g)" -e HOME=/tmp)
+MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w /work "${RUN_AS[@]}" \
+    "$IMAGE" python3 "${ARGS[@]}"
