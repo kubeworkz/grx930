@@ -93,6 +93,18 @@ run python3 c930/asic_gf180mcu/tools/lvs_chip/pdn_stitch.py \
     --report /work/build/lvs_chip/strap_report.json 2>&1 | tee "$WORK/stitch.log"
 rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { echo "pdn_stitch refused/failed ($rc)"; exit "$rc"; }
 
+# Stage 5 turns the stitched GDS and the filled DEF into the 2x2 ECO drop list. N = 0 is a gate like
+# the dangling-net audit above, not a short list: with no site the ECO has nothing to drop on, so
+# stop before CDL and leave the finder's CSV and report in $WORK for the rows and rails that failed.
+step "ECO site finder (Stage 5, stitched GDS + filled DEF through OpenDB)"
+run python3 c930/asic_gf180mcu/tools/lvs_chip/find_eco_sites.py \
+    --gds /work/build/lvs_chip/stream_out_filled_stitched.gds \
+    --def /work/build/lvs_chip/filled.def \
+    --lef /work/c930/asic_gf180mcu/build/cells.lef \
+    --out /work/build/lvs_chip/eco_sites.csv \
+    --report /work/build/lvs_chip/eco_sites.txt 2>&1 | tee "$WORK/eco_sites.log"
+rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { echo "ECO site finder stopped ($rc); see $WORK/eco_sites.log"; exit "$rc"; }
+
 step "CDL (routed netlist)"
 [ -s "$ROUTED" ] || { echo "no routed netlist at $ROUTED"; exit 2; }
 run python3 c930/asic_gf180mcu/tools/lvs_chip/mk_chip_cdl.py \
@@ -116,5 +128,6 @@ fi
 step "done"
 echo "filled DEF:   $WORK/filled.def"
 echo "dangling:     $WORK/dangling_nets.tsv (CLEAN)"
+echo "ECO sites:    $WORK/eco_sites.csv (N=$(awk '/^N /{print $2}' "$WORK/eco_sites.txt")); report $WORK/eco_sites.txt"
 echo "stitched GDS: $WORK/stream_out_filled_stitched.gds"
 echo "chip CDL:     $WORK/grx930_test_chip.cdl"
