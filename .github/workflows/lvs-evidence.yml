@@ -129,7 +129,12 @@ jobs:
 
   evidence:
     name: "LVS evidence refresh (docker + pinned PDK subset)"
-    runs-on: ubuntu-24.04
+    # Self-hosted on the build machine for the same reason as pdn-negative: the hosted queue left
+    # every ubuntu-24.04 job in this repository waiting, and this host already carries the image.
+    # Measured there before the move: the pin fetch takes 27 s for 9.7 MB and verifies all 102
+    # recorded hashes, one fixture runs green end to end in about 25 s, and the switch selftest
+    # passes 21/21. The job keeps the workflow's write token, because --update still has to push.
+    runs-on: [self-hosted, Linux, X64, grx930-gates]
     # 51 fixtures, one docker run each, plus a 1.5 GB image pull on a cold runner. 45 minutes was
     # right for 14; 51 measured 30 minutes locally, and a cold runner adds the pull.
     timeout-minutes: 90
@@ -224,3 +229,15 @@ jobs:
             Pin:    c930/asic_gf180mcu/build/.lvs_pin/PIN.txt (fetched in this run)"
             git push origin "HEAD:${{ github.ref_name }}"
           fi
+
+      # The harness runs docker as the image's own root when it writes the pmap stub, so each
+      # fixture leaves a root-owned bin/pmap under build/lvs_run. A hosted runner throws its
+      # workspace away; this one does not, and the next actions/checkout's `git clean -ffdx` exits
+      # 1 on it (measured on this host). Give the tree back to the runner user, always -- a run
+      # that died half way leaves the same debris.
+      - name: Return the workspace to the runner user
+        if: always()
+        run: |
+          docker run --rm -v "$PWD:/work" --entrypoint sh \
+            ghcr.io/efabless/openlane2:2.3.10 \
+            -c 'chown -R '"$(id -u)"':"$(id -g)"' /work'
