@@ -65,3 +65,7 @@
 *.jou  -text
 *.log  -text
 *.lic  -text
+
+# The route209 raw CDL evidence is retained byte-for-byte with CRLF; its logged
+# SHA-256 is over that raw form.
+build/production/sta/eco_routed_route209_repro.cdl -text

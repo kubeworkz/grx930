@@ -1,0 +1,20 @@
+# CDL <-> DEF cell-instance identity check (not LVS)
+generated_utc=2026-11-21T23:21:37Z
+cdl=c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl
+cdl_sha256=1a29a6ad2cb99882a8e2d8974cadff3237f317cc349c1a0c3e7f20545f75b717
+def=build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def
+def_sha256=d8c7211bf6d20db3297395d5a5c6ff5f31e9df70e3cb9ef55b6ef6b525579a01
+method=compare CDL X-instance name+cell-type against DEF COMPONENTS entries whose cell type appears in the CDL; filler cell types absent from the CDL are excluded
+def_components_total=361906
+cdl_x_instances=209075
+def_instances_with_cdl_types=209076
+matched=209075
+def_only=1
+cdl_only=0
+cdl_cell_types=38
+def_cell_types=44
+cdl_types_absent_from_def=0
+def_only_instances:
+  FILL_ROW_861_TIE77 gf180mcu_fd_sc_mcu7t5v0__filltie
+result=IDENTITY_WITH_ONE_DEF_ONLY_FILLTIE
+scope=cell instance name/type only; connectivity and routed-netlist derivation are not proven
