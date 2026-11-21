@@ -54,6 +54,11 @@ A pad that would meet M1 outside its own island is refused outright: across a ga
 net the finder cannot identify, so the ECO's pad would short VSS to it. The report names the site
 and the area it hit; nothing here asks the ECO to draw a bridge to unknown metal.
 
+A row below the coverage gate is still accepted when the pad's new metal is enclosed by the
+anchor's own fingers -- the tap-cell comb slot -- because that metal touches only VSS and keeps
+M1.2a spacing to every other shape. Those sites report the M1 they add; every other site stays
+clipped to the metal that is already there, because an overhang would close the 0.23 um gap.
+
 Output: `eco_sites.csv` (name, x, y, ty, kind, m1_cover) in GDS database units (1 nm), with the
 pad's M1 overlap as a fraction, and a report with
 `N_sub + N_rows + N_rail = N`. The DEF writer doubles these for its 2000 dbu/um frame; use
@@ -94,6 +99,7 @@ GRID_CELL = 10.0            # M2 / filltie bucket, as in the validator
 EPS = 0.02                  # keepout is strict: no touching geometry
 Y_BUCKET = 1.0              # island y-bucket: an M1 island is about a micrometre tall
 M1_MIN_COVER = 0.50         # less than half the pad on the island's M1 is refused
+M1_SPACE = 0.23             # M1.2a: spacing a drawn pad must keep to foreign M1
 
 
 def nm(v):
@@ -310,12 +316,11 @@ def main():
         ft_index.add(x, y, x, y)
 
     # Islands: M1 shapes with a filltie point on them. No merge, no netlist: a tap is the anchor.
+    # This is the bbox filter only; the polygon check that a tap really lies on the metal (a tap on
+    # the edge counts) runs once the polygons are collected, below.
     t0 = time.time()
     islands = [b for b in m1 if fillties and ft_index.hits(b[0], b[1], b[2], b[3])]
-    island_y = YIndex()
-    for b in islands:
-        island_y.add(b)
-    print(f"PHASE islands {time.time()-t0:.0f}s n={len(islands)}", flush=True)
+    print(f"PHASE islands_bbox {time.time()-t0:.0f}s n={len(islands)}", flush=True)
 
     rails = [b for b in m1
              if b[2] - b[0] >= nm(STRIP_MIN_LEN) and nm(STRIP_MIN_H) <= b[3] - b[1] <= nm(STRIP_MAX_H)]
@@ -338,6 +343,38 @@ def main():
         it.next()
     print(f"PHASE pad_metal {time.time()-t0:.0f}s shapes="
           f"{sum(len(v) for v in anchor_polys.values())}", flush=True)
+
+    # The tap has to sit on the island's metal, not merely inside its bounding box: a filltie origin
+    # in the empty corner of a comb's box would anchor a site to metal it never touches. Test the
+    # polygon collected above, and only then build the y index the row loop searches. A 1 nm probe
+    # box keeps a tap that sits exactly on the polygon's edge, which is on the metal.
+    t2 = time.time()
+    grid_cell = nm(10.0)
+    tap_grid = {}
+    for x, y in fillties:
+        tap_grid.setdefault((x // grid_cell, y // grid_cell), []).append((x, y))
+
+    def tap_on_island(b):
+        pts = []
+        for kx in range(b[0] // grid_cell, b[2] // grid_cell + 1):
+            for ky in range(b[1] // grid_cell, b[3] // grid_cell + 1):
+                for px, py in tap_grid.get((kx, ky), ()):
+                    if b[0] <= px <= b[2] and b[1] <= py <= b[3] and (px, py) not in pts:
+                        pts.append((px, py))
+        for px, py in pts:
+            probe = db.Region(db.Box(px - 1, py - 1, px + 1, py + 1))
+            for poly in anchor_polys.get((b[0], b[1], b[2], b[3]), ()):
+                if not (db.Region(poly) & probe).is_empty():
+                    return True
+        return False
+
+    islands_bbox = len(islands)
+    islands = [b for b in islands if tap_on_island(b)]
+    island_y = YIndex()
+    for b in islands:
+        island_y.add(b)
+    print(f"PHASE islands_on_metal {time.time()-t2:.0f}s bbox={islands_bbox} on_metal={len(islands)}"
+          f" dropped={islands_bbox - len(islands)}", flush=True)
 
     m2_index = BoxIndex()
     for b in m2:
@@ -436,12 +473,14 @@ def main():
     t0 = time.time()
     sites = []
     row_fail = []
+    draw_try = []
+    added_by = {}
     snapped = 0
     snap_max = 0
-    low_cover = 0
     for idx, (y, ty) in enumerate(rows):
         found = None
         best_cover = 0.0
+        best_draw = None
         tried = False
         for _, ys, b in row_islands(y):
             x = b[0] + nm(M1_HALF)
@@ -453,13 +492,15 @@ def main():
                     if cov >= M1_MIN_COVER:
                         found = (x, ys, cov)
                         break
+                    if best_draw is None or cov > best_draw[2]:
+                        best_draw = (x, ys, cov, b)
                 x += nm(X_STEP)
             if found is not None:
                 break
         if found is None:
-            if tried:
-                low_cover += 1
             row_fail.append((y, idx, best_cover, "cover" if tried else "no_island"))
+            if best_draw is not None:
+                draw_try.append((idx, y, ty, best_draw))
         else:
             x, ys, cov = found
             if ys != y:
@@ -495,10 +536,11 @@ def main():
     # new connection to a net nobody here has identified.
     t1 = time.time()
     pad_index = BoxIndex()
-    for _, x, y, _, _, _, _ in sites:
-        pad_index.add(x - nm(M1_HALF), y - nm(M1_V), x + nm(M1_HALF), y + nm(M1_V))
+    for x, y in [(s[1], s[2]) for s in sites] + [(d[3][0], d[3][1]) for d in draw_try]:
+        pad_index.add(x - nm(M1_HALF) - nm(M1_SPACE), y - nm(M1_V) - nm(M1_SPACE),
+                      x + nm(M1_HALF) + nm(M1_SPACE), y + nm(M1_V) + nm(M1_SPACE))
     near_pads = db.Region()
-    if sites:
+    if sites or draw_try:
         it = top.begin_shapes_rec(layout.find_layer(*M1))
         while not it.at_end():
             sh = it.shape()
@@ -511,12 +553,28 @@ def main():
         near_pads = near_pads.merged()
     print(f"PHASE pad_foreign {time.time()-t1:.0f}s polys={near_pads.count()}", flush=True)
 
+    # `Region#interacting` returns nothing for polygons that coincide exactly, which is the usual
+    # case for an isolated island, so find the anchor's component by overlap instead: near_pads is
+    # merged, so each of its polygons is one conductor.
+    comp_cache = {}
+
+    def anchor_component(anchor):
+        key = (anchor[0], anchor[1], anchor[2], anchor[3])
+        if key not in comp_cache:
+            metal = anchor_metal[key]
+            comp = db.Region()
+            for poly in near_pads.each():
+                r = db.Region(poly)
+                if not (r & metal).is_empty():
+                    comp.insert(poly)
+            comp_cache[key] = comp
+        return comp_cache[key]
+
     kept, refused = [], []
     for s in sites:
         name, x, y, ty, kind, cov, anchor = s
-        key = (anchor[0], anchor[1], anchor[2], anchor[3])
         pad = db.Region(db.Box(x - nm(M1_HALF), y - nm(M1_V), x + nm(M1_HALF), y + nm(M1_V)))
-        comp = near_pads.interacting(anchor_metal[key])
+        comp = anchor_component(anchor)
         bad = (pad & (near_pads - comp)).area() / 1.0e6   # nm^2 -> um^2
         if bad:
             refused.append(s + (bad,))
@@ -528,7 +586,30 @@ def main():
             idx = int(name.split("_")[1])
             row_fail.append((rows[idx][0], idx, cov, "foreign"))
     row_fail.sort(key=lambda f: f[1])
-    print(f"PHASE rows_done {time.time()-t0:.0f}s sites={len(sites)} refused_foreign={len(refused)}", flush=True)
+
+    # A row below the gate is still a landing when the pad's new metal is enclosed by the anchor's
+    # own fingers: that is the tap-cell comb slot, and the added M1 touches only VSS while keeping
+    # M1.2a spacing to everything else. The rail-only rows are not drawn -- their 0.09 um overhang
+    # would close the 0.23 um gap to the cell's internal M1 -- so they stay clipped to existing metal.
+    drawn = []
+    for idx, y, ty, (x, ys, cov, b) in draw_try:
+        pad = db.Region(db.Box(x - nm(M1_HALF), ys - nm(M1_V), x + nm(M1_HALF), ys + nm(M1_V)))
+        comp = anchor_component(b)
+        other = near_pads - comp
+        added = pad - comp
+        if added.is_empty() or not (pad & other).is_empty():
+            continue
+        if not (added.sized(nm(M1_SPACE)) & other).is_empty():
+            continue
+        name = f"row_{idx:04d}"
+        add_um2 = added.area() / 1.0e6
+        sites.append((name, x, ys, ty, "row", cov, b))
+        added_by[name] = add_um2
+        drawn.append((name, x, ys, cov, add_um2))
+        row_fail = [f for f in row_fail if f[1] != idx]
+    row_fail.sort(key=lambda f: f[1])
+    print(f"PHASE rows_done {time.time()-t0:.0f}s sites={len(sites)} refused_foreign={len(refused)}"
+          f" drawn={len(drawn)}", flush=True)
     n_rows = sum(1 for s in sites if s[4] == "row")
     n_rail = sum(1 for s in sites if s[4] == "rail")
     n_sub = 0  # the filled DEF has no `sub` net; an island is only a tap-bearing M1 shape
@@ -538,9 +619,10 @@ def main():
     thin = sum(1 for c in covers if c < 0.80)
 
     with open(args.out, "w") as fh:
-        fh.write("# name,x,y,ty,kind,m1_cover -- GDS database units (1 nm), cover = pad area fraction\n")
+        fh.write("# name,x,y,ty,kind,m1_cover,m1_added_um2 -- GDS units (1 nm); cover is the pad\n")
+        fh.write("# area on existing M1, added is the M1 the ECO draws (0 = clipped to existing)\n")
         for name, x, y, ty, kind, cov, anchor in sites:
-            fh.write(f"{name},{x},{y},{ty},{kind},{cov:.3f}\n")
+            fh.write(f"{name},{x},{y},{ty},{kind},{cov:.3f},{added_by.get(name, 0.0):.3f}\n")
 
     lines = [
         "ECO_SITE_FINDER",
@@ -563,13 +645,16 @@ def main():
         f"vdd_strips    {len(vdd)}",
         f"fillties      {len(fillties)}",
         f"sub_islands   {len(islands)}",
+        f"islands_bbox  {islands_bbox}",
+        f"islands_off_metal {islands_bbox - len(islands)}",
         f"rail_shapes   {len(rails)}",
         f"N_sub         {n_sub}",
         f"N_rows        {n_rows}",
         f"N_rail        {n_rail}",
         f"N             {n_sub + n_rows + n_rail}",
         f"row_fail      {len(row_fail)}",
-        f"row_fail_why  cover {low_cover} / no_island {sum(1 for f in row_fail if f[3] == 'no_island')}"
+        f"row_fail_why  cover {sum(1 for f in row_fail if f[3] == 'cover')}"
+        f" / no_island {sum(1 for f in row_fail if f[3] == 'no_island')}"
         f" / foreign {sum(1 for f in row_fail if f[3] == 'foreign')}",
         f"rows_snapped  {snapped} (max {snap_max} nm)",
         f"m1_min_cover  {M1_MIN_COVER:.3f} (pad area on the island's M1 polygons)",
@@ -577,7 +662,9 @@ def main():
         f"m1_cover_med  {cover_med:.3f}",
         f"m1_cover_thin {thin} (< 0.80)",
         f"m1_foreign_sites {len(refused)} (M1 outside the anchor under the pad; refused)",
-        f"rows_low_cover {low_cover}",
+        f"m1_added_sites {len(drawn)} (pad drawn and merged into the anchor)",
+        f"m1_added_um2  {sum(a for _, _, _, _, a in drawn):.3f}",
+        f"rows_low_cover {sum(1 for f in row_fail if f[3] == 'cover')}",
         f"rail_fail     {rail_fail}",
         "ECO_SITES: " + ("CLEAN" if sites else "EMPTY"),
     ]
@@ -586,6 +673,8 @@ def main():
         lines.append(f"  ROW_FAIL idx={idx} y={y} best_cover={cov:.3f} reason={reason}")
     for name, x, y, ty, kind, cov, anchor, bad in refused:
         lines.append(f"  PAD_FOREIGN {name} x={x} y={y} cover={cov:.3f} foreign_um2={bad:.3f}")
+    for name, x, y, cov, add in drawn:
+        lines.append(f"  PAD_DRAWN {name} x={x} y={y} cover={cov:.3f} added_um2={add:.3f}")
     open(args.report, "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0 if sites else 1
