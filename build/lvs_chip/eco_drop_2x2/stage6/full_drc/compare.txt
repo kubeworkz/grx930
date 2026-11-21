@@ -1,0 +1,9 @@
+before full_drc/before.lyrdb: 4243 items
+after  full_drc/after.lyrdb: 4243 items
+delta +0
+
+rule        before   after   added removed
+
+(item sets identical)
+
+added 0  removed 0
