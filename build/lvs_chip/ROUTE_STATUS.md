@@ -84,6 +84,23 @@ The notch and V2 shift are therefore unchanged. No check was weakened.
 
 `fix71` is retained as the notch-only candidate. It does not include the separately approved extension and is superseded by `fix70` for the selected route.
 
+## Stage 6 — ECO 2x2 drops: 168 sites, 504 sboxes
+
+The 209 candidate sites were screened with the reject rule in `find_eco_sites.py`
+(M1.2a space check on the metal the landing adds, including the anchor's own
+fingers; M2.2a 0.28 µm and V1.2a 0.26 µm margins in the keepout). 41 were dropped
+(12 comb-slot drawn pads, 29 spacing) and 4 moved to a clean x in their row; no
+waivers. The all-site crop DRC, the Stage 7 XOR and the GDS-vs-DEF cross-check
+are all clean on the resulting list.
+
+- **Site list:** `build/lvs_chip/eco_drop_2x2/stage6/eco_sites_v3.csv` — **168 sites**, all `row`; `find_eco_sites.py` reports `refused_sites 31 (foreign 2 / M1.2a spacing 29)` and `ECO_SITES: CLEAN`.
+- **Pre-ECO DEF:** `filled.def`, 172,187,377 B, SHA-256 `2ae87c2db7a0f6a1bb0095ee9f9a8a2786a556d07eb49208640ba772ef1fac04` — 361,906 components (209,075 placed + 152,831 filler), 0 rows without a tap, 0 rail/route overlaps.
+- **ECO DEF:** `eco_routed.def`, 172,217,358 B, SHA-256 `d8c7211bf6d20db3297395d5a5c6ff5f31e9df70e3cb9ef55b6ef6b525579a01`; one `sub` special net (`USE GROUND`, no terminals) on **one swire with 504 sboxes** — 168 M2 straps, 168 `Via1_2X2_0_60_10_60_H_V`, 168 `Via2_2X2_0_60_10_60_V_H`. ODB read-back: `NET sub special=1 / SWIRES 1 / SBOXES 504`.
+- **Crop DRC (168 windows, metal1..V2):** **891 before, 891 after, 0 added, 0 removed** — identical item sets (`drc_crop_v2/all_before.lyrdb`, `all_after.lyrdb`).
+- **Stage 7 XOR (`eco_routed.def` vs `filled.def`):** everything before `SPECIALNETS` and after `END SPECIALNETS` byte-identical; VDD/VSS/`one_`/`zero_` unchanged; only `sub` added. 168/168 straps match the CSV with 450 nm past each via, no unmatched or duplicate; M2 296.605 µm, 249.148 µm². **CLEAN**.
+- **GDS-vs-DEF cross-check:** `grx930_test_chip_final.gds` (168 pads, 138,195,264 B, SHA-256 `0b21c684165ef12335332cf2e340b3c2b41b3ab3378a468697875cf2d663b24c`) and the crop pair: exact written shapes **168/168 M1, 168/168 M2, 168/168 M3, 672/672 V1, 672/672 V2**; missing 0.000 µm², extra 0.000 µm²; **no site disagrees**. The 209-site GDS is kept as `grx930_test_chip_final_209.gds`.
+- **M3 pads kept on purpose:** the 900 × 800 M3 box is the via's own LEF enclosure (`Via2_2X2_0_60_10_60_V_H`: `RECT -0.450 -0.400 0.450 0.400`), not a separate pad, and the DEF placement already carries it. All 168 fall entirely inside existing M3 (M3 adds **0.000 µm²**), so the pads change no metal; dropping them in the GDS only would make GDS ≠ DEF and silently assume existing M3 at every site. **Decision: keep.**
+
 ## Builder
 
 `probe/connect_zn_to_b.py` starts from the accepted `fix59` base.
