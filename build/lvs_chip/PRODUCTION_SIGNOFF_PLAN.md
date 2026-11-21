@@ -319,10 +319,10 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 
 ### G4 — Multi-corner STA and power
 
-**Status: NOT RUN — no final DEF/SPEF, and the existing P&R log ends in DRT-0305.**
+**Status: NOT RUN — no final SPEF and G0 is unsigned; the DEF is the frozen Stage 7 `eco_routed.def`.**
 
 **Inputs**
-- `build/production/final/grx930_test_chip.def`
+- `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def` (the G0-frozen DEF; no copy)
 - `build/production/final/grx930_test_chip.spef`
 - LEF:
   - `c930/asic_gf180mcu/gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lef/gf180mcu_fd_sc_mcu7t5v0.tlef`
@@ -387,7 +387,7 @@ check_power_grid -net VSS
 - Crosstalk and thermal checks are complete or have a signed, numbered waiver.
 - Power numbers are reported per corner; no single-corner estimate is labeled full-chip signoff.
 
-**Open blockers:** No SPEF exists, and the current DEF came from an incomplete detailed route (`DRT-0305`). This gate cannot start until G0/G2 produce a routed, extracted database.
+**Open blockers:** No SPEF exists. The DEF is the G0-frozen `eco_routed.def`; the old incomplete-route `rebased_grx930_test_chip.def` is not an input. This gate cannot start until G0 is signed and the SPEF is extracted.
 
 ---
 
