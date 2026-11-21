@@ -37,6 +37,9 @@ Focused window `2873000,2576500,2876500,2579900` (`fix70_zn_crop.lyrdb`):
 
 The single full-chip M2.1 is at `(1765.6,1499.3;1765.1,1499.3)|(1765.1,1499.5;1765.6,1499.5)` (report units: µm), far outside the ZN window. It does not affect the clean ZN result above.
 
+- **Full-chip disposition:** `DRC_DISPOSITION.md` — **0 route-induced findings**; **4,318 unchanged pre-existing baseline findings**; waiver decision still **OPEN**.
+- Item-level comparison against `fix59` found only five removed findings and zero added findings; the full report has **0 items inside the ZN window**.
+
 ### Full-chip LVS
 
 - **854,961 matches**
@@ -73,6 +76,32 @@ The extension changes only M2 relative to `fix71`:
 - M3 XOR: **0**
 
 The notch and V2 shift are therefore unchanged. No check was weakened.
+
+## Catalog-fill candidate — actual8 (M1.2a clean, not selected)
+
+Built from the original routed DEF, not from the filled or stitched fix70 artifact.
+
+- **DEF:** `build/lvs_chip/filled/grx930_test_chip_filled_catalog_actual8.def`
+- **DEF SHA-256:** `124f469957ad07cbe95814ca48bf72fd4153342aa79be714e877a801da02f738`
+- **GDS:** `build/lvs_chip/stream_out_filled_catalog_actual8.gds`
+- **GDS SHA-256:** `16f95289983983bb3ed557fd9b54e38576059910b548fa53697e1e95a925523b`
+- **Fill:** 62,707 filler cells; 384,110 sites filled; 8,310 sites left empty by catalog-M1 blocking; 0 route/rail overlaps.
+- **Gate:** actual streamed cell M1 polygons are decomposed into exact rectangles, and top-level route M1 boxes are included in the same spacing set. M1.2a is 0.23 µm = 460 dbu at 2000 dbu/µm.
+- **Full metal+via DRC:** **86 findings**, all **DCF.1a**; **M1.2a = 0** (`catalog_actual8_drc/beol_tiling.lyrdb`, SHA-256 `7bea88ee4ef9c4a98edba678d8a11759a4e69ae28d8e91a6404e4af24abd978a`, 295.858 s).
+- **M1.2a ownership:** 0 fill+standard, 0 standard+via, 0 standard+standard, 0 fill+via, 0 fill+fill, 0 direct top-level M1.
+- **Status:** the requested fill-to-standard M1.2a closure is met without weakening DRC. This candidate is not selected and does not replace `fix70`.
+- **Tap note:** worst cell-to-tap is 397.04 µm and 4 rows have no tap (limit 20 µm); this must be repaired before the candidate can be considered shippable.
+
+### Tap-repair attempt — actual10 (not accepted)
+
+- **DEF:** `build/lvs_chip/filled/grx930_test_chip_filled_catalog_actual10.def`
+- **DEF SHA-256:** `cc38a205f54d12ff5938464a6c85119fee13eb2e1616c2763cf3aba6c5b38349`
+- **GDS:** `build/lvs_chip/stream_out_filled_catalog_actual10.gds`
+- **GDS SHA-256:** `40900871adf7fbdc3cef0dc161b272c4ef6e9a3595375943ff9126053fdf56da`
+- **Taps:** 32,151 filltie cells; **0 rows without a tap**; worst cell-to-tap **182.56 µm** (limit 20 µm).
+- **Beol DRC:** **88 findings**, all **DCF.1a**; **M1.2a = 0**
+  (`catalog_actual10_drc/beol_tiling.lyrdb`, SHA-256 `659c5aaf830309048d4811d2a0135ba073cbbec96830e917323f4283e9aa41b2`).
+- **Blocker:** for the worst row, every `filltie` site within ±20 µm of `_75537_`/`_85452_` has a positive **0.165 µm** M1 gap to `_75537_` in all tested orientations. Placing one would add an M1.2a violation, so the tap target cannot be met with the stock `filltie` cell and this row's M1. The candidate is not selected and is not shippable by the tap criterion.
 
 ## Previous: fix71 (notch only, superseded)
 
