@@ -27,7 +27,7 @@ block_g2() {
 GDS="$FINAL/grx930_test_chip_final.gds"
 SPEF="$FINAL/grx930_test_chip.spef"
 CDL="$PROJECT_ROOT/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl"
-DEF="$PROJECT_ROOT/build/lvs_chip/rebased_grx930_test_chip.def"
+DEF="$PROJECT_ROOT/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def"
 DECK="$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs"
 IMAGE="${KLAYOUT_IMAGE:-grx930/klayout-lvs-pmap:local}"
 
@@ -81,7 +81,8 @@ esac
 
 for f in "$GDS" "$SPEF" "$CDL" "$DEF"; do
   actual=$(sha256sum "$f" | awk '{print $1}')
-  expected=$(awk -v target="$f" '$2 == target {print $1; exit}' "$G0_MANIFEST")
+  # sha256sum on this host prefixes the path field with '*' (binary marker).
+  expected=$(awk -v target="$f" '{ path=$2; sub(/^\*/, "", path); if (path == target) {print $1; exit} }' "$G0_MANIFEST")
   [ -n "$expected" ] || block_g2 "G0 manifest has no hash for a frozen input; no LVS run was started." "missing_manifest_hash=$f"
   [ "$actual" = "$expected" ] || block_g2 "A frozen input changed after G0; no LVS run was started." "manifest_hash_mismatch=$f"
 done
