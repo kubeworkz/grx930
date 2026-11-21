@@ -10,7 +10,7 @@ This plan is a sequence and evidence contract, not a result. A gate is complete 
 | Final merged GDS | **Present as the Stage 7 stream.** `build/production/final/grx930_test_chip_final.gds` is the G0 GDS (154,570,546 bytes; SHA-256 `8fdeb5812ae7325a0b336e26b60cb873e1c75d370640aa63ecd69b0acf766b62`), streamed from `eco_routed.def`. The 8,168-drop `fix70` GDS is still absent. `c930/asic_gf180mcu/wafer_space_submission/grx930_test_chip_final.gds` is explicitly marked **VOID** in its README and is not an input. |
 | Final schematic/CDL | `c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl` exists (17,754,516 bytes; SHA-256 `1a29a6ad2cb99882a8e2d8974cadff3237f317cc349c1a0c3e7f20545f75b717`) and is frozen in place by G0. |
 | Final routed DEF | `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def` is the G0 DEF (172,217,358 bytes; SHA-256 `d8c7211bf6d20db3297395d5a5c6ff5f31e9df70e3cb9ef55b6ef6b525579a01`; 168 Via1/Via2 ECO drops). It was built from `filled.def`, not from the pre-ECO `rebased_grx930_test_chip.def`; the rebased DEF has `SPECIALNETS 4` and 0 ECO vias and cannot pair with the ECO GDS. |
-| Final SPEF | **Absent.** `build/production/final/grx930_test_chip.spef` is missing, so `g0_freeze.sh` exits 2 with `missing_count=1`. |
+| Final SPEF | **Present.** `build/production/final/grx930_test_chip.spef` is 188,709,802 bytes, SHA-256 `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0`, extracted from `eco_routed.odb` with the pinned OpenROAD `dcf36133` nom RCX model. G0 reads it as a required input. |
 | DFT/ATPG | **Not inserted.** No scan chain, scan DEF, or ATPG pattern set exists. `dftc`, `tetramax`, and `yosys` are not on PATH in this environment. |
 | Full-chip LVS verdict | **None.** The full run was stopped after more than 100 minutes. A crop is not a substitute. |
 | Full DRC verdict | **None.** Only focused M1/M2/M3/V1/V2 decks have run. |
@@ -50,15 +50,14 @@ DFT insertion changes the netlist. Any LVS, DRC, or STA run made before G1 is a 
 
 ### G0 — Input freeze
 
-**Status: BLOCKED — both geometry checks pass on the Stage 7 pair; the SPEF is missing and no signoff exists.**
+**Status: READY_FOR_REVIEW — all inputs are present and both geometry checks pass; no signoff exists.**
 
-The 2026-11-21T20:00:58Z run wrote `status=BLOCKED`, `gds_checks=PASS`,
-`def_gds_checks=PASS`, `no_void=PASS`, `missing_count=1` (only the SPEF),
+The 2026-11-21T21:39:35Z run wrote `status=READY_FOR_REVIEW`,
+`gds_checks=PASS`, `def_gds_checks=PASS`, `no_void=PASS`, `missing=none`,
 `failures=none`,
-`manifest_sha256=ddba5cf2314e6a67c2cc3ced360b0a30b3ab2b73af45fe7e1539f2c0357486a3`,
-and exited 2. That is the correct state: the geometry pair is checked, but G0
-is not complete until every required input exists and the design lead and
-independent reviewer sign it.
+`manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800`,
+and exited 0. G0 is still not signed: `G0_signoff.txt` is absent, so this is
+evidence for the design lead and independent reviewer, not a gate pass.
 
 **Inputs**
 - Final ECO GDS: `build/production/final/grx930_test_chip_final.gds`, streamed from `eco_routed.def`.
@@ -109,7 +108,7 @@ that is the intended reminder that the input set is incomplete.
 | `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def` | `d8c7211bf6d20db3297395d5a5c6ff5f31e9df70e3cb9ef55b6ef6b525579a01` |
 | `build/lvs_chip/eco_drop_2x2/stage6/filled.def` | `2ae87c2db7a0f6a1bb0095ee9f9a8a2786a556d07eb49208640ba772ef1fac04` |
 | `build/lvs_chip/eco_drop_2x2/stage6/eco_sites_v3.csv` | `8efedede2176095d20b634a04c16f1ffd1d7f8cdc8edcd0025b1e60b6ee01c82` |
-| `build/production/final/grx930_test_chip.spef` | **MISSING** |
+| `build/production/final/grx930_test_chip.spef` | `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0` |
 | `build/production/run/gds_checks.rb` | `fbfac9851f7b6209ae086b27ebd9bc9f9928cd2ce87e2d69d93253e8d616bac5` |
 | `build/production/run/def_gds_checks.rb` | `55945b780991609e392721164efabac477c23918324f171f7b44e49dae54eb93` |
 | `gf180mcu.drc` | `e7c7d2597890cfcb4cf0e5312f5652051a119fb3e1cc1772a6e5c04594bc65d8` |
@@ -121,12 +120,26 @@ that is the intended reminder that the input set is incomplete.
 the PDK deck files listed under **Inputs**. The CDL and both DEFs are used in
 place; no copies are accepted as substitutes.
 
+**SPEF extraction record (2026-11-21)**
+- Tool: OpenROAD `dcf36133a369abc8f3c5e5738cd4d82e4903c0e0` from `ghcr.io/wafer-space/gf180mcu-precheck:104d9ccbc0d3`.
+- Model: GF180MCU `nom` RCX rules, `/workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom`, SHA-256 `d83a04ea28af9b74a097fb479bbab9ed52859a1e3428b33d3151cb5afae62ddf`.
+- Database: `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.odb` (206,880,759 bytes; `sub` special net, 1 swire, 504 sboxes).
+- Command:
+```tcl
+read_db /work/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.odb
+extract_parasitics -ext_model_file /workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom
+write_spef /work/build/production/final/grx930_test_chip.spef
+```
+`define_process_corner` alone left the model filename empty in this build (`RCX-0468`); the single-corner `-ext_model_file` form loaded the same model and defined `MinMax0`.
+- Output: 188,709,802 bytes, SHA-256 `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0`; `*DESIGN "grx930_test_chip"`, `*VERSION "dcf36133..."`, 125,214 `*D_NET`s; extraction ended `RCX_DONE`, exit 0.
+- Coverage: 126,236 DEF signal nets, of which 1,022 have fewer than two terminals and no wire; 126,236 − 1,022 = 125,214 annotated nets. `read_spef` reported 0 unannotated drivers and 0 partially unannotated drivers.
+
 **Owner:** Design lead; independent reviewer recomputes hashes.
 
 **Exit criteria**
 - One and only one GDS/CDL/DEF/SPEF set is named, and it is the set above. The pre-ECO `rebased_grx930_test_chip.def` and the fix16 base are not G0 inputs.
 - Every entry in `input_sha256.txt` matches its named file and no entry is `MISSING`.
-- `G0_status.txt` has `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `def_gds_checks=PASS`, `no_void=PASS`, and a `manifest_sha256` matching `input_sha256.txt`. The current run is `BLOCKED` only because the SPEF is missing.
+- `G0_status.txt` has `status=READY_FOR_REVIEW`, `gds_checks=PASS`, `def_gds_checks=PASS`, `no_void=PASS`, and a `manifest_sha256` matching `input_sha256.txt`. The current run is `READY_FOR_REVIEW` with `missing=none` and `failures=none`; it is not signed.
 - `gds_checks.rb` requires `expected_drops` and reports `DROPS=168`, `VIA2_NEW_CUTS=672`, `DEF_DIE_UM=3932.000x5122.000` and `FAILURES=`; the GDS content bbox is inside the DEF die.
 - `def_gds_checks.rb` XORs the DEF's top-level Metal1–Metal5 routing against the final GDS and requires 168 approved 2×2 Via1/Via2 placements. With `-rd base=pre_eco_stream.gds -rd base_def=filled.def -rd sites=eco_sites_v3.csv` it also compares `(final.gds − base.gds)` against `(eco_routed.def − filled.def)` inside each site window and requires zero new metal or Via1/Via2 cut outside the windows. On the current pair: 168/168 windows PASS, `WINDOWS_WITH_DELTA=168`, `WINDOW_FAILURES=0`, and every `OUTSIDE_WINDOWS_*_DBU2=0`. VDD exclusion is expressed in `eco_sites_v3.csv`; the retired fixed row-300 box is not part of the check.
 - `def_gds_checks.rb` has a positive control: `build/production/run/test_def_gds_positive.sh` generates a synthetic 8,168-site DEF/GDS pair in `build/production/fixtures/def_gds_positive/` and requires zero XOR on Metal1–Metal5 and exactly 8,168 Via1/Via2 2×2 placements. At every DEF via anchor it XORs the 0.26 µm 2×2 cut array against GDS Via1 35/0 and Via2 38/0 (32,672 cut shapes per layer). The harness requires a second GDS with two omitted cut arrays to fail, a windowed positive whose base/final pair must report 8,168/8,168 clean, non-empty windows with no delta outside them, and the same pair with one site moved +5 µm to fail with one empty window and outside-window geometry. The pairs are synthetic; the fixture's 8,168-site count is a control independent of the production count, which is 168, and it does not substitute for the production ECO, whose full 8,168-coordinate list is absent from this checkout.
@@ -195,7 +208,7 @@ The two Tcl files must contain, at minimum:
 
 ### G2 — Full-chip LVS
 
-**Status: NOT RUN — G0 is unsigned and no final SPEF exists; prior full run stopped after >100 minutes.**
+**Status: NOT RUN — G0 is unsigned; prior full run stopped after >100 minutes.**
 
 **Inputs**
 - `build/production/final/grx930_test_chip_final.gds`
@@ -319,7 +332,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 
 ### G4 — Multi-corner STA and power
 
-**Status: NOT RUN — no final SPEF and G0 is unsigned; the DEF is the frozen Stage 7 `eco_routed.def`.**
+**Status: NOT RUN — G0 is unsigned; the DEF and SPEF are the frozen Stage 7 pair.**
 
 **Inputs**
 - `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def` (the G0-frozen DEF; no copy)
@@ -387,7 +400,7 @@ check_power_grid -net VSS
 - Crosstalk and thermal checks are complete or have a signed, numbered waiver.
 - Power numbers are reported per corner; no single-corner estimate is labeled full-chip signoff.
 
-**Open blockers:** No SPEF exists. The DEF is the G0-frozen `eco_routed.def`; the old incomplete-route `rebased_grx930_test_chip.def` is not an input. This gate cannot start until G0 is signed and the SPEF is extracted.
+**Open blockers:** The DEF and SPEF are the G0-frozen `eco_routed.def` and `grx930_test_chip.spef`; the old incomplete-route `rebased_grx930_test_chip.def` is not an input. This gate cannot start until G0 is signed; no multi-corner STA/power run has been made.
 
 ---
 
@@ -456,7 +469,7 @@ build/production/<gate>/
 
 `verdict.txt` starts as `NOT RUN`. It may be changed to `PASS` only by the named owner after the exit criteria are checked. A report without a signoff is evidence, not a gate pass.
 
-**Release status: NOT APPROVED.** G0 through G5 are **NOT RUN** or **BLOCKED** as stated above. The focused 13-site crop at `build/lvs_chip/eco_drop_2x2/row_corrected/` is **not** an input to any production gate except as ECO-geometry evidence.
+**Release status: NOT APPROVED.** G0 is **READY_FOR_REVIEW** but unsigned; G1–G5 are **NOT RUN** or **BLOCKED** as stated above. The focused 13-site crop at `build/lvs_chip/eco_drop_2x2/row_corrected/` is **not** an input to any production gate except as ECO-geometry evidence.
 
 ## 6. Limit closure register
 
@@ -466,9 +479,9 @@ A full-depth workspace search, `git rev-list --all --objects`, and `git lfs ls-f
 |---|---|---|
 | Real 8,168-drop coordinate list | `validate_drop_windows_2x2.rb` needs `c930/asic_gf180mcu/build/lvs_chip/fill_regression_tie_final.gds` and `/scripts/chip.l2n`; both absent. Selected `fix70` GDS (`c5fa46ed3d17e36b75026964655e6376d15a00ca03f57f67277290fc98c20738`) and accepted `fix59` base (`3f82dff9090c2c5d7a3fe7c921db3dd3dbc4ecda37b21f5d28c754abcff2bdae`) absent. | Supply those sources, or authorize a new 541-row extraction from a named baseline. |
 | Final GDS | Present as the Stage 7 168-drop stream; hashed in `input_sha256.txt` and checked by `gds_checks.rb` and `def_gds_checks.rb`. The 8,168-drop `fix70` GDS is still absent. | Nothing for the 168-drop G0 GDS; the 8,168 identity needs the old database. |
-| Final SPEF | `build/production/final/grx930_test_chip.spef` absent; it has not been extracted from the Stage 7 `eco_routed.odb`. | Supply the extracted SPEF, or the ODB and RCX rules. |
+| Final SPEF | Present: 188,709,802 bytes, SHA-256 `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0`; extracted from the Stage 7 `eco_routed.odb` with OpenROAD `dcf36133` nom RCX and read back with 0 unannotated drivers. | None for G0; the signoff corners may still require their own extraction runs. |
 | Gridworkz G0 signoff | No `G0_signoff.txt`; no Gridworkz connector/API. | Gridworkz-authorized signature over the frozen manifest. |
 
 Real-pair probes are not substitutes. `stream_out_filled.gds` against `filled/grx930_test_chip_filled.def` gives Metal1 XOR 0 but Metal2–Metal5 XOR 117,600 / 1,303,157,600 / 665,639,200 / 13,321,905,600 dbu²; `stream_out.gds` against the September `grx930_test_chip.def` gives the same numbers. Shape counts match per layer, but the local DEFs and streamed GDS files are not from the same stream-out revision, so neither pair is a zero-XOR real control. The synthetic fixtures remain the only passing controls.
 
-Until the inputs above arrive, G0 stays `BLOCKED`, G2 exits 2, and the package stays **VOID — DO NOT SUBMIT**.
+Until the remaining inputs above arrive and G0 is signed, G2 and G4 stay blocked and the package stays **VOID — DO NOT SUBMIT**.
