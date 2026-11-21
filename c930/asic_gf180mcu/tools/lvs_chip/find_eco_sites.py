@@ -99,7 +99,11 @@ GRID_CELL = 10.0            # M2 / filltie bucket, as in the validator
 EPS = 0.02                  # keepout is strict: no touching geometry
 Y_BUCKET = 1.0              # island y-bucket: an M1 island is about a micrometre tall
 M1_MIN_COVER = 0.50         # less than half the pad on the island's M1 is refused
-M1_SPACE = 0.23             # M1.2a: spacing a drawn pad must keep to foreign M1
+M1_SPACE = 0.23             # M1.2a: spacing any M1 the pad adds must keep, same net or not
+M2_SPACE = 0.28             # M2.2a: spacing the 0.84 um strap must keep to other M2
+V1_SPACE = 0.26             # V1.2a: spacing the 2x2 via1 array must keep to other via1
+VIA1 = (35, 0)
+VIA1_CUT, VIA1_OFF = 0.13, 0.26   # 0.26 um cuts on 0.52 um centres
 
 
 def nm(v):
@@ -205,7 +209,7 @@ def read_gds(path):
     top = max(tops, key=lambda c: (c.bbox().area(), c.name))
 
     shapes = {}
-    for name, (ln, dt) in (("m1", M1), ("m2", M2), ("m3", M3)):
+    for name, (ln, dt) in (("m1", M1), ("m2", M2), ("m3", M3), ("v1", VIA1)):
         li = layout.find_layer(ln, dt)
         if li is None:
             if name == "m1":
@@ -288,7 +292,7 @@ def main():
     t0 = time.time()
     layout, shapes, label_ys, top = read_gds(args.gds)
     print(f"PHASE read_gds {time.time()-t0:.0f}s shapes=" + str({k: len(v) for k, v in shapes.items()}), flush=True)
-    m1, m2, m3 = shapes["m1"], shapes["m2"], shapes["m3"]
+    m1, m2, m3, v1 = shapes["m1"], shapes["m2"], shapes["m3"], shapes["v1"]
 
     facts = load_def_facts(args)
     units = float(facts["def_units"])
@@ -382,6 +386,9 @@ def main():
     m3_index = BoxIndex()
     for b in m3:
         m3_index.add(*b)
+    v1_index = BoxIndex()
+    for b in v1:
+        v1_index.add(*b)
     vdd_index = BoxIndex()
     vdd_boxes = []
     for x0, x1, y in vdd:
@@ -405,10 +412,22 @@ def main():
         sys.exit("find_eco_sites: CANNOT-RUN the DEF's row pitch is not positive")
 
     def keepout_free(x, y, ty):
+        """Clearance for the M2 strap and the via1 cut arrays, with the deck's spacing margins.
+
+        M2.2a is 0.28 um, so the corridor has to extend past the 0.45 um via extension, not stop
+        at it; V1.2a is 0.26 um past the array's own extent. The corridor without those margins
+        let six straps and four arrays land within 0.11-0.23 um of existing M2 and via1.
+        """
         x0, x1 = x - nm(STRAP_HALF), x + nm(STRAP_HALF)
-        y0 = min(y, ty) - nm(PAD_Y) - nm(EPS)
-        y1 = max(y, ty) + nm(PAD_Y) + nm(EPS)
-        return not (m2_index.hits(x0, y0, x1, y1) or vdd_index.hits(x0, y0, x1, y1))
+        y0 = min(y, ty) - nm(PAD_Y) - nm(M2_SPACE) - nm(EPS)
+        y1 = max(y, ty) + nm(PAD_Y) + nm(M2_SPACE) + nm(EPS)
+        if m2_index.hits(x0, y0, x1, y1) or vdd_index.hits(x0, y0, x1, y1):
+            return False
+        r = nm(VIA1_OFF + VIA1_CUT + V1_SPACE)
+        for cy in (y, ty):
+            if v1_index.hits(x - r, cy - r, x + r, cy + r):
+                return False
+        return True
 
     def covered_by_vss(x, ty):
         return any(b[0] <= x - nm(M3_HALF) and x + nm(M3_HALF) <= b[2]
@@ -570,6 +589,24 @@ def main():
             comp_cache[key] = comp
         return comp_cache[key]
 
+    def m1_space_ok(x, y, anchor):
+        """M1.2a on the metal the pad actually adds.
+
+        The pad is clipped to the conductor, so `pad - comp` is the new metal. Merging it with
+        that conductor and running the deck's own space check catches both cases the all-site
+        DRC found: the clipped site whose sliver pokes into a neighbour, and the drawn pad whose
+        edge stops 0.03-0.19 um short of the cell's own fingers. The finger is the same net, but
+        M1.2a does not care about nets, so 'foreign only' was the wrong test.
+        """
+        pad = db.Region(db.Box(x - nm(M1_HALF), y - nm(M1_V), x + nm(M1_HALF), y + nm(M1_V)))
+        comp = anchor_component(anchor)
+        added = pad - comp
+        if added.is_empty():
+            return True
+        # The other metal has to be in the checked region or there is no pair to measure: the
+        # deck flags a gap between two polygons, not between a polygon and its own edge.
+        return (near_pads + added).merged().space_check(nm(M1_SPACE)).is_empty()
+
     kept, refused = [], []
     for s in sites:
         name, x, y, ty, kind, cov, anchor = s
@@ -577,14 +614,16 @@ def main():
         comp = anchor_component(anchor)
         bad = (pad & (near_pads - comp)).area() / 1.0e6   # nm^2 -> um^2
         if bad:
-            refused.append(s + (bad,))
+            refused.append(s + (bad, "foreign"))
+        elif not m1_space_ok(x, y, anchor):
+            refused.append(s + (0.0, "space"))
         else:
             kept.append(s)
     sites = kept
-    for name, x, y, ty, kind, cov, anchor, bad in refused:
+    for name, x, y, ty, kind, cov, anchor, bad, why in refused:
         if kind == "row":
             idx = int(name.split("_")[1])
-            row_fail.append((rows[idx][0], idx, cov, "foreign"))
+            row_fail.append((rows[idx][0], idx, cov, why))
     row_fail.sort(key=lambda f: f[1])
 
     # A row below the gate is still a landing when the pad's new metal is enclosed by the anchor's
@@ -599,7 +638,7 @@ def main():
         added = pad - comp
         if added.is_empty() or not (pad & other).is_empty():
             continue
-        if not (added.sized(nm(M1_SPACE)) & other).is_empty():
+        if not m1_space_ok(x, ys, b):
             continue
         name = f"row_{idx:04d}"
         add_um2 = added.area() / 1.0e6
@@ -608,7 +647,7 @@ def main():
         drawn.append((name, x, ys, cov, add_um2))
         row_fail = [f for f in row_fail if f[1] != idx]
     row_fail.sort(key=lambda f: f[1])
-    print(f"PHASE rows_done {time.time()-t0:.0f}s sites={len(sites)} refused_foreign={len(refused)}"
+    print(f"PHASE rows_done {time.time()-t0:.0f}s sites={len(sites)} refused={len(refused)}"
           f" drawn={len(drawn)}", flush=True)
     n_rows = sum(1 for s in sites if s[4] == "row")
     n_rail = sum(1 for s in sites if s[4] == "rail")
@@ -655,13 +694,15 @@ def main():
         f"row_fail      {len(row_fail)}",
         f"row_fail_why  cover {sum(1 for f in row_fail if f[3] == 'cover')}"
         f" / no_island {sum(1 for f in row_fail if f[3] == 'no_island')}"
-        f" / foreign {sum(1 for f in row_fail if f[3] == 'foreign')}",
+        f" / foreign {sum(1 for f in row_fail if f[3] == 'foreign')}"
+        f" / space {sum(1 for f in row_fail if f[3] == 'space')}",
         f"rows_snapped  {snapped} (max {snap_max} nm)",
         f"m1_min_cover  {M1_MIN_COVER:.3f} (pad area on the island's M1 polygons)",
         f"m1_cover_min  {cover_min:.3f}",
         f"m1_cover_med  {cover_med:.3f}",
         f"m1_cover_thin {thin} (< 0.80)",
-        f"m1_foreign_sites {len(refused)} (M1 outside the anchor under the pad; refused)",
+        f"refused_sites {len(refused)} (foreign overlap {sum(1 for r in refused if r[8] == 'foreign')}"
+        f" / M1.2a spacing {sum(1 for r in refused if r[8] == 'space')})",
         f"m1_added_sites {len(drawn)} (pad drawn and merged into the anchor)",
         f"m1_added_um2  {sum(a for _, _, _, _, a in drawn):.3f}",
         f"rows_low_cover {sum(1 for f in row_fail if f[3] == 'cover')}",
@@ -671,8 +712,9 @@ def main():
     # Every refused row, not a sample: an unnamed row is one nobody can go and fix.
     for y, idx, cov, reason in row_fail:
         lines.append(f"  ROW_FAIL idx={idx} y={y} best_cover={cov:.3f} reason={reason}")
-    for name, x, y, ty, kind, cov, anchor, bad in refused:
-        lines.append(f"  PAD_FOREIGN {name} x={x} y={y} cover={cov:.3f} foreign_um2={bad:.3f}")
+    for name, x, y, ty, kind, cov, anchor, bad, why in refused:
+        lines.append(f"  PAD_REFUSED {name} x={x} y={y} cover={cov:.3f} reason={why}"
+                     f" foreign_um2={bad:.3f}")
     for name, x, y, cov, add in drawn:
         lines.append(f"  PAD_DRAWN {name} x={x} y={y} cover={cov:.3f} added_um2={add:.3f}")
     open(args.report, "w").write("\n".join(lines) + "\n")
