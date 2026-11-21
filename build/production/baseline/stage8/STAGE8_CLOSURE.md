@@ -92,6 +92,35 @@ the `report_net i_clk` wire capacitance is the clock-specific evidence. A
 clock-only `write_spef -nets {i_clk}` selection contains 227,050 `*CAP` entries
 and 65,248 `*RES` entries, repeating the full SPEF's `68.7184` pF total.
 
+## Min/max SPEF decision
+
+**Decision (2026-11-21): the current signoff flow uses the single frozen `nom`
+SPEF. Min/max SPEFs are not required, and no additional extraction is
+scheduled.**
+
+Basis:
+
+- `build/lvs_chip/PRODUCTION_SIGNOFF_PLAN.md` G4 lists
+  `build/production/final/grx930_test_chip.spef` as its only SPEF input. Its exit
+  criterion is "All five corners complete with the same frozen DEF/SPEF."
+- `build/production/sta/sta_mcorner.tcl` has one `set spef ...` and one
+  `read_spef $spef`; every one of the five liberty `CORNER` runs reuses it.
+- `build/production/run/g4_sta.sh` runs those five corners through that template
+  and has no per-corner SPEF selection.
+- G0 freezes only the `nom` SPEF, and G2 hash-checks only that SPEF. The `min` and
+  `max` RCX rule files are pinned Stage 1 resources, but no current gate or
+  runner consumes min/max SPEFs.
+
+Scope: this is a single-RC-corner approximation across the five PVT liberty
+corners, exactly as the current G4 flow specifies. It is not a claim that
+per-RC-corner extraction is unnecessary for every foundry flow. If the STA/power
+lead or foundry later requires separate min/max RC corners, that is a new
+requirement: two additional extraction runs, one per corner, would be needed
+before G4 signoff. No such run has been started.
+
+G4 has not run. This decision is a flow-inspection result, not a timing result;
+G0 remains unsigned and G2 remains blocked.
+
 ## diff_spef and reproducibility
 
 The `diff_spef` Tcl wrapper in this build ignores `-r_res`, `-r_cap`,
@@ -131,12 +160,13 @@ connectivity, names, and net membership reproduce exactly.
 | Corner files exist | **PASS for `nom`** | `grx930_test_chip.spef.corner` names `corner=nom` |
 | `read_spef` / `diff_spef` succeeds | **PASS** | 0 unannotated and 0 partial drivers; value-enabled diff rc 0; byte-identical re-extraction |
 
-**Limitations.** Only the `nom` SPEF was produced. The plan makes `min` and `max`
-SPEFs conditional on the signoff corners requiring them; no such requirement is
-recorded here, and this closure does not claim min/max coverage. The
-`diff_spef` wrapper bug means future runs must use the direct `rcx::diff_spef`
-form with the value flags. The 236,696 instance warnings are the physical tapcell
-population, not missing signal nets.
+**Limitations.** Only the `nom` SPEF was produced; the current G4 flow explicitly
+uses that single frozen SPEF for all five liberty corners, so no min/max
+extraction is required by the current signoff flow (see the decision above). This
+closure does not claim per-RC-corner coverage. The `diff_spef` wrapper bug means
+future runs must use the direct `rcx::diff_spef` form with the value flags. The
+236,696 instance warnings are the physical tapcell population, not missing signal
+nets.
 
 ## Evidence hashes
 
