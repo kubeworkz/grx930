@@ -1,11 +1,11 @@
 # Fresh baseline plan — RTL to routed DEF to a new-count ECO to GDS/SPEF
 
-**Status: STAGE 3 PASS — DETAILED ROUTING REACHED 0 VIOLATIONS (tag
-`prod01_drt16`, clean at iteration 11); Stage 0–2 records remain below.** The
-Stage 0 pin is `build/production/baseline/stage0/IDENTITY.md`.
-Stage 2 synthesis/place-and-route and Stage 3 DRT have run; no stream-out, ECO
-insertion, or RCX command has been run for this plan. The submission package
-remains **VOID — DO NOT SUBMIT**.
+**Status: STAGE 8 CLOSED WITH RECORDED EXCEPTION — NOM SPEF EXTRACTED AND
+VALIDATED; G0 READY_FOR_REVIEW, UNSIGNED.** The earlier stage records remain
+below. The Stage 0 pin is `build/production/baseline/stage0/IDENTITY.md`. Stage 7
+stream-out/ECO and Stage 8 nominal RCX have run; no min/max SPEF has been
+produced. G2 remains blocked on G0 signoff, and the submission package remains
+**VOID — DO NOT SUBMIT**.
 
 This creates a **new identity**. It cannot claim `fix59`, `fix70`, the historical
 541-row source, or the current 8,168-drop provenance. The existing submission
@@ -1041,37 +1041,56 @@ the invocations here.
 Gate: both checkers exit 0; zero XOR inside every site window; `N` Via1 and Via2
 drops; no new geometry outside the windows.
 
-### Stage 8 — Extract SPEF with OpenRCX
+### Stage 8 — Extract SPEF with OpenRCX — CLOSED WITH RECORDED EXCEPTION
 
-Verified against the re-pinned Stage 0 OpenROAD build
-(`dcf36133a369abc8f3c5e5738cd4d82e4903c0e0`): `define_process_corner`,
-`extract_parasitics`, and `write_spef` are present. `report_parasitics` does
-**not** exist; use `report_parasitic_annotation` and `read_spef`/`diff_spef`.
-This is command-name verification only; RCX has not run.
+Status (2026-11-21): nominal-corner RCX extraction completed and validated.
+Closure record: `build/production/baseline/stage8/STAGE8_CLOSURE.md`.
 
-Run one corner per process against `eco_routed.odb`, so each rules file defines
-its own corner at index 0. Do not pass `-ext_model_file` again after
-`define_process_corner`; it redefines the corner set the first call just made.
+The pinned OpenROAD build is `dcf36133a369abc8f3c5e5738cd4d82e4903c0e0`; the
+`nom` RCX rules are
+`/workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom`
+(SHA-256 `d83a04ea…62ddf`). The successful command was:
 
 ```tcl
-read_db /work/build/production/baseline/eco_routed.odb
-define_process_corner -ext_model_index 0 \
-  <PDK>/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom
-extract_parasitics
+read_db /work/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.odb
+extract_parasitics -ext_model_file /workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom
 write_spef /work/build/production/final/grx930_test_chip.spef
 ```
 
-`define_process_corner` takes **one filename** plus the optional
-`-ext_model_index`; it does **not** take `(index, "corner name")`. Name the corner
-in the SPEF metadata or a sidecar. Repeat with a separate process for `min` and
-`max` if the signoff corners require them.
+`define_process_corner -ext_model_index 0 <file>` alone left the model filename
+empty in this build (`RCX-0468`); the single-corner `-ext_model_file` form loaded
+the same model and defined `MinMax0`. Output: 188,709,802 bytes, SHA-256
+`f4d4b6f2…e91410b0`, 125,214 `*D_NET`s. The sidecar
+`build/production/final/grx930_test_chip.spef.corner` records `corner=nom`.
 
-Validation: use `report_parasitic_annotation` and a net-coverage count against the
-DEF netlist; write a second SPEF with `-nets` for a subset and compare with
-`diff_spef` if needed.
+Coverage: 126,236 DEF signal nets; 1,022 have fewer than two terminals and no
+wire, so 125,214 are annotated. The 1,022 are **accepted as a recorded
+exception**: they have no wire geometry from which to form a SPEF RC network, and
+the audit found none are clock nets. This is a coverage exception, not an
+LVS/DRC waiver.
 
-Gate: SPEF net count equals the DEF net count; no unannotated clock nets; corner
-files exist; `read_spef`/`diff_spef` succeeds.
+Clock: the only clock net, `i_clk`, is annotated. Delivered SPEF `*D_NET *1`
+68.7184 pF; `report_net` reports 68.71 pF wire and 179.77 pF total; a clock-only
+`write_spef -nets {i_clk}` subset contains 227,050 `*CAP` and 65,248 `*RES`
+entries. `read_spef` found 0 unannotated and 0 partially unannotated drivers.
+
+`diff_spef`: the Tcl wrapper in this build ignores `-r_res`/`-r_cap`/
+`-r_cc_cap`/`-r_conn` and tests an undefined `-over` flag, so the value-enabled
+comparison was invoked as `rcx::diff_spef <spef> 1 1 1 1 -1 -1`. It returned 0
+with no numeric-difference lines and exactly the expected 1,022 missing nets
+(plus 236,696 tapcell instances with no signal-net SPEF entry). A full
+re-extraction reproduced the delivered SPEF byte-for-byte after excluding
+`*DATE`, with the same 188,709,802 bytes and 125,214 `*D_NET`s.
+
+Gate: **PASS WITH RECORDED EXCEPTION** for net-count equality
+(125,214 + 1,022 = 126,236); no unannotated clock nets; `nom` corner sidecar
+exists; `read_spef` and value-enabled `diff_spef` succeed. Min/max SPEFs were not
+produced; repeat only if the signoff corners require them.
+
+Evidence: `spef_extract.log`, `spef_readback.log`,
+`spef_clock_annotation.log`, `stage8_coverage_audit.log`,
+`spef_diff_values.log`, and `spef_reextract.log` under
+`build/production/sta/`.
 
 ### Stage 9 — Freeze, G0, and G2
 

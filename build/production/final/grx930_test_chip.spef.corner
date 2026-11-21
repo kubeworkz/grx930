@@ -1,0 +1,9 @@
+# SPEF corner sidecar.
+spef=build/production/final/grx930_test_chip.spef
+spef_sha256=f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0
+design=grx930_test_chip
+corner=nom
+rcx_model=gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom
+rcx_model_sha256=d83a04ea28af9b74a097fb479bbab9ed52859a1e3428b33d3151cb5afae62ddf
+openroad=dcf36133a369abc8f3c5e5738cd4d82e4903c0e0
+extraction_date_utc=2026-11-21
