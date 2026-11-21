@@ -9,14 +9,16 @@ MAN="$PROD/manifests"
 
 mkdir -p "$FINAL" "$MAN" "$PROD/dft" "$PROD/lvs" "$PROD/drc" "$PROD/sta" "$PROD/foundry" "$PROD/logs"
 
-# Exact plan inputs: the rebased CDL/DEF are used in place; no copies are
-# accepted as substitutes. The final GDS and extracted SPEF are the frozen
-# production artifacts.
+# Exact plan inputs: the rebased CDL is used in place; no copies are accepted
+# as substitutes. The final GDS and DEF are the Stage 7 stream pair, so the
+# DEF/GDS check and its base subtraction see the same geometry the streamer did.
 GDS="$FINAL/grx930_test_chip_final.gds"
 CDL="$PROJECT_ROOT/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl"
-DEF="$PROJECT_ROOT/build/lvs_chip/rebased_grx930_test_chip.def"
+DEF="$PROJECT_ROOT/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def"
 SPEF="$FINAL/grx930_test_chip.spef"
-BASE="$PROJECT_ROOT/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds"
+BASE="$FINAL/pre_eco_stream.gds"
+BASE_DEF="$PROJECT_ROOT/build/lvs_chip/eco_drop_2x2/stage6/filled.def"
+SITES="$PROJECT_ROOT/build/lvs_chip/eco_drop_2x2/stage6/eco_sites_v3.csv"
 CHECK="$PROJECT_ROOT/build/production/run/gds_checks.rb"
 DEF_CHECK="$PROJECT_ROOT/build/production/run/def_gds_checks.rb"
 
@@ -30,7 +32,7 @@ for var in EXPECTED_DROPS EXPECTED_DIE_W EXPECTED_DIE_H; do
   fi
 done
 
-required=("$GDS" "$CDL" "$DEF" "$SPEF" "$BASE" "$CHECK" "$DEF_CHECK")
+required=("$GDS" "$CDL" "$DEF" "$SPEF" "$BASE" "$BASE_DEF" "$SITES" "$CHECK" "$DEF_CHECK")
 
 deck_files=(
   "$PROJECT_ROOT/c930/asic_gf180mcu/libs.tech/klayout/tech/drc/gf180mcu.drc"
@@ -89,8 +91,8 @@ if [ -s "$GDS" ] && [ -s "$BASE" ] && [ -s "$CHECK" ]; then
       --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
       -r /work/build/production/run/gds_checks.rb \
       -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
-      -rd base=/work/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds \
-      -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
+      -rd base=/work/build/production/final/pre_eco_stream.gds \
+      -rd def=/work/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def \
       -rd topcell=grx930_test_chip \
       -rd expected_die_w="$EXPECTED_DIE_W" \
       -rd expected_die_h="$EXPECTED_DIE_H" \
@@ -108,7 +110,8 @@ if [ -s "$GDS" ] && [ -s "$BASE" ] && [ -s "$CHECK" ]; then
   fi
 fi
 
-if [ -s "$GDS" ] && [ -s "$DEF" ] && [ -s "$DEF_CHECK" ]; then
+if [ -s "$GDS" ] && [ -s "$DEF" ] && [ -s "$BASE" ] &&
+   [ -s "$BASE_DEF" ] && [ -s "$SITES" ] && [ -s "$DEF_CHECK" ]; then
   if ! command -v docker >/dev/null 2>&1; then
     def_gds_checks="BLOCKED_NO_DOCKER"
     failures+=("docker unavailable for DEF/GDS consistency checks")
@@ -123,9 +126,12 @@ if [ -s "$GDS" ] && [ -s "$DEF" ] && [ -s "$DEF_CHECK" ]; then
       --entrypoint klayout ghcr.io/efabless/openlane2:2.3.10 -b \
       -r /work/build/production/run/def_gds_checks.rb \
       -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
-      -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
+      -rd def=/work/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def \
       -rd topcell=grx930_test_chip \
       -rd expected_drops="$EXPECTED_DROPS" \
+      -rd base=/work/build/production/final/pre_eco_stream.gds \
+      -rd base_def=/work/build/lvs_chip/eco_drop_2x2/stage6/filled.def \
+      -rd sites=/work/build/lvs_chip/eco_drop_2x2/stage6/eco_sites_v3.csv \
       -rd report=/work/build/production/manifests/def_gds_checks.txt \
       > "$MAN/def_gds_checks.log" 2>&1
     def_rc=$?
