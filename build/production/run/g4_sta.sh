@@ -9,7 +9,7 @@ STA="$PROD/sta"
 
 mkdir -p "$STA" "$PROD/logs"
 
-DEF="$FINAL/grx930_test_chip.def"
+DEF="$PROJECT_ROOT/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def"
 SPEF="$FINAL/grx930_test_chip.spef"
 TCL="$STA/sta_mcorner.tcl"
 POWER_TCL="$STA/power_ir.tcl"

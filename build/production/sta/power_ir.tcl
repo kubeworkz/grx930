@@ -1,7 +1,7 @@
 # Power-grid IR analysis on the frozen routed DEF.
 set root "c930/asic_gf180mcu/gf180mcu_pdk/libs.ref/gf180mcu_fd_sc_mcu7t5v0"
 set lib "$root/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib"
-set def "build/production/final/grx930_test_chip.def"
+set def "build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def"
 set spef "build/production/final/grx930_test_chip.spef"
 
 if {![file exists $def]}  { error "missing DEF: $def" }
