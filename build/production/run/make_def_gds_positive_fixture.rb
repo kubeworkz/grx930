@@ -1,18 +1,22 @@
-# Builds the positive-control DEF/GDS pair for def_gds_checks.rb.
-# The pair is synthetic: it is not the production ECO list. It carries all
-# 8,168 approved 2x2 ECO via names at legal non-row-300 sites, with M1/M3
-# landings, an 0.84 um M2 strap, and the real 2x2 Via1/Via2 cut arrays on GDS
-# layers 35/0 and 38/0. The GDS is written from the same site table in
+# Builds the control DEF/GDS pairs for def_gds_checks.rb.
+# The pairs are synthetic: they are not the production ECO list. The main pair
+# carries all 8,168 approved 2x2 ECO via names at legal sites, with
+# M1/M3 landings, an 0.84 um M2 strap, and the real 2x2 Via1/Via2 cut arrays on
+# GDS layers 35/0 and 38/0. The GDS is written from the same site table in
 # micrometres, independently of the DEF's 2000 dbu/um text, so the checker
 # must parse, convert, and XOR two encodings.
 #
-# Two negative pairs are written beside it:
+# Controls written beside it:
 # - positive_missing_cuts.gds omits the Via1 cuts at site 0 and the Via2 cuts
 #   at site 1, proving the cut check is not vacuous.
-# - row300_via2.{def,gds} moves one drop into the row-300 exclusion box,
-#   keeping both via counts at 8,168, so the row-300 rule is the only failure.
-# - row300_edge_via2.{def,gds} puts one anchor just outside the box so only its
-#   Via2 cuts intrude, proving the rule is an area check, not an anchor check.
+# - windowed_final.{def,gds}, windowed_base.{def,gds} and windowed_sites.csv
+#   are the windowed pair: the base has smaller landings and strap and no ECO
+#   vias, the final carries the ECO geometry, both hold one pre-existing
+#   Via1/Via2 array outside every window so the cut layers exist in both
+#   streams, and the site list holds one window per drop. Their shapes stay
+#   inside the +-1.5 um window.
+# - windowed_sites_shift.csv moves site 0 by +5.0 um, so its new geometry falls
+#   outside every window and the windowed check must fail.
 #
 # Run inside the KLayout container:
 #   klayout -b -r make_def_gds_positive_fixture.rb \
@@ -35,9 +39,20 @@ CUT_BOXES = [
   [130, 130, 390, 390],
 ].freeze
 
+# Per-site geometry in DEF dbu: metal1/metal3 are [half-width, half-height]
+# landing rectangles and strap is [half-length, width] of the Metal2 segment.
+# The wide set is the production-scale drop. The windowed set nests base inside
+# final and stays within the +-1.5 um (1500 GDS dbu) site window, so its delta
+# is a frame on every metal and no delta can land outside a window.
+GEOM_WIDE = { m1: [900, 780], strap: [2800, 1680], m3: [900, 800] }.freeze
+GEOM_WINDOWED_FINAL = { m1: [500, 400], strap: [2000, 600], m3: [500, 450] }.freeze
+GEOM_WINDOWED_BASE = { m1: [300, 250], strap: [1600, 400], m3: [300, 300] }.freeze
+# Pre-existing via array in GDS dbu, 10 um off the site grid and far from every
+# window; present in both windowed streams so the cut layers exist in each.
+FIXED_VIA = [1_610_000, 4_410_000].freeze
+
 # 136 x 60 grid plus 8 extras = 8,168 sites. The grid stops at x=2800 um and
-# y=1280 um; the extras sit at x=3200..3340 um, y=4000 um. None intersects the
-# row-300 exclusion box (3088.43..3089.27 um, 2794.51..2803.41 um).
+# y=1280 um; the extras sit at x=3200..3340 um, y=4000 um.
 sites = []
 136.times do |col|
   60.times do |row|
@@ -50,12 +65,17 @@ raise "site count #{sites.length} != #{EXPECTED}" unless sites.length == EXPECTE
 def_file = File.join(out_dir, "positive.def")
 gds_file = File.join(out_dir, "positive.gds")
 mismatch_file = File.join(out_dir, "positive_missing_cuts.gds")
-row300_def = File.join(out_dir, "row300_via2.def")
-row300_gds = File.join(out_dir, "row300_via2.gds")
-row300_edge_def = File.join(out_dir, "row300_edge_via2.def")
-row300_edge_gds = File.join(out_dir, "row300_edge_via2.gds")
+win_final_def = File.join(out_dir, "windowed_final.def")
+win_final_gds = File.join(out_dir, "windowed_final.gds")
+win_base_def = File.join(out_dir, "windowed_base.def")
+win_base_gds = File.join(out_dir, "windowed_base.gds")
+win_sites_csv = File.join(out_dir, "windowed_sites.csv")
+win_shift_csv = File.join(out_dir, "windowed_sites_shift.csv")
 
-def write_def(path, sites)
+def write_def(path, sites, geom = GEOM_WIDE, vias: true)
+  m1x, m1y = geom[:m1]
+  strap_x, strap_w = geom[:strap]
+  m3x, m3y = geom[:m3]
   File.open(path, "w") do |f|
     f.puts "VERSION 5.8 ;"
     f.puts "DIVIDERCHAR \"/\" ;"
@@ -70,11 +90,13 @@ def write_def(path, sites)
     f.puts "  ;"
     sites.each_with_index do |(cx, cy), i|
       f.puts "- VSS_#{i} ( * VSS ) + USE GROUND"
-      f.puts "  + ROUTED Metal1 ( #{cx} #{cy} ) RECT ( -900 -780 900 780 )"
-      f.puts "    NEW Metal2 1680 ( #{cx - 2800} #{cy} ) ( #{cx + 2800} #{cy} )"
-      f.puts "    NEW Metal3 ( #{cx} #{cy} ) RECT ( -900 -800 900 800 )"
-      f.puts "  + ROUTED Metal2 ( #{cx} #{cy} ) #{VIA1}"
-      f.puts "    NEW Metal3 ( #{cx} #{cy} ) #{VIA2}"
+      f.puts "  + ROUTED Metal1 ( #{cx} #{cy} ) RECT ( -#{m1x} -#{m1y} #{m1x} #{m1y} )"
+      f.puts "    NEW Metal2 #{strap_w} ( #{cx - strap_x} #{cy} ) ( #{cx + strap_x} #{cy} )"
+      f.puts "    NEW Metal3 ( #{cx} #{cy} ) RECT ( -#{m3x} -#{m3y} #{m3x} #{m3y} )"
+      if vias
+        f.puts "  + ROUTED Metal2 ( #{cx} #{cy} ) #{VIA1}"
+        f.puts "    NEW Metal3 ( #{cx} #{cy} ) #{VIA2}"
+      end
       f.puts "  ;"
     end
     f.puts "END SPECIALNETS"
@@ -83,7 +105,7 @@ def write_def(path, sites)
   path
 end
 
-def write_gds(path, sites, omit = {})
+def write_gds(path, sites, geom = GEOM_WIDE, omit: {}, cuts: true, fixed_vias: false)
   layout = RBA::Layout.new
   layout.dbu = 0.001
   cell = layout.create_cell("grx930_test_chip")
@@ -95,24 +117,36 @@ def write_gds(path, sites, omit = {})
   m4 = layout.layer(46, 0)
   m5 = layout.layer(81, 0)
 
+  m1x, m1y = geom[:m1]
+  strap_x, strap_w = geom[:strap]
+  m3x, m3y = geom[:m3]
   sites.each_with_index do |(cx, cy), i|
     ax = cx / 2
     ay = cy / 2
-    cell.shapes(m1).insert(RBA::Box.new((cx - 900) / 2, (cy - 780) / 2,
-                                        (cx + 900) / 2, (cy + 780) / 2))
-    cell.shapes(m2).insert(RBA::Box.new((cx - 3640) / 2, (cy - 840) / 2,
-                                        (cx + 3640) / 2, (cy + 840) / 2))
-    cell.shapes(m3).insert(RBA::Box.new((cx - 900) / 2, (cy - 800) / 2,
-                                        (cx + 900) / 2, (cy + 800) / 2))
-    unless omit[i] == :via1
+    cell.shapes(m1).insert(RBA::Box.new((cx - m1x) / 2, (cy - m1y) / 2,
+                                        (cx + m1x) / 2, (cy + m1y) / 2))
+    cell.shapes(m2).insert(RBA::Box.new((cx - strap_x - strap_w / 2) / 2,
+                                        (cy - strap_w / 2) / 2,
+                                        (cx + strap_x + strap_w / 2) / 2,
+                                        (cy + strap_w / 2) / 2))
+    cell.shapes(m3).insert(RBA::Box.new((cx - m3x) / 2, (cy - m3y) / 2,
+                                        (cx + m3x) / 2, (cy + m3y) / 2))
+    if cuts && omit[i] != :via1
       CUT_BOXES.each do |x0, y0, x1, y1|
         cell.shapes(v1).insert(RBA::Box.new(ax + x0, ay + y0, ax + x1, ay + y1))
       end
     end
-    unless omit[i] == :via2
+    if cuts && omit[i] != :via2
       CUT_BOXES.each do |x0, y0, x1, y1|
         cell.shapes(v2).insert(RBA::Box.new(ax + x0, ay + y0, ax + x1, ay + y1))
       end
+    end
+  end
+  if fixed_vias
+    fx, fy = FIXED_VIA
+    CUT_BOXES.each do |x0, y0, x1, y1|
+      cell.shapes(v1).insert(RBA::Box.new(fx + x0, fy + y0, fx + x1, fy + y1))
+      cell.shapes(v2).insert(RBA::Box.new(fx + x0, fy + y0, fx + x1, fy + y1))
     end
   end
   # One M4/M5 pair so those GDS layers are present for the XOR comparison.
@@ -126,28 +160,28 @@ end
 
 write_def(def_file, sites)
 write_gds(gds_file, sites)
-write_gds(mismatch_file, sites, 0 => :via1, 1 => :via2)
+write_gds(mismatch_file, sites, omit: { 0 => :via1, 1 => :via2 })
 
-# Row-300 negative pair: one drop moves to the center of the exclusion box.
-# Both via counts stay at 8,168, so only the row-300 rule may fail.
-ROW300_VIA2 = [3_088_850, 2_798_960]
-row300_sites = sites.dup
-row300_sites[0] = ROW300_VIA2
-write_def(row300_def, row300_sites)
-write_gds(row300_gds, row300_sites)
+# Windowed pair: the base and final differ only inside the site windows.
+write_def(win_final_def, sites, GEOM_WINDOWED_FINAL)
+write_gds(win_final_gds, sites, GEOM_WINDOWED_FINAL, fixed_vias: true)
+write_def(win_base_def, sites, GEOM_WINDOWED_BASE, vias: false)
+write_gds(win_base_gds, sites, GEOM_WINDOWED_BASE, cuts: false, fixed_vias: true)
 
-# Row-300 edge pair: the anchor is 700 dbu outside the box's left edge, but
-# the right Via2 cuts reach 80 dbu into it. The old anchor rule would pass.
-ROW300_EDGE_VIA2 = [3_087_730, 2_798_960]
-edge_sites = sites.dup
-edge_sites[0] = ROW300_EDGE_VIA2
-write_def(row300_edge_def, edge_sites)
-write_gds(row300_edge_gds, edge_sites)
+# Window lists are in GDS dbu; the site table is in DEF dbu (2000/um).
+[win_sites_csv, win_shift_csv].each do |path|
+  File.open(path, "w") do |f|
+    f.puts "# name,x,y,ty"
+    sites.each_with_index do |(cx, cy), i|
+      x = cx / 2 + (path == win_shift_csv && i.zero? ? 5000 : 0)
+      f.puts format("site_%04d,%d,%d,%d", i, x, cy / 2, cy / 2)
+    end
+  end
+end
 
-[def_file, gds_file, mismatch_file, row300_def, row300_gds,
- row300_edge_def, row300_edge_gds].each do |path|
+[def_file, gds_file, mismatch_file, win_final_def, win_final_gds,
+ win_base_def, win_base_gds, win_sites_csv, win_shift_csv].each do |path|
   puts "WROTE #{path} (#{File.size(path)} bytes)"
 end
 puts "SITES=#{sites.length} VIA1=#{sites.length} VIA2=#{sites.length}"
-puts "ROW300_ANCHOR=#{ROW300_VIA2.join(',')}"
-puts "ROW300_EDGE_ANCHOR=#{ROW300_EDGE_VIA2.join(',')}"
+puts "SHIFTED_SITE=site_0000 +5000 dbu"

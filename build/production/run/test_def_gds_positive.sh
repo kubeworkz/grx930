@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Positive control for def_gds_checks.rb: a synthetic DEF/GDS pair with matching
-# Metal1-Metal5 geometry, all 8,168 approved 2x2 ECO vias, and the matching
-# Via1/Via2 cut arrays on GDS 35/0 and 38/0 must return zero XOR and the exact
-# via counts. Three negative pairs must fail:
-# - positive_missing_cuts.gds omits two cut arrays.
-# - row300_via2.{def,gds} moves one Via2 drop into the row-300 exclusion box.
-# - row300_edge_via2.{def,gds} keeps the anchor outside the box but lets its
-#   Via2 cuts intrude, so only an area rule can catch it.
+# Controls for def_gds_checks.rb. The full-chip positive is a synthetic DEF/GDS
+# pair with matching Metal1-Metal5 geometry, 8,168 approved 2x2 ECO vias, and
+# the matching Via1/Via2 cut arrays on GDS 35/0 and 38/0; it must return zero
+# XOR and the exact via counts. The windowed positive feeds a base pair and the
+# 8,168-site window list, and must report one clean, non-empty window per site
+# with no delta outside them. Two negatives must fail: a GDS that omits two cut
+# arrays, and the windowed pair with site 0 moved +5 um. The row-300 exclusion
+# box is retired with the old floorplan, so no row-300 fixture is generated.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +37,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 
 run_checker() {
   local gds="$1" def="$2" report="$3" log="$4"
+  shift 4
   set +e
   MSYS_NO_PATHCONV=1 docker run --rm \
     -v "$HOST_ROOT:/work" -w /work \
@@ -47,6 +48,7 @@ run_checker() {
     -rd topcell=grx930_test_chip \
     -rd expected_drops=8168 \
     -rd "report=$report" \
+    "$@" \
     > "$log" 2>&1
   local rc=$?
   set -e
@@ -71,10 +73,68 @@ for via in "$V1" "$V2"; do
   grep -qx "XOR_${via}_CUT_DBU2=0" "$POS_REPORT" || { echo "FAIL: XOR_${via}_CUT_DBU2 is not zero"; fail=1; }
 done
 grep -qx 'EXPECTED_DROPS=8168' "$POS_REPORT" || { echo "FAIL: expected drop count is not 8168"; fail=1; }
-grep -qx "ROW300_${V2}=0" "$POS_REPORT" || { echo "FAIL: row-300 Via2 count is not zero"; fail=1; }
-grep -qx "ROW300_${V2}_ANCHORS_INSIDE=0" "$POS_REPORT" || { echo "FAIL: positive pair has a row-300 anchor"; fail=1; }
 grep -qx 'FAILURES=' "$POS_REPORT" || { echo "FAIL: report lists failures"; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
+
+# Windowed path: (final - base) must equal the DEF delta inside every site
+# window, and nothing new may lie outside the 8,168 windows.
+WIN_REPORT="$FIX/def_gds_checks.windowed.txt"
+win_rc=$(run_checker "$FIXW/windowed_final.gds" "$FIXW/windowed_final.def" \
+  "$FIXW/def_gds_checks.windowed.txt" "$FIX/def_gds_checks.windowed.log" \
+  -rd "base=$FIXW/windowed_base.gds" \
+  -rd "base_def=$FIXW/windowed_base.def" \
+  -rd "sites=$FIXW/windowed_sites.csv")
+[ -s "$WIN_REPORT" ] || { echo "FAIL: windowed run wrote no report (exit $win_rc)"; cat "$FIX/def_gds_checks.windowed.log"; exit 1; }
+echo "--- windowed positive control ---"
+grep -E '^(WINDOWS|WINDOWS_WITH_DELTA|WINDOW_FAILURES|FAILURES)=' "$WIN_REPORT"
+[ "$win_rc" -eq 0 ] || { echo "FAIL: checker exited $win_rc on a clean windowed pair"; exit 1; }
+grep -qx 'WINDOWS=8168' "$WIN_REPORT" || { echo "FAIL: windowed run did not report 8,168 windows"; exit 1; }
+grep -qx 'WINDOWS_WITH_DELTA=8168' "$WIN_REPORT" || { echo "FAIL: some window has no new geometry"; exit 1; }
+grep -qx 'WINDOW_FAILURES=0' "$WIN_REPORT" || { echo "FAIL: windowed run reports failed windows"; exit 1; }
+pass_windows=$(grep -c '^WINDOW .* PASS$' "$WIN_REPORT" || true)
+[ "$pass_windows" -eq 8168 ] || { echo "FAIL: $pass_windows windows passed, expected 8,168"; exit 1; }
+for metal in Metal1 Metal2 Metal3 Metal4 Metal5; do
+  grep -qx "XOR_${metal}_DBU2=0" "$WIN_REPORT" || { echo "FAIL: windowed XOR_${metal}_DBU2 is not zero"; exit 1; }
+  grep -qx "OUTSIDE_WINDOWS_${metal}_DBU2=0" "$WIN_REPORT" || { echo "FAIL: ${metal} GDS delta outside the windows"; exit 1; }
+  grep -qx "OUTSIDE_WINDOWS_DEF_${metal}_DBU2=0" "$WIN_REPORT" || { echo "FAIL: ${metal} DEF delta outside the windows"; exit 1; }
+done
+for via in "$V1" "$V2"; do
+  grep -qx "GDS_${via}_CUTS=$CUTS" "$WIN_REPORT" || { echo "FAIL: windowed GDS ${via} cut count is not $CUTS"; exit 1; }
+  grep -qx "XOR_${via}_CUT_DBU2=0" "$WIN_REPORT" || { echo "FAIL: windowed XOR_${via}_CUT_DBU2 is not zero"; exit 1; }
+done
+for short in Via1_2X2 Via2_2X2; do
+  grep -qx "OUTSIDE_WINDOWS_${short}_CUT_DBU2=0" "$WIN_REPORT" || { echo "FAIL: ${short} cuts outside the windows"; exit 1; }
+done
+grep -qx 'FAILURES=' "$WIN_REPORT" || { echo "FAIL: windowed report lists failures"; exit 1; }
+echo "PASS: 8,168/8,168 windows clean and no delta outside them"
+
+# Shifted-site negative: one window moves +5 um, so that site's new geometry
+# lies outside every window and the run must fail.
+SFT_REPORT="$FIX/def_gds_checks.windowed_shift.txt"
+sft_rc=$(run_checker "$FIXW/windowed_final.gds" "$FIXW/windowed_final.def" \
+  "$FIXW/def_gds_checks.windowed_shift.txt" "$FIX/def_gds_checks.windowed_shift.log" \
+  -rd "base=$FIXW/windowed_base.gds" \
+  -rd "base_def=$FIXW/windowed_base.def" \
+  -rd "sites=$FIXW/windowed_sites_shift.csv")
+[ -s "$SFT_REPORT" ] || { echo "FAIL: shifted-site run wrote no report (exit $sft_rc)"; cat "$FIX/def_gds_checks.windowed_shift.log"; exit 1; }
+echo "--- windowed shifted-site control ---"
+grep -E '^(WINDOWS|WINDOWS_WITH_DELTA|WINDOW_FAILURES|FAILURES)=' "$SFT_REPORT"
+grep '^WINDOW .* FAIL$' "$SFT_REPORT" || true
+[ "$sft_rc" -ne 0 ] || { echo "FAIL: checker accepted a window list shifted off the geometry"; exit 1; }
+grep -qx 'WINDOWS=8168' "$SFT_REPORT" || { echo "FAIL: shifted run lost windows"; exit 1; }
+grep -qx 'WINDOWS_WITH_DELTA=8167' "$SFT_REPORT" || { echo "FAIL: the moved window was not reported empty"; exit 1; }
+grep -qx 'WINDOW_FAILURES=1' "$SFT_REPORT" || { echo "FAIL: expected exactly one failed window"; exit 1; }
+for metal in Metal1 Metal2 Metal3; do
+  area=$(sed -n "s/^OUTSIDE_WINDOWS_${metal}_DBU2=//p" "$SFT_REPORT" | tail -1)
+  def_area=$(sed -n "s/^OUTSIDE_WINDOWS_DEF_${metal}_DBU2=//p" "$SFT_REPORT" | tail -1)
+  [ -n "$area" ] && [ "$area" -gt 0 ] || { echo "FAIL: ${metal} delta outside the windows was not detected"; exit 1; }
+  [ "$def_area" = "$area" ] || { echo "FAIL: ${metal} GDS and DEF disagree outside the windows ($area vs $def_area)"; exit 1; }
+done
+for short in Via1_2X2 Via2_2X2; do
+  area=$(sed -n "s/^OUTSIDE_WINDOWS_${short}_CUT_DBU2=//p" "$SFT_REPORT" | tail -1)
+  [ -n "$area" ] && [ "$area" -gt 0 ] || { echo "FAIL: ${short} cuts outside the windows were not detected"; exit 1; }
+done
+echo "PASS: the shifted window list fails with one empty window and outside geometry"
 
 MIS_REPORT="$FIX/def_gds_checks.mismatch.txt"
 mis_rc=$(run_checker "$FIXW/positive_missing_cuts.gds" "$FIXW/positive.def" \
@@ -88,44 +148,4 @@ for via in "$V1" "$V2"; do
   [ -n "$area" ] && [ "$area" -gt 0 ] || { echo "FAIL: missing ${via} cuts were not detected"; exit 1; }
 done
 
-ROW_REPORT="$FIX/def_gds_checks.row300.txt"
-row_rc=$(run_checker "$FIXW/row300_via2.gds" "$FIXW/row300_via2.def" \
-  "$FIXW/def_gds_checks.row300.txt" "$FIX/def_gds_checks.row300.log")
-[ -s "$ROW_REPORT" ] || { echo "FAIL: row-300 run wrote no report (exit $row_rc)"; exit 1; }
-echo "--- row-300 control ---"
-cat "$ROW_REPORT"
-[ "$row_rc" -ne 0 ] || { echo "FAIL: checker accepted a Via2 array in row 300"; exit 1; }
-grep -qx "ROW300_${V2}=1" "$ROW_REPORT" || { echo "FAIL: row-300 Via2 count is not 1"; exit 1; }
-grep -qx "ROW300_${V2}_ANCHORS_INSIDE=1" "$ROW_REPORT" || { echo "FAIL: row-300 anchor was not reported inside the box"; exit 1; }
-grep -qx "ECO_${V1}=8168" "$ROW_REPORT" || { echo "FAIL: row-300 pair disturbed the Via1 count"; exit 1; }
-grep -qx "ECO_${V2}=8168" "$ROW_REPORT" || { echo "FAIL: row-300 pair disturbed the Via2 count"; exit 1; }
-for metal in Metal1 Metal2 Metal3 Metal4 Metal5; do
-  grep -qx "XOR_${metal}_DBU2=0" "$ROW_REPORT" || { echo "FAIL: row-300 pair has a ${metal} XOR"; exit 1; }
-done
-for via in "$V1" "$V2"; do
-  grep -qx "XOR_${via}_CUT_DBU2=0" "$ROW_REPORT" || { echo "FAIL: row-300 pair has a ${via} cut XOR"; exit 1; }
-done
-grep -qx 'FAILURES=row300 has 1 Via2_2X2 drops with cuts overlapping the exclusion box' "$ROW_REPORT" || {
-  echo "FAIL: row-300 run failed for a reason other than the row-300 rule"; exit 1; }
-
-EDGE_REPORT="$FIX/def_gds_checks.row300_edge.txt"
-edge_rc=$(run_checker "$FIXW/row300_edge_via2.gds" "$FIXW/row300_edge_via2.def" \
-  "$FIXW/def_gds_checks.row300_edge.txt" "$FIX/def_gds_checks.row300_edge.log")
-[ -s "$EDGE_REPORT" ] || { echo "FAIL: row-300 edge run wrote no report (exit $edge_rc)"; exit 1; }
-echo "--- row-300 edge control ---"
-cat "$EDGE_REPORT"
-[ "$edge_rc" -ne 0 ] || { echo "FAIL: checker accepted Via2 cuts intruding into row 300"; exit 1; }
-grep -qx "ROW300_${V2}=1" "$EDGE_REPORT" || { echo "FAIL: intruding cuts were not counted"; exit 1; }
-grep -qx "ROW300_${V2}_ANCHORS_INSIDE=0" "$EDGE_REPORT" || { echo "FAIL: edge anchor was not reported outside the box"; exit 1; }
-grep -qx "ECO_${V1}=8168" "$EDGE_REPORT" || { echo "FAIL: edge pair disturbed the Via1 count"; exit 1; }
-grep -qx "ECO_${V2}=8168" "$EDGE_REPORT" || { echo "FAIL: edge pair disturbed the Via2 count"; exit 1; }
-for metal in Metal1 Metal2 Metal3 Metal4 Metal5; do
-  grep -qx "XOR_${metal}_DBU2=0" "$EDGE_REPORT" || { echo "FAIL: edge pair has a ${metal} XOR"; exit 1; }
-done
-for via in "$V1" "$V2"; do
-  grep -qx "XOR_${via}_CUT_DBU2=0" "$EDGE_REPORT" || { echo "FAIL: edge pair has a ${via} cut XOR"; exit 1; }
-done
-grep -qx 'FAILURES=row300 has 1 Via2_2X2 drops with cuts overlapping the exclusion box' "$EDGE_REPORT" || {
-  echo "FAIL: edge run failed for a reason other than the row-300 cut overlap"; exit 1; }
-
-echo "PASS: matching pair is clean; missing-cut, row-300 anchor, and row-300 cut-intrusion pairs all fail"
+echo "PASS: matching pair is clean; the windowed pair is clean; the shifted-site and missing-cut pairs fail"
