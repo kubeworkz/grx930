@@ -50,7 +50,10 @@ OUT = f"{ROOT}/build/lvs_chip/grx930_test_chip.cdl"
 
 # Bulk pins follow the supplies, the way the taps tie them on the die. See the module docstring:
 # the deck's substrate rule makes the p-side one net, and the nwell taps join VDD.
-POWER = {"VDD": "VDD", "VSS": "VSS", "VNW": "VDD", "VPW": "VSS"}
+POWER = {"VDD": "VDD", "VSS": "VSS", "VNW": "VDD", "VPW": "VSS",
+         # The pad ring's IO supplies are the same nets: the routed DEF's VDD SPECIALNET carries
+         # `( * DVDD )` and VSS carries `( * DVSS )`, so an IO cell's DVDD/DVSS pin is VDD/VSS.
+         "DVDD": "VDD", "DVSS": "VSS"}
 
 # Statements that carry no devices and no connectivity.
 ALLOWED = {"wire", "reg", "input", "output", "inout", "parameter", "localparam",
@@ -180,17 +183,44 @@ def main():
                     help="routed netlist to convert (default: the canonical one)")
     ap.add_argument("--out", default=OUT,
                     help="CDL to write (default: the chip CDL the deck reads)")
+    ap.add_argument("--top", default=None,
+                    help="name for the CDL .SUBCKT (default: the netlist's module name); "
+                         "use the layout top when the netlist module and the GDS top differ")
+    ap.add_argument("--lib", action="append", default=None,
+                    help="library CDL to take cell definitions from; repeatable. The default is "
+                         "the standard-cell CDL; add the IO CDL when the netlist instantiates pads")
+    ap.add_argument("--float-unconnected", action="store_true",
+                    help="give a deliberately unconnected pin its own floating net instead of "
+                         "refusing. A clock-load cell's Z or an unused pad output has no driver and "
+                         "no load; the routed netlist omits it, and a CDL must still name a node. "
+                         "Each float is unique, so no two pins are silently joined")
     args = ap.parse_args()
     try:
-        return generate(args.routed, args.out)
+        return generate(args.routed, args.out, args.top, args.lib, args.float_unconnected)
     except Refused as err:
         print(f"REFUSED  {err}")
         return 2
 
 
-def generate(routed, out):
-    lib = lib_subckts(LIBCDL)
-    top, ports, insts = parse_instances(routed, lib)
+def generate(routed, out, top_override=None, lib_paths=None, float_unconnected=False):
+    if top_override is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", top_override):
+        refuse(f"--top {top_override!r} is not a SPICE subcircuit name")
+    lib_paths = lib_paths or [LIBCDL]
+    lib = {}
+    lib_meta = []
+    for path in lib_paths:
+        if not os.path.exists(path):
+            refuse(f"no library CDL at {path}")
+        cells = lib_subckts(path)
+        clash = sorted(set(cells) & set(lib))
+        if clash:
+            refuse(f"{len(clash)} cells defined in more than one library CDL: {clash[:5]}")
+        lib.update(cells)
+        lib_meta.append((path, hashlib.sha256(open(path, "rb").read()).hexdigest()))
+    parsed_top, ports, insts = parse_instances(routed, lib)
+    top = top_override or parsed_top
+    if top != parsed_top:
+        print(f"top: {parsed_top} -> {top} (layout top)")
     # A bus port has to arrive at the deck as its bits: the layout's labels are literal
     # `o_gpio[3]` strings, and the port check compares those strings, not bus semantics.
     used = {n for _, _, c in insts for n in c.values()}
@@ -207,35 +237,44 @@ def generate(routed, out):
 
     nets = set()
     bad = []
+    floated = 0
     for cell, inst, conns in insts:
         want = lib[cell]
         for pin in want:
             net = POWER.get(pin) or conns.get(pin)
             if net is None:
-                bad.append(f"{cell} {inst} pin {pin} unconnected")
-            else:
-                nets.add(net)
+                if float_unconnected:
+                    net = sanitize(f"NC_{inst}_{pin}")
+                    conns[pin] = net
+                    floated += 1
+                else:
+                    bad.append(f"{cell} {inst} pin {pin} unconnected")
+            nets.add(net)
     if bad:
         refuse(f"{len(bad)} unconnected pins, e.g. {bad[:3]}")
+    if floated:
+        print(f"floated {floated} deliberately unconnected pins on unique nets")
 
     flat = sorted(nets)
     if len(set(flat)) != len(flat):
         refuse("duplicate net names after sanitising")
 
-    text = open(LIBCDL, errors="replace").read()
     wanted = set(cells)
-    keep, writing = [], False
-    for line in text.splitlines():
-        low = line.strip().lower()
-        if low.startswith(".subckt"):
-            writing = line.split()[1] in wanted
+    keep = []
+    for path, _ in lib_meta:
+        text = open(path, errors="replace").read()
+        writing = False
+        for line in text.splitlines():
+            low = line.strip().lower()
+            if low.startswith(".subckt"):
+                writing = line.split()[1] in wanted
+                if writing:
+                    keep.append(line)
+                continue
             if writing:
                 keep.append(line)
-            continue
-        if writing:
-            keep.append(line)
-            if low.startswith(".ends"):
-                writing = False
+                if low.startswith(".ends"):
+                    writing = False
     # every cell must have brought its definition along
     kept = {l.split()[1] for l in keep if l.strip().lower().startswith(".subckt")}
     if kept != wanted:
@@ -243,11 +282,11 @@ def generate(routed, out):
 
     block = "\n".join(keep) + "\n"
     block_sha = hashlib.sha256(block.encode()).hexdigest()
-    lib_sha = hashlib.sha256(open(LIBCDL, "rb").read()).hexdigest()
 
     with open(out, "w") as fh:
-        fh.write(f"* {top}: routed gate-level netlist, cells from the PDK library CDL\n")
-        fh.write(f"* library: {os.path.basename(LIBCDL)} sha256 {lib_sha}\n")
+        fh.write(f"* {top}: routed gate-level netlist, cells from the PDK library CDLs\n")
+        for path, lib_sha in lib_meta:
+            fh.write(f"* library: {os.path.basename(path)} sha256 {lib_sha}\n")
         fh.write(f"* appended: {len(kept)} cell definitions, sha256 {block_sha}\n")
         fh.write(f".SUBCKT {top} {' '.join(ports)}\n")
         for cell, inst, conns in insts:
@@ -258,7 +297,8 @@ def generate(routed, out):
 
     print(f"wrote {out} ({os.path.getsize(out)} B): {len(insts)} X instances, "
           f"{len(nets)} nets, {len(kept)} cell definitions")
-    print(f"library CDL sha256 {lib_sha}")
+    for path, lib_sha in lib_meta:
+        print(f"library CDL {os.path.basename(path)} sha256 {lib_sha}")
     print(f"appended definitions sha256 {block_sha}")
     return 0
 
