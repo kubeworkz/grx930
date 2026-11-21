@@ -1,0 +1,26 @@
+OpenROAD dcf36133a369abc8f3c5e5738cd4d82e4903c0e0 
+Features included (+) or not (-): +GPU +GUI +Python
+This program is licensed under the BSD-3 license. See the LICENSE file for details.
+Components of this program may be licensed under more restrictive licenses which must be honored.
+[INFO RCX-0435] Reading extraction model file /workspace/gf180mcu/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.nom ...
+[INFO RCX-0434] Defined process_corner MinMax0 with ext_model_index 0 (using extRulesFile defaults)
+[INFO RCX-0436] RC segment generation grx930_test_chip (max_merge_res 50.0) ...
+[INFO RCX-0040] Final 603315 rc segments
+[INFO RCX-0439] Coupling Cap extraction grx930_test_chip ...
+[INFO RCX-0440] Coupling threshhold is 0.1000 fF, coupling capacitance less than 0.1000 fF will be grounded.
+[INFO RCX-0442] 7% of 1134662 wires extracted
+[INFO RCX-0442] 15% of 1134662 wires extracted
+[INFO RCX-0442] 27% of 1134662 wires extracted
+[INFO RCX-0442] 38% of 1134662 wires extracted
+[INFO RCX-0442] 46% of 1134662 wires extracted
+[INFO RCX-0442] 57% of 1134662 wires extracted
+[INFO RCX-0442] 67% of 1134662 wires extracted
+[INFO RCX-0442] 76% of 1134662 wires extracted
+[INFO RCX-0442] 90% of 1134662 wires extracted
+[INFO RCX-0442] 99% of 1134662 wires extracted
+[INFO RCX-0442] 100% of 1134662 wires extracted
+[INFO RCX-0045] Extract 126239 nets, 728529 rsegs, 728529 caps, 1488085 ccs
+[INFO RCX-0042] 100000 nets finished
+[INFO RCX-0443] 126236 nets finished
+RCX_DONE
+extract_rc=0

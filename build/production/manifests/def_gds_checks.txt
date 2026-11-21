@@ -1,0 +1,206 @@
+DEF_Metal1_SHAPES=58073
+GDS_Metal1_SHAPES=58073
+XOR_Metal1_DBU2=0
+DEF_Metal2_SHAPES=858506
+GDS_Metal2_SHAPES=858506
+XOR_Metal2_DBU2=0
+DEF_Metal3_SHAPES=306598
+GDS_Metal3_SHAPES=306598
+XOR_Metal3_DBU2=0
+DEF_Metal4_SHAPES=42527
+GDS_Metal4_SHAPES=42527
+XOR_Metal4_DBU2=0
+DEF_Metal5_SHAPES=1082
+GDS_Metal5_SHAPES=1082
+XOR_Metal5_DBU2=0
+GDS_Via1_2X2_0_60_10_60_H_V_CUTS=672
+XOR_Via1_2X2_0_60_10_60_H_V_CUT_DBU2=0
+GDS_Via2_2X2_0_60_10_60_V_H_CUTS=672
+XOR_Via2_2X2_0_60_10_60_V_H_CUT_DBU2=0
+ECO_Via1_2X2_0_60_10_60_H_V=168
+ECO_Via2_2X2_0_60_10_60_V_H=168
+EXPECTED_DROPS=168
+OUTSIDE_WINDOWS_Metal1_DBU2=0
+OUTSIDE_WINDOWS_DEF_Metal1_DBU2=0
+OUTSIDE_WINDOWS_Metal2_DBU2=0
+OUTSIDE_WINDOWS_DEF_Metal2_DBU2=0
+OUTSIDE_WINDOWS_Metal3_DBU2=0
+OUTSIDE_WINDOWS_DEF_Metal3_DBU2=0
+OUTSIDE_WINDOWS_Metal4_DBU2=0
+OUTSIDE_WINDOWS_DEF_Metal4_DBU2=0
+OUTSIDE_WINDOWS_Metal5_DBU2=0
+OUTSIDE_WINDOWS_DEF_Metal5_DBU2=0
+OUTSIDE_WINDOWS_Via1_2X2_CUT_DBU2=0
+OUTSIDE_WINDOWS_Via2_2X2_CUT_DBU2=0
+WINDOW row_0000 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0005 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0006 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0007 xor_dbu2=0 delta_dbu2=1435400 PASS
+WINDOW row_0008 xor_dbu2=0 delta_dbu2=1267400 PASS
+WINDOW row_0009 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0010 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0014 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0015 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0016 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0017 xor_dbu2=0 delta_dbu2=1401800 PASS
+WINDOW row_0019 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0021 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0022 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0024 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0025 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0026 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0027 xor_dbu2=0 delta_dbu2=1368200 PASS
+WINDOW row_0028 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0029 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0032 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0033 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0034 xor_dbu2=0 delta_dbu2=1838600 PASS
+WINDOW row_0035 xor_dbu2=0 delta_dbu2=1670600 PASS
+WINDOW row_0036 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0037 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0038 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0039 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0042 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0044 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0045 xor_dbu2=0 delta_dbu2=1637000 PASS
+WINDOW row_0046 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0047 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0048 xor_dbu2=0 delta_dbu2=1133000 PASS
+WINDOW row_0049 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0050 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0052 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0054 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0055 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0056 xor_dbu2=0 delta_dbu2=1435400 PASS
+WINDOW row_0057 xor_dbu2=0 delta_dbu2=1267400 PASS
+WINDOW row_0058 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0059 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0060 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0061 xor_dbu2=0 delta_dbu2=1670600 PASS
+WINDOW row_0062 xor_dbu2=0 delta_dbu2=1838600 PASS
+WINDOW row_0063 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0064 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0065 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0066 xor_dbu2=0 delta_dbu2=1401800 PASS
+WINDOW row_0068 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0070 xor_dbu2=0 delta_dbu2=1319900 PASS
+WINDOW row_0072 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0073 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0074 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0075 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0076 xor_dbu2=0 delta_dbu2=1368200 PASS
+WINDOW row_0078 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0079 xor_dbu2=0 delta_dbu2=1401800 PASS
+WINDOW row_0080 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0083 xor_dbu2=0 delta_dbu2=1838600 PASS
+WINDOW row_0084 xor_dbu2=0 delta_dbu2=1477400 PASS
+WINDOW row_0085 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0086 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0087 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0088 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0091 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0093 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0094 xor_dbu2=0 delta_dbu2=1637000 PASS
+WINDOW row_0095 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0096 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0097 xor_dbu2=0 delta_dbu2=1133000 PASS
+WINDOW row_0098 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0099 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0101 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0103 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0104 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0105 xor_dbu2=0 delta_dbu2=1250600 PASS
+WINDOW row_0106 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0107 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0108 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0110 xor_dbu2=0 delta_dbu2=1670600 PASS
+WINDOW row_0112 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0113 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0114 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0115 xor_dbu2=0 delta_dbu2=1401800 PASS
+WINDOW row_0117 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0118 xor_dbu2=0 delta_dbu2=1368200 PASS
+WINDOW row_0120 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0122 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0123 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0124 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0125 xor_dbu2=0 delta_dbu2=1368200 PASS
+WINDOW row_0127 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0129 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0130 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0131 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0132 xor_dbu2=0 delta_dbu2=1838600 PASS
+WINDOW row_0133 xor_dbu2=0 delta_dbu2=1670600 PASS
+WINDOW row_0134 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0135 xor_dbu2=0 delta_dbu2=1139300 PASS
+WINDOW row_0137 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0139 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0140 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0142 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0143 xor_dbu2=0 delta_dbu2=1637000 PASS
+WINDOW row_0144 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0145 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0147 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0148 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0149 xor_dbu2=0 delta_dbu2=1637000 PASS
+WINDOW row_0150 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0152 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0153 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0154 xor_dbu2=0 delta_dbu2=1435400 PASS
+WINDOW row_0155 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0156 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0157 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0158 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0161 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0162 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0163 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0164 xor_dbu2=0 delta_dbu2=1189700 PASS
+WINDOW row_0165 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0166 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0168 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0170 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0171 xor_dbu2=0 delta_dbu2=1872200 PASS
+WINDOW row_0172 xor_dbu2=0 delta_dbu2=1704200 PASS
+WINDOW row_0173 xor_dbu2=0 delta_dbu2=1536200 PASS
+WINDOW row_0174 xor_dbu2=0 delta_dbu2=1368200 PASS
+WINDOW row_0175 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0176 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0177 xor_dbu2=0 delta_dbu2=1401800 PASS
+WINDOW row_0178 xor_dbu2=0 delta_dbu2=1569800 PASS
+WINDOW row_0179 xor_dbu2=0 delta_dbu2=1737800 PASS
+WINDOW row_0180 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0181 xor_dbu2=0 delta_dbu2=1838600 PASS
+WINDOW row_0182 xor_dbu2=0 delta_dbu2=1670600 PASS
+WINDOW row_0183 xor_dbu2=0 delta_dbu2=1502600 PASS
+WINDOW row_0184 xor_dbu2=0 delta_dbu2=1334600 PASS
+WINDOW row_0185 xor_dbu2=0 delta_dbu2=1166600 PASS
+WINDOW row_0186 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0191 xor_dbu2=0 delta_dbu2=1805000 PASS
+WINDOW row_0192 xor_dbu2=0 delta_dbu2=1637000 PASS
+WINDOW row_0193 xor_dbu2=0 delta_dbu2=1469000 PASS
+WINDOW row_0194 xor_dbu2=0 delta_dbu2=1301000 PASS
+WINDOW row_0195 xor_dbu2=0 delta_dbu2=1133000 PASS
+WINDOW row_0196 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0201 xor_dbu2=0 delta_dbu2=1771400 PASS
+WINDOW row_0202 xor_dbu2=0 delta_dbu2=1603400 PASS
+WINDOW row_0203 xor_dbu2=0 delta_dbu2=1435400 PASS
+WINDOW row_0204 xor_dbu2=0 delta_dbu2=1267400 PASS
+WINDOW row_0205 xor_dbu2=0 delta_dbu2=1099400 PASS
+WINDOW row_0206 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0210 xor_dbu2=0 delta_dbu2=1905800 PASS
+WINDOW row_0002 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0004 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0013 xor_dbu2=0 delta_dbu2=1128800 PASS
+WINDOW row_0043 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0053 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0102 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0141 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0151 xor_dbu2=0 delta_dbu2=1695800 PASS
+WINDOW row_0189 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0198 xor_dbu2=0 delta_dbu2=1095200 PASS
+WINDOW row_0200 xor_dbu2=0 delta_dbu2=1263200 PASS
+WINDOW row_0209 xor_dbu2=0 delta_dbu2=1128800 PASS
+WINDOWS=168
+WINDOWS_WITH_DELTA=168
+WINDOW_FAILURES=0
+FAILURES=
