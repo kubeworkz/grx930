@@ -35,7 +35,7 @@ fi
 
 set +e
 for corner in ss_n40C_4v50 ss_125C_4v50 tt_025C_5v00 ff_n40C_5v50 ff_125C_5v50; do
-  CORNER="$corner" DEF="$DEF" openroad -exit "$TCL" \
+  CORNER="$corner" DEF="$DEF" SPEF="$SPEF" openroad -exit "$TCL" \
     > "$STA/${corner}.log" 2>&1
   rc=$?
   echo "$corner exit_code=$rc" >> "$STA/corner_status.txt"
@@ -55,7 +55,7 @@ done
 set -e
 
 set +e
-DEF="$DEF" openroad -exit "$POWER_TCL" > "$STA/power_ir.log" 2>&1
+DEF="$DEF" SPEF="$SPEF" openroad -exit "$POWER_TCL" > "$STA/power_ir.log" 2>&1
 power_rc=$?
 set -e
 

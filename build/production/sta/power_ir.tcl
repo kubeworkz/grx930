@@ -5,7 +5,10 @@ if {![info exists ::env(DEF)]} {
   error "DEF is not set"
 }
 set def $::env(DEF)
-set spef "build/production/final/grx930_test_chip.spef"
+if {![info exists ::env(SPEF)]} {
+  error "SPEF is not set"
+}
+set spef $::env(SPEF)
 
 if {![file exists $def]}  { error "missing DEF: $def" }
 if {![file exists $spef]} { error "missing SPEF: $spef" }
