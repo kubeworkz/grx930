@@ -199,7 +199,7 @@ The two Tcl files must contain, at minimum:
 
 **Inputs**
 - `build/production/final/grx930_test_chip_final.gds`
-- `build/production/final/grx930_test_chip.cdl`
+- `c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl` (the G0-frozen CDL, in place; no copy)
 - `c930/asic_gf180mcu/libs.tech/klayout/tech/lvs/gf180mcu.lvs` (unmodified PDK deck)
 - Top cell: `grx930_test_chip`
 - 5LM stack
@@ -411,7 +411,7 @@ check_power_grid -net VSS
 mkdir -p build/production/foundry
 sha256sum \
   build/production/final/grx930_test_chip_final.gds \
-  build/production/final/grx930_test_chip.cdl \
+  c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl \
   > build/production/foundry/final_manifest.sha256
 
 python3 c930/asic_gf180mcu/wafer_space_submission/verify_layers.py \
