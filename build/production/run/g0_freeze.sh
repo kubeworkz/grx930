@@ -20,6 +20,16 @@ BASE="$PROJECT_ROOT/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.
 CHECK="$PROJECT_ROOT/build/production/run/gds_checks.rb"
 DEF_CHECK="$PROJECT_ROOT/build/production/run/def_gds_checks.rb"
 
+# Die and ECO drop count belong to the baseline, not to this script. Refuse to
+# freeze with the retired 3932x5122 / 8,168 values by requiring them from the
+# environment; the checkers get them as -rd parameters.
+for var in EXPECTED_DROPS EXPECTED_DIE_W EXPECTED_DIE_H; do
+  if [ -z "${!var:-}" ]; then
+    echo "G0 parameters unset: set $var (ECO drop count, die width, die height)" >&2
+    exit 2
+  fi
+done
+
 required=("$GDS" "$CDL" "$DEF" "$SPEF" "$BASE" "$CHECK" "$DEF_CHECK")
 
 deck_files=(
@@ -82,9 +92,9 @@ if [ -s "$GDS" ] && [ -s "$BASE" ] && [ -s "$CHECK" ]; then
       -rd base=/work/build/lvs_chip/rebased_tap_stream_out_filled_stitched_fix16.gds \
       -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
       -rd topcell=grx930_test_chip \
-      -rd expected_die_w=3932 \
-      -rd expected_die_h=5122 \
-      -rd expected_drops=8168 \
+      -rd expected_die_w="$EXPECTED_DIE_W" \
+      -rd expected_die_h="$EXPECTED_DIE_H" \
+      -rd expected_drops="$EXPECTED_DROPS" \
       -rd report=/work/build/production/manifests/gds_checks.txt \
       > "$MAN/gds_checks.log" 2>&1
     check_rc=$?
@@ -115,7 +125,7 @@ if [ -s "$GDS" ] && [ -s "$DEF" ] && [ -s "$DEF_CHECK" ]; then
       -rd gds=/work/build/production/final/grx930_test_chip_final.gds \
       -rd def=/work/build/lvs_chip/rebased_grx930_test_chip.def \
       -rd topcell=grx930_test_chip \
-      -rd expected_drops=8168 \
+      -rd expected_drops="$EXPECTED_DROPS" \
       -rd report=/work/build/production/manifests/def_gds_checks.txt \
       > "$MAN/def_gds_checks.log" 2>&1
     def_rc=$?

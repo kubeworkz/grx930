@@ -140,3 +140,19 @@ are all clean on the resulting list.
 - `--with-extension`: adds the separately approved M2 extension and produces the selected `fix70` geometry.
 - The extension is never folded into the notch.
 - `build_connect.sh` defaults to the notch-only output; the approved extension route requires the explicit `--with-extension` invocation documented in `EXTENSION_CHANGE.md`.
+
+## Stage 7 — final GDS and G0 geometry checks
+
+Both GDS files are fresh `stream_out.py` output, so the base/final delta is
+exactly the inserted ECO geometry (not a patched pre-ECO frame). The DEF's two
+generated vias (`via3_4_…`, `via4_5_…`) were first promoted to a supplemental
+LEF by `promote_def_vias.py`; the streamer refuses an unresolvable via.
+
+- **Base GDS:** `build/production/final/pre_eco_stream.gds`, 154,541,386 B, SHA-256 `dcdd8a307f53e7f298940a49b555b6a8037ad2aaad145ce45e08ba0923a29b04`, from `filled.def`.
+- **Final GDS:** `build/production/final/grx930_test_chip_final.gds`, 154,570,546 B, SHA-256 `8fdeb5812ae7325a0b336e26b60cb873e1c75d370640aa63ecd69b0acf766b62`, from `eco_routed.def`. One top cell, 54 cells (base 52); 361,906 components over 44 cell types in both.
+- **Stream delta:** 1,266,618 → 1,266,786 wire boxes (**+168** segments), 1,192,183 → 1,192,519 via placements (**+336** = 168 Via1 + 168 Via2; 7 → 9 via cell types), labels +1 (`sub`). No other change.
+- **`gds_checks.rb`:** `DROPS=168`, `VIA2_NEW_CUTS=672` = 4 × 168; DEF die 3932.000 × 5122.000 µm, GDS content 3931.530 × 5121.790 µm at (0.090, 0.090), inside the die; `FAILURES=` (`build/production/manifests/gds_checks.txt`).
+- **`def_gds_checks.rb`:** top-level XOR **0 dbu²** on Metal1–Metal5 (58,073 / 858,506 / 306,598 / 42,527 / 1,082 shapes each); 672/672 cuts and XOR 0 at both Via1/Via2 arrays; `ECO_…=168` each; `FAILURES=` (`build/production/manifests/def_gds_checks.txt`).
+- **Checker control:** `test_def_gds_positive.sh` passes — synthetic matching pair clean (8,168 drops, 32,672 cuts), missing-cut pair fails with 270,400 dbu² per via. The windowed path is now covered permanently by the same script: its synthetic base/final pair reports 8,168/8,168 windows PASS, `WINDOWS_WITH_DELTA=8168`, `WINDOW_FAILURES=0` and 0 dbu² outside, while the same pair with `site_0000` moved +5 µm exits 1 with one empty window and 125,000 / 330,000 / 135,000 dbu² of Metal1/2/3 outside (GDS and DEF agree) plus 270,400 dbu² per cut layer.
+- **G0 parameterization:** `expected_drops` is required by both checkers (old 8,168 default removed); die is optional and compared only when `expected_die_w/h` are given; `g0_freeze.sh` now requires `EXPECTED_DROPS`, `EXPECTED_DIE_W`, `EXPECTED_DIE_H` and passes them as `-rd`. The retired row-300 exclusion box is removed from both checkers and their control; VDD exclusion lives in the ECO site list.
+- **Windowed `def_gds_checks`:** `-rd base=<pre-ECO GDS> -rd base_def=<filled.def> -rd sites=<eco_sites_v3.csv>` compares `(final − base)` with `(eco_routed.def − filled.def)` per metal inside each site window (x ±1.5 µm, y ±1.5 µm around both via rows), compares the GDS Via1/Via2 cut delta with the expected 2×2 arrays, and asserts zero delta outside all 168 windows. Result on the pair above: **168/168 windows PASS, `WINDOW_FAILURES=0`, `WINDOWS_WITH_DELTA=168`**, and `OUTSIDE_WINDOWS_*_DBU2=0` for Metal1–Metal5, Via1 and Via2; the full-chip XOR and 672-cut checks still report `FAILURES=`. `eco_sites.csv` is the 209-site candidate list; the frozen list is `eco_sites_v3.csv` (168). A shifted-site control (`row_0000` +5 µm) exits 1 with `554,400 dbu²` of Metal2 outside the windows, `270,400 dbu²` per cut layer, and one empty window, so the window assertion is not vacuous.
