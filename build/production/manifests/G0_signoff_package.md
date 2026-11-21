@@ -201,8 +201,34 @@ signatory uses it before filling `G0_signoff.txt`.
 | Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback |  |  |  |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above |  |  |  |
 
-A blank row is unsigned. G0 remains `READY_FOR_REVIEW` until the signatory
-creates `G0_signoff.txt`; this package alone does not change the gate.
+**Design-lead CDL exception — DRAFT; UNSIGNED**
+
+Proposed design-lead acceptance (not signed):
+
+The design lead would accept the route209 post-hoc generation log as **content
+evidence only** for G0 CDL identity. The retained route209 ODB
+(`8d2c4b23edf29b102969ce58ef4d5dcdbf3c3edf1e48c2bb39c01ba9a8203d13`) and
+exported Verilog
+(`3645b3bc3acfe75c759a73d9769689ef10808fb25ed5f911c7d40c529fe196e5`)
+regenerate all 209,075 X-instance lines with `mk_chip_cdl.py`
+(`41cb50f99f18faa7514835c849688a69b2cd805aedeebc6bfaf88bda5871c68f`); the
+sorted X-instance set matches the G0 CDL
+(`6c042d79ce83d70403d66909119e59419cac095d4e7815d54aeb69fa562fd918`) with
+zero CDL-only or regeneration-only lines. Byte identity is not claimed because
+the header (`CDLs` vs `CDL`), port order, and instance order differ.
+
+This exception is limited to CDL content identity. It does not establish or pin
+the original routed netlist, the original `mk_chip_cdl.py` revision, the
+original `cdl.log`/`pipeline_tap.log`, or an original byte-identical file, and
+it does not waive G2/LVS, geometry, SPEF, or any other gate requirement.
+
+Design lead: ____________________  Date (UTC): ____________________
+
+Result: DRAFT — NOT SIGNED (proposed `ACCEPTED_WITH_RECORDED_EXCEPTION`)
+
+A blank row is unsigned. This draft is not a signature. G0 remains
+`READY_FOR_REVIEW` until the signatory creates `G0_signoff.txt`; this package
+alone does not change the gate.
 
 ## 8. Addendum — 2026-11-21: Stage 8 closure linkage
 
@@ -227,3 +253,142 @@ waiver, and it does not alter G0, G2, or any signoff requirement.
 
 G0 remains `READY_FOR_REVIEW`; `G0_signoff.txt` is absent and no LVS has been
 started.
+
+## 9. CDL provenance — 2026-11-21
+
+The G0 package previously recorded only the CDL hash. This section links the
+derivation recipe, records the retained cell-instance identity check, and records
+a post-hoc generation from the retained tap-routed route209 ODB. This is
+**content evidence only**: the post-hoc log reproduces all 209,075 X-instance
+lines, but it is not the original pipeline log, does not pin the original
+tool/netlist/log, and does not claim byte-for-byte identity.
+
+**Linked derivation recipe**
+
+- `c930/asic_gf180mcu/build/rebuild_after_probe.sh` (SHA-256
+  `10e2236316d88d48ace19a30c24cb71f185a9a4e759e267f9c557d43b86d986f`) runs the
+  tap placement/route rebuild and then `rebased_pipeline.sh --lvs`.
+- `c930/asic_gf180mcu/build/rebased_pipeline.sh` (SHA-256
+  `b4575ee93b93b97f941b2e8f8bf1f02a9f0a0c72a73aaa55b4a2c7c4f789ef97`), step
+  “CDL (routed netlist)” lines 108–117, invokes
+  `mk_chip_cdl.py --routed /work/build/grx930_test_chip_routed.v` and copies
+  the result to `build/lvs_chip/rebased_grx930_test_chip.cdl`.
+- The current G0 CDL is
+  `build/lvs_chip/rebased_tap_grx930_test_chip.cdl`, SHA-256
+  `1a29a6ad2cb99882a8e2d8974cadff3237f317cc349c1a0c3e7f20545f75b717`,
+  matching `input_sha256.txt`.
+
+**Retained cell-instance identity check**
+
+`build/production/sta/cdl_netlist_identity.log` (SHA-256
+`075e78305d17294eb7bdbdb092227ffc4daa3968dda116c5a0e45afd6f744040`)
+compares the G0 CDL against the frozen G0 DEF. It compares CDL `X` instance
+names and cell types with DEF `COMPONENTS` entries whose cell type appears in
+the CDL; DEF-only filler cell types absent from the CDL are excluded.
+
+```text
+def_components_total=361906
+cdl_x_instances=209075
+def_instances_with_cdl_types=209076
+matched=209075
+def_only=1
+cdl_only=0
+cdl_types_absent_from_def=0
+def_only_instances:
+  FILL_ROW_861_TIE77 gf180mcu_fd_sc_mcu7t5v0__filltie
+result=IDENTITY_WITH_ONE_DEF_ONLY_FILLTIE
+```
+
+All 209,075 CDL instances match a DEF instance by name and cell type; the CDL
+has no unmatched instance. The single DEF-only instance is a physical filltie.
+This is consistent with a post-CDL fill insertion, but the tree does not contain
+the original generation log that proves that sequence. The check does not compare
+connectivity, so it is not a full netlist-identity check.
+
+**Post-hoc generation from the retained tap-routed route209 ODB (content evidence only)**
+
+This is post-hoc content evidence only. It does not identify or pin the
+original generation run, original routed netlist, original `mk_chip_cdl.py`
+revision, or original `cdl.log`; those remain open.
+
+No original routed Verilog netlist or retained `cdl.log`/`pipeline_tap.log`
+exists in the worktree or any Git ref/history. The retained
+`eco_routed_route209.odb` / `.def` is a tap-bearing routed database with
+209,075 components and 83,865 fillties; it is the source used here.
+
+- Generation log: `build/production/sta/cdl_route209_generation.log`, SHA-256
+  `77cf2af20ac5fc96e581f9cae9d477d20b9c7aa9f1deda0ce6dde9d32a9833a0`.
+- Exported Verilog: `build/production/sta/eco_routed_route209_export.v`,
+  SHA-256 `3645b3bc3acfe75c759a73d9769689ef10808fb25ed5f911c7d40c529fe196e5`.
+- Raw CRLF output: `build/production/sta/eco_routed_route209_repro.cdl`,
+  17,964,084 bytes, SHA-256
+  `dbe8dd714dfe14cfd54a98342ca5d8601dd53b133741fd1765b27fe88b4d7a3e`.
+- Post-hoc generator: current `mk_chip_cdl.py`, SHA-256
+  `41cb50f99f18faa7514835c849688a69b2cd805aedeebc6bfaf88bda5871c68f`;
+  this is the reconstruction tool, not the recorded original revision. Library
+  CDL SHA-256
+  `8c7f781f8bd314070f390559ec09ffdab07d7cb25533a9790df62a43f99ff175`.
+- Content result (post-hoc only): 209,075 X-instances; the sorted X-instance set is identical to the
+  G0 CDL (`6c042d79ce83d70403d66909119e59419cac095d4e7815d54aeb69fa562fd918`),
+  with zero CDL-only or regeneration-only lines. The regenerated output is
+  `build/production/sta/eco_routed_route209_repro_lf.cdl` (SHA-256
+  `939ac844c67998bd46dcf17daa1ec5dc3ab5252aa62d3f55a90d608aae0e74ad`).
+- Byte identity is **not** claimed: the header says `CDLs` rather than `CDL`,
+  and the top-level port and instance orders differ. No X-instance content
+  differs.
+
+`post_hoc_content_evidence=REPRODUCED_FROM_ROUTE209_ODB`
+`original_run_pinned=NO`
+
+**Residual historical gap**
+
+- No retained original `cdl.log` or `pipeline_tap.log` exists in this checkout;
+  the pipeline logs to the remote `$WORK/cdl.log`. The post-hoc generation log
+  above is not the missing original run.
+- The linked recipe names `rebased_grx930_test_chip.cdl`; no recorded copy or
+  rename to the G0 path `rebased_tap_grx930_test_chip.cdl` was found.
+- The current worktree `mk_chip_cdl.py` has SHA-256
+  `41cb50f99f18faa7514835c849688a69b2cd805aedeebc6bfaf88bda5871c68f`, while
+  the Stage 1 baseline pins
+  `685ab89d0dbf9442bc6eee3986ab8b999d7fbc0ef58dafe3cb5d81747ea3c806`. The
+  tool is modified, and no original tool revision is recorded. The G0 header's
+  singular `CDL` wording is not produced by the current `41cb…` tool (which
+  writes `CDLs`), so the original likely used the pre-`--lib` baseline; this is
+  evidence, not proof.
+- The exact original generation run is still not recovered: no original
+  `cdl.log`, no `pipeline_tap.log`, and no original routed `.v`. The post-hoc
+  regeneration establishes **content evidence only** from the retained route209
+  ODB; it does not establish original-run provenance or byte-identical
+  historical output. G2, which is blocked, is the first planned
+  device/top-level-pin comparison.
+
+**Design-lead attestation (not signed; fallback)**
+
+Design lead of record: `Gridworkz` (name supplied 2026-11-21). This records the
+name only; it is not a signature. The post-hoc generation log above is the
+selected content evidence only; this attestation remains an unsigned fallback.
+
+The fallback attestation would state:
+
+> I attest that `build/lvs_chip/rebased_tap_grx930_test_chip.cdl` is the CDL
+> generated from the routed netlist for the G0-frozen DEF; that the one DEF-only
+> filltie `FILL_ROW_861_TIE77` is accounted for as (post-CDL fill insertion /
+> intentionally excluded / other): ____________________; that the exact
+> `mk_chip_cdl.py` revision used was ____________________; that the
+> `rebased_tap` filename corresponds to the pipeline output; and that no other
+> unrecorded cell or netlist edits occurred after generation.
+
+Name: ____________________  Date (UTC): ____________________
+
+Generator revision/SHA-256: ____________________
+
+Routed netlist path and SHA-256: ____________________
+
+Result: ____________________
+
+These fields are intentionally blank: no original tool revision, routed netlist,
+or original generation log has been established.
+
+The post-hoc generation log above is content evidence only and does not fill the
+blank original-run fields. G0 remains `READY_FOR_REVIEW`; this attestation is not
+signed and no LVS has been started.
