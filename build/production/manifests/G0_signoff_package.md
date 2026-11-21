@@ -203,3 +203,27 @@ signatory uses it before filling `G0_signoff.txt`.
 
 A blank row is unsigned. G0 remains `READY_FOR_REVIEW` until the signatory
 creates `G0_signoff.txt`; this package alone does not change the gate.
+
+## 8. Addendum — 2026-11-21: Stage 8 closure linkage
+
+This addendum links the G0 review package to the Stage 8 closure completed after
+the package was prepared. It does not change any frozen G0 input or sign G0.
+
+- Stage 8 closure: `build/production/baseline/stage8/STAGE8_CLOSURE.md`
+- Closure status: `CLOSED_WITH_RECORDED_EXCEPTION`
+- Closure SHA-256: `92afb51c8bd24145087d81a6961e4db80cb8e7a1cc9dcbd2fe6bf1a020453839`
+- ODB used for extraction: `build/lvs_chip/eco_drop_2x2/stage6/eco_routed.odb`
+- ODB size: 206,880,759 bytes
+- ODB SHA-256: `5290f82150c00d321e9650cdbfc903fe331f29167dfbc52a2e060ec16ff52772`
+
+The ODB is Stage 8 extraction evidence, not part of the signed 13-entry G0 input
+manifest.
+
+The Stage 8 closure accepts the 1,022-net coverage exception: 126,236 DEF signal
+nets, of which 1,022 have fewer than two terminals and no wire; the SPEF has
+125,214 `*D_NET` records, and `125,214 + 1,022 = 126,236`. No clock net is in the
+exception class. This is a Stage 8 RCX coverage disposition only, not an LVS/DRC
+waiver, and it does not alter G0, G2, or any signoff requirement.
+
+G0 remains `READY_FOR_REVIEW`; `G0_signoff.txt` is absent and no LVS has been
+started.
