@@ -350,18 +350,14 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 
 **Command**
 ```bash
-mkdir -p build/production/sta
-for corner in ss_n40C_4v50 ss_125C_4v50 tt_025C_5v00 ff_n40C_5v50 ff_125C_5v50; do
-  CORNER=$corner openroad -exit build/production/sta/sta_mcorner.tcl \
-    > build/production/sta/${corner}.log 2>&1
-done
-openroad -exit build/production/sta/power_ir.tcl \
-  > build/production/sta/power_ir.log 2>&1
+build/production/run/g4_sta.sh
 ```
 
-`sta_mcorner.tcl` must read the LEF, the selected liberty, the frozen DEF, and the frozen SPEF, then apply. The shell exports `CORNER`; the Tcl reads it explicitly:
+`g4_sta.sh` runs the five corners through `sta_mcorner.tcl` and then runs `power_ir.tcl`. It supplies `CORNER`, the frozen `DEF`, and the frozen `SPEF` to both helpers; direct invocation requires those environment variables. `sta_mcorner.tcl` must read the LEF, the selected liberty, the frozen DEF, and the frozen SPEF, then apply:
 ```tcl
 set corner $::env(CORNER)
+set def $::env(DEF)
+set spef $::env(SPEF)
 create_clock -name i_clk -period 40.0 [get_ports i_clk]
 set_input_delay  6.0 -clock i_clk [all_inputs]
 set_output_delay 6.0 -clock i_clk [all_outputs]
