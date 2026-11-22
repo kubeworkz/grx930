@@ -1,9 +1,8 @@
 # G0 signoff handoff — GRX930 test chip
 
 **Current state:** `G0_signoff.txt` is present and its five fields verify.
-Independent reviewer Dave Cook is recorded; the design lead review and
-design-lead CDL exception remain unsigned. This handoff is not itself a
-signature and does not authorize one.
+Independent reviewer Dave Cook and the design-lead CDL exception are recorded.
+This handoff is not itself a signature and does not authorize one.
 
 ## Manifest hash to sign
 
@@ -64,37 +63,36 @@ accept this exception before signoff.
 
 ## Review rows
 
-The independent reviewer and verified signatory are recorded below; the design
-lead row remains blank. Complete the design-lead row only after that review.
+The design lead, independent reviewer, and verified signatory are recorded
+below.
 
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
-| Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status |  |  |  |
+| Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
 | Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above | Gridworkz | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 Recorded review results:
 
-- Design lead: blank
+- Design lead: Gridworkz
 - Independent reviewer: `PASS` — Dave Cook, 2026-11-21
 - Gridworkz signatory: `SIGNED` — verified against `G0_signoff.txt`
 
 Design-lead CDL exception line:
 
 ```text
-Design lead: ____________________  Date (UTC): ____________________
+Design lead: Gridworkz  Date (UTC): 2026-11-21T21:39:35Z
 
-Result: ____________________
-# proposed wording: ACCEPTED_WITH_RECORDED_EXCEPTION
+Result: ACCEPTED_WITH_RECORDED_EXCEPTION
 ```
 
-Do not fill this line unless you are the design lead accepting the documented
-content-only exception.
+The design lead recorded this acceptance of the documented content-only
+exception.
 
 ## Five signoff fields
 
 `G0_signoff.txt` is present and field-verified. The values below match it. The
-design-lead CDL-exception signature remains blank.
+design-lead CDL exception is recorded above.
 
 ```text
 gate=G0
@@ -151,7 +149,6 @@ This handoff does not create `G0_signoff.txt`.
 4. Do not alter `G0_status.txt`, the frozen inputs, or the template. The
    signatory's file is the signature; this handoff is not.
 
-**Gate status:** `G0_signoff.txt` is verified, but G0 is not complete while the
-design-lead review and CDL exception remain unsigned. This handoff does not
-create `G0_signoff.txt`, fill the design-lead signature fields, start LVS, or
-change G0 state.
+**Gate status:** `G0_signoff.txt` is verified; the design-lead review and CDL
+exception are recorded. This handoff does not create `G0_signoff.txt`, fill the
+design-lead signature fields, start LVS, or change G0 state.

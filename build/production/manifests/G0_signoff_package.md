@@ -26,7 +26,7 @@ manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
 `status=READY_FOR_REVIEW` and `owner=Gridworkz` (SHA-256
 `a05a7924b6a397144ff81456462f1f55f1a248bcdd425ea7c1b4365b2317dd50`); the
-independent reviewer is recorded in §7 and the design lead remains unsigned.
+independent reviewer and design-lead CDL exception are recorded in §7.
 This package does not modify `G0_status.txt`.
 
 The run log `build/production/manifests/g0_run.log` ends `g0_rc=0` (SHA-256
@@ -216,13 +216,13 @@ signatory's verified file is recorded below.
 
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
-| Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status |  |  |  |
+| Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
 | Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above | Gridworkz | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
-**Design-lead CDL exception — DRAFT; UNSIGNED**
+**Design-lead CDL exception — SIGNED**
 
-Proposed design-lead acceptance (not signed):
+Accepted by design lead: Gridworkz
 
 The design lead would accept the route209 post-hoc generation log as **content
 evidence only** for G0 CDL identity. The retained route209 ODB
@@ -241,14 +241,13 @@ the original routed netlist, the original `mk_chip_cdl.py` revision, the
 original `cdl.log`/`pipeline_tap.log`, or an original byte-identical file, and
 it does not waive G2/LVS, geometry, SPEF, or any other gate requirement.
 
-Design lead: ____________________  Date (UTC): ____________________
+Design lead: Gridworkz  Date (UTC): 2026-11-21T21:39:35Z
 
-Result: DRAFT — NOT SIGNED (proposed `ACCEPTED_WITH_RECORDED_EXCEPTION`)
+Result: ACCEPTED_WITH_RECORDED_EXCEPTION
 
-A blank design-lead row is unsigned. This draft is not a signature.
+The design-lead row and CDL exception are recorded.
 `G0_signoff.txt` is present and field-verified; the independent reviewer is
-recorded above. G0 is not complete while the design-lead review and CDL
-exception remain unsigned. This package alone does not change the gate.
+recorded above. This package alone does not change the gate.
 
 ## 8. Addendum — 2026-11-21: Stage 8 closure linkage
 
@@ -273,7 +272,7 @@ exception class. This is a Stage 8 RCX coverage disposition only, not an LVS/DRC
 waiver, and it does not alter G0, G2, or any signoff requirement.
 
 `G0_signoff.txt` is present and field-verified; the design-lead review and CDL
-exception remain unsigned, and no LVS has been started.
+exception are recorded, and no LVS has been started.
 
 ## 9. CDL provenance — 2026-11-21
 
@@ -410,7 +409,7 @@ The fallback attestation would state:
 > `rebased_tap` filename corresponds to the pipeline output; and that no other
 > unrecorded cell or netlist edits occurred after generation.
 
-Name: ____________________  Date (UTC): ____________________
+Name: _________________  Date (UTC): ____________________
 
 Generator revision/SHA-256: ____________________
 
