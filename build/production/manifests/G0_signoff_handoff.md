@@ -49,7 +49,7 @@ Reviewer evidence hashes:
 
 `G0_status.txt` now reports `status=READY_FOR_REVIEW` and `owner=Gridworkz`; its
 current working-tree hash is
-`a05a7924b6a397144ff81456462f1f55f1a248bcdd425ea7c1b4365b2317dd50`. The table
+`4e3d9b4ba5edb08e62750fe803f5c34b8e68dedad1033c3237e88f9ad1d05885`. The table
 records the original review snapshot.
 
 Stage 8 is `CLOSED_WITH_RECORDED_EXCEPTION`: 125,214 annotated nets + 1,022

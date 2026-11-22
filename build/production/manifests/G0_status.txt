@@ -14,5 +14,5 @@ gds_checks=PASS
 def_gds_checks=PASS
 missing=none
 failures=none
-note=Hashes and GDS checks are evidence only. G0 is not PASS until the design lead and independent reviewer sign the identity and contents.
+note=Hashes and GDS checks are evidence only. Design-lead review and independent-review signoff are recorded; G0_signoff.txt is SIGNED.
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
