@@ -395,13 +395,14 @@ used here.
   historical output. G2, which is blocked, is the first planned
   device/top-level-pin comparison.
 
-**Design-lead attestation (not signed; fallback)**
+**Unused fallback attestation — unsigned, not the primary signed CDL exception**
 
-Design lead of record: `Gridworkz` (name supplied 2026-11-21). This records the
-name only; it is not a signature. The post-hoc generation log above is the
-selected content evidence only; this attestation remains an unsigned fallback.
+Design lead of record: `Gridworkz` (name supplied 2026-11-21). This fallback
+records the name only. It is not a signature and is not the design-lead CDL
+exception accepted and signed in §7. The post-hoc generation log above is the
+selected content evidence only; this fallback remains unsigned.
 
-The fallback attestation would state:
+For reference, the unused fallback attestation would state:
 
 > I attest that `build/lvs_chip/rebased_tap_grx930_test_chip.cdl` is the CDL
 > generated from the routed netlist for the G0-frozen DEF; that the one DEF-only
@@ -423,5 +424,6 @@ These fields are intentionally blank: no original tool revision, routed netlist,
 or original generation log has been established.
 
 The post-hoc generation log above is content evidence only and does not fill the
-blank original-run fields. `G0_signoff.txt` is present and field-verified, but
-this design-lead attestation remains unsigned and no LVS has been started.
+blank original-run fields. `G0_signoff.txt` is present and field-verified. This
+unsigned fallback is not the §7 design-lead CDL exception, which is accepted and
+signed; no LVS has been started.
