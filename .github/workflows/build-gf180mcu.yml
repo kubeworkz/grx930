@@ -288,7 +288,7 @@ jobs:
   # slow-arm case and the disk guard's start/stop cases (16 s on the box: two real
   # pollers started, stopped and restarted).
   chain-selftests:
-    name: "Chain selftests (one definition: build/chain_selftests.sh)"
+    name: "Chain selftests and CDL generator smoke test"
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -308,6 +308,12 @@ jobs:
           bash --version | head -1
           python3 --version
           command -v pgrep timeout diff
+
+      # Synthetic fixtures only: no Docker, PDK, routed database, or flow. This
+      # is the CLI regression for mk_chip_cdl.py's --top, repeatable --lib, and
+      # --float-unconnected paths.
+      - name: CDL generator smoke test
+        run: python3 c930/asic_gf180mcu/tools/lvs_chip/test_mk_chip_cdl.py
 
       # Every test runs even when an earlier one fails, and each verdict is in the
       # report, so this log is the whole picture rather than the first failure.
