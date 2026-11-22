@@ -8,8 +8,10 @@ only a Gridworkz-authorized signatory may create it.
 
 ## 1. Gate state
 
-Source: `build/production/manifests/G0_status.txt` (SHA-256
-`99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85`).
+Historical source for the excerpt below: the original
+`build/production/manifests/G0_status.txt` `READY_FOR_REVIEW` snapshot
+(SHA-256 `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85`).
+This is not the current gate file.
 
 ```text
 gate=G0
@@ -23,7 +25,7 @@ failures=none
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
 
-This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
+The excerpt above is historical. The current `G0_status.txt` reports
 `status=READY_FOR_REVIEW` and `owner=Design lead (unassigned)` (SHA-256
 `51d54ad4f717319aea1ba2c0c6430fc1c943e39b9077ea0d8b91a17afa5fe8b2`); the
 design-lead CDL exception is recorded in §7; the independent review is signed
