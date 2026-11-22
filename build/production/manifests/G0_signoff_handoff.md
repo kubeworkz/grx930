@@ -70,7 +70,7 @@ below.
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
-| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Michele Cook | — | SIGNED — Michele Cook |
+| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Michele Cook | 2026-11-21 | SIGNED — Michele Cook |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above | Dave Cook | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 Recorded review results:
@@ -78,6 +78,8 @@ Recorded review results:
 - Design lead: Gridworkz
 - Independent reviewer: `SIGNED` — Michele Cook
 - Gridworkz signatory: `SIGNED` — verified against `G0_signoff.txt`
+- Date (UTC): 2026-11-21T21:39:35Z
+
 
 Design-lead CDL exception line:
 
