@@ -1,10 +1,10 @@
 # G0 signoff package — GRX930 test chip
 
-Prepared 2026-11-21 from the `READY_FOR_REVIEW` G0 run. This is a review
-package, not a signature. It does not modify `G0_status.txt`,
-`input_sha256.txt`, the signoff template, or any gate result.
-`G0_signoff.txt` is absent and must only be created by a Gridworkz-authorized
-signatory after the reviews below.
+Prepared 2026-11-21 from the `READY_FOR_REVIEW` G0 run; updated 2026-11-22 to
+reconcile the verified `G0_signoff.txt`. This is a review package, not a
+signature. It does not modify `G0_status.txt`, `input_sha256.txt`, the signoff
+template, or any gate result. `G0_signoff.txt` is present and field-verified;
+only a Gridworkz-authorized signatory may create it.
 
 ## 1. Gate state
 
@@ -22,6 +22,12 @@ missing=none
 failures=none
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
+
+This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
+`status=SIGNED` and `owner=Gridworkz` (SHA-256
+`e668ae5cd1aa0a5d871f2f8e27e8b442c0aa25c0439c3e46bed4e12a6eb09e8e`); the
+independent reviewer is recorded in §7 and the design lead remains unsigned.
+This package does not modify `G0_status.txt`.
 
 The run log `build/production/manifests/g0_run.log` ends `g0_rc=0` (SHA-256
 `4ababf5a9551e50319c4af3dca5f62addfda30cc2dadf176c7348b893691a4b8`).
@@ -158,7 +164,7 @@ sha256sum -c build/production/manifests/input_sha256.txt
 
 grep -E '^(status|missing|failures|manifest_sha256)=' \
   build/production/manifests/G0_status.txt
-# expect READY_FOR_REVIEW, none, none, 15f623f5...
+# current working tree: SIGNED, none, none, 15f623f5...
 
 sha256sum build/production/final/grx930_test_chip.spef
 # expect f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0
@@ -169,7 +175,8 @@ Reviewer evidence hashes:
 | File | SHA-256 |
 |---|---|
 | `input_sha256.txt` | `15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800` |
-| `G0_status.txt` | `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85` |
+| `G0_status.txt` (READY_FOR_REVIEW snapshot) | `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85` |
+| `G0_signoff.txt` (present) | `4f13a6ed5835a40ec9b2ae208892385865e0d152da1e40c6ba5e04a645319ac1` |
 | `g0_run.log` | `4ababf5a9551e50319c4af3dca5f62addfda30cc2dadf176c7348b893691a4b8` |
 | `gds_checks.txt` | `8a725206a60088ab85199b9f38f55f57c65155c892fcee446ddd1c9d880fdda0` |
 | `def_gds_checks.txt` | `d42b537a397acb238bf1b8ad99c7dfa53863d6365a5d124cdbc20152a14f9f5f` |
@@ -179,14 +186,15 @@ Reviewer evidence hashes:
 
 ## 6. Exact fields the signatory must fill
 
-Create only `build/production/manifests/G0_signoff.txt` by copying
-`G0_signoff.template.txt`. Do not edit the template. The file must contain:
+`build/production/manifests/G0_signoff.txt` is present and its five fields are
+verified. It was created from `G0_signoff.template.txt`; the template was not
+edited. The verified contents are:
 
 ```text
 gate=G0
 status=SIGNED
-signed_by=<Gridworkz-authorized signer name>
-signed_utc=<YYYY-MM-DDTHH:MM:SSZ>
+signed_by=Gridworkz
+signed_utc=2026-11-21T21:39:35Z
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
 
@@ -203,14 +211,14 @@ Field rules enforced by `build/production/run/g2_lvs.sh`:
 
 ## 7. Review record (not part of the gate file)
 
-The design lead and independent reviewer complete this record; the Gridworkz
-signatory uses it before filling `G0_signoff.txt`.
+The design lead and independent reviewer complete this record. The Gridworkz
+signatory's verified file is recorded below.
 
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status |  |  |  |
-| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback |  |  |  |
-| Gridworkz signatory | Confirm both reviews; fill the five fields above |  |  |  |
+| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
+| Gridworkz signatory | Confirm both reviews; fill the five fields above | Gridworkz | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 **Design-lead CDL exception — DRAFT; UNSIGNED**
 
@@ -237,9 +245,10 @@ Design lead: ____________________  Date (UTC): ____________________
 
 Result: DRAFT — NOT SIGNED (proposed `ACCEPTED_WITH_RECORDED_EXCEPTION`)
 
-A blank row is unsigned. This draft is not a signature. G0 remains
-`READY_FOR_REVIEW` until the signatory creates `G0_signoff.txt`; this package
-alone does not change the gate.
+A blank design-lead row is unsigned. This draft is not a signature.
+`G0_signoff.txt` is present and field-verified; the independent reviewer is
+recorded above. G0 is not complete while the design-lead review and CDL
+exception remain unsigned. This package alone does not change the gate.
 
 ## 8. Addendum — 2026-11-21: Stage 8 closure linkage
 
@@ -263,8 +272,8 @@ nets, of which 1,022 have fewer than two terminals and no wire; the SPEF has
 exception class. This is a Stage 8 RCX coverage disposition only, not an LVS/DRC
 waiver, and it does not alter G0, G2, or any signoff requirement.
 
-G0 remains `READY_FOR_REVIEW`; `G0_signoff.txt` is absent and no LVS has been
-started.
+`G0_signoff.txt` is present and field-verified; the design-lead review and CDL
+exception remain unsigned, and no LVS has been started.
 
 ## 9. CDL provenance — 2026-11-21
 
@@ -413,5 +422,5 @@ These fields are intentionally blank: no original tool revision, routed netlist,
 or original generation log has been established.
 
 The post-hoc generation log above is content evidence only and does not fill the
-blank original-run fields. G0 remains `READY_FOR_REVIEW`; this attestation is not
-signed and no LVS has been started.
+blank original-run fields. `G0_signoff.txt` is present and field-verified, but
+this design-lead attestation remains unsigned and no LVS has been started.

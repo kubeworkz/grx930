@@ -1,8 +1,9 @@
 # G0 signoff handoff — GRX930 test chip
 
-**Current state:** `READY_FOR_REVIEW`; `G0_signoff.txt` is absent. This handoff is
-not a signature and does not authorize one. Every reviewer name, date, result,
-and signoff value below is intentionally blank.
+**Current state:** `G0_signoff.txt` is present and its five fields verify.
+Independent reviewer Dave Cook is recorded; the design lead review and
+design-lead CDL exception remain unsigned. This handoff is not itself a
+signature and does not authorize one.
 
 ## Manifest hash to sign
 
@@ -28,7 +29,7 @@ sha256sum -c build/production/manifests/input_sha256.txt
 
 grep -E '^(status|missing|failures|manifest_sha256)=' \
   build/production/manifests/G0_status.txt
-# expect READY_FOR_REVIEW, none, none, 15f623f5...
+# current working tree: SIGNED, none, none, 15f623f5...
 ```
 
 Reviewer evidence hashes:
@@ -36,7 +37,8 @@ Reviewer evidence hashes:
 | File | SHA-256 |
 |---|---|
 | `input_sha256.txt` | `15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800` |
-| `G0_status.txt` | `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85` |
+| `G0_status.txt` (READY_FOR_REVIEW snapshot) | `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85` |
+| `G0_signoff.txt` (present) | `4f13a6ed5835a40ec9b2ae208892385865e0d152da1e40c6ba5e04a645319ac1` |
 | `g0_run.log` | `4ababf5a9551e50319c4af3dca5f62addfda30cc2dadf176c7348b893691a4b8` |
 | `gds_checks.txt` | `8a725206a60088ab85199b9f38f55f57c65155c892fcee446ddd1c9d880fdda0` |
 | `def_gds_checks.txt` | `d42b537a397acb238bf1b8ad99c7dfa53863d6365a5d124cdbc20152a14f9f5f` |
@@ -44,6 +46,11 @@ Reviewer evidence hashes:
 | `spef_readback.log` | `160c0b89eb55205f29ed0b6bdbf58f17b60257b39195d9e67437ce47c22f3b69` |
 | `grx930_test_chip.spef` (external) | `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0` |
 | `STAGE8_CLOSURE.md` | `92afb51c8bd24145087d81a6961e4db80cb8e7a1cc9dcbd2fe6bf1a020453839` |
+
+`G0_status.txt` now reports `status=SIGNED` and `owner=Gridworkz`; its current
+working-tree hash is
+`e668ae5cd1aa0a5d871f2f8e27e8b442c0aa25c0439c3e46bed4e12a6eb09e8e`. The table
+records the original review snapshot.
 
 Stage 8 is `CLOSED_WITH_RECORDED_EXCEPTION`: 125,214 annotated nets + 1,022
 no-wire/<2-terminal nets = 126,236 DEF signal nets. No clock net is in the
@@ -55,22 +62,22 @@ G0 CDL, but the original routed netlist, tool revision, and original
 `cdl.log`/`pipeline_tap.log` remain unpinned. The design lead must explicitly
 accept this exception before signoff.
 
-## Review-row wording
+## Review rows
 
-These are the package's three rows, with every review field left blank. Complete
-a row only after performing that review.
+The independent reviewer and verified signatory are recorded below; the design
+lead row remains blank. Complete the design-lead row only after that review.
 
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status |  |  |  |
-| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback |  |  |  |
-| Gridworkz signatory | Confirm both reviews; fill the five fields above |  |  |  |
+| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
+| Gridworkz signatory | Confirm both reviews; fill the five fields above | Gridworkz | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
-Suggested result wording after review:
+Recorded review results:
 
-- Design lead: `PASS` or `PASS WITH RECORDED CDL EXCEPTION`
-- Independent reviewer: `PASS`
-- Gridworkz signatory: `SIGNED` only after `G0_signoff.txt` is created with valid fields
+- Design lead: blank
+- Independent reviewer: `PASS` — Dave Cook, 2026-11-21
+- Gridworkz signatory: `SIGNED` — verified against `G0_signoff.txt`
 
 Design-lead CDL exception line:
 
@@ -86,14 +93,14 @@ content-only exception.
 
 ## Five signoff fields
 
-Only an authorized Gridworkz signatory creates `G0_signoff.txt`, after both
-review rows are complete. The signature values remain blank in this handoff.
+`G0_signoff.txt` is present and field-verified. The values below match it. The
+design-lead CDL-exception signature remains blank.
 
 ```text
 gate=G0
 status=SIGNED
-signed_by=
-signed_utc=
+signed_by=Gridworkz
+signed_utc=2026-11-21T21:39:35Z
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
 
@@ -118,14 +125,14 @@ This handoff does not create `G0_signoff.txt`.
       build/production/manifests/G0_signoff.txt
    ```
 
-2. Fill the five fields exactly. Leave the signature values blank in this
-   handoff; the authorized signatory supplies them in the copied file:
+2. Fill the five fields exactly. The verified values are shown here; the
+   authorized signatory supplies them in the copied file:
 
    ```text
    gate=G0
    status=SIGNED
-   signed_by=
-   signed_utc=
+   signed_by=Gridworkz
+   signed_utc=2026-11-21T21:39:35Z
    manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
    ```
 
@@ -144,7 +151,7 @@ This handoff does not create `G0_signoff.txt`.
 4. Do not alter `G0_status.txt`, the frozen inputs, or the template. The
    signatory's file is the signature; this handoff is not.
 
-**Stop conditions:** do not sign if any input hash fails, either review row is
-incomplete, the design lead has not accepted the CDL exception, or the manifest
-hash does not match. This handoff does not create `G0_signoff.txt`, fill
-signature fields, start LVS, or change G0 state.
+**Gate status:** `G0_signoff.txt` is verified, but G0 is not complete while the
+design-lead review and CDL exception remain unsigned. This handoff does not
+create `G0_signoff.txt`, fill the design-lead signature fields, start LVS, or
+change G0 state.
