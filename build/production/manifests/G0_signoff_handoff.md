@@ -29,7 +29,7 @@ sha256sum -c build/production/manifests/input_sha256.txt
 
 grep -E '^(status|missing|failures|manifest_sha256)=' \
   build/production/manifests/G0_status.txt
-# current working tree: SIGNED, none, none, 15f623f5...
+# current working tree: READY_FOR_REVIEW, none, none, 15f623f5...
 ```
 
 Reviewer evidence hashes:
@@ -47,9 +47,9 @@ Reviewer evidence hashes:
 | `grx930_test_chip.spef` (external) | `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0` |
 | `STAGE8_CLOSURE.md` | `92afb51c8bd24145087d81a6961e4db80cb8e7a1cc9dcbd2fe6bf1a020453839` |
 
-`G0_status.txt` now reports `status=SIGNED` and `owner=Gridworkz`; its current
-working-tree hash is
-`e668ae5cd1aa0a5d871f2f8e27e8b442c0aa25c0439c3e46bed4e12a6eb09e8e`. The table
+`G0_status.txt` now reports `status=READY_FOR_REVIEW` and `owner=Gridworkz`; its
+current working-tree hash is
+`a05a7924b6a397144ff81456462f1f55f1a248bcdd425ea7c1b4365b2317dd50`. The table
 records the original review snapshot.
 
 Stage 8 is `CLOSED_WITH_RECORDED_EXCEPTION`: 125,214 annotated nets + 1,022

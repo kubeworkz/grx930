@@ -24,8 +24,8 @@ manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
 
 This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
-`status=SIGNED` and `owner=Gridworkz` (SHA-256
-`e668ae5cd1aa0a5d871f2f8e27e8b442c0aa25c0439c3e46bed4e12a6eb09e8e`); the
+`status=READY_FOR_REVIEW` and `owner=Gridworkz` (SHA-256
+`a05a7924b6a397144ff81456462f1f55f1a248bcdd425ea7c1b4365b2317dd50`); the
 independent reviewer is recorded in §7 and the design lead remains unsigned.
 This package does not modify `G0_status.txt`.
 
@@ -164,7 +164,7 @@ sha256sum -c build/production/manifests/input_sha256.txt
 
 grep -E '^(status|missing|failures|manifest_sha256)=' \
   build/production/manifests/G0_status.txt
-# current working tree: SIGNED, none, none, 15f623f5...
+# current working tree: READY_FOR_REVIEW, none, none, 15f623f5...
 
 sha256sum build/production/final/grx930_test_chip.spef
 # expect f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0
