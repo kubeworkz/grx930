@@ -26,8 +26,8 @@ manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
 `status=READY_FOR_REVIEW` and `owner=Gridworkz` (SHA-256
 `a05a7924b6a397144ff81456462f1f55f1a248bcdd425ea7c1b4365b2317dd50`); the
-independent reviewer and design-lead CDL exception are recorded in §7.
-This package does not modify `G0_status.txt`.
+design-lead CDL exception is recorded in §7; the independent review remains
+pending a separate reviewer. This package does not modify `G0_status.txt`.
 
 The run log `build/production/manifests/g0_run.log` ends `g0_rc=0` (SHA-256
 `4ababf5a9551e50319c4af3dca5f62addfda30cc2dadf176c7348b893691a4b8`).
@@ -217,7 +217,7 @@ signatory's verified file is recorded below.
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
-| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
+| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | PENDING — separate reviewer required | — | UNRESOLVED — Dave Cook is also the signatory |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above | Dave Cook | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 **Design-lead CDL exception — SIGNED**
@@ -246,8 +246,8 @@ Design lead: Gridworkz  Date (UTC): 2026-11-21T21:39:35Z
 Result: ACCEPTED_WITH_RECORDED_EXCEPTION
 
 The design-lead row and CDL exception are recorded.
-`G0_signoff.txt` is present and field-verified; the independent reviewer is
-recorded above. This package alone does not change the gate.
+`G0_signoff.txt` is present and field-verified; the independent review remains
+pending a separate reviewer. This package alone does not change the gate.
 
 ## 8. Addendum — 2026-11-21: Stage 8 closure linkage
 
