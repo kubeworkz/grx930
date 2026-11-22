@@ -1,7 +1,7 @@
 gate=G0
 status=READY_FOR_REVIEW
 generated_utc=2026-11-21T21:39:35Z
-owner=Gridworkz
+owner=Design lead (unassigned)
 manifest=/c/Users/kubew/grx930/build/production/manifests/input_sha256.txt
 cdl=/c/Users/kubew/grx930/c930/asic_gf180mcu/build/lvs_chip/rebased_tap_grx930_test_chip.cdl
 def=/c/Users/kubew/grx930/build/lvs_chip/eco_drop_2x2/stage6/eco_routed.def

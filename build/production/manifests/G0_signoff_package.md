@@ -24,8 +24,8 @@ manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
 
 This is the original `READY_FOR_REVIEW` snapshot. The working tree now reports
-`status=READY_FOR_REVIEW` and `owner=Gridworkz` (SHA-256
-`4e3d9b4ba5edb08e62750fe803f5c34b8e68dedad1033c3237e88f9ad1d05885`); the
+`status=READY_FOR_REVIEW` and `owner=Design lead (unassigned)` (SHA-256
+`51d54ad4f717319aea1ba2c0c6430fc1c943e39b9077ea0d8b91a17afa5fe8b2`); the
 design-lead CDL exception is recorded in §7; the independent review is signed
 by Michele Cook. This package does not modify `G0_status.txt`.
 

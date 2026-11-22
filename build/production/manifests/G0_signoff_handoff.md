@@ -47,9 +47,9 @@ Reviewer evidence hashes:
 | `grx930_test_chip.spef` (external) | `f4d4b6f2ce01b9c52bf0808a295579dd8984cb4b8d82c1c64b78bcb7e91410b0` |
 | `STAGE8_CLOSURE.md` | `92afb51c8bd24145087d81a6961e4db80cb8e7a1cc9dcbd2fe6bf1a020453839` |
 
-`G0_status.txt` now reports `status=READY_FOR_REVIEW` and `owner=Gridworkz`; its
+`G0_status.txt` now reports `status=READY_FOR_REVIEW` and `owner=Design lead (unassigned)`; its
 current working-tree hash is
-`4e3d9b4ba5edb08e62750fe803f5c34b8e68dedad1033c3237e88f9ad1d05885`. The table
+`51d54ad4f717319aea1ba2c0c6430fc1c943e39b9077ea0d8b91a17afa5fe8b2`. The table
 records the original review snapshot.
 
 Stage 8 is `CLOSED_WITH_RECORDED_EXCEPTION`: 125,214 annotated nets + 1,022
