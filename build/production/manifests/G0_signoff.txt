@@ -5,6 +5,6 @@
 # manifest. The agent must not fill this on Gridworkz's behalf.
 gate=G0
 status=SIGNED
-signed_by=Gridworkz
+signed_by=Dave Cook, Founder, Gridworkz
 signed_utc=2026-11-21T21:39:35Z
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800

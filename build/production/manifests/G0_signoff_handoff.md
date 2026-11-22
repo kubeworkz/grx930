@@ -37,7 +37,7 @@ Reviewer evidence hashes:
 |---|---|
 | `input_sha256.txt` | `15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800` |
 | `G0_status.txt` (READY_FOR_REVIEW snapshot) | `99d4be37683047fe11abb1284a4cb96f71277e1c3004bf51cb31aace78879a85` |
-| `G0_signoff.txt` (present) | `4f13a6ed5835a40ec9b2ae208892385865e0d152da1e40c6ba5e04a645319ac1` |
+| `G0_signoff.txt` (present) | `5eb984defb38c57f55bb46d79d899ca523312ce6d7b646c1465b4446ec2f0840` |
 | `g0_run.log` | `4ababf5a9551e50319c4af3dca5f62addfda30cc2dadf176c7348b893691a4b8` |
 | `gds_checks.txt` | `8a725206a60088ab85199b9f38f55f57c65155c892fcee446ddd1c9d880fdda0` |
 | `def_gds_checks.txt` | `d42b537a397acb238bf1b8ad99c7dfa53863d6365a5d124cdbc20152a14f9f5f` |
@@ -70,7 +70,7 @@ below.
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
 | Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Dave Cook | 2026-11-21 | PASS |
-| Gridworkz signatory | Confirm both reviews; fill the five fields above | Gridworkz | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
+| Gridworkz signatory | Confirm both reviews; fill the five fields above | Dave Cook | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 Recorded review results:
 
@@ -97,7 +97,7 @@ design-lead CDL exception is recorded above.
 ```text
 gate=G0
 status=SIGNED
-signed_by=Gridworkz
+signed_by=Dave Cook, Founder, Gridworkz
 signed_utc=2026-11-21T21:39:35Z
 manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
 ```
@@ -129,7 +129,7 @@ This handoff does not create `G0_signoff.txt`.
    ```text
    gate=G0
    status=SIGNED
-   signed_by=Gridworkz
+   signed_by=Dave Cook, Founder, Gridworkz
    signed_utc=2026-11-21T21:39:35Z
    manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
    ```
