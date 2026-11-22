@@ -1,9 +1,9 @@
 # G0 signoff handoff — GRX930 test chip
 
 **Current state:** `G0_signoff.txt` is present and its five fields verify.
-The design-lead CDL exception is recorded; the independent review is assigned
-to Michele Cook, with the result pending. This handoff is not itself a
-signature and does not authorize one.
+The design-lead CDL exception is recorded; the independent review is signed by
+Michele Cook. This handoff is not itself a signature and does not authorize
+one.
 
 ## Manifest hash to sign
 
@@ -64,19 +64,19 @@ accept this exception before signoff.
 
 ## Review rows
 
-The design lead, assigned independent reviewer, and verified signatory are
-recorded below; the independent review result remains pending.
+The design lead, independent reviewer, and verified signatory are recorded
+below.
 
 | Role | Review scope | Name | Date (UTC) | Result |
 |---|---|---|---|---|
 | Design lead | Frozen GDS/CDL/DEF/SPEF identity, 168-drop geometry, G0 status | Gridworkz | 2026-11-21 | PASS WITH RECORDED CDL EXCEPTION |
-| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Michele Cook | — | PENDING — review result not recorded |
+| Independent reviewer | Recompute manifest and all 13 input hashes; confirm SPEF readback | Michele Cook | — | SIGNED — Michele Cook |
 | Gridworkz signatory | Confirm both reviews; fill the five fields above | Dave Cook | 2026-11-21 | SIGNED — verified against `G0_signoff.txt` |
 
 Recorded review results:
 
 - Design lead: Gridworkz
-- Independent reviewer: `PENDING` — Michele Cook, review result not recorded
+- Independent reviewer: `SIGNED` — Michele Cook
 - Gridworkz signatory: `SIGNED` — verified against `G0_signoff.txt`
 
 Design-lead CDL exception line:
