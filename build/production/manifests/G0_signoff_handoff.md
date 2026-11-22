@@ -105,6 +105,45 @@ Rules:
 - The manifest hash must match exactly.
 - Do not edit `G0_signoff.template.txt`.
 
+## Creation procedure (authorized signatory only)
+
+Only an authorized Gridworkz signatory performs this procedure, after both
+review rows are complete and the design lead has accepted the CDL exception.
+This handoff does not create `G0_signoff.txt`.
+
+1. Copy the template; do not edit the template itself:
+
+   ```bash
+   cp build/production/manifests/G0_signoff.template.txt \
+      build/production/manifests/G0_signoff.txt
+   ```
+
+2. Fill the five fields exactly. Leave the signature values blank in this
+   handoff; the authorized signatory supplies them in the copied file:
+
+   ```text
+   gate=G0
+   status=SIGNED
+   signed_by=
+   signed_utc=
+   manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800
+   ```
+
+3. Verify the copied file before treating G0 as signed:
+
+   ```bash
+   test -f build/production/manifests/G0_signoff.txt
+   grep -qx 'gate=G0' build/production/manifests/G0_signoff.txt
+   grep -Eq '^signed_by=.*Gridworkz' build/production/manifests/G0_signoff.txt
+   grep -Eq '^signed_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
+     build/production/manifests/G0_signoff.txt
+   grep -qx 'manifest_sha256=15f623f5127715d47b8436bf43fa39b1c8f31a393773835c3f0ab0814d560800' \
+     build/production/manifests/G0_signoff.txt
+   ```
+
+4. Do not alter `G0_status.txt`, the frozen inputs, or the template. The
+   signatory's file is the signature; this handoff is not.
+
 **Stop conditions:** do not sign if any input hash fails, either review row is
 incomplete, the design lead has not accepted the CDL exception, or the manifest
 hash does not match. This handoff does not create `G0_signoff.txt`, fill
