@@ -59,8 +59,8 @@ exception class; only the `nom` RC corner was extracted.
 CDL exception: the route209 evidence is **post-hoc content evidence only**. It
 reproduces all 209,075 X-instance lines and the sorted X-instance set matches the
 G0 CDL, but the original routed netlist, tool revision, and original
-`cdl.log`/`pipeline_tap.log` remain unpinned. The design lead must explicitly
-accept this exception before signoff.
+`cdl.log`/`pipeline_tap.log` remain unpinned. The design lead explicitly
+accepted this exception; the signed result is recorded in the review rows below.
 
 ## Review rows
 

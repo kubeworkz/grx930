@@ -226,7 +226,7 @@ signatory's verified file is recorded below.
 
 Accepted by design lead: Gridworkz
 
-The design lead would accept the route209 post-hoc generation log as **content
+The design lead accepted the route209 post-hoc generation log as **content
 evidence only** for G0 CDL identity. The retained route209 ODB
 (`8d2c4b23edf29b102969ce58ef4d5dcdbf3c3edf1e48c2bb39c01ba9a8203d13`; external,
 not tracked) and exported Verilog
